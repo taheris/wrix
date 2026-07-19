@@ -62,7 +62,7 @@ fn cleanup_prunes_only_wrix_managed_images_outside_bounded_keep_set() -> TestRes
     let records = serde_json::from_slice::<Vec<image::Record>>(&fs::read(&mru_path)?)?;
     assert_eq!(records.len(), 8);
     assert_eq!(
-        records[0].ref_name.as_deref(),
+        records[0].ref_name.as_ref().map(image::ImageRef::as_str),
         Some("localhost/wrix-current:live")
     );
     assert_eq!(records[0].digest.as_ref(), Some(&digest('c')));
@@ -70,11 +70,10 @@ fn cleanup_prunes_only_wrix_managed_images_outside_bounded_keep_set() -> TestRes
         records[0].id.as_ref().map(image::ImageId::as_str),
         Some("current-id")
     );
-    assert!(
-        !records
-            .iter()
-            .any(|record| record.ref_name.as_deref() == Some("localhost/wrix-dropped-by-bound:old"))
-    );
+    assert!(!records.iter().any(
+        |record| record.ref_name.as_ref().map(image::ImageRef::as_str)
+            == Some("localhost/wrix-dropped-by-bound:old")
+    ));
 
     let deleted = store.deleted.iter().cloned().collect::<BTreeSet<_>>();
     assert_eq!(
@@ -136,11 +135,10 @@ fn concurrent_mru_updates_preserve_each_workspace_record() -> TestResult {
     assert_eq!(records.len(), 2);
     for index in 0..2 {
         let expected = format!("localhost/wrix-workspace-{index}:live");
-        assert!(
-            records
-                .iter()
-                .any(|record| record.ref_name.as_deref() == Some(expected.as_str()))
-        );
+        assert!(records.iter().any(
+            |record| record.ref_name.as_ref().map(image::ImageRef::as_str)
+                == Some(expected.as_str())
+        ));
     }
     Ok(())
 }

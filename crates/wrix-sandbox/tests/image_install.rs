@@ -115,7 +115,7 @@ fn darwin_docker_archive_sources_tag_loaded_image() -> TestResult {
     let archive = root.path().join("image.tar");
     fs::write(&archive, b"fake archive")?;
     let desired_digest = digest('f');
-    let loaded_ref = format!("untagged@{}", digest('0'));
+    let loaded_ref = format!("untagged@{}", digest('0').as_str());
     let mut store = FakeStore {
         loaded_archive_ref: Some(loaded_ref.clone()),
         ..FakeStore::default()
@@ -143,7 +143,7 @@ fn darwin_docker_archive_sources_tag_loaded_image() -> TestResult {
                 target: String::from("wrix-darwin:test"),
             },
             Call::Delete {
-                target: format!("untagged@{}", digest('0')),
+                target: format!("untagged@{}", digest('0').as_str()),
             },
         ]
     );

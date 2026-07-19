@@ -508,12 +508,7 @@ impl<'a> Plan<'a> {
                 writeln!(stdout, "ENV={key}={value}")?;
             }
             for (key, value) in Self::runtime_host_env_pairs() {
-                let rendered = if is_secret_env(&key) {
-                    "[REDACTED]"
-                } else {
-                    &value
-                };
-                writeln!(stdout, "ENV={key}={rendered}")?;
+                writeln!(stdout, "ENV={key}={}", dry_run_env_value(&key, &value))?;
             }
             if let Some(path) = self.spawn_config_container_path() {
                 writeln!(stdout, "ENV=WRIX_SPAWN_CONFIG={path}")?;
@@ -544,7 +539,7 @@ impl<'a> Plan<'a> {
                 }
             }
             for (key, value) in &self.spawn_env {
-                writeln!(stdout, "ENV={key}={value}")?;
+                writeln!(stdout, "ENV={key}={}", dry_run_env_value(key, value))?;
             }
             for arg in &self.agent_args {
                 writeln!(stdout, "CMD={arg}")?;
@@ -1276,28 +1271,19 @@ fn darwin_mounts_from_rendered(
 ) -> Result<DarwinMounts, LaunchError> {
     let mut mounts = DarwinMounts::default();
     for mount in profile_mounts {
-        mounts.push(
-            &RenderedMount::from_profile(mount),
-            staging_root,
-            mount.optional,
-        )?;
+        mounts.push(&RenderedMount::from_profile(mount), staging_root)?;
     }
     for mount in spawn_mounts {
-        mounts.push(mount, staging_root, false)?;
+        mounts.push(mount, staging_root)?;
     }
     Ok(mounts)
 }
 
 impl DarwinMounts {
-    fn push(
-        &mut self,
-        mount: &RenderedMount,
-        staging_root: &Path,
-        optional: bool,
-    ) -> Result<(), LaunchError> {
+    fn push(&mut self, mount: &RenderedMount, staging_root: &Path) -> Result<(), LaunchError> {
         let source = expand_path(&mount.host);
         if !source.exists() {
-            if optional {
+            if mount.optional {
                 return Ok(());
             }
             return Err(LaunchError::MountSourceMissing {
@@ -1969,6 +1955,14 @@ fn first_configured_value(values: &[Option<String>]) -> Option<String> {
     values.iter().find_map(Clone::clone)
 }
 
+fn dry_run_env_value<'a>(name: &str, value: &'a str) -> &'a str {
+    if is_secret_env(name) {
+        "[REDACTED]"
+    } else {
+        value
+    }
+}
+
 fn is_secret_env(name: &str) -> bool {
     matches!(
         name,
@@ -2451,18 +2445,10 @@ mod test {
         };
         let mut mounts = DarwinMounts::default();
         mounts
-            .push(
-                &RenderedMount::from_profile(&profile_mount),
-                &staging.root,
-                profile_mount.optional,
-            )
+            .push(&RenderedMount::from_profile(&profile_mount), &staging.root)
             .unwrap();
         mounts
-            .push(
-                &RenderedMount::from_spawn(&spawn_mount),
-                &staging.root,
-                false,
-            )
+            .push(&RenderedMount::from_spawn(&spawn_mount), &staging.root)
             .unwrap();
 
         assert_eq!(

@@ -79,6 +79,27 @@ fn consumer_spawn_config_fields_are_mounted_for_entrypoint() -> TestResult {
 }
 
 #[test]
+fn provider_credentials_in_spawn_config_are_redacted() -> TestResult {
+    let fixture = SpawnFixture::new("spawn-provider-redaction")?;
+    let config = fixture.write(
+        "provider-redaction",
+        &json!({
+            "workspace": path_text(&fixture.workspace),
+            "env": [["OPENAI_API_KEY", "spawn-secret"]],
+            "agent_args": [],
+            "mounts": []
+        }),
+    )?;
+
+    let run = fixture.run("provider-redaction", &config)?;
+
+    assert!(run.success, "{}", run.stderr);
+    assert!(run.stdout.contains("ENV=OPENAI_API_KEY=[REDACTED]"));
+    assert!(!run.stdout.contains("spawn-secret"));
+    Ok(())
+}
+
+#[test]
 fn image_source_override_requires_source_kind() -> TestResult {
     let fixture = SpawnFixture::new("spawn-missing-kind")?;
     let config = fixture.write(

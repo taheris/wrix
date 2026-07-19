@@ -80,11 +80,15 @@ pub struct ImageId(String);
 
 impl ImageId {
     pub fn parse(value: &str) -> Result<Self, ImageIdParseError> {
-        normalized_value(value)
-            .map(Self)
-            .ok_or_else(|| ImageIdParseError {
+        let Some(value) = normalized_value(value) else {
+            return Err(ImageIdParseError {
                 value: value.to_owned(),
-            })
+            });
+        };
+        if value.chars().any(char::is_whitespace) {
+            return Err(ImageIdParseError { value });
+        }
+        Ok(Self(value))
     }
 
     pub fn as_str(&self) -> &str {
@@ -105,6 +109,44 @@ impl<'de> Deserialize<'de> for ImageId {
 #[derive(Clone, Debug, Display, Error)]
 /// invalid image ID: {value}
 pub struct ImageIdParseError {
+    value: String,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
+pub struct ImageRef(String);
+
+impl ImageRef {
+    pub fn parse(value: &str) -> Result<Self, ImageRefParseError> {
+        let Some(value) = normalized_value(value) else {
+            return Err(ImageRefParseError {
+                value: value.to_owned(),
+            });
+        };
+        if value.chars().any(char::is_whitespace) {
+            return Err(ImageRefParseError { value });
+        }
+        Ok(Self(value))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for ImageRef {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(&value).map_err(de::Error::custom)
+    }
+}
+
+#[derive(Clone, Debug, Display, Error)]
+/// invalid image reference: {value}
+pub struct ImageRefParseError {
     value: String,
 }
 
@@ -148,9 +190,9 @@ pub struct Record {
         default,
         rename = "ref",
         skip_serializing_if = "Option::is_none",
-        deserialize_with = "deserialize_optional_normalized_string"
+        deserialize_with = "deserialize_optional_image_ref"
     )]
-    pub ref_name: Option<String>,
+    pub ref_name: Option<ImageRef>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -196,6 +238,8 @@ pub enum Error {
     /// {source}
     ImageId { source: ImageIdParseError },
     /// {source}
+    ImageRef { source: ImageRefParseError },
+    /// {source}
     Io { source: io::Error },
 }
 
@@ -208,6 +252,12 @@ impl From<DigestParseError> for Error {
 impl From<ImageIdParseError> for Error {
     fn from(source: ImageIdParseError) -> Self {
         Self::ImageId { source }
+    }
+}
+
+impl From<ImageRefParseError> for Error {
+    fn from(source: ImageRefParseError) -> Self {
+        Self::ImageRef { source }
     }
 }
 
@@ -373,9 +423,7 @@ fn remember(
     image_ref: &str,
     digest: Option<&Digest>,
 ) -> Result<(), Error> {
-    let Some(ref_name) = normalized_value(image_ref) else {
-        return Ok(());
-    };
+    let ref_name = ImageRef::parse(image_ref)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -416,7 +464,7 @@ fn prune(
     let mut keep_refs = BTreeSet::new();
     let mut keep_ids = BTreeSet::new();
     let mut keep_digests = BTreeSet::new();
-    add_normalized(&mut keep_refs, image_ref);
+    keep_refs.insert(ImageRef::parse(image_ref)?);
     if let Some(digest) = digest {
         keep_digests.insert(digest.clone());
     }
@@ -508,7 +556,7 @@ impl Descriptor {
 }
 
 struct ListedImage {
-    ref_name: Option<String>,
+    ref_name: Option<ImageRef>,
     target: String,
     id: ImageId,
     digest: Option<Digest>,
@@ -564,8 +612,8 @@ fn listed_image_from_line(
     }
     let tag = fields.next().unwrap_or("<none>");
     let listed_id = fields.next().unwrap_or("");
-    let ref_name = (repo != "<none>" && tag != "<none>").then(|| format!("{repo}:{tag}"));
-    let Some(target) = ref_name.clone().or_else(|| normalized_value(listed_id)) else {
+    let (ref_name, target) = listed_image_identity(runtime, repo, tag, listed_id)?;
+    let Some(target) = target else {
         return Ok(None);
     };
     let id = store
@@ -580,10 +628,10 @@ fn listed_image_from_line(
     let legacy = match runtime {
         Runtime::Podman => ref_name
             .as_ref()
-            .is_some_and(|name| name.starts_with("localhost/wrix-")),
+            .is_some_and(|name| name.as_str().starts_with("localhost/wrix-")),
         Runtime::Container => ref_name
             .as_ref()
-            .is_some_and(|name| name.starts_with("wrix-")),
+            .is_some_and(|name| name.as_str().starts_with("wrix-")),
     };
     Ok(Some(ListedImage {
         ref_name,
@@ -600,37 +648,32 @@ fn listed_image_identity(
     repo: &str,
     tag: &str,
     listed_id: &str,
-) -> (String, String) {
+) -> Result<(Option<ImageRef>, Option<String>), Error> {
     let untagged_container_ref =
         runtime == Runtime::Container && tag == "<none>" && repo.starts_with("untagged@sha256:");
-    let ref_name = if repo != "<none>" && tag != "<none>" {
-        format!("{repo}:{tag}")
-    } else {
-        String::new()
-    };
+    let ref_name = (repo != "<none>" && tag != "<none>")
+        .then(|| ImageRef::parse(&format!("{repo}:{tag}")))
+        .transpose()?;
     let target = if untagged_container_ref {
-        repo.to_owned()
+        Some(repo.to_owned())
     } else {
-        normalized_value(&ref_name)
+        ref_name
+            .as_ref()
+            .map(|reference| reference.as_str().to_owned())
             .or_else(|| normalized_value(listed_id))
-            .unwrap_or_default()
     };
-    (ref_name, target)
+    Ok((ref_name, target))
 }
 
-fn add_normalized(set: &mut BTreeSet<String>, value: &str) {
-    if let Some(value) = normalized_value(value) {
-        set.insert(value);
-    }
-}
-
-fn deserialize_optional_normalized_string<'de, D>(
-    deserializer: D,
-) -> Result<Option<String>, D::Error>
+fn deserialize_optional_image_ref<'de, D>(deserializer: D) -> Result<Option<ImageRef>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    Ok(Option::<String>::deserialize(deserializer)?.and_then(|value| normalized_value(&value)))
+    let value = Option::<String>::deserialize(deserializer)?;
+    value
+        .and_then(|value| normalized_value(&value))
+        .map(|value| ImageRef::parse(&value).map_err(de::Error::custom))
+        .transpose()
 }
 
 fn deserialize_optional_digest<'de, D>(deserializer: D) -> Result<Option<Digest>, D::Error>
@@ -1103,6 +1146,26 @@ mod test {
     };
 
     #[test]
+    fn digest_rejects_non_sha256_values() {
+        assert!(super::Digest::parse("sha512:abc").is_err());
+    }
+
+    #[test]
+    fn image_id_rejects_sentinel_values() {
+        assert!(super::ImageId::parse("<none>").is_err());
+    }
+
+    #[test]
+    fn image_id_rejects_whitespace() {
+        assert!(super::ImageId::parse("image id").is_err());
+    }
+
+    #[test]
+    fn image_ref_rejects_whitespace() {
+        assert!(super::ImageRef::parse("localhost/wrix image:latest").is_err());
+    }
+
+    #[test]
     fn apple_load_output_parser_extracts_untagged_ref() {
         let output = b"loading\nLoaded: untagged@sha256:abcdef0123456789, done\n";
 
@@ -1167,10 +1230,14 @@ mod test {
             "untagged@sha256:full-manifest-digest",
             "<none>",
             "untagged-index-digest",
-        );
+        )
+        .expect("parse listed image identity");
 
-        assert!(ref_name.is_empty());
-        assert_eq!(target, "untagged@sha256:full-manifest-digest");
+        assert!(ref_name.is_none());
+        assert_eq!(
+            target.as_deref(),
+            Some("untagged@sha256:full-manifest-digest")
+        );
     }
 
     #[test]
