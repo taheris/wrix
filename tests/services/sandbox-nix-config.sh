@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 LINUX_ENTRYPOINT="$REPO_ROOT/lib/sandbox/linux/entrypoint.sh"
-DARWIN_ENTRYPOINT="$REPO_ROOT/lib/sandbox/darwin/entrypoint.sh"
+DARWIN_NETWORK_BOOTSTRAP="$REPO_ROOT/lib/sandbox/darwin/network-bootstrap.sh"
 BASH_BIN="${BASH:-$(command -v bash)}"
 AWK_BIN="$(command -v awk)"
 SORT_BIN="$(command -v sort)"
@@ -642,7 +642,7 @@ run_policy() {
   local block="$stub_dir/$platform-policy.sh"
   case "$platform" in
     linux) extract_policy_block "$LINUX_ENTRYPOINT" "$block" ;;
-    darwin) extract_policy_block "$DARWIN_ENTRYPOINT" "$block" ;;
+    darwin) extract_policy_block "$DARWIN_NETWORK_BOOTSTRAP" "$block" ;;
     *) fail "unknown platform: $platform" ;;
   esac
   WRIX_FIREWALL_BACKEND="$backend" \

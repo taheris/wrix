@@ -60,6 +60,7 @@ else
   [[ -x "$WRIX_IP6TABLES_BIN" ]] || wrix_die "ip6tables is required for sandbox IPv6 blocking"
 fi
 
+# BEGIN wrix network policy
 wrix_nft() {
   "$WRIX_NFT_BIN" "$@" || wrix_die "nft $* failed"
 }
@@ -367,6 +368,7 @@ apply_wrix_network_policy() {
   fi
   wrix_verify_firewall_policy
 }
+# END wrix network policy
 
 wrix_wait_for_route
 apply_wrix_network_policy
