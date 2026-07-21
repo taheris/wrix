@@ -6,7 +6,6 @@ REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 # shellcheck source=tests/lib/live-sandbox.sh
 source "$SCRIPT_DIR/../lib/live-sandbox.sh"
 
-wrix_require_live_sandbox
 cd "$REPO_ROOT"
 
 TEST_TMP=$(mktemp -d -t wrix-audit-trail.XXXXXX)
@@ -36,15 +35,11 @@ fail() {
   FAILED=$((FAILED + 1))
 }
 
-LAUNCHER=$(wrix_build_live_launcher)
+LAUNCHER=""
 DEPLOY_KEY="$TEST_TMP/deploy-key"
 HOME_DIR="$TEST_TMP/home"
 XDG_CACHE_HOME="$TEST_TMP/cache"
 PI_AUTH_FILE="$TEST_TMP/pi-auth.json"
-mkdir -p "$HOME_DIR" "$XDG_CACHE_HOME"
-wrix_make_ed25519_key "$DEPLOY_KEY" "audit-trail-test"
-printf '{}\n' >"$PI_AUTH_FILE"
-chmod 600 "$PI_AUTH_FILE"
 
 expected_session_dir() {
   local agent="$1"
@@ -74,42 +69,26 @@ agent_binary() {
   esac
 }
 
-transcript_marker() {
-  local agent="$1"
-  local session_dir
-
-  session_dir=$(expected_session_dir "$agent")
-  printf '%s\n' "$session_dir/wrix-audit-transcript-$agent"
-}
-
 write_agent_stub() {
   local agent="$1"
   local workspace="$2"
-  local binary marker session_dir stub_dir stub_path
+  local binary stub_dir stub_path
 
   binary=$(agent_binary "$agent")
-  marker=$(transcript_marker "$agent")
-  session_dir=$(expected_session_dir "$agent")
   stub_dir="$workspace/bin"
   stub_path="$stub_dir/$binary"
   mkdir -p "$stub_dir"
-  cat >"$stub_path" <<EOF
+  cat >"$stub_path" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
-probe_workspace="\${WRIX_AUDIT_PROBE_WORKSPACE:-/workspace}"
-session_path="\$probe_workspace${session_dir#/workspace}"
-marker_path="\$probe_workspace${marker#/workspace}"
-mkdir -p "\$session_path"
-{
-  printf 'agent=%s\n' "$agent"
-  printf 'argv='
-  printf '%q ' "\$@"
-  printf '\n'
-} >"\$marker_path"
-if [[ "$agent" = "claude" ]]; then
-  printf '{"sessionId":"wrix-audit-%s"}\n' "$agent" >"\$probe_workspace/.claude/history.jsonl"
-fi
+probe_workspace="${WRIX_AUDIT_PROBE_WORKSPACE:-/workspace}"
+mkdir -p "$probe_workspace/.wrix"
+jq -n \
+  --arg agent "${WRIX_AGENT:-}" \
+  --arg binary "$(basename "$0")" \
+  '{agent: $agent, binary: $binary}' \
+  >"$probe_workspace/.wrix/selected-agent.json"
 EOF
   chmod +x "$stub_path"
 }
@@ -117,30 +96,30 @@ EOF
 assert_agent_probe_contract() {
   local agent="$1"
   local workspace="$TEST_TMP/probe-$agent"
-  local binary marker host_marker out
+  local binary host_marker
 
   mkdir -p "$workspace"
   write_agent_stub "$agent" "$workspace"
   binary=$(agent_binary "$agent")
-  marker=$(transcript_marker "$agent")
-  host_marker="$workspace${marker#/workspace}"
-  out="$TEST_TMP/probe-$agent.out"
-  WRIX_AUDIT_PROBE_WORKSPACE="$workspace" "$workspace/bin/$binary" --probe >"$out"
+  host_marker="$workspace/.wrix/selected-agent.json"
+  WRIX_AGENT="$agent" WRIX_AUDIT_PROBE_WORKSPACE="$workspace" \
+    "$workspace/bin/$binary" --probe
   if [[ ! -f "$host_marker" ]]; then
-    fail "$agent: agent probe self-test did not write marker: $host_marker"
+    fail "$agent: agent probe self-test did not write observation: $host_marker"
     return
   fi
-  if ! grep -qF "agent=$agent" "$host_marker"; then
-    fail "$agent: agent probe self-test marker does not identify the agent"
+  if ! jq -e --arg agent "$agent" --arg binary "$binary" \
+    '.agent == $agent and .binary == $binary' "$host_marker" >/dev/null; then
+    fail "$agent: agent probe self-test wrote an invalid observation"
     sed 's/^/    /' "$host_marker" >&2
     return
   fi
-  pass "$agent: agent probe self-test writes its transcript marker"
+  pass "$agent: agent probe self-test records the invoked runtime"
 }
 
 assert_audit_log_for_agent() {
   local agent="$1"
-  local image_source image_ref profile_config spawn_config workspace out err rc log_count log_file field value session_dir host_session_dir marker host_marker
+  local image_source image_ref profile_config spawn_config workspace out err rc log_count log_file field value session_dir host_session_dir binary host_marker
 
   image_source=$(wrix_realize_test_image_source "$agent")
   image_ref=$(wrix_live_image_ref "audit-$agent-$$")
@@ -209,14 +188,15 @@ assert_audit_log_for_agent() {
     return
   fi
 
-  marker=$(transcript_marker "$agent")
-  host_marker="$workspace${marker#/workspace}"
+  binary=$(agent_binary "$agent")
+  host_marker="$workspace/.wrix/selected-agent.json"
   if [[ ! -f "$host_marker" ]]; then
-    fail "$agent: selected agent did not write transcript marker: $host_marker"
+    fail "$agent: selected agent did not write its runtime observation: $host_marker"
     return
   fi
-  if ! grep -qF "agent=$agent" "$host_marker"; then
-    fail "$agent: transcript marker does not identify the selected agent"
+  if ! jq -e --arg agent "$agent" --arg binary "$binary" \
+    '.agent == $agent and .binary == $binary' "$host_marker" >/dev/null; then
+    fail "$agent: selected-agent observation does not match ProfileConfig"
     sed 's/^/    /' "$host_marker" >&2
     return
   fi
@@ -224,10 +204,29 @@ assert_audit_log_for_agent() {
   pass "$agent: live launcher runs selected agent and writes mandatory session-metadata index"
 }
 
-assert_agent_probe_contract claude
-assert_agent_probe_contract pi
-assert_agent_probe_contract direct
+test_agent_probe_contracts() {
+  assert_agent_probe_contract claude
+  assert_agent_probe_contract pi
+  assert_agent_probe_contract direct
+}
 
+if [[ "$#" -gt 0 ]]; then
+  case "$1" in
+    test_agent_probe_contracts) test_agent_probe_contracts ;;
+    *) fail "unknown audit trail test function: $1" ;;
+  esac
+  [[ "$FAILED" -eq 0 ]]
+  exit 0
+fi
+
+wrix_require_live_sandbox
+LAUNCHER=$(wrix_build_live_launcher)
+mkdir -p "$HOME_DIR" "$XDG_CACHE_HOME"
+wrix_make_ed25519_key "$DEPLOY_KEY" "audit-trail-test"
+printf '{}\n' >"$PI_AUTH_FILE"
+chmod 600 "$PI_AUTH_FILE"
+
+test_agent_probe_contracts
 assert_audit_log_for_agent claude
 assert_audit_log_for_agent pi
 assert_audit_log_for_agent direct

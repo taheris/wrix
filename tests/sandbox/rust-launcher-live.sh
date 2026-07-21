@@ -264,30 +264,6 @@ test_linux_custom_mounts_env_reach_live_launcher() {
   printf 'PASS: custom mounts/env reached the live Rust launcher container argv\n'
 }
 
-test_linux_host_provider_credentials_reach_live_launcher() {
-  require_linux
-  local tmp wrix workspace descriptor layout profile_config digest
-  tmp=$(mktemp -d -t wrix-live.XXXXXX)
-  register_tmp "$tmp"
-  setup_fake_runtime "$tmp"
-  wrix=$(wrix_bin)
-  workspace="$tmp/workspace"
-  descriptor="$tmp/descriptor.json"
-  layout="$tmp/oci-layout"
-  profile_config="$tmp/profile.json"
-  digest="sha256:abababababababababababababababababababababababababababababababab"
-  write_descriptor "$descriptor" "$layout" "$digest"
-  write_profile_config "$profile_config" "$workspace" "$descriptor" "$digest"
-
-  OPENAI_API_KEY="openai-provider-fixture" \
-  ANTHROPIC_API_KEY="anthropic-provider-fixture" \
-    run_live_run "$tmp" "$profile_config" "$workspace" "$digest" "$wrix"
-
-  grep -q -- '-e OPENAI_API_KEY=openai-provider-fixture' "$tmp/state/podman.log" || fail "OPENAI_API_KEY did not reach live podman argv"
-  grep -q -- '-e ANTHROPIC_API_KEY=anthropic-provider-fixture' "$tmp/state/podman.log" || fail "ANTHROPIC_API_KEY did not reach live podman argv"
-  printf 'PASS: host provider credentials reached the live launcher container argv\n'
-}
-
 test_linux_sets_is_sandbox_without_fakeuid() {
   require_linux
   local tmp wrix workspace descriptor layout profile_config digest
@@ -476,7 +452,6 @@ IMAGES
 
 if [[ $# -eq 0 ]]; then
   test_linux_custom_mounts_env_reach_live_launcher
-  test_linux_host_provider_credentials_reach_live_launcher
   test_linux_sets_is_sandbox_without_fakeuid
   test_linux_microvm_runtime
   test_linux_archiveless_install_uses_oci_layout

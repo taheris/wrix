@@ -9,9 +9,6 @@ let
   securityScriptFunction = script: function: ''
     run_repo_script ${escapeShellArg "tests/security/${script}.sh"} ${escapeShellArg function}
   '';
-  sandboxScriptWithWrix = script: function: ''
-    run_repo_script_with_wrix ${escapeShellArg "tests/sandbox/${script}.sh"} ${escapeShellArg function}
-  '';
 in
 {
   "security.audit-trail-anchor" = securityScript "audit-trail-anchor";
@@ -24,6 +21,5 @@ in
 
   "security.nested-key-propagation" = securityScript "nested-key-propagation";
 
-  "security.provider-credential-env" =
-    sandboxScriptWithWrix "rust-launcher-live" "test_linux_host_provider_credentials_reach_live_launcher";
+  "security.provider-credential-env" = securityScript "provider-credential-env";
 }
