@@ -470,6 +470,11 @@ rawImage
   # exclusive) can assert the agent rides its own tar (specs/image-builder.md
   # § Provenance-Tiered Layering).
   inherit stableProfileImage agentImage;
-  # Expose generated agent settings so verifiers inspect the image input JSON.
-  inherit claudeSettingsJson materializedRoots piSettingsJson;
+  # Expose generated agent configuration so verifiers inspect the image input JSON.
+  inherit
+    claudeConfigJson
+    claudeSettingsJson
+    materializedRoots
+    piSettingsJson
+    ;
 }

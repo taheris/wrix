@@ -81,7 +81,7 @@ let
   sandboxToolPackages = [ (linuxPkgs.lib.hiPrio imageRustCli.wrix) ];
 
   # Claude config (~/.claude.json) - onboarding state and runtime flags
-  claudeConfig = {
+  baseClaudeConfig = {
     bypassPermissionsModeAccepted = true;
     effortCalloutDismissed = true;
     hasCompletedOnboarding = true;
@@ -98,7 +98,6 @@ let
   };
 
   # Claude settings (~/.claude/settings.json) - user preferences
-  # Base settings that can be extended with MCP servers
   baseClaudeSettings = {
     "$schema" = "https://json.schemastore.org/claude-code-settings.json";
 
@@ -173,6 +172,7 @@ let
       entrypointSh,
       networkBootstrapSh ? null,
       krunSupport ? false,
+      claudeConfig ? baseClaudeConfig,
       claudeSettings ? baseClaudeSettings,
       piSettings ? basePiSettings,
       mcpServerConfigs ? { },
@@ -218,7 +218,7 @@ let
   # Build MCP server configurations from the mcp attrset
   # Returns { packages, mcpServers } where:
   #   - packages: flattened list of all server runtime packages
-  #   - mcpServers: attrset of server configs for claudeSettings
+  #   - mcpServers: attrset of server configs for Claude's user config
   buildMcpConfig =
     mcp:
     let
@@ -296,8 +296,16 @@ let
         if agentPkg == null then defaultAgentPkg else agentPkg
       );
 
-      # Merge MCP servers and profile plugins into Claude settings. When
-      # mcpRuntime is true, don't bake mcpServers — entrypoint handles it.
+      # Claude reads explicit MCP server registrations from its user config.
+      finalClaudeConfig =
+        baseClaudeConfig
+        // (
+          if agent == "claude" && !mcpRuntime && mcpConfig.mcpServers != { } then
+            { inherit (mcpConfig) mcpServers; }
+          else
+            { }
+        );
+
       claudeAgentSettings = if agent == "claude" then agentSettings else { };
 
       finalClaudeSettings =
@@ -306,7 +314,6 @@ let
         // {
           env = baseClaudeSettings.env // (claudeAgentSettings.env or { });
         }
-        // (if !mcpRuntime && mcpConfig.mcpServers != { } then { inherit (mcpConfig) mcpServers; } else { })
         // (
           if (finalProfile.enabledPlugins or { }) != { } then
             { inherit (finalProfile) enabledPlugins; }
@@ -354,6 +361,7 @@ let
         networkBootstrapSh = if isDarwin then ./darwin/network-bootstrap.sh else null;
         krunSupport = isLinux;
         asTarball = isDarwin;
+        claudeConfig = finalClaudeConfig;
         claudeSettings = finalClaudeSettings;
         piSettings = finalPiSettings;
         agentPkg = finalAgentPkg;
