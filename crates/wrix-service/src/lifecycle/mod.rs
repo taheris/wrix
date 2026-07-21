@@ -85,6 +85,8 @@ pub enum Error {
         path: String,
         source: serde_json::Error,
     },
+    /// invalid persisted workspace hash: {value}
+    InvalidPersistedWorkspaceHash { value: String },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -554,11 +556,20 @@ struct PortLease {
 #[derive(Debug, Deserialize)]
 struct PersistedServices {
     #[serde(deserialize_with = "deserialize_workspace_hash")]
-    workspace_hash: WorkspaceHash,
+    workspace_hash: PersistedWorkspaceHash,
     #[serde(deserialize_with = "deserialize_container_name")]
     container_name: ContainerName,
     endpoints: PersistedEndpoints,
 }
+
+#[derive(Debug, Eq, PartialEq)]
+enum PersistedWorkspaceHash {
+    Current(WorkspaceHash),
+    Legacy(LegacyWorkspaceHash),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct LegacyWorkspaceHash(String);
 
 #[derive(Debug, Deserialize)]
 struct PersistedEndpoints {
@@ -598,14 +609,44 @@ impl PortLease {
     }
 }
 
+impl PersistedWorkspaceHash {
+    fn parse(value: String) -> Result<Self> {
+        match WorkspaceHash::parse(&value) {
+            Ok(hash) => Ok(Self::Current(hash)),
+            Err(_source) if LegacyWorkspaceHash::is_valid(&value) => {
+                Ok(Self::Legacy(LegacyWorkspaceHash(value)))
+            }
+            Err(_source) => Err(Error::InvalidPersistedWorkspaceHash { value }),
+        }
+    }
+
+    fn matches(&self, current: &WorkspaceHash) -> bool {
+        match self {
+            Self::Current(persisted) => persisted == current,
+            Self::Legacy(_legacy) => false,
+        }
+    }
+}
+
+impl LegacyWorkspaceHash {
+    const HEX_LEN: usize = 16;
+
+    fn is_valid(value: &str) -> bool {
+        value.len() == Self::HEX_LEN
+            && value
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    }
+}
+
 fn deserialize_workspace_hash<'de, D>(
     deserializer: D,
-) -> std::result::Result<WorkspaceHash, D::Error>
+) -> std::result::Result<PersistedWorkspaceHash, D::Error>
 where
     D: Deserializer<'de>,
 {
     let value = String::deserialize(deserializer)?;
-    WorkspaceHash::parse(&value).map_err(de::Error::custom)
+    PersistedWorkspaceHash::parse(value).map_err(de::Error::custom)
 }
 
 fn deserialize_container_name<'de, D>(
@@ -654,7 +695,7 @@ fn current_container_name(
     let Some(services) = read_persisted_services(&path)? else {
         return Ok(None);
     };
-    if &services.workspace_hash != workspace_hash {
+    if !services.workspace_hash.matches(workspace_hash) {
         return Ok(None);
     }
     Ok(Some(services.container_name))
@@ -679,7 +720,8 @@ fn container_name_collides(
         let Some(services) = read_persisted_services(&services_path)? else {
             continue;
         };
-        if &services.container_name == candidate && &services.workspace_hash != workspace_hash {
+        if &services.container_name == candidate && !services.workspace_hash.matches(workspace_hash)
+        {
             return Ok(true);
         }
     }

@@ -7,7 +7,7 @@ use std::{
 };
 
 use wrix_core::path::{Workspace, WorkspaceHash};
-use wrix_service::lifecycle::{CacheMode, DoltEndpoint, DoltTransport, Plan};
+use wrix_service::lifecycle::{CacheMode, DoltEndpoint, DoltTransport, Paths, Plan};
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
@@ -54,6 +54,41 @@ fn workspace_identity_is_stable_and_collision_resistant() -> TestResult {
         other.workspace().hash(),
     )?;
 
+    Ok(())
+}
+
+#[test]
+fn legacy_workspace_hash_metadata_uses_collision_safe_plan() -> TestResult {
+    let root = repo("legacy-workspace-hash")?;
+    let workspace = Workspace::from_service_path(&root)?;
+    let fixture = tempfile::Builder::new()
+        .prefix("legacy-workspace-hash")
+        .tempdir()?;
+    let state_base = fixture.path().join("state");
+    let legacy_state = state_base.join("0123456789abcdef");
+    let paths = Paths::new(
+        state_base.join(workspace.hash().as_str()),
+        fixture.path().join("cache"),
+    );
+    fs::create_dir_all(&legacy_state)?;
+    fs::write(
+        legacy_state.join("services.json"),
+        format!(
+            concat!(
+                "{{\n",
+                "  \"workspace_hash\": \"0123456789abcdef\",\n",
+                "  \"container_name\": \"{}\",\n",
+                "  \"endpoints\": {{ \"cache_http\": null, \"dolt_tcp\": null }}\n",
+                "}}\n"
+            ),
+            workspace.container_name()
+        ),
+    )?;
+
+    let expected_name = workspace.disambiguated_container_name();
+    let plan = Plan::for_workspace_with_paths(workspace, CacheMode::Disabled, paths)?;
+
+    assert_eq!(plan.container_name(), expected_name);
     Ok(())
 }
 
@@ -159,10 +194,18 @@ fn rerun_with_temp_cache_enabled(test_name: &str) -> TestResult<bool> {
     if env::var_os(CHILD_MARKER).is_some() {
         return Ok(false);
     }
+    let fixture = tempfile::Builder::new()
+        .prefix("service-temp-cache-child")
+        .tempdir()?;
+    let home = fixture.path().join("home");
+    fs::create_dir_all(&home)?;
     let output = Command::new(env::current_exe()?)
         .arg(test_name)
         .arg("--exact")
         .arg("--nocapture")
+        .env("HOME", home)
+        .env("XDG_STATE_HOME", fixture.path().join("state"))
+        .env("XDG_CACHE_HOME", fixture.path().join("cache"))
         .env("WRIX_SERVICE_ALLOW_TEMP_CACHE", "1")
         .env(CHILD_MARKER, "1")
         .output()?;
