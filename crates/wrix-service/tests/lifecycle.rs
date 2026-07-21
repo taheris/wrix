@@ -1,7 +1,9 @@
 use std::{
+    env,
     ffi::OsStr,
     fs, io,
     path::{Component, Path, PathBuf},
+    process::Command,
 };
 
 use wrix_core::path::Workspace;
@@ -11,6 +13,9 @@ type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
 #[test]
 fn workspace_identity_is_stable_and_collision_resistant() -> TestResult {
+    if rerun_with_temp_cache_enabled("workspace_identity_is_stable_and_collision_resistant")? {
+        return Ok(());
+    }
     let root = repo_with_dolt("identity-primary")?;
     let child = root.join("nested/workspace");
     fs::create_dir_all(&child)?;
@@ -139,6 +144,27 @@ fn dolt_endpoint_transport_is_platform_specific() -> TestResult {
     }
 
     Ok(())
+}
+
+fn rerun_with_temp_cache_enabled(test_name: &str) -> TestResult<bool> {
+    const CHILD_MARKER: &str = "WRIX_SERVICE_TEMP_CACHE_TEST_CHILD";
+    if env::var_os(CHILD_MARKER).is_some() {
+        return Ok(false);
+    }
+    let output = Command::new(env::current_exe()?)
+        .arg(test_name)
+        .arg("--exact")
+        .arg("--nocapture")
+        .env("WRIX_SERVICE_ALLOW_TEMP_CACHE", "1")
+        .env(CHILD_MARKER, "1")
+        .output()?;
+    assert!(
+        output.status.success(),
+        "child failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    Ok(true)
 }
 
 fn distinct_plan(first: &Plan) -> TestResult<Plan> {

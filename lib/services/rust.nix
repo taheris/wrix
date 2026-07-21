@@ -14,6 +14,15 @@ let
     };
   };
 
+  cacheHookTestPublisher = pkgs.writeShellScriptBin "wrix-cache-test-publisher" ''
+    set -euo pipefail
+
+    printf 'uid=%s\n' "$UID"
+    printf 'args='
+    printf '%s ' "$@"
+    printf '\n'
+  '';
+
   prekHooksBundle = import ../prek/bundle.nix { inherit pkgs; };
 
   binaryMeta = name: {
@@ -47,7 +56,21 @@ let
 
 in
 {
-  inherit (workspace) cargoArtifacts clippy nextest;
+  inherit (workspace) cargoArtifacts clippy;
+
+  nextest = workspace.nextest.overrideAttrs (
+    {
+      nativeBuildInputs ? [ ],
+      ...
+    }:
+    {
+      nativeBuildInputs = nativeBuildInputs ++ [
+        pkgs.hostname
+        pkgs.openssh
+      ];
+      WRIX_TEST_PUBLISHER_HELPER = "${cacheHookTestPublisher}/bin/wrix-cache-test-publisher";
+    }
+  );
 
   package = workspace.bin;
   wrix = mkWrappedBinaryPackage "wrix" [

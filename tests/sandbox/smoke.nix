@@ -500,20 +500,24 @@ in
         {
           nativeBuildInputs = [
             bash
+            pkgs.coreutils
             pkgs.gnugrep
+            pkgs.jq
           ];
         }
         ''
-          launcher="${wrixLauncher}/bin/wrix"
-          grep -aq 'WRIX_MICROVM' "$launcher" || { echo "FAIL: Missing WRIX_MICROVM env var check"; exit 1; }
-          grep -aq '/dev/kvm' "$launcher" || { echo "FAIL: Missing /dev/kvm detection"; exit 1; }
-          grep -aq -- '--runtime' "$launcher" || { echo "FAIL: Missing runtime flag construction"; exit 1; }
-          echo "Linux microVM krun detection validation passed"
-          mkdir $out
+          set -euo pipefail
+
+          WRIX_TEST_WRIX_BIN="${wrixLauncher}/bin/wrix" \
+            REPO_ROOT="${../..}" \
+            bash "${../../tests/sandbox/rust-launcher-live.sh}" test_linux_microvm_runtime
+          mkdir "$out"
         ''
     else
       runCommandLocal "smoke-linux-microvm-krun" { } ''
-        trap '_ec=$?; if [ "$_ec" -eq 77 ]; then mkdir -p $out; exit 0; fi' EXIT
+        set -euo pipefail
+
+        trap '_ec=$?; if [[ "$_ec" -eq 77 ]]; then mkdir -p "$out"; exit 0; fi' EXIT
         echo "SKIP: krun microVM detection (Linux-only test)" >&2
         exit 77
       '';
