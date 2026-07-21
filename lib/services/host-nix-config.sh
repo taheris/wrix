@@ -45,10 +45,10 @@ wrix_host_require_public_key() {
 
 wrix_host_config_snapshot() {
   local nix_bin="${WRIX_NIX_BIN:-nix}"
-  if "$nix_bin" config show 2>/dev/null; then
+  if "$nix_bin" config show 2>/dev/null; then # compatibility: older Nix rejects the config subcommand.
     return 0
   fi
-  "$nix_bin" show-config 2>/dev/null
+  "$nix_bin" show-config 2>/dev/null # compatibility: newer Nix may omit the legacy alias.
 }
 
 wrix_host_config_line_value() {
@@ -168,7 +168,7 @@ wrix_host_nix_config_main() {
     wrix_host_reject_conflicting_hook "$before_config" || return 1
   fi
 
-  endpoints="$($service_bin service endpoints)" || return 1
+  endpoints="$("$service_bin" service endpoints)" || return 1
   if printf '%s\n' "$endpoints" | grep -q '"cache_http":[[:space:]]*null'; then
     return 0
   fi

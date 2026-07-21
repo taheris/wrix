@@ -16,6 +16,8 @@ const PROJECT_DRV: &str = "/nix/store/project-root.drv";
 const PROJECT_OUT: &str = "/nix/store/project-root-out";
 const PENDING_OUT: &str = "/nix/store/pending-root-out";
 const UPSTREAM_OUT: &str = "/nix/store/upstream-dependency-out";
+const ARBITRARY_OUT: &str = "/nix/store/arbitrary-host-path";
+const CLOSURE_DEPENDENCY: &str = "/nix/store/closure-only-dependency";
 const VALID_PUBLIC_KEY: &str = "wrix-cache:CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC=\n";
 
 #[test]
@@ -28,11 +30,27 @@ fn publish_realized_roots_drains_pending_and_updates_gc_markers() -> TestResult 
         &[PROJECT_OUT],
     )])?;
     fixture.write_pending("matching", PROJECT_DRV, &[PENDING_OUT])?;
+    fixture.write_extra_closure(&[CLOSURE_DEPENDENCY])?;
+    fixture.write_roots(&[
+        RootSpec::new(
+            "packages.x86_64-linux.demo",
+            ".#packages.x86_64-linux.demo",
+            PROJECT_DRV,
+            &[PROJECT_OUT],
+        ),
+        RootSpec::new(
+            "packages.x86_64-linux.missing",
+            ".#packages.x86_64-linux.missing",
+            "/nix/store/missing-root.drv",
+            &[],
+        ),
+    ])?;
 
     let report = fixture.run("publish")?;
 
     assert!(report.contains("published root: .#packages.x86_64-linux.demo"));
     assert!(report.contains("drained pending:"));
+    assert!(report.contains("unrealized root: .#packages.x86_64-linux.missing"));
     assert_eq!(fixture.pending_count()?, 0);
     let marker = fs::read_to_string(
         fixture
@@ -40,12 +58,14 @@ fn publish_realized_roots_drains_pending_and_updates_gc_markers() -> TestResult 
             .join("gcroots/packages.x86_64-linux.demo"),
     )?;
     assert!(marker.contains(PROJECT_OUT));
+    assert!(marker.contains(CLOSURE_DEPENDENCY));
     let manifest = fs::read_to_string(fixture.state_root.join("publish-roots.json"))?;
     assert!(manifest.contains(fixture.workspace.hash().as_str()));
     let log = fixture.nix_log()?;
     assert!(log.contains(PROJECT_OUT));
     assert!(log.contains(PENDING_OUT));
     assert!(log.contains("--no-recursive"));
+    assert!(!log.contains("nix build"));
 
     Ok(())
 }
@@ -75,19 +95,43 @@ fn warm_roots_include_checks_only_when_requested() -> TestResult {
 
     let without_checks = Fixture::new("warm-without-checks")?;
     without_checks.write_roots(&roots)?;
-    without_checks.run_warm(false)?;
+    let without_report = without_checks.run_warm(false)?;
     let log = without_checks.nix_log()?;
     assert!(log.contains(".#packages.x86_64-linux.pkg"));
     assert!(log.contains(".#devShells.x86_64-linux.default"));
     assert!(!log.contains(".#checks.x86_64-linux.unit"));
+    assert!(without_report.contains("published root: .#packages.x86_64-linux.pkg"));
+    assert!(
+        without_checks
+            .state_root
+            .join("gcroots/packages.x86_64-linux.pkg")
+            .is_file()
+    );
+    assert!(
+        without_checks
+            .state_root
+            .join("gcroots/devShells.x86_64-linux.default")
+            .is_file()
+    );
+    assert!(
+        fs::read_to_string(without_checks.state_root.join("cache-status.json"))?
+            .contains("\"dirty\": false")
+    );
 
     let with_checks = Fixture::new("warm-with-checks")?;
     with_checks.write_roots(&roots)?;
-    with_checks.run_warm(true)?;
+    let with_report = with_checks.run_warm(true)?;
     let log = with_checks.nix_log()?;
     assert!(log.contains(".#packages.x86_64-linux.pkg"));
     assert!(log.contains(".#devShells.x86_64-linux.default"));
     assert!(log.contains(".#checks.x86_64-linux.unit"));
+    assert!(with_report.contains("published root: .#checks.x86_64-linux.unit"));
+    assert!(
+        with_checks
+            .state_root
+            .join("gcroots/checks.x86_64-linux.unit")
+            .is_file()
+    );
 
     Ok(())
 }
@@ -102,14 +146,38 @@ fn publish_filters_to_current_workspace_closure() -> TestResult {
         &[PROJECT_OUT],
     )])?;
     fixture.write_extra_closure(&[UPSTREAM_OUT])?;
+    fixture.write_pending("foreign", "/nix/store/foreign-root.drv", &[ARBITRARY_OUT])?;
 
     fixture.run("publish")?;
 
     let copy = fixture.copy_log_line()?;
     assert!(copy.contains(PROJECT_OUT));
     assert!(!copy.contains(UPSTREAM_OUT));
-    assert!(!copy.contains("/nix/store/arbitrary-host-path"));
+    assert!(!copy.contains(ARBITRARY_OUT));
+    assert_eq!(fixture.pending_count()?, 1);
 
+    Ok(())
+}
+
+#[test]
+fn publish_fails_when_root_closure_query_fails() -> TestResult {
+    let fixture = Fixture::new("publish-query-failure")?;
+    fixture.write_roots(&[RootSpec::new(
+        "packages.x86_64-linux.demo",
+        ".#packages.x86_64-linux.demo",
+        PROJECT_DRV,
+        &[PROJECT_OUT],
+    )])?;
+
+    let error = fixture.run_failure("publish", &[("WRIX_FAKE_QUERY_FAIL", "1")])?;
+
+    assert!(
+        error.contains("nix-store --query --requisites"),
+        "unexpected error: {error}"
+    );
+    if fixture.nix_log.exists() {
+        assert!(!fixture.nix_log()?.contains("nix copy"));
+    }
     Ok(())
 }
 
@@ -133,6 +201,11 @@ fn publish_uses_flat_signed_cache_with_nonrecursive_copies() -> TestResult {
         fixture.state_root.join("keys/cache.secret").display()
     )));
     assert!(copy.contains(PROJECT_OUT));
+    let narinfo = fs::read_to_string(fixture.cache_root.join("project-root.narinfo"))?;
+    assert!(narinfo.contains("StorePath: /nix/store/project-root-out"));
+    assert!(narinfo.contains("Sig: wrix-cache:"));
+    assert!(fixture.cache_root.join("nix-cache-info").is_file());
+    assert!(fixture.cache_root.join("nar").is_dir());
 
     Ok(())
 }
@@ -198,6 +271,33 @@ fn prune_keeps_only_paths_reachable_from_current_markers() -> TestResult {
     )?;
     fs::write(fixture.cache_root.join("nar/stale.nar"), "stale\n")?;
     fs::write(fixture.cache_root.join("nar/orphan.nar"), "orphan\n")?;
+    fs::write(
+        fixture.state_root.join("gcroots/checks.demo"),
+        "/nix/store/cccccccccccccccccccccccccccccccc-dependency\n",
+    )?;
+    fs::write(
+        fixture
+            .cache_root
+            .join("cccccccccccccccccccccccccccccccc.narinfo"),
+        "StorePath: /nix/store/cccccccccccccccccccccccccccccccc-dependency\nURL: nar/dependency.nar\n",
+    )?;
+    fs::write(
+        fixture.cache_root.join("nar/dependency.nar"),
+        "dependency\n",
+    )?;
+    fs::create_dir_all(fixture.cache_root.join("log"))?;
+    fs::write(
+        fixture
+            .cache_root
+            .join("log/cccccccccccccccccccccccccccccccc.drv"),
+        "retained log\n",
+    )?;
+    fs::write(
+        fixture
+            .cache_root
+            .join("log/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.drv"),
+        "stale log\n",
+    )?;
 
     fixture.run("prune")?;
 
@@ -216,6 +316,25 @@ fn prune_keeps_only_paths_reachable_from_current_markers() -> TestResult {
     );
     assert!(!fixture.cache_root.join("nar/stale.nar").exists());
     assert!(!fixture.cache_root.join("nar/orphan.nar").exists());
+    assert!(
+        fixture
+            .cache_root
+            .join("cccccccccccccccccccccccccccccccc.narinfo")
+            .exists()
+    );
+    assert!(fixture.cache_root.join("nar/dependency.nar").exists());
+    assert!(
+        fixture
+            .cache_root
+            .join("log/cccccccccccccccccccccccccccccccc.drv")
+            .exists()
+    );
+    assert!(
+        !fixture
+            .cache_root
+            .join("log/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.drv")
+            .exists()
+    );
     let status = fs::read_to_string(fixture.state_root.join("cache-status.json"))?;
     assert!(status.contains("\"dirty\": false"));
 
@@ -253,12 +372,17 @@ fn status_warns_above_soft_size_without_pruning() -> TestResult {
     let fixture = Fixture::new("status-soft-limit")?;
     fs::create_dir_all(fixture.cache_root.join("nar"))?;
     let retained = fixture.cache_root.join("nar/retained.nar");
-    fs::write(&retained, "retained cache payload\n")?;
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&retained)?;
+    file.set_len(50 * 1024 * 1024 * 1024 + 1)?;
 
-    let report = fixture.run_with_env("status", &[("WRIX_CACHE_SOFT_LIMIT_BYTES", "1")])?;
+    let report = fixture.run("status")?;
 
     assert!(report.contains("cache size:"));
-    assert!(report.contains("warning: project cache size exceeds 1 byte soft threshold"));
+    assert!(report.contains("warning: project cache size exceeds 53687091200 byte soft threshold"));
     assert!(retained.exists());
 
     Ok(())
@@ -455,6 +579,23 @@ impl Fixture {
         Self::finish_child(command, &output)
     }
 
+    fn run_failure(&self, action: &str, extra_env: &[(&str, &str)]) -> TestResult<String> {
+        let output = self.root.path().join(format!("{action}-failure.out"));
+        let mut command = self.child_command(action, &output)?;
+        for (key, value) in extra_env {
+            command.env(key, value);
+        }
+        let child = command.output()?;
+        if child.status.success() {
+            return Err(io::Error::other("publisher child unexpectedly succeeded").into());
+        }
+        Ok(format!(
+            "{}{}",
+            String::from_utf8_lossy(&child.stdout),
+            String::from_utf8_lossy(&child.stderr)
+        ))
+    }
+
     fn child_command(&self, action: &str, output: &Path) -> TestResult<Command> {
         let mut command = Command::new(env::current_exe()?);
         command
@@ -472,6 +613,8 @@ impl Fixture {
             .env("WRIX_FAKE_NIX_STORE_LOG", &self.nix_store_log)
             .env("WRIX_FAKE_KEY_COUNTER", &self.key_counter)
             .env("WRIX_FAKE_EXTRA_CLOSURE_FILE", &self.extra_closure_file)
+            .env("WRIX_FAKE_CACHE_ROOT", &self.cache_root)
+            .env("WRIX_FAKE_QUERY_FAIL", "0")
             .env("WRIX_FAKE_UPSTREAM_MATCH", "upstream")
             .env("WRIX_UPSTREAM_SUBSTITUTERS", "https://cache.example");
         if self.roots_file.exists() {
@@ -541,7 +684,18 @@ if [[ "$#" -ge 4 && "$1" == "path-info" && "$2" == "--store" ]]; then
 fi
 
 case "$1" in
-  build|copy)
+  build)
+    exit 0
+    ;;
+  copy)
+    cache_root="$WRIX_FAKE_CACHE_ROOT"
+    mkdir -p "$cache_root/nar"
+    printf 'nar payload\n' >"$cache_root/nar/project-root.nar"
+    cat >"$cache_root/project-root.narinfo" <<'NARINFO'
+StorePath: /nix/store/project-root-out
+URL: nar/project-root.nar
+Sig: wrix-cache:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+NARINFO
     exit 0
     ;;
   config)
@@ -596,6 +750,10 @@ case "$1" in
     exit 0
     ;;
   --query)
+    if [[ "$WRIX_FAKE_QUERY_FAIL" == "1" ]]; then
+      printf 'closure query failed\n' >&2
+      exit 1
+    fi
     shift 2
     for store_path in "$@"; do
       printf '%s\n' "$store_path"

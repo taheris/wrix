@@ -2,11 +2,13 @@ use std::{
     env, fs, io,
     io::Write,
     net::Ipv4Addr,
+    num::NonZeroU16,
     path::{Path, PathBuf},
     process::{Command as ProcessCommand, ExitCode, Output, Stdio},
 };
 
 use displaydoc::Display;
+use serde::Deserialize;
 use serde_json::Value;
 use thiserror::Error;
 use wrix_core::path::Workspace;
@@ -55,6 +57,14 @@ pub enum LaunchError {
     MissingCachePublicKey { path: String },
     /// project cache public key is invalid: {path}
     InvalidCachePublicKey { path: String },
+    /// project cache state root must be absolute: {path}
+    InvalidCacheStateRoot { path: String },
+    /// Dolt endpoint host must be a numeric IPv4 address: {host}
+    InvalidDoltHost { host: String },
+    /// Dolt endpoint port is invalid: {port}
+    InvalidDoltPort { port: String },
+    /// Dolt socket endpoint is empty
+    MissingDoltSocket,
     /// service command failed: {stderr}
     ServiceFailed { stderr: String },
     /// command failed: {program}: {stderr}
@@ -213,12 +223,56 @@ struct DarwinMounts {
 
 #[derive(Default)]
 struct ServicesState {
-    project_cache_url: Option<String>,
-    project_cache_host: Option<String>,
-    project_cache_port: Option<u16>,
-    project_cache_nix_config: Option<String>,
+    project_cache: Option<ProjectCache>,
     beads_socket: Option<BeadsSocket>,
     beads_tcp: Option<BeadsTcp>,
+}
+
+struct ProjectCache {
+    url: String,
+    host: Ipv4Addr,
+    port: NonZeroU16,
+    nix_config: String,
+}
+
+#[derive(Deserialize)]
+struct ServiceMetadata {
+    state_root: PathBuf,
+    endpoints: ServiceEndpoints,
+}
+
+#[derive(Deserialize)]
+struct ServiceEndpoints {
+    cache_http: Option<CacheHttpEndpoint>,
+}
+
+#[derive(Deserialize)]
+struct CacheHttpEndpoint {
+    host: Ipv4Addr,
+    port: NonZeroU16,
+}
+
+struct CachePublicKey(String);
+
+impl CachePublicKey {
+    fn read(path: &Path) -> Result<Self, LaunchError> {
+        if !path.is_file() {
+            return Err(LaunchError::MissingCachePublicKey {
+                path: path.display().to_string(),
+            });
+        }
+        let value = fs::read_to_string(path)?;
+        let value = value.trim();
+        let valid_name = value
+            .split_once(':')
+            .is_some_and(|(name, encoded)| !name.is_empty() && encoded.len() == 44);
+        if !valid_name || !value.ends_with('=') {
+            return Err(LaunchError::InvalidCachePublicKey {
+                path: path.display().to_string(),
+            });
+        }
+        Ok(Self(value.to_owned()))
+    }
 }
 
 struct BeadsSocket {
@@ -227,8 +281,8 @@ struct BeadsSocket {
 }
 
 struct BeadsTcp {
-    host: String,
-    port: u16,
+    host: Ipv4Addr,
+    port: NonZeroU16,
 }
 
 #[derive(Clone, Debug)]
@@ -1009,17 +1063,16 @@ impl<'a> Plan<'a> {
         if let Some(session_id) = &self.session_id {
             pairs.push((String::from("WRIX_SESSION_ID"), session_id.clone()));
         }
-        if let Some(cache_host) = &self.services.project_cache_host {
-            pairs.push((String::from("WRIX_PROJECT_CACHE_HOST"), cache_host.clone()));
-        }
-        if let Some(cache_port) = self.services.project_cache_port {
+        if let Some(cache) = &self.services.project_cache {
+            pairs.push((
+                String::from("WRIX_PROJECT_CACHE_HOST"),
+                cache.host.to_string(),
+            ));
             pairs.push((
                 String::from("WRIX_PROJECT_CACHE_PORT"),
-                cache_port.to_string(),
+                cache.port.to_string(),
             ));
-        }
-        if let Some(nix_config) = &self.services.project_cache_nix_config {
-            pairs.push((String::from("NIX_CONFIG"), nix_config.clone()));
+            pairs.push((String::from("NIX_CONFIG"), cache.nix_config.clone()));
         }
         if let Some(beads) = &self.services.beads_socket {
             pairs.push((
@@ -1028,7 +1081,10 @@ impl<'a> Plan<'a> {
             ));
         }
         if let Some(beads) = &self.services.beads_tcp {
-            pairs.push((String::from("BEADS_DOLT_SERVER_HOST"), beads.host.clone()));
+            pairs.push((
+                String::from("BEADS_DOLT_SERVER_HOST"),
+                beads.host.to_string(),
+            ));
             pairs.push((
                 String::from("BEADS_DOLT_SERVER_PORT"),
                 beads.port.to_string(),
@@ -1393,47 +1449,30 @@ impl ServicesState {
 
     fn load_project_cache(&mut self, workspace: &Path) -> Result<(), LaunchError> {
         let output = run_service(workspace, &["service", "endpoints"])?;
-        let value = serde_json::from_slice::<Value>(&output.stdout)
+        let metadata = serde_json::from_slice::<ServiceMetadata>(&output.stdout)
             .map_err(|source| LaunchError::ServiceJson { source })?;
-        if value
-            .pointer("/endpoints/cache_http")
-            .is_none_or(Value::is_null)
-        {
+        let Some(endpoint) = metadata.endpoints.cache_http else {
             return Ok(());
-        }
-        let host = value
-            .pointer("/endpoints/cache_http/host")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let port = value
-            .pointer("/endpoints/cache_http/port")
-            .and_then(Value::as_u64)
-            .and_then(|port| u16::try_from(port).ok())
-            .unwrap_or(0);
-        let state_root = value
-            .get("state_root")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let public_key_path = Path::new(state_root).join("keys/cache.pub");
-        if !public_key_path.is_file() {
-            return Err(LaunchError::MissingCachePublicKey {
-                path: public_key_path.display().to_string(),
+        };
+        if !metadata.state_root.is_absolute() {
+            return Err(LaunchError::InvalidCacheStateRoot {
+                path: metadata.state_root.display().to_string(),
             });
         }
-        let public_key = fs::read_to_string(&public_key_path)?.replace('\n', "");
-        if !public_key.contains(':') || !public_key.ends_with('=') {
-            return Err(LaunchError::InvalidCachePublicKey {
-                path: public_key_path.display().to_string(),
-            });
-        }
-        let sandbox_host = sandbox_cache_host(host)?;
-        let url = format!("http://{sandbox_host}:{port}");
-        self.project_cache_url = Some(url.clone());
-        self.project_cache_host = Some(sandbox_host);
-        self.project_cache_port = Some(port);
-        self.project_cache_nix_config = Some(format!(
-            "extra-substituters = {url}\nextra-trusted-public-keys = {public_key}\nbuilders-use-substitutes = true"
-        ));
+        let public_key_path = metadata.state_root.join("keys/cache.pub");
+        let public_key = CachePublicKey::read(&public_key_path)?;
+        let sandbox_host = sandbox_cache_host(endpoint.host)?;
+        let url = format!("http://{sandbox_host}:{}", endpoint.port);
+        let nix_config = format!(
+            "extra-substituters = {url}\nextra-trusted-public-keys = {}\nbuilders-use-substitutes = true",
+            public_key.0
+        );
+        self.project_cache = Some(ProjectCache {
+            url,
+            host: sandbox_host,
+            port: endpoint.port,
+            nix_config,
+        });
         Ok(())
     }
 
@@ -1443,27 +1482,27 @@ impl ServicesState {
             let socket = trim_stdout(&output.stdout);
             self.beads_socket = Some(configure_dolt_socket(workspace, &socket)?);
         } else {
-            let port = trim_stdout(&run_service(workspace, &["service", "dolt", "port"])?.stdout)
-                .parse::<u16>()
-                .map_or(0, |port| port);
-            let host = trim_stdout(&run_service(workspace, &["service", "dolt", "host"])?.stdout);
+            let port_text =
+                trim_stdout(&run_service(workspace, &["service", "dolt", "port"])?.stdout);
+            let port = port_text
+                .parse::<NonZeroU16>()
+                .map_err(|_source| LaunchError::InvalidDoltPort { port: port_text })?;
+            let host_text =
+                trim_stdout(&run_service(workspace, &["service", "dolt", "host"])?.stdout);
+            let host = host_text
+                .parse::<Ipv4Addr>()
+                .map_err(|_source| LaunchError::InvalidDoltHost { host: host_text })?;
             self.beads_tcp = Some(BeadsTcp { host, port });
         }
         Ok(())
     }
 
     fn write_dry_run(&self, stdout: &mut impl Write) -> Result<(), LaunchError> {
-        if let Some(url) = &self.project_cache_url {
-            writeln!(stdout, "PROJECT_CACHE_URL={url}")?;
-            if let Some(host) = &self.project_cache_host {
-                writeln!(stdout, "ENV=WRIX_PROJECT_CACHE_HOST={host}")?;
-            }
-            if let Some(port) = self.project_cache_port {
-                writeln!(stdout, "ENV=WRIX_PROJECT_CACHE_PORT={port}")?;
-            }
-            if let Some(config) = &self.project_cache_nix_config {
-                writeln!(stdout, "ENV=NIX_CONFIG={config}")?;
-            }
+        if let Some(cache) = &self.project_cache {
+            writeln!(stdout, "PROJECT_CACHE_URL={}", cache.url)?;
+            writeln!(stdout, "ENV=WRIX_PROJECT_CACHE_HOST={}", cache.host)?;
+            writeln!(stdout, "ENV=WRIX_PROJECT_CACHE_PORT={}", cache.port)?;
+            writeln!(stdout, "ENV=NIX_CONFIG={}", cache.nix_config)?;
         }
         if let Some(beads) = &self.beads_socket {
             writeln!(
@@ -1683,6 +1722,9 @@ fn service_workspace_has_dolt(workspace: &Path) -> Result<bool, LaunchError> {
 }
 
 fn configure_dolt_socket(workspace: &Path, socket: &str) -> Result<BeadsSocket, LaunchError> {
+    if socket.is_empty() {
+        return Err(LaunchError::MissingDoltSocket);
+    }
     let project_real = workspace.canonicalize()?;
     let workspace_socket = project_real.join(".wrix/dolt.sock");
     if Path::new(socket) == workspace_socket {
@@ -1697,20 +1739,20 @@ fn configure_dolt_socket(workspace: &Path, socket: &str) -> Result<BeadsSocket, 
     })
 }
 
-fn sandbox_cache_host(host: &str) -> Result<String, LaunchError> {
-    let resolved = env::var("WRIX_PROJECT_CACHE_SANDBOX_HOST").unwrap_or_else(|_| {
-        if Platform::CURRENT == Platform::Linux && host.starts_with("127.") {
-            String::from("169.254.1.2")
-        } else {
-            host.to_owned()
+fn sandbox_cache_host(host: Ipv4Addr) -> Result<Ipv4Addr, LaunchError> {
+    match env::var("WRIX_PROJECT_CACHE_SANDBOX_HOST") {
+        Ok(value) => value
+            .parse::<Ipv4Addr>()
+            .map_err(|_source| LaunchError::InvalidCacheHost { host: value }),
+        Err(env::VarError::NotPresent)
+            if Platform::CURRENT == Platform::Linux && host.is_loopback() =>
+        {
+            Ok(Ipv4Addr::new(169, 254, 1, 2))
         }
-    });
-    if resolved.split('.').count() == 4
-        && resolved.split('.').all(|part| part.parse::<u8>().is_ok())
-    {
-        Ok(resolved)
-    } else {
-        Err(LaunchError::InvalidCacheHost { host: resolved })
+        Err(env::VarError::NotPresent) => Ok(host),
+        Err(env::VarError::NotUnicode(value)) => Err(LaunchError::InvalidCacheHost {
+            host: value.to_string_lossy().into_owned(),
+        }),
     }
 }
 

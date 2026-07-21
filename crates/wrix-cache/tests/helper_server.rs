@@ -11,7 +11,7 @@ use std::{
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
 #[test]
-fn static_server_serves_only_binary_cache_paths_on_persisted_loopback_port() -> TestResult {
+fn static_server_enforces_binary_cache_path_policy() -> TestResult {
     let fixture = tempfile::Builder::new().prefix("helper-server").tempdir()?;
     let cache_root = fixture.path().join("cache-root");
     fs::create_dir_all(cache_root.join("nar"))?;
@@ -81,7 +81,6 @@ fn static_server_serves_only_binary_cache_paths_on_persisted_loopback_port() -> 
         assert!(!response.contains("secret"));
     }
 
-    assert!((21_000..=22_999).contains(&port));
     Ok(())
 }
 

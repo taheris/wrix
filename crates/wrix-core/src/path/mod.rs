@@ -4,7 +4,9 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
+use displaydoc::Display;
 use sha2::{Digest, Sha256};
+use thiserror::Error;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Workspace {
@@ -17,6 +19,12 @@ pub struct WorkspaceHash(String);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ContainerName(String);
+
+#[derive(Clone, Debug, Display, Error)]
+/// workspace hash must be a lowercase sha256 hex digest: {value}
+pub struct WorkspaceHashParseError {
+    value: String,
+}
 
 impl Workspace {
     pub fn from_current_dir() -> io::Result<Self> {
@@ -93,6 +101,16 @@ impl WorkspaceHash {
             push_hex_byte(&mut hash, byte);
         }
         Self(hash)
+    }
+
+    pub fn parse(value: &str) -> Result<Self, WorkspaceHashParseError> {
+        if Self::is_valid_str(value) {
+            Ok(Self(value.to_owned()))
+        } else {
+            Err(WorkspaceHashParseError {
+                value: value.to_owned(),
+            })
+        }
     }
 
     pub const fn as_str(&self) -> &str {

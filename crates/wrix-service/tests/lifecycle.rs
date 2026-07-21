@@ -6,7 +6,7 @@ use std::{
     process::Command,
 };
 
-use wrix_core::path::Workspace;
+use wrix_core::path::{Workspace, WorkspaceHash};
 use wrix_service::lifecycle::{CacheMode, DoltEndpoint, DoltTransport, Plan};
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
@@ -47,12 +47,18 @@ fn workspace_identity_is_stable_and_collision_resistant() -> TestResult {
         dolt_endpoint(&plan)?.socket_path(),
         dolt_endpoint(&other)?.socket_path()
     );
+    assert_cache_command_uses_workspace(&root, plan.workspace().hash())?;
+    assert_cache_command_uses_workspace(&child, plan.workspace().hash())?;
+    assert_cache_command_uses_workspace(
+        other.workspace().canonical_path(),
+        other.workspace().hash(),
+    )?;
 
     Ok(())
 }
 
 #[test]
-fn temp_cache_only_workspace_does_not_start_service() -> TestResult {
+fn temp_cache_only_plan_has_no_services() -> TestResult {
     let root = temp_workspace("temp-cache-only")?;
     let workspace = Workspace::from_service_path(&root)?;
     let plan = Plan::for_workspace(workspace, CacheMode::Enabled)?;
@@ -84,6 +90,7 @@ fn loom_bead_workspace_uses_repo_service_identity() -> TestResult {
     assert_eq!(bead_plan.container_name(), repo_plan.container_name());
     assert_ne!(raw_bead.workspace().hash(), repo_plan.workspace().hash());
     assert_ne!(raw_bead.container_name(), repo_plan.container_name());
+    assert_cache_command_uses_workspace(&bead, repo_plan.workspace().hash())?;
 
     Ok(())
 }
@@ -116,12 +123,13 @@ fn loom_integration_workspace_uses_repo_service_identity() -> TestResult {
         repo_plan.workspace().hash()
     );
     assert_ne!(raw_integration.container_name(), repo_plan.container_name());
+    assert_cache_command_uses_workspace(&integration, repo_plan.workspace().hash())?;
 
     Ok(())
 }
 
 #[test]
-fn dolt_endpoint_transport_is_platform_specific() -> TestResult {
+fn default_dolt_transport_matches_current_platform() -> TestResult {
     let root = repo_with_dolt("dolt-transport")?;
     let plan = plan_for_service_path(&root, CacheMode::Disabled)?;
     let endpoint = dolt_endpoint(&plan)?;
@@ -165,6 +173,68 @@ fn rerun_with_temp_cache_enabled(test_name: &str) -> TestResult<bool> {
         String::from_utf8_lossy(&output.stderr),
     );
     Ok(true)
+}
+
+#[test]
+#[ignore = "child process receives an isolated current directory and cache roots"]
+fn cache_identity_child() -> TestResult {
+    let args = ["service", "cache", "status"].map(String::from);
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let status = wrix_cli::command::run(&args, &mut stdout, &mut stderr)?;
+
+    assert_eq!(status, std::process::ExitCode::SUCCESS);
+    assert!(stderr.is_empty());
+    assert!(String::from_utf8(stdout)?.contains("cache size:"));
+    Ok(())
+}
+
+fn assert_cache_command_uses_workspace(path: &Path, expected: &WorkspaceHash) -> TestResult {
+    let fixture = tempfile::Builder::new()
+        .prefix("cache-command-identity")
+        .tempdir()?;
+    let home = fixture.path().join("home");
+    let state_home = fixture.path().join("state");
+    let cache_home = fixture.path().join("cache");
+    let state_root = state_home.join("wrix/workspaces").join(expected.as_str());
+    fs::create_dir_all(&home)?;
+    fs::create_dir_all(state_root.join("keys"))?;
+    fs::write(state_root.join("keys/cache.secret"), "secret\n")?;
+    fs::write(
+        state_root.join("keys/cache.pub"),
+        "wrix-cache:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n",
+    )?;
+
+    let mut command = Command::new(std::env::current_exe()?);
+    for (name, _) in std::env::vars_os() {
+        if name.to_string_lossy().starts_with("WRIX_") {
+            command.env_remove(name);
+        }
+    }
+    let output = command
+        .arg("cache_identity_child")
+        .arg("--exact")
+        .arg("--ignored")
+        .current_dir(path)
+        .env("HOME", home)
+        .env("XDG_STATE_HOME", &state_home)
+        .env("XDG_CACHE_HOME", &cache_home)
+        .env("WRIX_NIX_STORE_BIN", "/bin/false")
+        .output()?;
+    if !output.status.success() {
+        return Err(io::Error::other(format!(
+            "cache identity command failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ))
+        .into());
+    }
+    let workspace_dirs = fs::read_dir(state_home.join("wrix/workspaces"))?
+        .filter_map(std::result::Result::ok)
+        .map(|entry| entry.file_name())
+        .collect::<Vec<_>>();
+    assert_eq!(workspace_dirs, vec![expected.as_str()]);
+    Ok(())
 }
 
 fn distinct_plan(first: &Plan) -> TestResult<Plan> {

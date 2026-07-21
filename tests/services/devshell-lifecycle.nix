@@ -89,7 +89,7 @@ pkgs.testers.runNixOSTest {
     machine.succeed(as_alice("systemctl --user show-environment"))
     machine.succeed(
         "mkdir -p /home/alice/devshell-repo/.git /home/alice/disabled-repo/.git "
-        "/home/alice/.local/state /home/alice/.cache"
+        "/home/alice/disabled-repo/.beads/dolt /home/alice/.local/state /home/alice/.cache"
     )
     machine.succeed("chown -R alice:users /home/alice")
 
@@ -126,10 +126,10 @@ pkgs.testers.runNixOSTest {
             )
         )
 
-    with subtest("cache opt-out does not start a service"):
+    with subtest("cache opt-out still starts the beads service"):
         machine.succeed(as_alice("${disabledProbe}"))
         machine.succeed("test -e /home/alice/disabled-hook.ready")
-        machine.fail(as_alice("podman container exists disabled-repo-service"))
+        machine.succeed(as_alice("podman container exists disabled-repo-service"))
 
     machine.succeed(
         as_alice(
@@ -137,5 +137,11 @@ pkgs.testers.runNixOSTest {
         )
     )
     machine.fail(as_alice("podman container exists devshell-repo-service"))
+    machine.succeed(
+        as_alice(
+            "cd /home/alice/disabled-repo && ${wrix.rustPackage.wrix}/bin/wrix service stop --no-cache"
+        )
+    )
+    machine.fail(as_alice("podman container exists disabled-repo-service"))
   '';
 }

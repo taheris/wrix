@@ -486,9 +486,12 @@ dependencies = [
 name = "wrix-cache"
 version = "0.1.0"
 dependencies = [
+ "displaydoc",
  "fs2",
+ "serde",
  "serde_json",
  "tempfile",
+ "thiserror",
  "wrix-core",
 ]
 
@@ -513,7 +516,9 @@ dependencies = [
 name = "wrix-core"
 version = "0.1.0"
 dependencies = [
+ "displaydoc",
  "sha2",
+ "thiserror",
 ]
 
 [[package]]
@@ -534,11 +539,14 @@ name = "wrix-service"
 version = "0.1.0"
 dependencies = [
  "displaydoc",
+ "serde",
+ "serde_json",
  "tempfile",
  "thiserror",
  "wrix-cache",
  "wrix-cli",
  "wrix-core",
+ "wrix-sandbox",
 ]
 
 [[package]]

@@ -9,7 +9,58 @@ use std::{
 #[cfg(unix)]
 use std::os::unix::{fs::PermissionsExt, process::CommandExt};
 
-use wrix_core::path::WorkspaceHash;
+use displaydoc::Display;
+use serde::Deserialize;
+use thiserror::Error as ThisError;
+use wrix_core::path::{WorkspaceHash, WorkspaceHashParseError};
+
+pub type Result<T> = std::result::Result<T, Error>;
+
+#[derive(Debug, Display, ThisError)]
+pub enum Error {
+    /// cache helper I/O failed: {source}
+    Io {
+        #[from]
+        source: io::Error,
+    },
+    /// {source}
+    Publisher {
+        #[from]
+        source: crate::publisher::Error,
+    },
+    /// {source}
+    WorkspaceHash {
+        #[from]
+        source: WorkspaceHashParseError,
+    },
+    /// environment variable {name} is required
+    MissingEnvironment { name: &'static str },
+    /// environment variable {name} must be valid Unicode
+    InvalidUnicodeEnvironment { name: &'static str },
+    /// expected argument {name}
+    ExpectedArgument { name: String },
+    /// missing value for argument {name}
+    MissingArgumentValue { name: String },
+    /// unexpected argument {value}
+    UnexpectedArgument { value: String },
+    /// invalid {label} {value}
+    InvalidNumber { label: &'static str, value: String },
+    /// {label} must be an absolute directory: {path}
+    InvalidDirectory { label: &'static str, path: String },
+    /// {label} must be an absolute file: {path}
+    InvalidFile { label: &'static str, path: String },
+    /// {label} is not executable: {path}
+    NotExecutable { label: &'static str, path: String },
+    /// hook is running as uid {actual}, expected root or workspace owner {expected}
+    UnexpectedUser { actual: u32, expected: u32 },
+    /// command failed: {program}: {stderr}
+    ProcessFailed {
+        program: &'static str,
+        stderr: String,
+    },
+    /// invalid publish manifest JSON: {source}
+    ManifestJson { source: serde_json::Error },
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Helper {
@@ -20,7 +71,7 @@ pub enum Helper {
 
 #[derive(Clone, Debug)]
 struct HookConfig {
-    workspace_hash: String,
+    workspace_hash: WorkspaceHash,
     owner_uid: u32,
     owner_gid: u32,
     state_root: PathBuf,
@@ -31,12 +82,23 @@ struct HookConfig {
 
 #[derive(Clone, Debug)]
 struct PublishConfig {
-    workspace_hash: String,
+    workspace_hash: WorkspaceHash,
     state_root: PathBuf,
     cache_root: PathBuf,
     manifest: PathBuf,
     drv_path: String,
     out_paths: String,
+}
+
+#[derive(Deserialize)]
+struct Manifest {
+    roots: Vec<ManifestRoot>,
+}
+
+#[derive(Deserialize)]
+struct ManifestRoot {
+    #[serde(alias = "drvPath")]
+    drv_path: String,
 }
 
 impl Helper {
@@ -77,7 +139,7 @@ fn run(
     args: &[String],
     stdout: &mut impl Write,
     stderr: &mut impl Write,
-) -> io::Result<ExitCode> {
+) -> Result<ExitCode> {
     if args.is_empty()
         || args
             .first()
@@ -93,7 +155,7 @@ fn run(
     }
 }
 
-fn run_serve(args: &[String], stderr: &mut impl Write) -> io::Result<ExitCode> {
+fn run_serve(args: &[String], stderr: &mut impl Write) -> Result<ExitCode> {
     let (listen, root) = match args {
         [root] => ("0.0.0.0:8080", root.as_str()),
         [flag, listen, root] if flag == "--listen" => (listen.as_str(), root.as_str()),
@@ -117,18 +179,17 @@ fn run_serve(args: &[String], stderr: &mut impl Write) -> io::Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn handle_cache_request(stream: TcpStream, root: &Path) -> io::Result<()> {
+fn handle_cache_request(stream: TcpStream, root: &Path) -> Result<()> {
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut first_line = String::new();
     reader.read_line(&mut first_line)?;
     let mut parts = first_line.split_whitespace();
-    let method = parts.next().unwrap_or("");
-    let target = parts.next().unwrap_or("");
+    let request = parts.next().zip(parts.next());
     let mut stream = stream;
-    match method {
-        "GET" => serve_cache_path(&mut stream, root, target, true),
-        "HEAD" => serve_cache_path(&mut stream, root, target, false),
-        _ => write_response(
+    match request {
+        Some(("GET", target)) => serve_cache_path(&mut stream, root, target, true),
+        Some(("HEAD", target)) => serve_cache_path(&mut stream, root, target, false),
+        Some((_, _)) | None => write_response(
             &mut stream,
             "405 Method Not Allowed",
             b"method not allowed\n",
@@ -142,7 +203,7 @@ fn serve_cache_path(
     root: &Path,
     target: &str,
     include_body: bool,
-) -> io::Result<()> {
+) -> Result<()> {
     let Some(relative) = parse_cache_target(target) else {
         return write_response(stream, "404 Not Found", b"not found\n", include_body);
     };
@@ -153,13 +214,13 @@ fn serve_cache_path(
     write_response(stream, "200 OK", &body, include_body)
 }
 
-fn resolve_cache_file(root: &Path, relative: &str) -> io::Result<Option<PathBuf>> {
+fn resolve_cache_file(root: &Path, relative: &str) -> Result<Option<PathBuf>> {
     let root = root.canonicalize()?;
     let path = root.join(relative);
     let path = match path.canonicalize() {
         Ok(path) => path,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error),
+        Err(error) => return Err(error.into()),
     };
     if path.starts_with(&root) && path.is_file() {
         Ok(Some(path))
@@ -198,7 +259,7 @@ fn write_response(
     status: &str,
     body: &[u8],
     include_body: bool,
-) -> io::Result<()> {
+) -> Result<()> {
     write!(
         stream,
         "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -210,18 +271,13 @@ fn write_response(
     Ok(())
 }
 
-fn run_hook(args: &[String], stdout: &mut impl Write) -> io::Result<ExitCode> {
+fn run_hook(args: &[String], stdout: &mut impl Write) -> Result<ExitCode> {
     let config = HookConfig::parse(args)?;
     config.validate()?;
-    let drv_path = env::var("DRV_PATH").map_err(|_| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "DRV_PATH is required for the post-build hook",
-        )
-    })?;
-    let out_paths = env::var("OUT_PATHS").unwrap_or_else(|_| String::new());
+    let drv_path = required_environment("DRV_PATH")?;
+    let out_paths = required_environment("OUT_PATHS")?;
     let manifest = fs::read_to_string(&config.manifest)?;
-    if !manifest_allows_drv(&manifest, &drv_path) {
+    if !manifest_allows_drv(&manifest, &drv_path)? {
         writeln!(
             stdout,
             "wrix-cache-hook: skipping non-project derivation {drv_path}"
@@ -231,10 +287,10 @@ fn run_hook(args: &[String], stdout: &mut impl Write) -> io::Result<ExitCode> {
     exec_publisher(config, drv_path, out_paths)
 }
 
-fn run_publish(args: &[String], stdout: &mut impl Write) -> io::Result<ExitCode> {
+fn run_publish(args: &[String], stdout: &mut impl Write) -> Result<ExitCode> {
     let config = PublishConfig::parse(args)?;
     let report = crate::publisher::run_hook_record(
-        &config.workspace_hash,
+        config.workspace_hash.as_str(),
         &config.state_root,
         &config.cache_root,
         &config.manifest,
@@ -247,21 +303,18 @@ fn run_publish(args: &[String], stdout: &mut impl Write) -> io::Result<ExitCode>
     Ok(ExitCode::SUCCESS)
 }
 
-fn exec_publisher(config: HookConfig, drv_path: String, out_paths: String) -> io::Result<ExitCode> {
+fn exec_publisher(config: HookConfig, drv_path: String, out_paths: String) -> Result<ExitCode> {
     let current_uid = current_uid()?;
     if current_uid != 0 && current_uid != config.owner_uid {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            format!(
-                "hook is running as uid {current_uid}, expected root or workspace owner {}",
-                config.owner_uid
-            ),
-        ));
+        return Err(Error::UnexpectedUser {
+            actual: current_uid,
+            expected: config.owner_uid,
+        });
     }
     let mut command = Command::new(&config.publisher_helper);
     command
         .arg("--workspace-hash")
-        .arg(config.workspace_hash)
+        .arg(config.workspace_hash.as_str())
         .arg("--state-root")
         .arg(config.state_root)
         .arg("--cache-root")
@@ -280,11 +333,11 @@ fn exec_publisher(config: HookConfig, drv_path: String, out_paths: String) -> io
     exec_command(command)
 }
 
-fn exec_command(mut command: Command) -> io::Result<ExitCode> {
+fn exec_command(mut command: Command) -> Result<ExitCode> {
     #[cfg(unix)]
     {
         let error = command.exec();
-        Err(error)
+        Err(error.into())
     }
     #[cfg(not(unix))]
     {
@@ -297,16 +350,17 @@ fn exec_command(mut command: Command) -> io::Result<ExitCode> {
     }
 }
 
-fn current_uid() -> io::Result<u32> {
+fn current_uid() -> Result<u32> {
     let output = Command::new("id")
         .arg("-u")
         .stdin(Stdio::null())
         .stderr(Stdio::piped())
         .output()?;
     if !output.status.success() {
-        return Err(io::Error::other(
-            String::from_utf8_lossy(&output.stderr).into_owned(),
-        ));
+        return Err(Error::ProcessFailed {
+            program: "id -u",
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        });
     }
     parse_u32(
         String::from_utf8_lossy(&output.stdout).trim(),
@@ -315,9 +369,9 @@ fn current_uid() -> io::Result<u32> {
 }
 
 impl HookConfig {
-    fn parse(args: &[String]) -> io::Result<Self> {
+    fn parse(args: &[String]) -> Result<Self> {
         let mut parser = FlagParser::new(args);
-        let workspace_hash = parser.required("--workspace-hash")?;
+        let workspace_hash = WorkspaceHash::parse(&parser.required("--workspace-hash")?)?;
         let owner_user_id = parse_u32(&parser.required("--owner-uid")?, "owner uid")?;
         let owner_group_id = parse_u32(&parser.required("--owner-gid")?, "owner gid")?;
         let state_root = PathBuf::from(parser.required("--state-root")?);
@@ -336,8 +390,7 @@ impl HookConfig {
         })
     }
 
-    fn validate(&self) -> io::Result<()> {
-        validate_workspace_hash(&self.workspace_hash)?;
+    fn validate(&self) -> Result<()> {
         require_absolute_dir("state root", &self.state_root)?;
         require_absolute_dir("cache root", &self.cache_root)?;
         require_absolute_file("publish manifest", &self.manifest)?;
@@ -346,9 +399,9 @@ impl HookConfig {
 }
 
 impl PublishConfig {
-    fn parse(args: &[String]) -> io::Result<Self> {
+    fn parse(args: &[String]) -> Result<Self> {
         let mut parser = FlagParser::new(args);
-        let workspace_hash = parser.required("--workspace-hash")?;
+        let workspace_hash = WorkspaceHash::parse(&parser.required("--workspace-hash")?)?;
         let state_root = PathBuf::from(parser.required("--state-root")?);
         let cache_root = PathBuf::from(parser.required("--cache-root")?);
         let manifest = PathBuf::from(parser.required("--manifest")?);
@@ -376,123 +429,93 @@ impl<'a> FlagParser<'a> {
         Self { args, index: 0 }
     }
 
-    fn required(&mut self, name: &str) -> io::Result<String> {
+    fn required(&mut self, name: &str) -> Result<String> {
         if self.args.get(self.index).map(String::as_str) != Some(name) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("expected {name}"),
-            ));
+            return Err(Error::ExpectedArgument {
+                name: name.to_owned(),
+            });
         }
         self.index += 1;
-        let value = self.args.get(self.index).cloned().ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("missing value for {name}"),
-            )
-        })?;
+        let value =
+            self.args
+                .get(self.index)
+                .cloned()
+                .ok_or_else(|| Error::MissingArgumentValue {
+                    name: name.to_owned(),
+                })?;
         self.index += 1;
         Ok(value)
     }
 
-    fn finish(&self) -> io::Result<()> {
+    fn finish(&self) -> Result<()> {
         if self.index == self.args.len() {
             return Ok(());
         }
-        Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("unexpected argument {}", self.args[self.index]),
-        ))
+        Err(Error::UnexpectedArgument {
+            value: self.args[self.index].clone(),
+        })
     }
 }
 
-fn validate_workspace_hash(hash: &str) -> io::Result<()> {
-    if WorkspaceHash::is_valid_str(hash) {
-        return Ok(());
-    }
-    Err(io::Error::new(
-        io::ErrorKind::InvalidInput,
-        "workspace hash must be a lowercase sha256 hex digest",
-    ))
-}
-
-fn require_absolute_dir(label: &str, path: &Path) -> io::Result<()> {
+fn require_absolute_dir(label: &'static str, path: &Path) -> Result<()> {
     if path.is_absolute() && path.is_dir() {
         return Ok(());
     }
-    Err(io::Error::new(
-        io::ErrorKind::InvalidInput,
-        format!("{label} must be an absolute directory: {}", path.display()),
-    ))
+    Err(Error::InvalidDirectory {
+        label,
+        path: path.display().to_string(),
+    })
 }
 
-fn require_absolute_file(label: &str, path: &Path) -> io::Result<()> {
+fn require_absolute_file(label: &'static str, path: &Path) -> Result<()> {
     if path.is_absolute() && path.is_file() {
         return Ok(());
     }
-    Err(io::Error::new(
-        io::ErrorKind::InvalidInput,
-        format!("{label} must be an absolute file: {}", path.display()),
-    ))
+    Err(Error::InvalidFile {
+        label,
+        path: path.display().to_string(),
+    })
 }
 
-fn require_executable_file(label: &str, path: &Path) -> io::Result<()> {
+fn require_executable_file(label: &'static str, path: &Path) -> Result<()> {
     require_absolute_file(label, path)?;
     #[cfg(unix)]
     {
         let mode = fs::metadata(path)?.permissions().mode();
         if mode & 0o111 == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                format!("{label} is not executable: {}", path.display()),
-            ));
+            return Err(Error::NotExecutable {
+                label,
+                path: path.display().to_string(),
+            });
         }
     }
     Ok(())
 }
 
-fn manifest_allows_drv(manifest: &str, drv_path: &str) -> bool {
-    manifest_key_values(manifest)
-        .into_iter()
-        .any(|(key, value)| matches!(key.as_str(), "drv_path" | "drvPath") && value == drv_path)
+fn manifest_allows_drv(manifest: &str, drv_path: &str) -> Result<bool> {
+    let manifest = serde_json::from_str::<Manifest>(manifest)
+        .map_err(|source| Error::ManifestJson { source })?;
+    Ok(manifest.roots.iter().any(|root| root.drv_path == drv_path))
 }
 
-fn manifest_key_values(input: &str) -> Vec<(String, String)> {
-    let mut pairs = Vec::new();
-    let mut rest = input;
-    while let Some(key_start) = rest.find('"') {
-        let after_key_start = &rest[key_start + 1..];
-        let Some(key_end) = after_key_start.find('"') else {
-            break;
-        };
-        let key = &after_key_start[..key_end];
-        let after_key = &after_key_start[key_end + 1..];
-        let Some(colon) = after_key.find(':') else {
-            rest = after_key;
-            continue;
-        };
-        let after_colon = after_key[colon + 1..].trim_start();
-        if let Some(value_start) = after_colon.strip_prefix('"')
-            && let Some(value_end) = value_start.find('"')
-        {
-            pairs.push((key.to_owned(), value_start[..value_end].to_owned()));
-            rest = &value_start[value_end + 1..];
-            continue;
-        }
-        rest = after_colon;
+fn parse_u32(input: &str, label: &'static str) -> Result<u32> {
+    input
+        .parse::<u32>()
+        .map_err(|_source| Error::InvalidNumber {
+            label,
+            value: input.to_owned(),
+        })
+}
+
+fn required_environment(name: &'static str) -> Result<String> {
+    match env::var(name) {
+        Ok(value) => Ok(value),
+        Err(env::VarError::NotPresent) => Err(Error::MissingEnvironment { name }),
+        Err(env::VarError::NotUnicode(_)) => Err(Error::InvalidUnicodeEnvironment { name }),
     }
-    pairs
 }
 
-fn parse_u32(input: &str, label: &str) -> io::Result<u32> {
-    input.parse::<u32>().map_err(|error| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("invalid {label} {input}: {error}"),
-        )
-    })
-}
-
-fn write_help(helper: Helper, stdout: &mut impl Write) -> io::Result<()> {
+fn write_help(helper: Helper, stdout: &mut impl Write) -> Result<()> {
     match helper {
         Helper::Hook => writeln!(
             stdout,
@@ -512,7 +535,8 @@ fn write_help(helper: Helper, stdout: &mut impl Write) -> io::Result<()> {
             helper.purpose(),
             helper.binary_name()
         ),
-    }
+    }?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -525,24 +549,18 @@ mod test {
         thread,
     };
 
-    use super::{
-        handle_cache_request, manifest_allows_drv, manifest_key_values, parse_cache_target,
-    };
+    use super::{handle_cache_request, manifest_allows_drv, parse_cache_target};
 
     #[test]
     fn manifest_scope_accepts_matching_drv_path() {
         let manifest = r#"{"roots":[{"name":"pkg","drv_path":"/nix/store/aaa.drv"}]}"#;
-        assert!(manifest_allows_drv(manifest, "/nix/store/aaa.drv"));
-        assert!(!manifest_allows_drv(manifest, "/nix/store/bbb.drv"));
+        assert!(manifest_allows_drv(manifest, "/nix/store/aaa.drv").unwrap());
+        assert!(!manifest_allows_drv(manifest, "/nix/store/bbb.drv").unwrap());
     }
 
     #[test]
-    fn manifest_parser_extracts_string_pairs() {
-        let pairs = manifest_key_values(r#"{"drvPath":"/nix/store/aaa.drv"}"#);
-        assert_eq!(
-            pairs,
-            vec![(String::from("drvPath"), String::from("/nix/store/aaa.drv"))]
-        );
+    fn manifest_parser_rejects_malformed_json() {
+        assert!(manifest_allows_drv(r#"{"roots": ["#, "/nix/store/aaa.drv").is_err());
     }
 
     #[test]

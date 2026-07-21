@@ -178,14 +178,14 @@ fn run_cache(
     stderr: &mut impl Write,
 ) -> io::Result<ExitCode> {
     if args.is_empty() || is_help(&args[0]) {
-        wrix_cache::command::write_help(stdout)?;
+        wrix_cache::command::write_help(stdout).map_err(io::Error::other)?;
         return Ok(ExitCode::SUCCESS);
     }
     if let Some(command) = wrix_cache::command::Command::parse(&args[0]) {
-        return wrix_cache::command::run(command, &args[1..], stdout);
+        return wrix_cache::command::run(command, &args[1..], stdout).map_err(io::Error::other);
     }
     writeln!(stderr, "unknown cache command: {}", args[0])?;
-    wrix_cache::command::write_help(stderr)?;
+    wrix_cache::command::write_help(stderr).map_err(io::Error::other)?;
     Ok(ExitCode::FAILURE)
 }
 
@@ -233,7 +233,7 @@ fn write_delegated_help(
 fn write_service_topic_help(args: &[String], stdout: &mut impl Write) -> io::Result<()> {
     match args.first().map(String::as_str) {
         Some("dolt") => wrix_service::command::write_dolt_help(stdout),
-        Some("cache") => wrix_cache::command::write_help(stdout),
+        Some("cache") => wrix_cache::command::write_help(stdout).map_err(io::Error::other),
         Some(_) | None => wrix_service::command::write_help(stdout),
     }
 }

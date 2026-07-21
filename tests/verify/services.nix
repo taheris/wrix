@@ -12,6 +12,14 @@ let
   lifecycle = serviceScriptWithWrix "lifecycle";
   hostNix = serviceScriptWithWrix "host-nix-config";
   sandboxNix = serviceScript "sandbox-nix-config";
+  dolt = serviceScriptWithWrix "dolt-endpoints";
+  linuxSystem =
+    if system == "aarch64-darwin" then
+      "aarch64-linux"
+    else if system == "x86_64-darwin" then
+      "x86_64-linux"
+    else
+      system;
 in
 {
   "services.devshell-start-independent" =
@@ -27,6 +35,24 @@ in
 
   "services.start-loads-image-source" = lifecycle "test_service_start_loads_image_source";
 
+  "services.temp-cache-only" = lifecycle "test_temp_cache_only_workspace_does_not_start_service";
+
+  "services.dolt-platform-transport" = ''
+    ${dolt "test_linux_dolt_uses_workspace_socket"}
+    ${dolt "test_explicit_tcp_dolt_uses_loopback_tcp"}
+  '';
+
+  "services.cache-state-layout" = ''
+    ${hostNix "test_default_cache_state_layout"}
+    ${hostNix "test_mkdevshell_nix_cache"}
+  '';
+
+  "services.container-pull-config" = sandboxNix "test_container_pull_config";
+
+  "services.cache-http-endpoint" = sandboxNix "test_no_container_dns_dependency";
+
+  "services.sandbox-cache-boundary" = sandboxNix "test_no_host_store_or_cache_secret";
+
   "services.image-labels" = lifecycle "test_service_image_labels";
 
   "services.rust-helper-binaries" = serviceScript "cli-surface" "test_rust_helper_binaries";
@@ -37,7 +63,12 @@ in
     ${hostNix "test_host_nix_config_rejects_non_wrix_hook"}
   '';
 
-  "services.limit-mode-cache-endpoint" = sandboxNix "test_limit_mode_cache_endpoint";
+  "services.limit-mode-cache-endpoint" = ''
+    local root
+    root="$(repo_root)"
+    nix build --no-link --no-warn-dirty \
+      "$root#legacyPackages.${linuxSystem}.systemTests.services-cache-network"
+  '';
 
   "services.cache-transport-http-only" = ''
     local root

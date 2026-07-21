@@ -11,10 +11,15 @@ use std::{
 use std::os::unix::{fs::FileTypeExt, net::UnixStream};
 
 use displaydoc::Display;
+use serde::{Deserialize, Deserializer, de};
 use thiserror::Error as ThisError;
 use wrix_core::{
     cache_key,
     path::{ContainerName, Workspace, WorkspaceHash},
+};
+use wrix_sandbox::image::{
+    self as runtime_image, CommandStore, Digest, InstallRequest, RetentionRequest,
+    Runtime as ImageRuntime, SourceKind,
 };
 
 const SCHEMA_VERSION: u8 = 1;
@@ -37,6 +42,16 @@ pub enum Error {
         #[from]
         source: io::Error,
     },
+    /// project cache operation failed: {source}
+    Cache {
+        #[from]
+        source: wrix_cache::publisher::Error,
+    },
+    /// runtime image operation failed: {source}
+    Image {
+        #[from]
+        source: runtime_image::Error,
+    },
     /// environment variable {name} must be valid Unicode
     InvalidUnicodeEnvironment { name: &'static str },
     /// unknown Dolt transport: {value}
@@ -51,20 +66,12 @@ pub enum Error {
     },
     /// unknown service image source kind: {value}
     UnknownImageSourceKind { value: String },
+    /// invalid service image digest: {value}
+    InvalidImageDigest { value: String },
     /// `WRIX_SERVICE_IMAGE_SOURCE_KIND` is required when `WRIX_SERVICE_IMAGE_SOURCE` is set
     MissingImageSourceKind,
     /// service image digest path does not exist: {path}
     MissingImageDigestPath { path: String },
-    /// service image descriptor {path} is missing field {field}
-    MissingImageDescriptorField { path: String, field: &'static str },
-    /// service image descriptor {path} has invalid field {field}: {value}
-    InvalidImageDescriptorField {
-        path: String,
-        field: &'static str,
-        value: String,
-    },
-    /// container runtime requires service image source_kind=docker-archive
-    ContainerRequiresDockerArchive,
     /// installed service image from {path}, but image {image} is unavailable
     InstalledImageUnavailable { path: String, image: String },
     /// service lifecycle operation failed: {message}
@@ -73,8 +80,11 @@ pub enum Error {
     PortInUse { port: u16, owner: String },
     /// no available loopback port in {start}-{end}
     NoAvailableLoopbackPort { start: u16, end: u16 },
-    /// could not create a unique {prefix} temp directory
-    TempDirAttemptsExceeded { prefix: String },
+    /// invalid persisted service metadata at {path}: {source}
+    PersistedServicesJson {
+        path: String,
+        source: serde_json::Error,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -495,6 +505,7 @@ pub fn start(cache_mode: CacheMode) -> Result<Status> {
     if plan.has_services() && runtime.reconcile_legacy_containers(&plan)? {
         plan = Plan::for_workspace(plan.workspace().clone(), cache_mode)?;
     }
+    runtime.refresh_unavailable_ports(&mut plan)?;
     plan.ensure_layout()?;
     if plan.has_services() {
         runtime.ensure_running(&plan)?;
@@ -540,17 +551,85 @@ struct PortLease {
     dolt_tcp_port: Option<u16>,
 }
 
+#[derive(Debug, Deserialize)]
+struct PersistedServices {
+    #[serde(deserialize_with = "deserialize_workspace_hash")]
+    workspace_hash: WorkspaceHash,
+    #[serde(deserialize_with = "deserialize_container_name")]
+    container_name: ContainerName,
+    endpoints: PersistedEndpoints,
+}
+
+#[derive(Debug, Deserialize)]
+struct PersistedEndpoints {
+    cache_http: Option<PersistedEndpoint>,
+    dolt_tcp: Option<PersistedEndpoint>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PersistedEndpoint {
+    host: std::net::Ipv4Addr,
+    port: std::num::NonZeroU16,
+}
+
+impl PersistedEndpoint {
+    fn loopback_port(&self) -> Option<u16> {
+        self.host.is_loopback().then_some(self.port.get())
+    }
+}
+
 impl PortLease {
     fn read(path: &Path) -> Result<Self> {
-        if !path.exists() {
+        let Some(services) = read_persisted_services(path)? else {
             return Ok(Self::default());
-        }
-        let content = fs::read_to_string(path)?;
+        };
         Ok(Self {
-            cache_http_port: read_endpoint_port(&content, "cache_http"),
-            dolt_tcp_port: read_endpoint_port(&content, "dolt_tcp"),
+            cache_http_port: services
+                .endpoints
+                .cache_http
+                .as_ref()
+                .and_then(PersistedEndpoint::loopback_port),
+            dolt_tcp_port: services
+                .endpoints
+                .dolt_tcp
+                .as_ref()
+                .and_then(PersistedEndpoint::loopback_port),
         })
     }
+}
+
+fn deserialize_workspace_hash<'de, D>(
+    deserializer: D,
+) -> std::result::Result<WorkspaceHash, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    WorkspaceHash::parse(&value).map_err(de::Error::custom)
+}
+
+fn deserialize_container_name<'de, D>(
+    deserializer: D,
+) -> std::result::Result<ContainerName, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    ContainerName::from_persisted(value)
+        .ok_or_else(|| de::Error::custom("invalid service container name"))
+}
+
+fn read_persisted_services(path: &Path) -> Result<Option<PersistedServices>> {
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let content = fs::read_to_string(path)?;
+    serde_json::from_str(&content)
+        .map(Some)
+        .map_err(|source| Error::PersistedServicesJson {
+            path: path.display().to_string(),
+            source,
+        })
 }
 
 fn select_container_name(workspace: &Workspace, paths: &Paths) -> Result<ContainerName> {
@@ -572,14 +651,13 @@ fn current_container_name(
     workspace_hash: &WorkspaceHash,
 ) -> Result<Option<ContainerName>> {
     let path = paths.services_path();
-    if !path.exists() {
+    let Some(services) = read_persisted_services(&path)? else {
+        return Ok(None);
+    };
+    if &services.workspace_hash != workspace_hash {
         return Ok(None);
     }
-    let content = fs::read_to_string(path)?;
-    if json_string_field(&content, "workspace_hash").as_deref() != Some(workspace_hash.as_str()) {
-        return Ok(None);
-    }
-    Ok(json_string_field(&content, "container_name").and_then(ContainerName::from_persisted))
+    Ok(Some(services.container_name))
 }
 
 fn container_name_collides(
@@ -598,14 +676,10 @@ fn container_name_collides(
         if !services_path.exists() {
             continue;
         }
-        let content = fs::read_to_string(services_path)?;
-        let Some(container_name) = json_string_field(&content, "container_name") else {
+        let Some(services) = read_persisted_services(&services_path)? else {
             continue;
         };
-        let Some(other_hash) = json_string_field(&content, "workspace_hash") else {
-            continue;
-        };
-        if container_name == candidate.as_str() && other_hash != workspace_hash.as_str() {
+        if &services.container_name == candidate && &services.workspace_hash != workspace_hash {
             return Ok(true);
         }
     }
@@ -618,24 +692,11 @@ enum RuntimeKind {
     Container,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ImageSourceKind {
-    NixDescriptor,
-    DockerArchive,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ImageSource {
     path: PathBuf,
-    kind: ImageSourceKind,
-    digest: Option<String>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct DescriptorSource {
-    digest: String,
-    oci_layout: PathBuf,
-    oci_ref: String,
+    kind: SourceKind,
+    digest: Option<Digest>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -668,22 +729,20 @@ impl RuntimeKind {
     }
 }
 
-impl ImageSourceKind {
-    fn parse(input: &str) -> Result<Self> {
-        match input {
-            "nix-descriptor" => Ok(Self::NixDescriptor),
-            "docker-archive" => Ok(Self::DockerArchive),
-            other => Err(Error::UnknownImageSourceKind {
-                value: other.to_owned(),
-            }),
-        }
+fn parse_image_source_kind(input: &str) -> Result<SourceKind> {
+    match input {
+        "nix-descriptor" => Ok(SourceKind::NixDescriptor),
+        "docker-archive" => Ok(SourceKind::DockerArchive),
+        other => Err(Error::UnknownImageSourceKind {
+            value: other.to_owned(),
+        }),
     }
 }
 
 impl ImageSource {
     fn from_env(path: PathBuf) -> Result<Self> {
         let kind = match env::var("WRIX_SERVICE_IMAGE_SOURCE_KIND") {
-            Ok(value) => ImageSourceKind::parse(&value)?,
+            Ok(value) => parse_image_source_kind(&value)?,
             Err(env::VarError::NotPresent) => {
                 return Err(Error::MissingImageSourceKind);
             }
@@ -695,7 +754,20 @@ impl ImageSource {
         };
         let digest = match env::var("WRIX_SERVICE_IMAGE_DIGEST") {
             Ok(value) if value.is_empty() => None,
-            Ok(value) => Some(value),
+            Ok(value) if value.starts_with("sha256:") => {
+                Some(Digest::parse(&value).map_err(|_source| Error::InvalidImageDigest { value })?)
+            }
+            Ok(value) => {
+                let path = Path::new(&value);
+                if !path.is_file() {
+                    return Err(Error::MissingImageDigestPath { path: value });
+                }
+                let digest = fs::read_to_string(path)?.trim().to_owned();
+                Some(
+                    Digest::parse(&digest)
+                        .map_err(|_source| Error::InvalidImageDigest { value: digest })?,
+                )
+            }
             Err(env::VarError::NotPresent) => None,
             Err(env::VarError::NotUnicode(_)) => {
                 return Err(Error::InvalidUnicodeEnvironment {
@@ -704,62 +776,6 @@ impl ImageSource {
             }
         };
         Ok(Self { path, kind, digest })
-    }
-
-    fn desired_digest(&self) -> Result<Option<String>> {
-        let Some(value) = &self.digest else {
-            return self.descriptor_digest();
-        };
-        if value.starts_with("sha256:") {
-            return Ok(Some(value.clone()));
-        }
-        let path = Path::new(value);
-        if !path.exists() {
-            return Err(Error::MissingImageDigestPath {
-                path: path.display().to_string(),
-            });
-        }
-        let digest = fs::read_to_string(path)?.trim().to_owned();
-        if digest.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(digest))
-        }
-    }
-
-    fn descriptor_digest(&self) -> Result<Option<String>> {
-        if self.kind == ImageSourceKind::NixDescriptor {
-            Ok(Some(DescriptorSource::from_path(&self.path)?.digest))
-        } else {
-            Ok(None)
-        }
-    }
-}
-
-impl DescriptorSource {
-    fn from_path(path: &Path) -> Result<Self> {
-        let content = fs::read_to_string(path)?;
-        Self::from_json(path, &content)
-    }
-
-    fn from_json(path: &Path, content: &str) -> Result<Self> {
-        let digest = required_descriptor_field(path, content, "digest")?;
-        if !is_sha256_digest(&digest) {
-            return Err(Error::InvalidImageDescriptorField {
-                path: path.display().to_string(),
-                field: "digest",
-                value: digest,
-            });
-        }
-        Ok(Self {
-            digest,
-            oci_layout: PathBuf::from(required_descriptor_field(path, content, "oci_layout")?),
-            oci_ref: required_descriptor_field(path, content, "oci_ref")?,
-        })
-    }
-
-    fn skopeo_source(&self) -> String {
-        format!("oci:{}:{}", self.oci_layout.display(), self.oci_ref)
     }
 }
 
@@ -979,6 +995,50 @@ impl Runtime {
         Ok(removed)
     }
 
+    fn refresh_unavailable_ports(&self, plan: &mut Plan) -> Result<()> {
+        if let Some(port) = plan.cache_port
+            && !self.port_available_for_plan(port, plan)?
+        {
+            plan.cache_port =
+                Some(self.select_available_port(plan, CACHE_PORT_START, CACHE_PORT_WIDTH)?);
+        }
+        let dolt_port = plan.dolt.as_ref().and_then(|endpoint| endpoint.tcp_port);
+        let replace_dolt_port = match dolt_port {
+            Some(port) => !self.port_available_for_plan(port, plan)?,
+            None => false,
+        };
+        if replace_dolt_port {
+            let port = self.select_available_port(plan, DOLT_PORT_START, DOLT_PORT_WIDTH)?;
+            if let Some(endpoint) = plan.dolt.as_mut() {
+                endpoint.tcp_port = Some(port);
+            }
+        }
+        Ok(())
+    }
+
+    fn select_available_port(&self, plan: &Plan, start: u16, width: u16) -> Result<u16> {
+        let preferred = start + plan.workspace.hash().port_offset(width);
+        for offset in 0..width {
+            let port = start + ((preferred - start + offset) % width);
+            if self.port_available_for_plan(port, plan)? {
+                return Ok(port);
+            }
+        }
+        Err(Error::NoAvailableLoopbackPort {
+            start,
+            end: start + width - 1,
+        })
+    }
+
+    fn port_available_for_plan(&self, port: u16, plan: &Plan) -> Result<bool> {
+        if let Some(owner) = self.container_port_owner(port)? {
+            return Ok(
+                owner.name == plan.container_name().as_str() && owner.belongs_to_workspace(plan)
+            );
+        }
+        Ok(is_loopback_port_available(port))
+    }
+
     fn ensure_plan_ports_available(&self, plan: &Plan) -> Result<()> {
         for port in plan.selected_host_ports() {
             if let Some(owner) = self.container_port_owner(port)? {
@@ -1127,45 +1187,42 @@ impl Runtime {
         let Some(source) = &self.image_source else {
             return Ok(());
         };
-        if self.image_cached(source)? {
-            return Ok(());
-        }
-        self.install_image(source)?;
-        if self.image_exists()? || self.tag_loaded_image()? {
+        let runtime = match self.kind {
+            RuntimeKind::Podman => ImageRuntime::Podman,
+            RuntimeKind::Container => ImageRuntime::Container,
+        };
+        let source_path = source.path.display().to_string();
+        let mut store = CommandStore;
+        runtime_image::install(
+            &mut store,
+            &InstallRequest {
+                runtime,
+                image_ref: &self.image,
+                image_source: &source_path,
+                source_kind: source.kind,
+                digest: source.digest.as_ref(),
+            },
+        )?;
+        let mru_path = runtime_image::default_mru_path();
+        runtime_image::remember_and_prune(
+            &mut store,
+            &RetentionRequest {
+                runtime,
+                image_ref: &self.image,
+                image_source: &source_path,
+                source_kind: source.kind,
+                digest: source.digest.as_ref(),
+                mru_path: &mru_path,
+            },
+        )?;
+        if self.image_exists()? {
             Ok(())
         } else {
             Err(Error::InstalledImageUnavailable {
-                path: source.path.display().to_string(),
+                path: source_path,
                 image: self.image.clone(),
             })
         }
-    }
-
-    fn image_cached(&self, source: &ImageSource) -> Result<bool> {
-        if let Some(digest) = source.desired_digest()?
-            && self.image_digest_exists(&digest)?
-            && (self.tag_image(&digest, &self.image)? || self.image_exists()?)
-        {
-            return Ok(true);
-        }
-        self.image_exists()
-    }
-
-    fn image_digest_exists(&self, digest: &str) -> Result<bool> {
-        if self.kind == RuntimeKind::Container {
-            return Ok(false);
-        }
-        let status = Command::new(&self.binary)
-            .arg("image")
-            .arg("inspect")
-            .arg("--format")
-            .arg("{{.Id}}")
-            .arg(digest)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()?;
-        Ok(status.success())
     }
 
     fn image_exists(&self) -> Result<bool> {
@@ -1181,169 +1238,6 @@ impl Runtime {
         }
         let status = command
             .arg(&self.image)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()?;
-        Ok(status.success())
-    }
-
-    fn install_image(&self, source: &ImageSource) -> Result<()> {
-        match self.kind {
-            RuntimeKind::Container => self.load_container_image(source),
-            RuntimeKind::Podman => self.copy_podman_image(source),
-        }
-    }
-
-    fn load_container_image(&self, source: &ImageSource) -> Result<()> {
-        if source.kind != ImageSourceKind::DockerArchive {
-            return Err(Error::ContainerRequiresDockerArchive);
-        }
-        let temp_dir = create_temp_dir("wrix-service-image")?;
-        let result = self.load_container_image_in_temp(source, &temp_dir);
-        match (result, fs::remove_dir_all(&temp_dir)) {
-            (Ok(()), Ok(())) => Ok(()),
-            (Ok(()), Err(error)) => Err(error.into()),
-            (Err(error), Ok(())) => Err(error),
-            (Err(error), Err(cleanup_error)) => Err(Error::Operation {
-                message: format!(
-                    "{error}; failed to remove temporary directory {}: {cleanup_error}",
-                    temp_dir.display()
-                ),
-            }),
-        }
-    }
-
-    fn load_container_image_in_temp(&self, source: &ImageSource, temp_dir: &Path) -> Result<()> {
-        let oci_archive = temp_dir.join("image.oci");
-        let source_ref = format!("docker-archive:{}", source.path.display());
-        let archive_ref = format!("oci-archive:{}", oci_archive.display());
-        match skopeo_copy(&source_ref, &archive_ref)? {
-            Ok(()) => {}
-            Err(error) => return Err(Error::Operation { message: error }),
-        }
-        let output = Command::new(&self.binary)
-            .arg("image")
-            .arg("load")
-            .arg("--input")
-            .arg(&oci_archive)
-            .stdin(Stdio::null())
-            .output()?;
-        if !output.status.success() {
-            return Err(Error::Operation {
-                message: format!(
-                    "failed to load service image from {}: {}",
-                    source.path.display(),
-                    String::from_utf8_lossy(&output.stderr)
-                ),
-            });
-        }
-        if let Some(loaded_ref) = loaded_container_ref(&output.stdout, &output.stderr) {
-            if !self.tag_image(&loaded_ref, &self.image)? {
-                return Err(Error::Operation {
-                    message: format!(
-                        "failed to tag loaded service image {loaded_ref} as {}",
-                        self.image
-                    ),
-                });
-            }
-            self.delete_container_image(&loaded_ref)?;
-        }
-        Ok(())
-    }
-
-    fn delete_container_image(&self, target: &str) -> Result<()> {
-        let output = Command::new(&self.binary)
-            .arg("image")
-            .arg("delete")
-            .arg(target)
-            .stdin(Stdio::null())
-            .output()?;
-        if output.status.success() {
-            Ok(())
-        } else {
-            Err(Error::Operation {
-                message: format!(
-                    "failed to delete temporary loaded service image {target}: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                ),
-            })
-        }
-    }
-
-    fn copy_podman_image(&self, source: &ImageSource) -> Result<()> {
-        let store_ref = self.container_storage_ref()?;
-        let source_ref = match source.kind {
-            ImageSourceKind::NixDescriptor => {
-                DescriptorSource::from_path(&source.path)?.skopeo_source()
-            }
-            ImageSourceKind::DockerArchive => format!("docker-archive:{}", source.path.display()),
-        };
-        match skopeo_copy(&source_ref, &store_ref)? {
-            Ok(()) => self.tag_latest(),
-            Err(error) => Err(Error::Operation { message: error }),
-        }
-    }
-
-    fn container_storage_ref(&self) -> Result<String> {
-        let default = format!("containers-storage:{}", self.image);
-        let output = Command::new(&self.binary)
-            .arg("info")
-            .arg("--format")
-            .arg("{{.Store.GraphDriverName}}@{{.Store.GraphRoot}}+{{.Store.RunRoot}}")
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()?;
-        if !output.status.success() {
-            return Ok(default);
-        }
-        let spec = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-        if spec.contains('@') && spec.contains('+') {
-            Ok(format!("containers-storage:[{spec}]{}", self.image))
-        } else {
-            Ok(default)
-        }
-    }
-
-    fn tag_loaded_image(&self) -> Result<bool> {
-        for source in ["wrix-service:latest", "localhost/wrix-service:latest"] {
-            if source == self.image {
-                continue;
-            }
-            if self.tag_image(source, &self.image)? && self.image_exists()? {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
-
-    fn tag_latest(&self) -> Result<()> {
-        let Some(repo) = self.image.rsplit_once(':').map(|(repo, _tag)| repo) else {
-            return Ok(());
-        };
-        let latest = format!("{repo}:latest");
-        if self.tag_image(&self.image, &latest)? {
-            Ok(())
-        } else {
-            Err(Error::Operation {
-                message: format!("failed to tag service image {} as {latest}", self.image),
-            })
-        }
-    }
-
-    fn tag_image(&self, source: &str, target: &str) -> Result<bool> {
-        let mut command = Command::new(&self.binary);
-        match self.kind {
-            RuntimeKind::Container => {
-                command.arg("image").arg("tag");
-            }
-            RuntimeKind::Podman => {
-                command.arg("tag");
-            }
-        }
-        let status = command
-            .arg(source)
-            .arg(target)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -1435,26 +1329,6 @@ impl Runtime {
     }
 }
 
-fn skopeo_copy(source_ref: &str, store_ref: &str) -> Result<std::result::Result<(), String>> {
-    let output = Command::new("skopeo")
-        .arg("--insecure-policy")
-        .arg("copy")
-        .arg("--quiet")
-        .arg(source_ref)
-        .arg(store_ref)
-        .stdin(Stdio::null())
-        .output()?;
-    if output.status.success() {
-        Ok(Ok(()))
-    } else {
-        Ok(Err(format!(
-            "skopeo copy failed with status {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr)
-        )))
-    }
-}
-
 fn is_missing_container_remove_error(stderr: &str) -> bool {
     let text = stderr.to_ascii_lowercase();
     text.contains("notfound")
@@ -1490,12 +1364,14 @@ fn bind_port_from_runtime_error(message: &str) -> Option<u16> {
     let lower = message.to_ascii_lowercase();
     let marker = "failed to bind port ";
     let start = lower.find(marker)? + marker.len();
-    message[start..]
+    let digits = message[start..]
         .chars()
         .take_while(char::is_ascii_digit)
-        .collect::<String>()
-        .parse()
-        .ok()
+        .collect::<String>();
+    let Ok(port) = digits.parse::<u16>() else {
+        return None;
+    };
+    Some(port)
 }
 
 fn process_port_owner(port: u16) -> Option<String> {
@@ -1541,107 +1417,6 @@ fn ss_port_owner(port: u16) -> Option<String> {
         .map(str::trim)
         .find(|line| line.contains(&needle))
         .map(|line| format!("process reported by ss ({line})"))
-}
-
-fn create_temp_dir(prefix: &str) -> Result<PathBuf> {
-    for attempt in 0..100 {
-        let path = env::temp_dir().join(format!("{prefix}-{}-{attempt}", std::process::id()));
-        match fs::create_dir(&path) {
-            Ok(()) => return Ok(path),
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(error.into()),
-        }
-    }
-    Err(Error::TempDirAttemptsExceeded {
-        prefix: prefix.to_owned(),
-    })
-}
-
-fn required_descriptor_field(path: &Path, content: &str, field: &'static str) -> Result<String> {
-    match json_string_field(content, field) {
-        Some(value) if !value.is_empty() => Ok(value),
-        Some(value) => Err(Error::InvalidImageDescriptorField {
-            path: path.display().to_string(),
-            field,
-            value,
-        }),
-        None => Err(Error::MissingImageDescriptorField {
-            path: path.display().to_string(),
-            field,
-        }),
-    }
-}
-
-fn is_sha256_digest(value: &str) -> bool {
-    let Some(hex) = value.strip_prefix("sha256:") else {
-        return false;
-    };
-    hex.len() == 64
-        && hex
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-}
-
-fn json_string_field(input: &str, name: &str) -> Option<String> {
-    let marker = format!("\"{name}\"");
-    let start = input.find(&marker)?;
-    let after_name = &input[start + marker.len()..];
-    let after_colon = &after_name[after_name.find(':')? + 1..];
-    let value_start = after_colon.find(|ch: char| !ch.is_whitespace())?;
-    parse_json_string(&after_colon[value_start..])
-}
-
-fn parse_json_string(input: &str) -> Option<String> {
-    if !input.starts_with('"') {
-        return None;
-    }
-    let mut output = String::new();
-    let mut escaped = false;
-    for ch in input[1..].chars() {
-        if escaped {
-            match ch {
-                '"' => output.push('"'),
-                '\\' => output.push('\\'),
-                '/' => output.push('/'),
-                'b' => output.push('\u{0008}'),
-                'f' => output.push('\u{000c}'),
-                'n' => output.push('\n'),
-                'r' => output.push('\r'),
-                't' => output.push('\t'),
-                _ => return None,
-            }
-            escaped = false;
-        } else if ch == '\\' {
-            escaped = true;
-        } else if ch == '"' {
-            return Some(output);
-        } else {
-            output.push(ch);
-        }
-    }
-    None
-}
-
-fn loaded_container_ref(stdout: &[u8], stderr: &[u8]) -> Option<String> {
-    let text = format!(
-        "{}\n{}",
-        String::from_utf8_lossy(stdout),
-        String::from_utf8_lossy(stderr)
-    );
-    for token in text.split_whitespace() {
-        let token = token.trim_matches(|ch| matches!(ch, '"' | '\'' | ',' | ';'));
-        let Some(rest) = token.strip_prefix("untagged@sha256:") else {
-            continue;
-        };
-        let digest = rest
-            .chars()
-            .take_while(char::is_ascii_hexdigit)
-            .collect::<String>();
-        if !digest.is_empty() {
-            return Some(format!("untagged@sha256:{digest}"));
-        }
-    }
-    None
 }
 
 fn default_runtime() -> String {
@@ -1694,19 +1469,6 @@ fn select_port(prior: Option<u16>, start: u16, width: u16, hash: &WorkspaceHash)
 
 fn is_loopback_port_available(port: u16) -> bool {
     TcpListener::bind(("127.0.0.1", port)).is_ok()
-}
-
-fn read_endpoint_port(content: &str, name: &str) -> Option<u16> {
-    let marker = format!("\"{name}\"");
-    let start = content.find(&marker)?;
-    let port_marker = "\"port\":";
-    let port_start = content[start..].find(port_marker)? + start + port_marker.len();
-    let digits = content[port_start..]
-        .chars()
-        .skip_while(|ch| ch.is_whitespace())
-        .take_while(char::is_ascii_digit)
-        .collect::<String>();
-    digits.parse().ok()
 }
 
 fn container_command(plan: &Plan) -> String {
@@ -1935,21 +1697,12 @@ fn push_unicode_escape(output: &mut String, value: char) {
 
 #[cfg(test)]
 mod test {
-    use std::path::Path;
-
     use super::{
-        DescriptorSource, DoltTransport, Error, ImageSourceKind, Plan, RuntimeKind,
-        bind_port_from_runtime_error, is_missing_container_remove_error, loaded_container_ref,
-        parse_published_ports, read_endpoint_port,
+        DoltTransport, Plan, RuntimeKind, bind_port_from_runtime_error,
+        is_missing_container_remove_error, parse_image_source_kind, parse_published_ports,
     };
     use wrix_core::path::Workspace;
-
-    #[test]
-    fn endpoint_port_reader_extracts_named_port() {
-        let content = r#"{"endpoints":{"cache_http":{"host":"127.0.0.1","port":21042},"dolt_tcp":{"host":"127.0.0.1","port":23042}}}"#;
-        assert_eq!(read_endpoint_port(content, "cache_http"), Some(21_042));
-        assert_eq!(read_endpoint_port(content, "dolt_tcp"), Some(23_042));
-    }
+    use wrix_sandbox::image::SourceKind;
 
     #[test]
     fn published_port_parser_extracts_loopback_bindings() {
@@ -1977,14 +1730,14 @@ mod test {
     #[test]
     fn service_image_source_kind_parser_accepts_contract_values() {
         assert_eq!(
-            ImageSourceKind::parse("nix-descriptor").unwrap(),
-            ImageSourceKind::NixDescriptor
+            parse_image_source_kind("nix-descriptor").unwrap(),
+            SourceKind::NixDescriptor
         );
         assert_eq!(
-            ImageSourceKind::parse("docker-archive").unwrap(),
-            ImageSourceKind::DockerArchive
+            parse_image_source_kind("docker-archive").unwrap(),
+            SourceKind::DockerArchive
         );
-        assert!(ImageSourceKind::parse("tarball").is_err());
+        assert!(parse_image_source_kind("tarball").is_err());
     }
 
     #[test]
@@ -2007,49 +1760,6 @@ mod test {
             RuntimeKind::Container
         );
         assert_eq!(RuntimeKind::for_binary("podman"), RuntimeKind::Podman);
-    }
-
-    #[test]
-    fn service_descriptor_source_uses_oci_layout_transport() {
-        let digest = format!("sha256:{}", "a".repeat(64));
-        let content = format!(
-            r#"{{"schema":1,"digest":"{digest}","oci_layout":"/nix/store/fake-oci","oci_ref":"latest"}}"#
-        );
-        let descriptor =
-            DescriptorSource::from_json(Path::new("/nix/store/fake-descriptor.json"), &content)
-                .unwrap();
-
-        assert_eq!(descriptor.digest, digest);
-        assert_eq!(descriptor.skopeo_source(), "oci:/nix/store/fake-oci:latest");
-    }
-
-    #[test]
-    fn service_descriptor_source_rejects_stream_fallback_without_layout() {
-        let digest = format!("sha256:{}", "a".repeat(64));
-        let legacy_stream_key = "fallback_".to_owned() + "stream";
-        let content = format!(
-            r#"{{"schema":1,"digest":"{digest}","{legacy_stream_key}":"/nix/store/fake-stream"}}"#
-        );
-        let error =
-            DescriptorSource::from_json(Path::new("/nix/store/fake-descriptor.json"), &content)
-                .unwrap_err();
-
-        assert!(matches!(
-            error,
-            Error::MissingImageDescriptorField {
-                field: "oci_layout",
-                ..
-            }
-        ));
-    }
-
-    #[test]
-    fn loaded_container_ref_extracts_apple_load_ref() {
-        let output = b"loading\nLoaded: untagged@sha256:abcdef0123456789, done\n";
-        assert_eq!(
-            loaded_container_ref(output, b""),
-            Some(String::from("untagged@sha256:abcdef0123456789"))
-        );
     }
 
     #[test]

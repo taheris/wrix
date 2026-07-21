@@ -3,7 +3,30 @@ use std::{
     process::ExitCode,
 };
 
+use displaydoc::Display;
+use thiserror::Error as ThisError;
+
 use crate::publisher::{self, Mode};
+
+pub type Result<T> = std::result::Result<T, Error>;
+
+#[derive(Debug, Display, ThisError)]
+pub enum Error {
+    /// cache command I/O failed: {source}
+    Io {
+        #[from]
+        source: io::Error,
+    },
+    /// {source}
+    Publisher {
+        #[from]
+        source: publisher::Error,
+    },
+    /// unknown cache warm option: {option}
+    UnknownWarmOption { option: String },
+    /// unexpected cache option: {option}
+    UnexpectedOption { option: String },
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Command {
@@ -27,13 +50,14 @@ impl Command {
     }
 }
 
-pub fn write_help(stdout: &mut impl Write) -> io::Result<()> {
+pub fn write_help(stdout: &mut impl Write) -> Result<()> {
     stdout.write_all(
         b"Manage the workspace project cache.\n\nUsage: wrix service cache <command> [options]\n\nCommands:\n  status\n  publish\n  warm [--checks]\n  prune\n  rotate-key\n",
-    )
+    )?;
+    Ok(())
 }
 
-pub fn run(command: Command, args: &[String], stdout: &mut impl Write) -> io::Result<ExitCode> {
+pub fn run(command: Command, args: &[String], stdout: &mut impl Write) -> Result<ExitCode> {
     match command {
         Command::Status => run_status(args, stdout),
         Command::Publish => run_publish(args, stdout),
@@ -43,72 +67,70 @@ pub fn run(command: Command, args: &[String], stdout: &mut impl Write) -> io::Re
     }
 }
 
-fn run_status(args: &[String], stdout: &mut impl Write) -> io::Result<ExitCode> {
+fn run_status(args: &[String], stdout: &mut impl Write) -> Result<ExitCode> {
     reject_args(args)?;
     let report = publisher::status_current_workspace()?;
     write_report(stdout, &report)?;
     Ok(ExitCode::SUCCESS)
 }
 
-fn run_publish(args: &[String], stdout: &mut impl Write) -> io::Result<ExitCode> {
+fn run_publish(args: &[String], stdout: &mut impl Write) -> Result<ExitCode> {
     reject_args(args)?;
     let report = publisher::run_current_workspace(Mode::Publish)?;
     write_report(stdout, &report)?;
     Ok(ExitCode::SUCCESS)
 }
 
-fn run_warm(args: &[String], stdout: &mut impl Write) -> io::Result<ExitCode> {
+fn run_warm(args: &[String], stdout: &mut impl Write) -> Result<ExitCode> {
     let checks = parse_warm_args(args)?;
     let report = publisher::run_current_workspace(Mode::Warm { checks })?;
     write_report(stdout, &report)?;
     Ok(ExitCode::SUCCESS)
 }
 
-fn run_prune(args: &[String], stdout: &mut impl Write) -> io::Result<ExitCode> {
+fn run_prune(args: &[String], stdout: &mut impl Write) -> Result<ExitCode> {
     reject_args(args)?;
     let report = publisher::run_current_workspace(Mode::Prune)?;
     write_report(stdout, &report)?;
     Ok(ExitCode::SUCCESS)
 }
 
-fn run_rotate_key(args: &[String], stdout: &mut impl Write) -> io::Result<ExitCode> {
+fn run_rotate_key(args: &[String], stdout: &mut impl Write) -> Result<ExitCode> {
     reject_args(args)?;
     let report = publisher::run_current_workspace(Mode::RotateKey)?;
     write_report(stdout, &report)?;
     Ok(ExitCode::SUCCESS)
 }
 
-fn write_report(stdout: &mut impl Write, report: &publisher::Report) -> io::Result<()> {
+fn write_report(stdout: &mut impl Write, report: &publisher::Report) -> Result<()> {
     for line in report.lines() {
         writeln!(stdout, "{line}")?;
     }
     Ok(())
 }
 
-fn parse_warm_args(args: &[String]) -> io::Result<bool> {
+fn parse_warm_args(args: &[String]) -> Result<bool> {
     let mut checks = false;
     for arg in args {
         match arg.as_str() {
             "--checks" => checks = true,
             other => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("unknown cache warm option: {other}"),
-                ));
+                return Err(Error::UnknownWarmOption {
+                    option: other.to_owned(),
+                });
             }
         }
     }
     Ok(checks)
 }
 
-fn reject_args(args: &[String]) -> io::Result<()> {
+fn reject_args(args: &[String]) -> Result<()> {
     if args.is_empty() {
         return Ok(());
     }
-    Err(io::Error::new(
-        io::ErrorKind::InvalidInput,
-        format!("unexpected cache option: {}", args[0]),
-    ))
+    Err(Error::UnexpectedOption {
+        option: args[0].clone(),
+    })
 }
 
 #[cfg(test)]

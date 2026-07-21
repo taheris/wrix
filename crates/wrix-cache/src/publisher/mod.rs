@@ -6,14 +6,53 @@ use std::{
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
     thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, SystemTimeError, UNIX_EPOCH},
 };
 
+use displaydoc::Display;
 use fs2::FileExt;
+use serde::{Deserialize, Serialize};
+use thiserror::Error as ThisError;
 use wrix_core::{
     cache_key,
-    path::{Workspace, WorkspaceHash},
+    path::{Workspace, WorkspaceHash, WorkspaceHashParseError},
 };
+
+pub type Result<T> = std::result::Result<T, Error>;
+
+#[derive(Debug, Display, ThisError)]
+pub enum Error {
+    /// project cache I/O failed: {source}
+    Io {
+        #[from]
+        source: io::Error,
+    },
+    /// invalid project cache JSON at {path}: {source}
+    Json {
+        path: String,
+        source: serde_json::Error,
+    },
+    /// {source}
+    WorkspaceHash {
+        #[from]
+        source: WorkspaceHashParseError,
+    },
+    /// system clock is before the Unix epoch: {source}
+    Clock {
+        #[from]
+        source: SystemTimeError,
+    },
+    /// environment variable {name} must be valid Unicode
+    InvalidUnicodeEnvironment { name: &'static str },
+    /// environment variable {name} has invalid value {value}
+    InvalidEnvironment { name: &'static str, value: String },
+    /// command failed: {program}: {stderr}
+    ProcessFailed { program: String, stderr: String },
+    /// timed out waiting for project cache lock {path}
+    LockTimeout { path: String },
+    /// HOME is required to resolve wrix cache state roots
+    HomeMissing,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Mode {
@@ -28,12 +67,43 @@ pub struct Report {
     lines: Vec<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct Root {
     name: String,
     installable: String,
+    #[serde(alias = "drvPath")]
     drv_path: String,
+    #[serde(default, alias = "outPaths")]
     out_paths: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct RootManifest {
+    #[serde(default)]
+    schema_version: Option<u8>,
+    #[serde(default)]
+    workspace_hash: Option<String>,
+    roots: Vec<Root>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct PendingRecord {
+    #[serde(default)]
+    created_at_epoch: Option<u64>,
+    #[serde(alias = "drvPath")]
+    drv_path: String,
+    #[serde(default, alias = "outPaths")]
+    out_paths: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct CacheStatus {
+    dirty: bool,
+    last_publish: Option<String>,
+    last_prune: Option<String>,
+    last_error: Option<String>,
+    #[serde(default)]
+    last_prune_epoch: Option<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -55,8 +125,8 @@ impl Report {
     }
 }
 
-pub fn run_current_workspace(mode: Mode) -> io::Result<Report> {
-    let workspace = Workspace::from_current_dir()?;
+pub fn run_current_workspace(mode: Mode) -> Result<Report> {
+    let workspace = Workspace::from_service_current_dir()?;
     let paths = Paths::for_workspace(workspace.hash())?;
     run_at(&workspace, &paths, mode)
 }
@@ -66,7 +136,7 @@ pub fn run_workspace_at(
     state_root: &Path,
     cache_root: &Path,
     mode: Mode,
-) -> io::Result<Report> {
+) -> Result<Report> {
     let paths = Paths {
         state_root: state_root.to_path_buf(),
         cache_root: cache_root.to_path_buf(),
@@ -74,13 +144,13 @@ pub fn run_workspace_at(
     run_at(workspace, &paths, mode)
 }
 
-pub fn status_current_workspace() -> io::Result<Report> {
-    let workspace = Workspace::from_current_dir()?;
+pub fn status_current_workspace() -> Result<Report> {
+    let workspace = Workspace::from_service_current_dir()?;
     let paths = Paths::for_workspace(workspace.hash())?;
     status_at_paths(&paths)
 }
 
-pub fn status_at(state_root: &Path, cache_root: &Path) -> io::Result<Report> {
+pub fn status_at(state_root: &Path, cache_root: &Path) -> Result<Report> {
     let paths = Paths {
         state_root: state_root.to_path_buf(),
         cache_root: cache_root.to_path_buf(),
@@ -88,17 +158,17 @@ pub fn status_at(state_root: &Path, cache_root: &Path) -> io::Result<Report> {
     status_at_paths(&paths)
 }
 
-fn run_at(workspace: &Workspace, paths: &Paths, mode: Mode) -> io::Result<Report> {
+fn run_at(workspace: &Workspace, paths: &Paths, mode: Mode) -> Result<Report> {
     paths.ensure()?;
     run(workspace, paths, mode)
 }
 
-fn status_at_paths(paths: &Paths) -> io::Result<Report> {
+fn status_at_paths(paths: &Paths) -> Result<Report> {
     paths.ensure()?;
     status_report(paths)
 }
 
-pub fn prune_stale_dirty(state_root: &Path, cache_root: &Path) -> io::Result<bool> {
+pub fn prune_stale_dirty(state_root: &Path, cache_root: &Path) -> Result<bool> {
     let paths = Paths {
         state_root: state_root.to_path_buf(),
         cache_root: cache_root.to_path_buf(),
@@ -118,7 +188,7 @@ pub fn run_hook_record(
     manifest: &Path,
     drv_path: &str,
     out_paths: &str,
-) -> io::Result<Report> {
+) -> Result<Report> {
     validate_workspace_hash(workspace_hash)?;
     let paths = Paths {
         state_root: state_root.to_path_buf(),
@@ -141,7 +211,7 @@ pub fn run_hook_record(
     run_automatic_publish(&paths, root)
 }
 
-fn run(workspace: &Workspace, paths: &Paths, mode: Mode) -> io::Result<Report> {
+fn run(workspace: &Workspace, paths: &Paths, mode: Mode) -> Result<Report> {
     match mode {
         Mode::Publish => with_explicit_lock(paths, || {
             let roots = discover_roots(RootSet::Publish)?;
@@ -176,9 +246,9 @@ fn run(workspace: &Workspace, paths: &Paths, mode: Mode) -> io::Result<Report> {
     }
 }
 
-fn run_automatic_publish(paths: &Paths, root: Root) -> io::Result<Report> {
+fn run_automatic_publish(paths: &Paths, root: Root) -> Result<Report> {
     let mut lines = Vec::new();
-    let timeout = hook_lock_timeout();
+    let timeout = hook_lock_timeout()?;
     let Some(lock) = OperationLock::acquire(paths, Some(timeout), &mut lines)? else {
         record_pending(paths, &root.drv_path, &root.out_paths)?;
         lines.push(String::from(
@@ -203,20 +273,13 @@ fn run_automatic_publish(paths: &Paths, root: Root) -> io::Result<Report> {
     }
 }
 
-fn with_explicit_lock<T>(
-    paths: &Paths,
-    operation: impl FnOnce() -> io::Result<T>,
-) -> io::Result<T> {
+fn with_explicit_lock<T>(paths: &Paths, operation: impl FnOnce() -> Result<T>) -> Result<T> {
     let mut lines = Vec::new();
-    let timeout = explicit_lock_timeout();
+    let timeout = explicit_lock_timeout()?;
     let Some(lock) = OperationLock::acquire(paths, Some(timeout), &mut lines)? else {
-        return Err(io::Error::new(
-            ErrorKind::TimedOut,
-            format!(
-                "timed out waiting for project cache lock {}",
-                paths.cache_lock_path().display()
-            ),
-        ));
+        return Err(Error::LockTimeout {
+            path: paths.cache_lock_path().display().to_string(),
+        });
     };
     let result = operation();
     let release = lock.release();
@@ -236,7 +299,7 @@ impl OperationLock {
         paths: &Paths,
         timeout: Option<Duration>,
         lines: &mut Vec<String>,
-    ) -> io::Result<Option<Self>> {
+    ) -> Result<Option<Self>> {
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -256,19 +319,21 @@ impl OperationLock {
                         ));
                         announced = true;
                     }
-                    if timeout.is_some_and(|limit| started.elapsed().is_ok_and(|age| age >= limit))
+                    if let Some(limit) = timeout
+                        && started.elapsed()? >= limit
                     {
                         return Ok(None);
                     }
                     thread::sleep(Duration::from_millis(50));
                 }
-                Err(error) => return Err(error),
+                Err(error) => return Err(error.into()),
             }
         }
     }
 
-    fn release(self) -> io::Result<()> {
-        self.file.unlock()
+    fn release(self) -> Result<()> {
+        self.file.unlock()?;
+        Ok(())
     }
 }
 
@@ -278,11 +343,11 @@ enum RootSet {
     Warm { checks: bool },
 }
 
-fn discover_roots(root_set: RootSet) -> io::Result<Vec<Root>> {
-    let config = RootConfig::from_env(root_set);
+fn discover_roots(root_set: RootSet) -> Result<Vec<Root>> {
+    let config = RootConfig::from_env(root_set)?;
     if let Some(path) = env::var_os("WRIX_CACHE_ROOTS_FILE") {
         let roots = roots_from_file(Path::new(&path))?;
-        return Ok(filter_roots(roots, &config));
+        return filter_roots(roots, &config);
     }
     let system = current_system()?;
     let mut installables = Vec::new();
@@ -293,14 +358,14 @@ fn discover_roots(root_set: RootSet) -> io::Result<Vec<Root>> {
         installables.extend(attr_installables("checks", &system)?);
     }
     if config.dev_shell
-        && let Some(shell) = selected_dev_shell()
+        && let Some(shell) = selected_dev_shell()?
     {
         let installable = format!(".#devShells.{system}.{shell}");
         if drv_path(&installable).is_ok() {
             installables.push((format!("devShells.{system}.{shell}"), installable));
         }
     }
-    for (index, installable) in env_lines(config.include_env).into_iter().enumerate() {
+    for (index, installable) in env_lines(config.include_env)?.into_iter().enumerate() {
         installables.push((format!("include.{index}"), installable));
     }
     let mut roots = Vec::new();
@@ -313,7 +378,7 @@ fn discover_roots(root_set: RootSet) -> io::Result<Vec<Root>> {
             out_paths: Vec::new(),
         });
     }
-    Ok(filter_roots(roots, &config))
+    filter_roots(roots, &config)
 }
 
 #[derive(Debug)]
@@ -326,33 +391,33 @@ struct RootConfig {
 }
 
 impl RootConfig {
-    fn from_env(root_set: RootSet) -> Self {
+    fn from_env(root_set: RootSet) -> Result<Self> {
         match root_set {
-            RootSet::Publish => Self {
-                packages: env_bool("WRIX_CACHE_PUBLISH_PACKAGES", true),
-                checks: env_bool("WRIX_CACHE_PUBLISH_CHECKS", true),
-                dev_shell: env_bool("WRIX_CACHE_PUBLISH_DEVSHELL", true),
+            RootSet::Publish => Ok(Self {
+                packages: env_bool("WRIX_CACHE_PUBLISH_PACKAGES", true)?,
+                checks: env_bool("WRIX_CACHE_PUBLISH_CHECKS", true)?,
+                dev_shell: env_bool("WRIX_CACHE_PUBLISH_DEVSHELL", true)?,
                 include_env: "WRIX_CACHE_PUBLISH_INCLUDE",
                 exclude_env: "WRIX_CACHE_PUBLISH_EXCLUDE",
-            },
-            RootSet::Warm { checks } => Self {
-                packages: env_bool("WRIX_CACHE_WARM_PACKAGES", true),
-                checks: checks || env_bool("WRIX_CACHE_WARM_CHECKS", false),
-                dev_shell: env_bool("WRIX_CACHE_WARM_DEVSHELL", true),
+            }),
+            RootSet::Warm { checks } => Ok(Self {
+                packages: env_bool("WRIX_CACHE_WARM_PACKAGES", true)?,
+                checks: checks || env_bool("WRIX_CACHE_WARM_CHECKS", false)?,
+                dev_shell: env_bool("WRIX_CACHE_WARM_DEVSHELL", true)?,
                 include_env: "WRIX_CACHE_WARM_INCLUDE",
                 exclude_env: "WRIX_CACHE_WARM_EXCLUDE",
-            },
+            }),
         }
     }
 }
 
-fn filter_roots(roots: Vec<Root>, config: &RootConfig) -> Vec<Root> {
-    let excludes: BTreeSet<String> = env_lines(config.exclude_env).into_iter().collect();
-    roots
+fn filter_roots(roots: Vec<Root>, config: &RootConfig) -> Result<Vec<Root>> {
+    let excludes: BTreeSet<String> = env_lines(config.exclude_env)?.into_iter().collect();
+    Ok(roots
         .into_iter()
         .filter(|root| root_category_enabled(root, config))
         .filter(|root| !excludes.contains(&root.name) && !excludes.contains(&root.installable))
-        .collect()
+        .collect())
 }
 
 fn root_category_enabled(root: &Root, config: &RootConfig) -> bool {
@@ -368,57 +433,47 @@ fn root_category_enabled(root: &Root, config: &RootConfig) -> bool {
     true
 }
 
-fn env_bool(name: &str, default: bool) -> bool {
+fn env_bool(name: &'static str, default: bool) -> Result<bool> {
     match env::var(name) {
-        Ok(value) if matches!(value.as_str(), "0" | "false" | "no") => false,
-        Ok(value) if matches!(value.as_str(), "1" | "true" | "yes") => true,
-        Ok(_) | Err(_) => default,
+        Ok(value) if matches!(value.as_str(), "0" | "false" | "no") => Ok(false),
+        Ok(value) if matches!(value.as_str(), "1" | "true" | "yes") => Ok(true),
+        Ok(value) => Err(Error::InvalidEnvironment { name, value }),
+        Err(env::VarError::NotPresent) => Ok(default),
+        Err(env::VarError::NotUnicode(_)) => Err(Error::InvalidUnicodeEnvironment { name }),
     }
 }
 
-fn env_lines(name: &str) -> Vec<String> {
-    env::var(name).map_or_else(
-        |_| Vec::new(),
-        |value| {
-            value
-                .lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-                .map(str::to_owned)
-                .collect()
-        },
-    )
+fn env_lines(name: &'static str) -> Result<Vec<String>> {
+    match env::var(name) {
+        Ok(value) => Ok(value
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(str::to_owned)
+            .collect()),
+        Err(env::VarError::NotPresent) => Ok(Vec::new()),
+        Err(env::VarError::NotUnicode(_)) => Err(Error::InvalidUnicodeEnvironment { name }),
+    }
 }
 
-fn roots_from_file(path: &Path) -> io::Result<Vec<Root>> {
+fn roots_from_file(path: &Path) -> Result<Vec<Root>> {
     let content = fs::read_to_string(path)?;
-    let mut roots = Vec::new();
+    let manifest =
+        serde_json::from_str::<RootManifest>(&content).map_err(|source| Error::Json {
+            path: path.display().to_string(),
+            source,
+        })?;
     let mut seen = HashSet::new();
-    for object in json_objects(&content) {
-        if let (Some(name), Some(installable), Some(drv_path)) = (
-            json_string_field(object, "name"),
-            json_string_field(object, "installable"),
-            json_string_field(object, "drv_path").or_else(|| json_string_field(object, "drvPath")),
-        ) {
-            if !seen.insert((name.clone(), drv_path.clone())) {
-                continue;
-            }
-            roots.push(Root {
-                name,
-                installable,
-                drv_path,
-                out_paths: json_string_array_field(object, "out_paths")
-                    .or_else(|| json_string_array_field(object, "outPaths"))
-                    .unwrap_or_default(),
-            });
-        }
-    }
-    Ok(roots)
+    Ok(manifest
+        .roots
+        .into_iter()
+        .filter(|root| seen.insert((root.name.clone(), root.drv_path.clone())))
+        .collect())
 }
 
-fn attr_installables(kind: &str, system: &str) -> io::Result<Vec<(String, String)>> {
+fn attr_installables(kind: &str, system: &str) -> Result<Vec<(String, String)>> {
     let attr = format!(".#{}.{system}", kind);
-    let output = Command::new(nix_bin())
+    let output = Command::new(nix_bin()?)
         .arg("eval")
         .arg("--json")
         .arg(&attr)
@@ -427,11 +482,15 @@ fn attr_installables(kind: &str, system: &str) -> io::Result<Vec<(String, String
         .stdin(Stdio::null())
         .output()?;
     if !output.status.success() {
-        return Ok(Vec::new());
+        return Err(process_failed("nix eval", &output.stderr));
     }
-    let text = String::from_utf8_lossy(&output.stdout);
+    let names =
+        serde_json::from_slice::<Vec<String>>(&output.stdout).map_err(|source| Error::Json {
+            path: String::from("nix eval attrNames output"),
+            source,
+        })?;
     let mut installables = Vec::new();
-    for name in parse_json_string_array(&text) {
+    for name in names {
         installables.push((
             format!("{kind}.{system}.{name}"),
             format!(".#{kind}.{system}.{name}"),
@@ -440,20 +499,22 @@ fn attr_installables(kind: &str, system: &str) -> io::Result<Vec<(String, String
     Ok(installables)
 }
 
-fn selected_dev_shell() -> Option<String> {
+fn selected_dev_shell() -> Result<Option<String>> {
     match env::var("WRIX_DEVSHELL") {
-        Ok(value) if value.is_empty() || value == "none" => None,
-        Ok(value) => Some(value),
-        Err(env::VarError::NotPresent) => Some(String::from("default")),
-        Err(env::VarError::NotUnicode(_)) => None,
+        Ok(value) if value.is_empty() || value == "none" => Ok(None),
+        Ok(value) => Ok(Some(value)),
+        Err(env::VarError::NotPresent) => Ok(Some(String::from("default"))),
+        Err(env::VarError::NotUnicode(_)) => Err(Error::InvalidUnicodeEnvironment {
+            name: "WRIX_DEVSHELL",
+        }),
     }
 }
 
-fn current_system() -> io::Result<String> {
+fn current_system() -> Result<String> {
     if let Ok(system) = env::var("WRIX_SYSTEM") {
         return Ok(system);
     }
-    let output = Command::new(nix_bin())
+    let output = Command::new(nix_bin()?)
         .arg("eval")
         .arg("--raw")
         .arg("--impure")
@@ -465,13 +526,14 @@ fn current_system() -> io::Result<String> {
     if output.status.success() {
         return Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned());
     }
-    Err(io::Error::other(
-        String::from_utf8_lossy(&output.stderr).into_owned(),
+    Err(process_failed(
+        "nix eval builtins.currentSystem",
+        &output.stderr,
     ))
 }
 
-fn drv_path(installable: &str) -> io::Result<String> {
-    let output = Command::new(nix_bin())
+fn drv_path(installable: &str) -> Result<String> {
+    let output = Command::new(nix_bin()?)
         .arg("path-info")
         .arg("--derivation")
         .arg(installable)
@@ -481,9 +543,7 @@ fn drv_path(installable: &str) -> io::Result<String> {
     if output.status.success() {
         return Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned());
     }
-    Err(io::Error::other(
-        String::from_utf8_lossy(&output.stderr).into_owned(),
-    ))
+    Err(process_failed("nix path-info --derivation", &output.stderr))
 }
 
 struct RealizedRoots {
@@ -491,7 +551,7 @@ struct RealizedRoots {
     unrealized: Vec<String>,
 }
 
-fn realized_roots(roots: Vec<Root>) -> io::Result<RealizedRoots> {
+fn realized_roots(roots: Vec<Root>) -> Result<RealizedRoots> {
     let mut realized = Vec::new();
     let mut unrealized = Vec::new();
     for mut root in roots {
@@ -515,11 +575,11 @@ fn realized_roots(roots: Vec<Root>) -> io::Result<RealizedRoots> {
     })
 }
 
-fn store_paths_valid(paths: &[String]) -> io::Result<bool> {
+fn store_paths_valid(paths: &[String]) -> Result<bool> {
     if paths.is_empty() {
         return Ok(false);
     }
-    let output = Command::new(nix_store_bin())
+    let output = Command::new(nix_store_bin()?)
         .arg("--check-validity")
         .arg("--print-invalid")
         .args(paths)
@@ -527,15 +587,13 @@ fn store_paths_valid(paths: &[String]) -> io::Result<bool> {
         .stderr(Stdio::piped())
         .output()?;
     if !output.status.success() {
-        return Err(io::Error::other(
-            String::from_utf8_lossy(&output.stderr).into_owned(),
-        ));
+        return Err(process_failed("nix-store --check-validity", &output.stderr));
     }
     Ok(output.stdout.is_empty())
 }
 
-fn output_paths(installable: &str) -> io::Result<Option<Vec<String>>> {
-    let output = Command::new(nix_bin())
+fn output_paths(installable: &str) -> Result<Option<Vec<String>>> {
+    let output = Command::new(nix_bin()?)
         .arg("path-info")
         .arg("--json")
         .arg(installable)
@@ -553,9 +611,11 @@ fn output_paths(installable: &str) -> io::Result<Option<Vec<String>>> {
     }
 }
 
-fn parse_path_info_paths(input: &str) -> io::Result<Vec<String>> {
-    let value: serde_json::Value = serde_json::from_str(input)
-        .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))?;
+fn parse_path_info_paths(input: &str) -> Result<Vec<String>> {
+    let value: serde_json::Value = serde_json::from_str(input).map_err(|source| Error::Json {
+        path: String::from("nix path-info output"),
+        source,
+    })?;
     let Some(object) = value.as_object() else {
         return Ok(Vec::new());
     };
@@ -569,11 +629,11 @@ fn parse_path_info_paths(input: &str) -> io::Result<Vec<String>> {
     Ok(paths)
 }
 
-fn build_roots(roots: &[Root]) -> io::Result<()> {
+fn build_roots(roots: &[Root]) -> Result<()> {
     if roots.is_empty() {
         return Ok(());
     }
-    let mut command = Command::new(nix_bin());
+    let mut command = Command::new(nix_bin()?);
     command.arg("build").arg("--no-link");
     for root in roots {
         command.arg(&root.installable);
@@ -585,9 +645,7 @@ fn build_roots(roots: &[Root]) -> io::Result<()> {
     if output.status.success() {
         Ok(())
     } else {
-        Err(io::Error::other(
-            String::from_utf8_lossy(&output.stderr).into_owned(),
-        ))
+        Err(process_failed("nix build", &output.stderr))
     }
 }
 
@@ -596,7 +654,7 @@ fn publish_roots(
     roots: &[Root],
     pending: Vec<Pending>,
     prune_after: bool,
-) -> io::Result<Report> {
+) -> Result<Report> {
     let root_drvs = roots
         .iter()
         .map(|root| root.drv_path.as_str())
@@ -604,10 +662,9 @@ fn publish_roots(
     let mut publishable = BTreeSet::new();
     let mut lines = Vec::new();
     for root in roots {
-        update_gc_marker(paths, root)?;
-        for path in closure_paths(&root.out_paths)? {
-            publishable.insert(path);
-        }
+        let closure = closure_paths(&root.out_paths)?;
+        update_gc_marker(paths, root, &closure)?;
+        publishable.extend(closure);
         lines.push(format!("published root: {}", root.installable));
     }
     for record in pending {
@@ -633,11 +690,11 @@ fn publish_roots(
     Ok(Report { lines })
 }
 
-fn closure_paths(out_paths: &[String]) -> io::Result<Vec<String>> {
+fn closure_paths(out_paths: &[String]) -> Result<Vec<String>> {
     if out_paths.is_empty() {
         return Ok(Vec::new());
     }
-    let output = Command::new(nix_store_bin())
+    let output = Command::new(nix_store_bin()?)
         .arg("--query")
         .arg("--requisites")
         .args(out_paths)
@@ -646,17 +703,24 @@ fn closure_paths(out_paths: &[String]) -> io::Result<Vec<String>> {
     if output.status.success() {
         return Ok(split_paths(&String::from_utf8_lossy(&output.stdout)));
     }
-    Ok(out_paths.to_vec())
+    Err(process_failed(
+        "nix-store --query --requisites",
+        &output.stderr,
+    ))
 }
 
-fn subtract_upstream(paths: &Paths, candidates: BTreeSet<String>) -> io::Result<Vec<String>> {
+fn subtract_upstream(paths: &Paths, candidates: BTreeSet<String>) -> Result<Vec<String>> {
     let substituters = upstream_substituters(paths)?;
     let mut filtered = Vec::new();
     for candidate in candidates {
-        if substituters
-            .iter()
-            .any(|substituter| substitutable(substituter, &candidate))
-        {
+        let mut upstream = false;
+        for substituter in &substituters {
+            if substitutable(substituter, &candidate)? {
+                upstream = true;
+                break;
+            }
+        }
+        if upstream {
             continue;
         }
         filtered.push(candidate);
@@ -664,18 +728,21 @@ fn subtract_upstream(paths: &Paths, candidates: BTreeSet<String>) -> io::Result<
     Ok(filtered)
 }
 
-fn upstream_substituters(paths: &Paths) -> io::Result<Vec<String>> {
+fn upstream_substituters(paths: &Paths) -> Result<Vec<String>> {
     if let Ok(value) = env::var("WRIX_UPSTREAM_SUBSTITUTERS") {
         return Ok(value.split_whitespace().map(str::to_owned).collect());
     }
-    let output = Command::new(nix_bin())
+    let output = Command::new(nix_bin()?)
         .arg("config")
         .arg("show")
         .arg("substituters")
         .stdin(Stdio::null())
         .output()?;
     if !output.status.success() {
-        return Ok(Vec::new());
+        return Err(process_failed(
+            "nix config show substituters",
+            &output.stderr,
+        ));
     }
     let text = String::from_utf8_lossy(&output.stdout);
     let own = format!("file://{}", paths.cache_root.display());
@@ -687,8 +754,8 @@ fn upstream_substituters(paths: &Paths) -> io::Result<Vec<String>> {
         .collect())
 }
 
-fn substitutable(substituter: &str, path: &str) -> bool {
-    Command::new(nix_bin())
+fn substitutable(substituter: &str, path: &str) -> Result<bool> {
+    let status = Command::new(nix_bin()?)
         .arg("path-info")
         .arg("--store")
         .arg(substituter)
@@ -696,15 +763,15 @@ fn substitutable(substituter: &str, path: &str) -> bool {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
+        .status()?;
+    Ok(status.success())
 }
 
-fn copy_to_cache(paths: &Paths, store_paths: &[String]) -> io::Result<()> {
+fn copy_to_cache(paths: &Paths, store_paths: &[String]) -> Result<()> {
     if store_paths.is_empty() {
         return Ok(());
     }
-    let mut command = Command::new(nix_bin());
+    let mut command = Command::new(nix_bin()?);
     command
         .arg("copy")
         .arg("--to")
@@ -722,13 +789,11 @@ fn copy_to_cache(paths: &Paths, store_paths: &[String]) -> io::Result<()> {
     if output.status.success() {
         Ok(())
     } else {
-        Err(io::Error::other(
-            String::from_utf8_lossy(&output.stderr).into_owned(),
-        ))
+        Err(process_failed("nix copy", &output.stderr))
     }
 }
 
-fn prune(paths: &Paths) -> io::Result<()> {
+fn prune(paths: &Paths) -> Result<()> {
     purge_expired_pending(paths)?;
     let reachable = marker_store_basenames(paths)?;
     if paths.cache_root.exists() {
@@ -759,11 +824,12 @@ fn prune(paths: &Paths) -> io::Result<()> {
             }
         }
         prune_unreferenced_payloads(paths, &retained_payloads)?;
+        prune_unreachable_logs(paths, &reachable)?;
     }
     write_cache_status(paths, false, None, Some("ok"), None)
 }
 
-fn narinfo_payload_paths(paths: &Paths, narinfo: &Path) -> io::Result<Vec<PathBuf>> {
+fn narinfo_payload_paths(paths: &Paths, narinfo: &Path) -> Result<Vec<PathBuf>> {
     let content = fs::read_to_string(narinfo)?;
     let mut payloads = Vec::new();
     for line in content.lines() {
@@ -793,7 +859,7 @@ fn cache_payload_path(paths: &Paths, url: &str) -> Option<PathBuf> {
     Some(paths.cache_root.join(relative))
 }
 
-fn prune_unreferenced_payloads(paths: &Paths, retained: &BTreeSet<PathBuf>) -> io::Result<()> {
+fn prune_unreferenced_payloads(paths: &Paths, retained: &BTreeSet<PathBuf>) -> Result<()> {
     let nar_dir = paths.cache_root.join("nar");
     if nar_dir.exists() {
         prune_payload_dir(&nar_dir, retained)?;
@@ -801,7 +867,41 @@ fn prune_unreferenced_payloads(paths: &Paths, retained: &BTreeSet<PathBuf>) -> i
     Ok(())
 }
 
-fn prune_payload_dir(dir: &Path, retained: &BTreeSet<PathBuf>) -> io::Result<()> {
+fn prune_unreachable_logs(paths: &Paths, reachable: &[String]) -> Result<()> {
+    let log_dir = paths.cache_root.join("log");
+    if !log_dir.exists() {
+        return Ok(());
+    }
+    let retained_hashes = reachable
+        .iter()
+        .filter_map(|name| name.split_once('-').map(|(hash, _name)| hash))
+        .collect::<Vec<_>>();
+    prune_log_dir(&log_dir, &retained_hashes)
+}
+
+fn prune_log_dir(dir: &Path, retained_hashes: &[&str]) -> Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if entry.file_type()?.is_dir() {
+            prune_log_dir(&path, retained_hashes)?;
+            if directory_is_empty(&path)? {
+                fs::remove_dir(path)?;
+            }
+        } else {
+            let retained = path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .is_some_and(|name| retained_hashes.iter().any(|hash| name.contains(hash)));
+            if !retained {
+                remove_cache_payload(&path)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn prune_payload_dir(dir: &Path, retained: &BTreeSet<PathBuf>) -> Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
@@ -817,23 +917,23 @@ fn prune_payload_dir(dir: &Path, retained: &BTreeSet<PathBuf>) -> io::Result<()>
     Ok(())
 }
 
-fn directory_is_empty(path: &Path) -> io::Result<bool> {
+fn directory_is_empty(path: &Path) -> Result<bool> {
     match fs::read_dir(path)?.next() {
         Some(Ok(_entry)) => Ok(false),
-        Some(Err(error)) => Err(error),
+        Some(Err(error)) => Err(error.into()),
         None => Ok(true),
     }
 }
 
-fn remove_cache_payload(path: &Path) -> io::Result<()> {
+fn remove_cache_payload(path: &Path) -> Result<()> {
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error),
+        Err(error) => Err(error.into()),
     }
 }
 
-fn marker_store_basenames(paths: &Paths) -> io::Result<Vec<String>> {
+fn marker_store_basenames(paths: &Paths) -> Result<Vec<String>> {
     let mut basenames = Vec::new();
     if !paths.gcroots_dir().exists() {
         return Ok(basenames);
@@ -852,12 +952,13 @@ fn marker_store_basenames(paths: &Paths) -> io::Result<Vec<String>> {
     Ok(basenames)
 }
 
-fn update_gc_marker(paths: &Paths, root: &Root) -> io::Result<()> {
+fn update_gc_marker(paths: &Paths, root: &Root, closure: &[String]) -> Result<()> {
     let marker = paths.gcroots_dir().join(safe_marker_name(&root.name));
-    fs::write(marker, format!("{}\n", root.out_paths.join("\n")))
+    fs::write(marker, format!("{}\n", closure.join("\n")))?;
+    Ok(())
 }
 
-fn read_pending(paths: &Paths) -> io::Result<Vec<Pending>> {
+fn read_pending(paths: &Paths) -> Result<Vec<Pending>> {
     let mut pending = Vec::new();
     if !paths.pending_dir().exists() {
         return Ok(pending);
@@ -867,57 +968,48 @@ fn read_pending(paths: &Paths) -> io::Result<Vec<Pending>> {
         if path.extension().and_then(|value| value.to_str()) != Some("json") {
             continue;
         }
-        let content = fs::read_to_string(&path)?;
-        if pending_expired(&path, &content)? {
+        let record = read_pending_record(&path)?;
+        if pending_expired(&path, &record)? {
             fs::remove_file(path)?;
             continue;
         }
-        if let Some(drv_path) = json_string_field(&content, "drv_path")
-            .or_else(|| json_string_field(&content, "drvPath"))
-        {
-            let out_paths = json_string_array_field(&content, "out_paths")
-                .or_else(|| json_string_array_field(&content, "outPaths"))
-                .unwrap_or_else(|| {
-                    json_string_field(&content, "out_paths")
-                        .map(|value| split_paths(&value))
-                        .unwrap_or_default()
-                });
-            pending.push(Pending {
-                path,
-                drv_path,
-                out_paths,
-            });
-        }
+        pending.push(Pending {
+            path,
+            drv_path: record.drv_path,
+            out_paths: record.out_paths,
+        });
     }
     Ok(pending)
 }
 
-fn record_pending(paths: &Paths, drv_path: &str, out_paths: &[String]) -> io::Result<PathBuf> {
+fn read_pending_record(path: &Path) -> Result<PendingRecord> {
+    let content = fs::read_to_string(path)?;
+    serde_json::from_str(&content).map_err(|source| Error::Json {
+        path: path.display().to_string(),
+        source,
+    })
+}
+
+fn record_pending(paths: &Paths, drv_path: &str, out_paths: &[String]) -> Result<PathBuf> {
     fs::create_dir_all(paths.pending_dir())?;
+    let created_at_epoch = now_epoch()?;
     let filename = format!(
         "{}-{}-{}.json",
-        now_epoch(),
+        created_at_epoch,
         std::process::id(),
         safe_pending_name(drv_path)
     );
     let path = paths.pending_dir().join(filename);
-    let content = format!(
-        concat!(
-            "{{\n",
-            "  \"created_at_epoch\": {},\n",
-            "  \"drv_path\": \"{}\",\n",
-            "  \"out_paths\": [{}]\n",
-            "}}\n"
-        ),
-        now_epoch(),
-        escape_json(drv_path),
-        json_string_array(out_paths)
-    );
-    fs::write(&path, content)?;
+    let record = PendingRecord {
+        created_at_epoch: Some(created_at_epoch),
+        drv_path: drv_path.to_owned(),
+        out_paths: out_paths.to_vec(),
+    };
+    write_json(&path, &record)?;
     Ok(path)
 }
 
-fn purge_expired_pending(paths: &Paths) -> io::Result<()> {
+fn purge_expired_pending(paths: &Paths) -> Result<()> {
     if !paths.pending_dir().exists() {
         return Ok(());
     }
@@ -926,66 +1018,52 @@ fn purge_expired_pending(paths: &Paths) -> io::Result<()> {
         if path.extension().and_then(|value| value.to_str()) != Some("json") {
             continue;
         }
-        let content = fs::read_to_string(&path)?;
-        if pending_expired(&path, &content)? {
+        let record = read_pending_record(&path)?;
+        if pending_expired(&path, &record)? {
             fs::remove_file(path)?;
         }
     }
     Ok(())
 }
 
-fn pending_expired(path: &Path, content: &str) -> io::Result<bool> {
-    let Some(created_at) = pending_created_at(path, content)? else {
-        return Ok(false);
-    };
-    Ok(now_epoch().saturating_sub(created_at) > pending_retention().as_secs())
+fn pending_expired(path: &Path, record: &PendingRecord) -> Result<bool> {
+    let created_at = pending_created_at(path, record)?;
+    Ok(now_epoch()?.saturating_sub(created_at) > pending_retention()?.as_secs())
 }
 
-fn pending_created_at(path: &Path, content: &str) -> io::Result<Option<u64>> {
-    if let Some(value) = json_number_field(content, "created_at_epoch") {
-        return Ok(Some(value));
+fn pending_created_at(path: &Path, record: &PendingRecord) -> Result<u64> {
+    if let Some(value) = record.created_at_epoch {
+        return Ok(value);
     }
-    let metadata = fs::metadata(path)?;
-    let modified = metadata.modified()?;
-    Ok(system_time_epoch(modified))
+    let modified = fs::metadata(path)?.modified()?;
+    system_time_epoch(modified)
 }
 
-fn read_manifest_roots(path: &Path) -> io::Result<Vec<Root>> {
+fn read_manifest_roots(path: &Path) -> Result<Vec<Root>> {
     roots_from_file(path)
 }
 
-fn write_manifest(path: &Path, hash: &WorkspaceHash, roots: &[Root]) -> io::Result<()> {
-    let mut content = format!(
-        "{{\n  \"schema_version\": 1,\n  \"workspace_hash\": \"{}\",\n  \"roots\": [\n",
-        escape_json(hash.as_str())
-    );
-    for (index, root) in roots.iter().enumerate() {
-        let comma = if index + 1 == roots.len() { "" } else { "," };
-        content.push_str("    { \"name\": \"");
-        content.push_str(&escape_json(&root.name));
-        content.push_str("\", \"installable\": \"");
-        content.push_str(&escape_json(&root.installable));
-        content.push_str("\", \"drv_path\": \"");
-        content.push_str(&escape_json(&root.drv_path));
-        content.push_str("\", \"out_paths\": [");
-        content.push_str(&json_string_array(&root.out_paths));
-        content.push_str("] }");
-        content.push_str(comma);
-        content.push('\n');
-    }
-    content.push_str("  ]\n}\n");
-    fs::write(path, content)
+fn write_manifest(path: &Path, hash: &WorkspaceHash, roots: &[Root]) -> Result<()> {
+    let manifest = RootManifest {
+        schema_version: Some(1),
+        workspace_hash: Some(hash.as_str().to_owned()),
+        roots: roots.to_vec(),
+    };
+    write_json(path, &manifest)
 }
 
-fn status_report(paths: &Paths) -> io::Result<Report> {
+fn status_report(paths: &Paths) -> Result<Report> {
     let pending = read_pending(paths)?;
-    let pending_age = pending
-        .iter()
-        .filter_map(|record| pending_file_age(&record.path))
+    let mut ages = Vec::new();
+    for record in &pending {
+        ages.push(pending_file_age(&record.path)?);
+    }
+    let pending_age = ages
+        .into_iter()
         .max()
         .map_or_else(|| String::from("none"), |age| format!("{}s", age.as_secs()));
     let cache_size = directory_size(&paths.cache_root)?;
-    let status = read_cache_status_text(paths)?;
+    let status = read_cache_status(paths)?;
     let endpoints = read_endpoints_text(paths)?;
     let mut lines = vec![
         format!("cache size: {cache_size} bytes"),
@@ -994,19 +1072,19 @@ fn status_report(paths: &Paths) -> io::Result<Report> {
         format!("dirty: {}", cache_status_dirty(paths)?),
         format!(
             "last_publish: {}",
-            json_nullable_string_field(&status, "last_publish")
+            status.last_publish.as_deref().unwrap_or("null")
         ),
         format!(
             "last_prune: {}",
-            json_nullable_string_field(&status, "last_prune")
+            status.last_prune.as_deref().unwrap_or("null")
         ),
         format!(
             "last_error: {}",
-            json_nullable_string_field(&status, "last_error")
+            status.last_error.as_deref().unwrap_or("null")
         ),
         format!("endpoints: {}", endpoints.trim()),
     ];
-    let threshold = soft_size_threshold();
+    let threshold = soft_size_threshold()?;
     if cache_size > threshold {
         lines.push(format!(
             "warning: project cache size exceeds {threshold} byte soft threshold"
@@ -1015,7 +1093,7 @@ fn status_report(paths: &Paths) -> io::Result<Report> {
     Ok(Report { lines })
 }
 
-fn rotate_key(paths: &Paths) -> io::Result<Report> {
+fn rotate_key(paths: &Paths) -> Result<Report> {
     wipe_cache(paths)?;
     generate_project_keypair(paths)?;
     write_cache_status(paths, false, None, Some("key-rotated"), None)?;
@@ -1026,7 +1104,7 @@ fn rotate_key(paths: &Paths) -> io::Result<Report> {
     })
 }
 
-fn wipe_cache(paths: &Paths) -> io::Result<()> {
+fn wipe_cache(paths: &Paths) -> Result<()> {
     if paths.cache_root.exists() {
         fs::remove_dir_all(&paths.cache_root)?;
     }
@@ -1035,20 +1113,22 @@ fn wipe_cache(paths: &Paths) -> io::Result<()> {
     fs::write(
         paths.cache_root.join("nix-cache-info"),
         "StoreDir: /nix/store\nWantMassQuery: 1\nPriority: 40\n",
-    )
+    )?;
+    Ok(())
 }
 
-fn generate_project_keypair(paths: &Paths) -> io::Result<()> {
+fn generate_project_keypair(paths: &Paths) -> Result<()> {
     cache_key::generate_keypair(
         &paths.key_name(),
         &paths.cache_secret_path(),
         &paths.cache_public_path(),
-        &nix_store_bin(),
-    )
+        &nix_store_bin()?,
+    )?;
+    Ok(())
 }
 
 impl Paths {
-    fn for_workspace(hash: &WorkspaceHash) -> io::Result<Self> {
+    fn for_workspace(hash: &WorkspaceHash) -> Result<Self> {
         let home = home_dir()?;
         let state_root = if cfg!(target_os = "macos") {
             home.join("Library/Application Support/wrix/workspaces")
@@ -1076,7 +1156,7 @@ impl Paths {
         })
     }
 
-    fn ensure(&self) -> io::Result<()> {
+    fn ensure(&self) -> Result<()> {
         fs::create_dir_all(&self.state_root)?;
         fs::create_dir_all(&self.cache_root)?;
         fs::create_dir_all(self.gcroots_dir())?;
@@ -1085,12 +1165,12 @@ impl Paths {
         fs::create_dir_all(self.cache_root.join("nar"))?;
         fs::create_dir_all(self.cache_root.join("log"))?;
         write_if_missing(&self.cache_lock_path(), "")?;
-        write_if_missing(&self.cache_status_path(), cache_status(false))?;
+        write_json_if_missing(&self.cache_status_path(), &cache_status(false))?;
         cache_key::ensure_keypair(
             &self.key_name(),
             &self.cache_secret_path(),
             &self.cache_public_path(),
-            &nix_store_bin(),
+            &nix_store_bin()?,
         )?;
         write_if_missing(
             &self.cache_root.join("nix-cache-info"),
@@ -1145,36 +1225,44 @@ impl Paths {
     }
 }
 
-fn home_dir() -> io::Result<PathBuf> {
-    env::var_os("HOME").map(PathBuf::from).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::NotFound,
-            "HOME is required to resolve wrix cache state roots",
-        )
-    })
+fn home_dir() -> Result<PathBuf> {
+    env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or(Error::HomeMissing)
 }
 
-fn nix_bin() -> String {
-    env::var("WRIX_NIX_BIN").unwrap_or_else(|_| String::from("nix"))
+fn nix_bin() -> Result<String> {
+    executable_from_env("WRIX_NIX_BIN", "nix")
 }
 
-fn nix_store_bin() -> String {
-    env::var("WRIX_NIX_STORE_BIN").unwrap_or_else(|_| String::from("nix-store"))
+fn nix_store_bin() -> Result<String> {
+    executable_from_env("WRIX_NIX_STORE_BIN", "nix-store")
 }
 
-fn cache_status(dirty: bool) -> String {
-    format!(
-        concat!(
-            "{{\n",
-            "  \"dirty\": {},\n",
-            "  \"last_publish\": null,\n",
-            "  \"last_prune\": null,\n",
-            "  \"last_error\": null,\n",
-            "  \"last_prune_epoch\": null\n",
-            "}}\n"
-        ),
-        if dirty { "true" } else { "false" }
-    )
+fn executable_from_env(name: &'static str, default: &str) -> Result<String> {
+    match env::var(name) {
+        Ok(value) if value.is_empty() => Err(Error::InvalidEnvironment { name, value }),
+        Ok(value) => Ok(value),
+        Err(env::VarError::NotPresent) => Ok(default.to_owned()),
+        Err(env::VarError::NotUnicode(_)) => Err(Error::InvalidUnicodeEnvironment { name }),
+    }
+}
+
+fn process_failed(program: &str, stderr: &[u8]) -> Error {
+    Error::ProcessFailed {
+        program: program.to_owned(),
+        stderr: String::from_utf8_lossy(stderr).into_owned(),
+    }
+}
+
+const fn cache_status(dirty: bool) -> CacheStatus {
+    CacheStatus {
+        dirty,
+        last_publish: None,
+        last_prune: None,
+        last_error: None,
+        last_prune_epoch: None,
+    }
 }
 
 fn write_cache_status(
@@ -1183,74 +1271,75 @@ fn write_cache_status(
     publish: Option<&str>,
     prune_status: Option<&str>,
     error: Option<&str>,
-) -> io::Result<()> {
-    let prior = read_cache_status_text(paths)?;
-    let last_publish = publish
-        .map(str::to_owned)
-        .or_else(|| json_string_field(&prior, "last_publish"));
-    let last_prune = prune_status
-        .map(str::to_owned)
-        .or_else(|| json_string_field(&prior, "last_prune"));
-    let last_error = error.map_or_else(
-        || {
+) -> Result<()> {
+    let prior = read_cache_status(paths)?;
+    let status = CacheStatus {
+        dirty,
+        last_publish: publish.map(str::to_owned).or(prior.last_publish),
+        last_prune: prune_status.map(str::to_owned).or(prior.last_prune),
+        last_error: error.map(str::to_owned).or_else(|| {
             if publish.is_some() || prune_status.is_some() {
                 None
             } else {
-                json_string_field(&prior, "last_error")
+                prior.last_error
             }
+        }),
+        last_prune_epoch: if prune_status.is_some() {
+            Some(now_epoch()?)
+        } else {
+            prior.last_prune_epoch
         },
-        |value| Some(value.to_owned()),
-    );
-    let prune_epoch = if prune_status.is_some() {
-        Some(now_epoch())
-    } else {
-        json_number_field(&prior, "last_prune_epoch")
     };
-    let content = format!(
-        concat!(
-            "{{\n",
-            "  \"dirty\": {},\n",
-            "  \"last_publish\": {},\n",
-            "  \"last_prune\": {},\n",
-            "  \"last_error\": {},\n",
-            "  \"last_prune_epoch\": {}\n",
-            "}}\n"
-        ),
-        if dirty { "true" } else { "false" },
-        json_optional_string(last_publish.as_deref()),
-        json_optional_string(last_prune.as_deref()),
-        json_optional_string(last_error.as_deref()),
-        prune_epoch.map_or_else(|| String::from("null"), |value| value.to_string())
-    );
-    fs::write(paths.cache_status_path(), content)
+    write_json(&paths.cache_status_path(), &status)
 }
 
-fn read_cache_status_text(paths: &Paths) -> io::Result<String> {
-    match fs::read_to_string(paths.cache_status_path()) {
-        Ok(content) => Ok(content),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(cache_status(false)),
-        Err(error) => Err(error),
-    }
+fn read_cache_status(paths: &Paths) -> Result<CacheStatus> {
+    let path = paths.cache_status_path();
+    let content = match fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(cache_status(false)),
+        Err(error) => return Err(error.into()),
+    };
+    serde_json::from_str(&content).map_err(|source| Error::Json {
+        path: path.display().to_string(),
+        source,
+    })
 }
 
-fn cache_status_dirty(paths: &Paths) -> io::Result<bool> {
-    let content = read_cache_status_text(paths)?;
-    Ok(json_bool_field(&content, "dirty").unwrap_or(false))
+fn cache_status_dirty(paths: &Paths) -> Result<bool> {
+    Ok(read_cache_status(paths)?.dirty)
 }
 
-fn prune_is_stale(paths: &Paths) -> io::Result<bool> {
-    let content = read_cache_status_text(paths)?;
-    let Some(last_prune) = json_number_field(&content, "last_prune_epoch") else {
+fn prune_is_stale(paths: &Paths) -> Result<bool> {
+    let Some(last_prune) = read_cache_status(paths)?.last_prune_epoch else {
         return Ok(true);
     };
-    Ok(now_epoch().saturating_sub(last_prune) > prune_interval().as_secs())
+    Ok(now_epoch()?.saturating_sub(last_prune) > prune_interval()?.as_secs())
 }
 
-fn write_if_missing(path: &Path, content: impl AsRef<[u8]>) -> io::Result<()> {
+fn write_if_missing(path: &Path, content: impl AsRef<[u8]>) -> Result<()> {
     if path.exists() {
         return Ok(());
     }
-    fs::write(path, content)
+    fs::write(path, content)?;
+    Ok(())
+}
+
+fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
+    let mut content = serde_json::to_string_pretty(value).map_err(|source| Error::Json {
+        path: path.display().to_string(),
+        source,
+    })?;
+    content.push('\n');
+    fs::write(path, content)?;
+    Ok(())
+}
+
+fn write_json_if_missing(path: &Path, value: &impl Serialize) -> Result<()> {
+    if path.exists() {
+        return Ok(());
+    }
+    write_json(path, value)
 }
 
 fn split_paths(input: &str) -> Vec<String> {
@@ -1259,102 +1348,6 @@ fn split_paths(input: &str) -> Vec<String> {
         .filter(|value| value.starts_with("/nix/store/"))
         .map(str::to_owned)
         .collect()
-}
-
-fn parse_json_string_array(input: &str) -> Vec<String> {
-    let mut values = Vec::new();
-    let mut rest = input;
-    while let Some(start) = rest.find('"') {
-        let after = &rest[start + 1..];
-        let Some(end) = after.find('"') else {
-            break;
-        };
-        values.push(after[..end].to_owned());
-        rest = &after[end + 1..];
-    }
-    values
-}
-
-fn json_objects(input: &str) -> Vec<&str> {
-    let mut objects = Vec::new();
-    let mut starts = Vec::new();
-    for (index, ch) in input.char_indices() {
-        match ch {
-            '{' => starts.push(index),
-            '}' => {
-                if let Some(object_start) = starts.pop() {
-                    objects.push(&input[object_start..=index]);
-                }
-            }
-            _ => {}
-        }
-    }
-    objects
-}
-
-fn json_string_field(input: &str, name: &str) -> Option<String> {
-    let marker = format!("\"{name}\"");
-    let start = input.find(&marker)? + marker.len();
-    let colon = input[start..].find(':')? + start;
-    let rest = input[colon + 1..].trim_start();
-    let value = rest.strip_prefix('"')?;
-    let end = value.find('"')?;
-    Some(value[..end].to_owned())
-}
-
-fn json_string_array_field(input: &str, name: &str) -> Option<Vec<String>> {
-    let marker = format!("\"{name}\"");
-    let start = input.find(&marker)? + marker.len();
-    let colon = input[start..].find(':')? + start;
-    let rest = input[colon + 1..].trim_start();
-    let value = rest.strip_prefix('[')?;
-    let end = value.find(']')?;
-    Some(parse_json_string_array(&value[..end]))
-}
-
-fn json_number_field(input: &str, name: &str) -> Option<u64> {
-    let marker = format!("\"{name}\"");
-    let start = input.find(&marker)? + marker.len();
-    let colon = input[start..].find(':')? + start;
-    let rest = input[colon + 1..].trim_start();
-    let digits = rest
-        .chars()
-        .take_while(char::is_ascii_digit)
-        .collect::<String>();
-    digits.parse().ok()
-}
-
-fn json_bool_field(input: &str, name: &str) -> Option<bool> {
-    let marker = format!("\"{name}\"");
-    let start = input.find(&marker)? + marker.len();
-    let colon = input[start..].find(':')? + start;
-    let rest = input[colon + 1..].trim_start();
-    if rest.starts_with("true") {
-        Some(true)
-    } else if rest.starts_with("false") {
-        Some(false)
-    } else {
-        None
-    }
-}
-
-fn json_nullable_string_field(input: &str, name: &str) -> String {
-    json_string_field(input, name).unwrap_or_else(|| String::from("null"))
-}
-
-fn json_optional_string(value: Option<&str>) -> String {
-    value.map_or_else(
-        || String::from("null"),
-        |text| format!("\"{}\"", escape_json(text)),
-    )
-}
-
-fn json_string_array(values: &[String]) -> String {
-    values
-        .iter()
-        .map(|value| format!("\"{}\"", escape_json(value)))
-        .collect::<Vec<_>>()
-        .join(", ")
 }
 
 fn safe_marker_name(input: &str) -> String {
@@ -1371,41 +1364,40 @@ fn safe_marker_name(input: &str) -> String {
 }
 
 fn safe_pending_name(input: &str) -> String {
-    let base = Path::new(input)
+    Path::new(input)
         .file_name()
         .and_then(|value| value.to_str())
-        .unwrap_or("pending");
-    safe_marker_name(base)
+        .map_or_else(|| safe_marker_name(input), safe_marker_name)
 }
 
-fn now_epoch() -> u64 {
-    system_time_epoch(SystemTime::now()).unwrap_or(0)
+fn now_epoch() -> Result<u64> {
+    system_time_epoch(SystemTime::now())
 }
 
-fn system_time_epoch(time: SystemTime) -> Option<u64> {
-    time.duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .ok()
+fn system_time_epoch(time: SystemTime) -> Result<u64> {
+    Ok(time.duration_since(UNIX_EPOCH)?.as_secs())
 }
 
-fn pending_file_age(path: &Path) -> Option<Duration> {
-    let metadata = fs::metadata(path).ok()?;
-    let modified = metadata.modified().ok()?;
-    modified.elapsed().ok()
+fn pending_file_age(path: &Path) -> Result<Duration> {
+    Ok(fs::metadata(path)?.modified()?.elapsed()?)
 }
 
-fn hook_lock_timeout() -> Duration {
-    env_duration("WRIX_CACHE_LOCK_TIMEOUT_MS", Duration::from_secs(30))
+fn hook_lock_timeout() -> Result<Duration> {
+    Ok(Duration::from_millis(env_u64(
+        "WRIX_CACHE_LOCK_TIMEOUT_MS",
+        30_000,
+    )?))
 }
 
-fn explicit_lock_timeout() -> Duration {
-    env_duration(
+fn explicit_lock_timeout() -> Result<Duration> {
+    let default = env_u64("WRIX_CACHE_LOCK_TIMEOUT_MS", 30_000)?;
+    Ok(Duration::from_millis(env_u64(
         "WRIX_CACHE_EXPLICIT_LOCK_TIMEOUT_MS",
-        env_duration("WRIX_CACHE_LOCK_TIMEOUT_MS", Duration::from_secs(30)),
-    )
+        default,
+    )?))
 }
 
-fn pending_retention() -> Duration {
+fn pending_retention() -> Result<Duration> {
     const DEFAULT_PENDING_RETENTION_SECS: u64 = 604_800;
     env_seconds(
         "WRIX_CACHE_PENDING_RETENTION_SECS",
@@ -1413,7 +1405,7 @@ fn pending_retention() -> Duration {
     )
 }
 
-fn prune_interval() -> Duration {
+fn prune_interval() -> Result<Duration> {
     const DEFAULT_PRUNE_INTERVAL_SECS: u64 = 86_400;
     env_seconds(
         "WRIX_CACHE_PRUNE_INTERVAL_SECS",
@@ -1421,28 +1413,25 @@ fn prune_interval() -> Duration {
     )
 }
 
-fn soft_size_threshold() -> u64 {
-    env::var("WRIX_CACHE_SOFT_LIMIT_BYTES")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(50 * 1024 * 1024 * 1024)
+fn soft_size_threshold() -> Result<u64> {
+    env_u64("WRIX_CACHE_SOFT_LIMIT_BYTES", 50 * 1024 * 1024 * 1024)
 }
 
-fn env_duration(name: &str, default: Duration) -> Duration {
-    env::var(name)
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .map_or(default, Duration::from_millis)
+fn env_seconds(name: &'static str, default: Duration) -> Result<Duration> {
+    Ok(Duration::from_secs(env_u64(name, default.as_secs())?))
 }
 
-fn env_seconds(name: &str, default: Duration) -> Duration {
-    env::var(name)
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .map_or(default, Duration::from_secs)
+fn env_u64(name: &'static str, default: u64) -> Result<u64> {
+    match env::var(name) {
+        Ok(value) => value
+            .parse::<u64>()
+            .map_err(|_source| Error::InvalidEnvironment { name, value }),
+        Err(env::VarError::NotPresent) => Ok(default),
+        Err(env::VarError::NotUnicode(_)) => Err(Error::InvalidUnicodeEnvironment { name }),
+    }
 }
 
-fn directory_size(path: &Path) -> io::Result<u64> {
+fn directory_size(path: &Path) -> Result<u64> {
     if !path.exists() {
         return Ok(0);
     }
@@ -1459,26 +1448,17 @@ fn directory_size(path: &Path) -> io::Result<u64> {
     Ok(total)
 }
 
-fn read_endpoints_text(paths: &Paths) -> io::Result<String> {
+fn read_endpoints_text(paths: &Paths) -> Result<String> {
     match fs::read_to_string(paths.services_path()) {
         Ok(content) => Ok(content),
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(String::from("unavailable")),
-        Err(error) => Err(error),
+        Err(error) => Err(error.into()),
     }
 }
 
-fn validate_workspace_hash(hash: &str) -> io::Result<()> {
-    if WorkspaceHash::is_valid_str(hash) {
-        return Ok(());
-    }
-    Err(io::Error::new(
-        io::ErrorKind::InvalidInput,
-        "workspace hash must be a lowercase sha256 hex digest",
-    ))
-}
-
-fn escape_json(input: &str) -> String {
-    input.replace('\\', "\\\\").replace('"', "\\\"")
+fn validate_workspace_hash(hash: &str) -> Result<()> {
+    WorkspaceHash::parse(hash)?;
+    Ok(())
 }
 
 #[cfg(test)]

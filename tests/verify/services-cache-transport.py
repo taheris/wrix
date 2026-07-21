@@ -66,7 +66,7 @@ def main():
     require_contains(
         "project-cache launcher path",
         cache_load,
-        'format!("http://{sandbox_host}:{port}")',
+        'format!("http://{sandbox_host}:{}", endpoint.port)',
     )
     require_contains(
         "project-cache launcher path",
@@ -76,8 +76,9 @@ def main():
     require_contains(
         "project-cache launcher path",
         cache_load,
-        "extra-trusted-public-keys = {public_key}",
+        "extra-trusted-public-keys = {}",
     )
+    require_contains("project-cache launcher path", cache_load, "public_key.0")
     require_contains(
         "project-cache launcher path",
         cache_load,

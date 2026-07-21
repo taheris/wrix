@@ -16,12 +16,8 @@ correctness gate loom's ability to make progress.
 Beads is an external CLI (`bd`) backed by a Dolt SQL database. Wrix
 provides:
 
-- A **Dolt service** inside the repository-root service container
-  (`<repo>-service`, owned by `services.md`) serving `.beads/dolt` on
-  identity-hashed endpoints. One service container exists per service
-  identity path and is reused across invocations; Loom paths under `.loom/`
-  share the outer repository identity so bead clones do not create their own
-  service containers.
+- The shared service lifecycle and identity contract defined by `services.md`.
+  Beads consumes that service's published Dolt endpoint for `.beads/dolt`.
 - A **shellHook** that ensures the service container is running and exports
   `BEADS_DOLT_SERVER_*` env vars so `bd` connects through the Dolt service
   rather than embedding Dolt in-process.

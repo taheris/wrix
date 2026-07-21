@@ -223,7 +223,13 @@ case "${1:-}" in
         name="$(last_arg "$@")"
         if image_exists "$name"; then
           if [[ "$*" == *'{{.Id}}'* ]]; then
-            printf 'sha256:fake-image-id\n'
+            printf 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n'
+          elif [[ "$*" == *'{{.Digest}}'* ]]; then
+            printf 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n'
+          elif [[ "$*" == *'wrix.managed'* ]]; then
+            printf 'true\n'
+          elif [[ "${2:-}" == "inspect" ]]; then
+            printf '%s\n' '[{"id":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","labels":{"wrix.managed":"true"}}]'
           fi
           exit 0
         fi
@@ -252,13 +258,17 @@ case "${1:-}" in
         log_call "$*"
         ;;
       list)
-        printf 'NAME TAG DIGEST\n'
-        for image in "$STATE_DIR"/*.image; do
-          [[ -e "$image" ]] || continue
-          name="${image##*/}"
-          name="${name%.image}"
-          printf '%s latest sha256:fake\n' "$name"
-        done
+        if [[ "$*" == *'--format json'* ]]; then
+          printf '[]\n'
+        else
+          printf 'NAME TAG DIGEST\n'
+          for image in "$STATE_DIR"/*.image; do
+            [[ -e "$image" ]] || continue
+            name="${image##*/}"
+            name="${name%.image}"
+            printf '%s latest sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n' "$name"
+          done
+        fi
         ;;
     esac
     ;;
@@ -309,11 +319,30 @@ case "${1:-}" in
     port_lines_for_args "$(<"$(run_file "$name")")"
     ;;
   ps)
+    if [[ "$*" == *'--filter ancestor='* ]]; then
+      exit 0
+    fi
     for run_file in "$STATE_DIR"/run-*; do
       [[ -e "$run_file" ]] || continue
       name="${run_file##*/run-}"
       printf '%s\n' "$name"
     done
+    ;;
+  images)
+    for image in "$STATE_DIR"/*.image; do
+      [[ -e "$image" ]] || continue
+      name="${image##*/}"
+      name="${name%.image}"
+      name="${name//_//}"
+      printf '%s latest sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n' "$name"
+    done
+    ;;
+  rmi)
+    target="${2:-}"
+    rm -f "$(image_file "$target")"
+    ;;
+  list)
+    printf '[]\n'
     ;;
   run)
     name=""
@@ -374,6 +403,10 @@ log_call() {
   printf '%s\n' "skopeo $*" >>"$STATE_DIR/calls"
 }
 
+if [[ "${1:-}" == "inspect" && "${2:-}" == "--raw" ]]; then
+  printf '%s\n' '{"config":{"digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}}'
+  exit 0
+fi
 if [[ "${1:-}" == "--insecure-policy" ]]; then
   shift
 fi
@@ -873,7 +906,7 @@ test_start_recreates_running_service_with_missing_dolt_socket() {
     "rm -f $planned_name"
 }
 
-test_start_reports_unrelated_cache_port_owner() {
+test_start_probes_past_unrelated_cache_port_owner() {
   require_python
   local wrix_bin
   wrix_bin="$(build_wrix)"
@@ -899,24 +932,19 @@ test_start_reports_unrelated_cache_port_owner() {
     -p "127.0.0.1:$cache_port:8080" \
     image sh -c 'sleep infinity'
 
-  if (cd "$workspace" && "$wrix_bin" service start >"$TEST_TMP/unrelated-port-start.txt" 2>"$TEST_TMP/unrelated-port-error.txt"); then
-    fail "service start succeeded with unrelated cache port owner"
-  fi
+  (cd "$workspace" && "$wrix_bin" service start >"$TEST_TMP/unrelated-port-start.txt")
+  (cd "$workspace" && "$wrix_bin" service endpoints >"$TEST_TMP/unrelated-port-endpoints-after.json")
 
-  local error_text
-  error_text="$(<"$TEST_TMP/unrelated-port-error.txt")"
-  assert_contains \
-    "unrelated port diagnostic" \
-    "$error_text" \
-    "service port $cache_port is already in use by container foreign-service"
-  assert_contains "unrelated port action" "$error_text" "free the port before retrying"
-  if [[ "$error_text" == *"pasta failed"* ]]; then
-    fail "service start surfaced raw pasta bind text: $error_text"
-  fi
+  local selected_port
+  selected_port="$(json_get "$TEST_TMP/unrelated-port-endpoints-after.json" endpoints.cache_http.port)"
+  assert_not_equals "busy persisted port was replaced" "$cache_port" "$selected_port"
+  assert_port_range "replacement cache port" "$selected_port" 21000 22999
   "$WRIX_CONTAINER_RUNTIME" container exists foreign-service
-  if "$WRIX_CONTAINER_RUNTIME" container exists "$planned_name"; then
-    fail "planned service started despite unrelated cache port owner"
-  fi
+  "$WRIX_CONTAINER_RUNTIME" container exists "$planned_name"
+  assert_file_contains \
+    "planned service uses replacement cache port" \
+    "$WRIX_FAKE_RUNTIME_STATE/run-$planned_name" \
+    "-p 127.0.0.1:$selected_port:8080"
 }
 
 test_temp_cache_only_workspace_does_not_start_service() {
@@ -1013,28 +1041,37 @@ test_service_start_loads_image_source() {
     export WRIX_SERVICE_IMAGE="$real_image"
     export WRIX_SERVICE_IMAGE_SOURCE="$real_source"
     export WRIX_SERVICE_IMAGE_SOURCE_KIND="$real_source_kind"
+    export WRIX_IMAGE_KEEP_FILE="$TEST_TMP/service-image-mru.json"
     mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
 
-    assert_service_descriptor_contract "$WRIX_SERVICE_IMAGE_SOURCE"
+    assert_service_descriptor_contract "$WRIX_SERVICE_IMAGE_SOURCE" || return 1
     local oci_layout oci_ref
     oci_layout="$(json_get "$WRIX_SERVICE_IMAGE_SOURCE" oci_layout)"
     oci_ref="$(json_get "$WRIX_SERVICE_IMAGE_SOURCE" oci_ref)"
 
     local workspace="$TEST_TMP/image-source-repo"
     mkdir -p "$workspace/.git"
-    (cd "$workspace" && "$wrix_bin" service start >"$TEST_TMP/image-source-start.txt")
+    (cd "$workspace" && "$wrix_bin" service start >"$TEST_TMP/image-source-start.txt") || return 1
 
     assert_file_contains \
       "service image descriptor OCI install" \
       "$WRIX_FAKE_RUNTIME_STATE/calls" \
-      "skopeo --insecure-policy copy --quiet oci:$oci_layout:$oci_ref containers-storage:"
+      "skopeo --insecure-policy copy --quiet oci:$oci_layout:$oci_ref containers-storage:" \
+      || return 1
     if grep -F -- "load --input $WRIX_SERVICE_IMAGE_SOURCE" "$WRIX_FAKE_RUNTIME_STATE/calls" >/dev/null; then
       fail "nix-descriptor service image used tar load path"
+      return 1
     fi
     assert_file_contains \
       "service run after descriptor install" \
       "$WRIX_FAKE_RUNTIME_STATE/run-image-source-repo-service" \
-      "$WRIX_SERVICE_IMAGE"
+      "$WRIX_SERVICE_IMAGE" \
+      || return 1
+    assert_file_contains \
+      "shared image retention records service image" \
+      "$WRIX_IMAGE_KEEP_FILE" \
+      "$WRIX_SERVICE_IMAGE" \
+      || return 1
   fi
 
   with_fake_runtime_env container
@@ -1044,6 +1081,7 @@ test_service_start_loads_image_source() {
   export WRIX_SERVICE_IMAGE="wrix-service:darwin-test"
   export WRIX_SERVICE_IMAGE_SOURCE="$TEST_TMP/wrix-service-archive.tar"
   export WRIX_SERVICE_IMAGE_SOURCE_KIND="docker-archive"
+  export WRIX_IMAGE_KEEP_FILE="$TEST_TMP/service-image-mru-darwin.json"
   if [[ "$real_source_kind" == "docker-archive" ]]; then
     export WRIX_SERVICE_IMAGE="$real_image"
     export WRIX_SERVICE_IMAGE_SOURCE="$real_source"
@@ -1056,54 +1094,93 @@ test_service_start_loads_image_source() {
 
   local darwin_workspace="$TEST_TMP/image-source-darwin-repo"
   mkdir -p "$darwin_workspace/.git"
-  (cd "$darwin_workspace" && "$wrix_bin" service start >"$TEST_TMP/image-source-darwin-start.txt")
+  (cd "$darwin_workspace" && "$wrix_bin" service start >"$TEST_TMP/image-source-darwin-start.txt") || return 1
 
   assert_file_contains \
     "service image docker archive converted for container" \
     "$WRIX_FAKE_RUNTIME_STATE/calls" \
-    "skopeo --insecure-policy copy --quiet docker-archive:$WRIX_SERVICE_IMAGE_SOURCE oci-archive:"
+    "skopeo --insecure-policy copy --quiet docker-archive:$WRIX_SERVICE_IMAGE_SOURCE oci-archive:" \
+    || return 1
   assert_file_contains \
     "service image docker archive load" \
     "$WRIX_FAKE_RUNTIME_STATE/calls" \
-    "image load --input"
+    "image load --input" \
+    || return 1
   assert_file_contains \
     "service image docker archive tag" \
     "$WRIX_FAKE_RUNTIME_STATE/calls" \
-    "image tag untagged@sha256:0000000000000000000000000000000000000000000000000000000000000000 $WRIX_SERVICE_IMAGE"
+    "image tag untagged@sha256:0000000000000000000000000000000000000000000000000000000000000000 $WRIX_SERVICE_IMAGE" \
+    || return 1
   assert_file_contains \
     "service image temporary load ref cleanup" \
     "$WRIX_FAKE_RUNTIME_STATE/calls" \
-    "image delete untagged@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    "image delete untagged@sha256:0000000000000000000000000000000000000000000000000000000000000000" \
+    || return 1
   assert_file_contains \
     "service run after archive load" \
     "$WRIX_FAKE_RUNTIME_STATE/run-image-source-darwin-repo-service" \
-    "$WRIX_SERVICE_IMAGE"
+    "$WRIX_SERVICE_IMAGE" \
+    || return 1
+  assert_file_contains \
+    "shared Darwin image retention records service image" \
+    "$WRIX_IMAGE_KEEP_FILE" \
+    "$WRIX_SERVICE_IMAGE" \
+    || return 1
   if grep -F -- "--restart" "$WRIX_FAKE_RUNTIME_STATE/run-image-source-darwin-repo-service" >/dev/null; then
     fail "container runtime service run included unsupported --restart flag"
+    return 1
   fi
   local run_count
   run_count=$(grep -cF -- "run -d --name image-source-darwin-repo-service" "$WRIX_FAKE_RUNTIME_STATE/calls")
-  (cd "$darwin_workspace" && "$wrix_bin" service start >"$TEST_TMP/image-source-darwin-start-again.txt")
+  (cd "$darwin_workspace" && "$wrix_bin" service start >"$TEST_TMP/image-source-darwin-start-again.txt") || return 1
   assert_equals \
     "container runtime second start run count" \
     "$run_count" \
-    "$(grep -cF -- "run -d --name image-source-darwin-repo-service" "$WRIX_FAKE_RUNTIME_STATE/calls")"
+    "$(grep -cF -- "run -d --name image-source-darwin-repo-service" "$WRIX_FAKE_RUNTIME_STATE/calls")" \
+    || return 1
 }
 
 test_service_image_labels() {
   require_python
   require_nix
 
-  local expected_source_kind
+  local expected_source_kind metadata_json source_link
   if [[ "$(uname -s)" == "Darwin" ]]; then
     expected_source_kind="docker-archive"
   else
     expected_source_kind="nix-descriptor"
   fi
 
-  local metadata_json
   metadata_json="$(nix eval --no-warn-dirty --json "$REPO_ROOT#wrix-service-image" --apply 'image: { inherit (image) labels ref source_kind; source = toString image.source; digest = toString image.digest; }')"
-  assert_service_image_metadata_contract "$metadata_json" "$expected_source_kind"
+  assert_service_image_metadata_contract "$metadata_json" "$expected_source_kind" || return 1
+  source_link="$TEST_TMP/service-image-label-source"
+  nix build --no-warn-dirty --out-link "$source_link" "$REPO_ROOT#wrix-service-image.source" >/dev/null
+
+  python3 - "$source_link" "$expected_source_kind" <<'PY'
+import json
+import pathlib
+import sys
+import tarfile
+
+source = pathlib.Path(sys.argv[1])
+kind = sys.argv[2]
+if kind == "nix-descriptor":
+    descriptor = json.loads(source.read_text(encoding="utf-8"))
+    layout = pathlib.Path(descriptor["oci_layout"])
+    index = json.loads((layout / "index.json").read_text(encoding="utf-8"))
+    manifest_digest = index["manifests"][0]["digest"].split(":", 1)[1]
+    manifest = json.loads((layout / "blobs/sha256" / manifest_digest).read_text(encoding="utf-8"))
+    config_digest = manifest["config"]["digest"].split(":", 1)[1]
+    config = json.loads((layout / "blobs/sha256" / config_digest).read_text(encoding="utf-8"))
+else:
+    with tarfile.open(source) as archive:
+        manifest = json.load(archive.extractfile("manifest.json"))[0]
+        config = json.load(archive.extractfile(manifest["Config"]))
+labels = config.get("config", {}).get("Labels", {})
+expected = {"wrix.managed": "true", "wrix.image.kind": "service"}
+if any(labels.get(key) != value for key, value in expected.items()):
+    raise SystemExit(f"built service image labels mismatch: {labels!r}")
+PY
 }
 
 test_service_mounts_beads_worktree_remote() {
@@ -1135,7 +1212,7 @@ ALL_TESTS=(
   test_cache_start_recreates_running_no_cache_service
   test_dolt_start_recreates_running_cache_only_service
   test_start_recreates_running_service_with_missing_dolt_socket
-  test_start_reports_unrelated_cache_port_owner
+  test_start_probes_past_unrelated_cache_port_owner
   test_temp_cache_only_workspace_does_not_start_service
   test_loom_bead_workspace_uses_repo_service
   test_service_start_loads_image_source
