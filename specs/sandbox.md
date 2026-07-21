@@ -178,7 +178,7 @@ Plus consumer-defined fields the entrypoint reads from the original config mount
 
 - Rootless Podman remains the default Linux runtime; krun is optional.
 - The launcher grants temporary in-container `NET_ADMIN` for firewall setup on every launch, including `WRIX_NETWORK=open`, because baseline LAN/private/host-local/VPN blocking is always required. The entrypoint installs the in-sandbox firewall ruleset (`nftables` by default on Linux Podman), disables/blocks IPv6 for v1, verifies policy, uses `capsh` to drop `NET_ADMIN`, and only then execs the agent.
-- Default boundary runs as rootless **container-root** (no `--userns=keep-id`), which maps to the invoking host user — the owner of the baked `/nix/store` — so store-mutating Nix ops succeed and `/workspace` files carry host UID/GID. claude refuses `--dangerously-skip-permissions` as root, so the launcher sets `IS_SANDBOX=1` (claude's own escape hatch) — **not** `LD_PRELOAD=/lib/libfakeuid.so`: that `getuid()→1000` spoof blanks claude's TUI on this boundary when the process is really root (wx-nsage). The microVM path keeps `--userns=keep-id` (krun maps host user→root inside the VM) and **does** use libfakeuid via `krun-init.sh` (krun-relay's PTY tolerates the spoof)
+- Default boundary runs as rootless **container-root** (no `--userns=keep-id`), which maps to the invoking host user — the owner of the baked `/nix/store` — so store-mutating Nix ops succeed and `/workspace` files carry host UID/GID. The launcher sets `IS_SANDBOX=1` so claude permits `--dangerously-skip-permissions` while the process remains root, and does not preload `libfakeuid`. The microVM path keeps `--userns=keep-id` (krun maps host user→root inside the VM) and uses libfakeuid via `krun-init.sh`.
 - `--pids-limit 4096` fork-bomb guard
 - `WRIX_MICROVM=1` switches to `podman --runtime krun` when `/dev/kvm` exists
 
@@ -216,7 +216,7 @@ Plus consumer-defined fields the entrypoint reads from the original config mount
   [check](test-ci:test-wrix-cli-in-profile)
 - In a fresh container built from a profile that ships `nix`, the runtime process (rootless container-root) runs `nix develop -c true`, a `nix build` of a flake target, and a store-mutating op against a baked root-owned path to completion (exit 0) with no `Operation not permitted` failure on a `/nix/store` path
   [system](verify:sandbox.nix-in-container)
-- The default container boundary does not `LD_PRELOAD` `libfakeuid` (its `getuid()→1000` spoof blanks claude's TUI when the process is really root — wx-nsage); instead it sets `IS_SANDBOX=1` so claude permits `--dangerously-skip-permissions` as root without spoofing. libfakeuid remains krun-only
+- The default container boundary sets `IS_SANDBOX=1` so claude permits `--dangerously-skip-permissions` as root without UID spoofing, does not `LD_PRELOAD` `libfakeuid`, and keeps libfakeuid restricted to the krun path
   [test](../crates/wrix-sandbox/tests/launch.rs::linux_default_boundary_sets_is_sandbox_without_fakeuid)
 - A freshly provisioned container — with no prior store surgery — passes `nix-store --verify --check-contents` with zero missing or dangling paths, so an additive `nix build` cannot fail with `No such file or directory` on a path the baked Nix DB registers as valid (the build-time guarantee is owned by `image-builder.md` § In-Container Nix Store Consistency)
   [system](verify:sandbox.nix-store-verify-clean)
