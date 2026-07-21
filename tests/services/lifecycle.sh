@@ -24,6 +24,14 @@ require_python() {
   exit 77
 }
 
+require_python3() {
+  if command -v python3 >/dev/null 2>&1; then
+    return 0
+  fi
+  printf 'SKIP: python3 is required for image fixture assertions\n' >&2
+  exit 77
+}
+
 require_nix() {
   if ! command -v nix >/dev/null 2>&1; then
     printf 'SKIP: nix is required for image label assertions\n' >&2
@@ -75,6 +83,44 @@ write_image() {
   local name="$1"
   local detail="$2"
   printf '%s\n' "$detail" >"$(image_file "$name")"
+}
+
+copy_image() {
+  local source="$1"
+  local target="$2"
+  cp "$(image_file "$source")" "$(image_file "$target")"
+}
+
+image_label_value() {
+  local name="$1"
+  local label="$2"
+  python3 -c '
+import json
+import pathlib
+import sys
+
+metadata = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+value = metadata.get("labels", {}).get(sys.argv[2])
+if value is None:
+    sys.exit(1)
+print(value)
+' "$(image_file "$name")" "$label"
+}
+
+image_inspect_json() {
+  local name="$1"
+  python3 -c '
+import json
+import pathlib
+import sys
+
+metadata = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(json.dumps([{
+    "id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "labels": metadata.get("labels", {}),
+}]))
+' "$(image_file "$name")"
 }
 
 log_call() {
@@ -226,10 +272,16 @@ case "${1:-}" in
             printf 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n'
           elif [[ "$*" == *'{{.Digest}}'* ]]; then
             printf 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n'
-          elif [[ "$*" == *'wrix.managed'* ]]; then
-            printf 'true\n'
+          elif [[ "$*" == *'index .Config.Labels "'* ]]; then
+            args="$*"
+            marker='index .Config.Labels "'
+            label="${args#*"$marker"}"
+            label="${label%%\"*}"
+            if ! image_label_value "$name" "$label"; then
+              printf '<no value>\n'
+            fi
           elif [[ "${2:-}" == "inspect" ]]; then
-            printf '%s\n' '[{"id":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","labels":{"wrix.managed":"true"}}]'
+            image_inspect_json "$name"
           fi
           exit 0
         fi
@@ -238,15 +290,24 @@ case "${1:-}" in
       load)
         source="$(input_arg "$@")"
         loaded_ref="untagged@sha256:0000000000000000000000000000000000000000000000000000000000000000"
-        write_image "$loaded_ref" "loaded from $source"
+        if [[ -f "$source.labels.json" ]]; then
+          cp "$source.labels.json" "$(image_file "$loaded_ref")"
+        else
+          write_image "$loaded_ref" '{}'
+        fi
         log_call "$*"
         printf 'Loaded: %s\n' "$loaded_ref"
         ;;
       tag)
         source="${3:-}"
         target="${4:-}"
-        if image_exists "$source" || [[ "$source" == sha256:* ]]; then
-          write_image "$target" "tagged from $source"
+        if image_exists "$source"; then
+          copy_image "$source" "$target"
+          log_call "$*"
+          exit 0
+        fi
+        if [[ "$source" == sha256:* ]]; then
+          write_image "$target" '{}'
           log_call "$*"
           exit 0
         fi
@@ -283,8 +344,13 @@ case "${1:-}" in
   tag)
     source="${2:-}"
     target="${3:-}"
-    if image_exists "$source" || [[ "$source" == sha256:* ]]; then
-      write_image "$target" "tagged from $source"
+    if image_exists "$source"; then
+      copy_image "$source" "$target"
+      log_call "$*"
+      exit 0
+    fi
+    if [[ "$source" == sha256:* ]]; then
+      write_image "$target" '{}'
       log_call "$*"
       exit 0
     fi
@@ -403,6 +469,49 @@ log_call() {
   printf '%s\n' "skopeo $*" >>"$STATE_DIR/calls"
 }
 
+write_source_metadata() {
+  local source_ref="$1"
+  local destination="$2"
+  python3 - "$source_ref" "$destination" <<'PY'
+import json
+import pathlib
+import sys
+import tarfile
+
+source_ref = sys.argv[1]
+destination = pathlib.Path(sys.argv[2])
+if source_ref.startswith("oci:"):
+    layout_ref = source_ref.removeprefix("oci:")
+    layout_name, _separator, _reference = layout_ref.rpartition(":")
+    layout = pathlib.Path(layout_name)
+    index = json.loads((layout / "index.json").read_text(encoding="utf-8"))
+    manifest_digest = index["manifests"][0]["digest"].split(":", 1)[1]
+    manifest = json.loads(
+        (layout / "blobs/sha256" / manifest_digest).read_text(encoding="utf-8")
+    )
+    config_digest = manifest["config"]["digest"].split(":", 1)[1]
+    config = json.loads(
+        (layout / "blobs/sha256" / config_digest).read_text(encoding="utf-8")
+    )
+elif source_ref.startswith("docker-archive:"):
+    archive_path = source_ref.removeprefix("docker-archive:")
+    with tarfile.open(archive_path) as archive:
+        manifest_file = archive.extractfile("manifest.json")
+        if manifest_file is None:
+            raise SystemExit("docker archive has no manifest.json")
+        manifest = json.load(manifest_file)[0]
+        config_file = archive.extractfile(manifest["Config"])
+        if config_file is None:
+            raise SystemExit("docker archive has no image config")
+        config = json.load(config_file)
+else:
+    raise SystemExit(f"unsupported source reference: {source_ref}")
+labels = config.get("config", {}).get("Labels", {})
+destination.parent.mkdir(parents=True, exist_ok=True)
+destination.write_text(json.dumps({"labels": labels}), encoding="utf-8")
+PY
+}
+
 if [[ "${1:-}" == "inspect" && "${2:-}" == "--raw" ]]; then
   printf '%s\n' '{"config":{"digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}}'
   exit 0
@@ -443,10 +552,54 @@ if [[ "$store_ref" == containers-storage:* ]]; then
   if [[ "$image_ref" == \[*\]* ]]; then
     image_ref="${image_ref#*]}"
   fi
-  printf 'copied from %s\n' "$source_ref" >"$(image_file "$image_ref")"
+  write_source_metadata "$source_ref" "$(image_file "$image_ref")"
+elif [[ "$store_ref" == oci-archive:* ]]; then
+  archive_path="${store_ref#oci-archive:}"
+  : >"$archive_path"
+  write_source_metadata "$source_ref" "$archive_path.labels.json"
 fi
 EOF
   chmod +x "$skopeo"
+}
+
+write_fake_docker_archive() {
+  local archive="$1"
+  python3 - "$archive" <<'PY'
+import io
+import json
+import pathlib
+import sys
+import tarfile
+
+archive_path = pathlib.Path(sys.argv[1])
+config = json.dumps({"config": {"Labels": {}}}).encode()
+manifest = json.dumps([{"Config": "config.json", "Layers": []}]).encode()
+with tarfile.open(archive_path, "w") as archive:
+    for name, content in (("config.json", config), ("manifest.json", manifest)):
+        info = tarfile.TarInfo(name)
+        info.size = len(content)
+        archive.addfile(info, io.BytesIO(content))
+PY
+}
+
+runtime_image_label() {
+  local runtime="$1"
+  local image="$2"
+  local label="$3"
+  if [[ "${runtime##*/}" == "container" ]]; then
+    "$runtime" image inspect "$image" | python3 -c '
+import json
+import sys
+
+metadata = json.load(sys.stdin)[0]
+value = metadata.get("labels", {}).get(sys.argv[1])
+if value is None:
+    sys.exit(1)
+print(value)
+' "$label"
+  else
+    "$runtime" image inspect --format "{{ index .Config.Labels \"$label\" }}" "$image"
+  fi
 }
 
 json_get() {
@@ -631,6 +784,8 @@ with_fake_runtime_env() {
 }
 
 test_fake_runtime_contract() {
+  require_python3
+  local fixture_layout config_digest manifest_digest
   with_fake_runtime_env
   "$WRIX_CONTAINER_RUNTIME" container exists demo && fail "demo should not exist before run"
   "$WRIX_CONTAINER_RUNTIME" run -d --name demo image sh -c 'sleep infinity'
@@ -656,6 +811,30 @@ test_fake_runtime_contract() {
     fail "fake runtime allowed duplicate host port"
   fi
   assert_file_contains "fake bind error" "$TEST_TMP/fake-conflict.err" "Failed to bind port 21042"
+
+  fixture_layout="$TEST_TMP/fake-image-layout"
+  config_digest="cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  manifest_digest="dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  mkdir -p "$fixture_layout/blobs/sha256"
+  printf '%s\n' '{"config":{"Labels":{"fixture.label":"from-source"}}}' \
+    >"$fixture_layout/blobs/sha256/$config_digest"
+  printf '%s\n' \
+    "{\"config\":{\"digest\":\"sha256:$config_digest\"},\"layers\":[]}" \
+    >"$fixture_layout/blobs/sha256/$manifest_digest"
+  printf '%s\n' \
+    "{\"manifests\":[{\"digest\":\"sha256:$manifest_digest\"}]}" \
+    >"$fixture_layout/index.json"
+  skopeo --insecure-policy copy --quiet \
+    "oci:$fixture_layout:latest" \
+    "containers-storage:localhost/fake-label:test"
+  assert_equals \
+    "fake imported image label" \
+    "from-source" \
+    "$(runtime_image_label "$WRIX_CONTAINER_RUNTIME" "localhost/fake-label:test" "fixture.label")"
+  assert_equals \
+    "fake does not fabricate managed label" \
+    "<no value>" \
+    "$(runtime_image_label "$WRIX_CONTAINER_RUNTIME" "localhost/fake-label:test" "wrix.managed")"
 }
 
 test_workspace_identity() {
@@ -1018,7 +1197,7 @@ test_loom_bead_workspace_uses_repo_service() {
 }
 
 test_service_start_loads_image_source() {
-  require_python
+  require_python3
   require_nix
   local wrix_bin metadata_json metadata_file real_image real_source real_source_kind real_source_link
   wrix_bin="$(build_wrix)"
@@ -1089,7 +1268,7 @@ test_service_start_loads_image_source() {
   fi
   mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
   if [[ "$real_source_kind" != "docker-archive" ]]; then
-    printf 'image archive\n' >"$WRIX_SERVICE_IMAGE_SOURCE"
+    write_fake_docker_archive "$WRIX_SERVICE_IMAGE_SOURCE"
   fi
 
   local darwin_workspace="$TEST_TMP/image-source-darwin-repo"
@@ -1141,46 +1320,58 @@ test_service_start_loads_image_source() {
 }
 
 test_service_image_labels() {
-  require_python
+  require_python3
   require_nix
 
-  local expected_source_kind metadata_json source_link
+  local wrix_bin expected_source_kind metadata_json metadata_file source_link
+  local service_image service_source workspace runtime_name
+  wrix_bin="$(build_wrix)"
   if [[ "$(uname -s)" == "Darwin" ]]; then
     expected_source_kind="docker-archive"
+    runtime_name="container"
   else
     expected_source_kind="nix-descriptor"
+    runtime_name="podman"
   fi
 
   metadata_json="$(nix eval --no-warn-dirty --json "$REPO_ROOT#wrix-service-image" --apply 'image: { inherit (image) labels ref source_kind; source = toString image.source; digest = toString image.digest; }')"
   assert_service_image_metadata_contract "$metadata_json" "$expected_source_kind" || return 1
+  metadata_file="$TEST_TMP/service-image-label-metadata.json"
+  printf '%s\n' "$metadata_json" >"$metadata_file"
+  service_image="$(json_get "$metadata_file" ref)"
   source_link="$TEST_TMP/service-image-label-source"
   nix build --no-warn-dirty --out-link "$source_link" "$REPO_ROOT#wrix-service-image.source" >/dev/null
+  service_source="$source_link"
 
-  python3 - "$source_link" "$expected_source_kind" <<'PY'
-import json
-import pathlib
-import sys
-import tarfile
+  with_fake_runtime_env "$runtime_name"
+  export HOME="$TEST_TMP/home-image-labels"
+  export XDG_STATE_HOME="$TEST_TMP/xdg-state-image-labels"
+  export XDG_CACHE_HOME="$TEST_TMP/xdg-cache-image-labels"
+  export WRIX_SERVICE_IMAGE="$service_image"
+  export WRIX_SERVICE_IMAGE_SOURCE="$service_source"
+  export WRIX_SERVICE_IMAGE_SOURCE_KIND="$expected_source_kind"
+  export WRIX_IMAGE_KEEP_FILE="$TEST_TMP/service-image-label-mru.json"
+  mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
 
-source = pathlib.Path(sys.argv[1])
-kind = sys.argv[2]
-if kind == "nix-descriptor":
-    descriptor = json.loads(source.read_text(encoding="utf-8"))
-    layout = pathlib.Path(descriptor["oci_layout"])
-    index = json.loads((layout / "index.json").read_text(encoding="utf-8"))
-    manifest_digest = index["manifests"][0]["digest"].split(":", 1)[1]
-    manifest = json.loads((layout / "blobs/sha256" / manifest_digest).read_text(encoding="utf-8"))
-    config_digest = manifest["config"]["digest"].split(":", 1)[1]
-    config = json.loads((layout / "blobs/sha256" / config_digest).read_text(encoding="utf-8"))
-else:
-    with tarfile.open(source) as archive:
-        manifest = json.load(archive.extractfile("manifest.json"))[0]
-        config = json.load(archive.extractfile(manifest["Config"]))
-labels = config.get("config", {}).get("Labels", {})
-expected = {"wrix.managed": "true", "wrix.image.kind": "service"}
-if any(labels.get(key) != value for key, value in expected.items()):
-    raise SystemExit(f"built service image labels mismatch: {labels!r}")
-PY
+  workspace="$TEST_TMP/image-label-repo"
+  mkdir -p "$workspace/.git"
+  (cd "$workspace" && "$wrix_bin" service start >"$TEST_TMP/image-label-start.txt") || return 1
+
+  assert_file_contains \
+    "service launcher image" \
+    "$WRIX_FAKE_RUNTIME_STATE/run-image-label-repo-service" \
+    "$service_image" \
+    || return 1
+  assert_equals \
+    "launched service image managed label" \
+    "true" \
+    "$(runtime_image_label "$WRIX_CONTAINER_RUNTIME" "$service_image" "wrix.managed")" \
+    || return 1
+  assert_equals \
+    "launched service image kind label" \
+    "service" \
+    "$(runtime_image_label "$WRIX_CONTAINER_RUNTIME" "$service_image" "wrix.image.kind")" \
+    || return 1
 }
 
 test_service_mounts_beads_worktree_remote() {

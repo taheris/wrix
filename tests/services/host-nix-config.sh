@@ -242,24 +242,32 @@ write_fake_nix() {
 #!/usr/bin/env bash
 set -euo pipefail
 
+config_value() {
+  local key="$1"
+  printf '%s\n' "${NIX_CONFIG:-}" | awk -F '=' -v key="$key" '
+    $1 ~ "^[[:space:]]*" key "[[:space:]]*$" {
+      value = $0
+      sub("^[^=]*=[[:space:]]*", "", value)
+      sub("[[:space:]]*$", "", value)
+      result = value
+    }
+    END { print result }
+  '
+}
+
 if [[ "${1:-}" == "config" && "${2:-}" == "show" ]]; then
-  while IFS= read -r line; do
-    case "${WRIX_FAKE_NIX_IGNORE:-}" in
-      substituter)
-        [[ "$line" == extra-substituters* ]] && continue
-        ;;
-      key)
-        [[ "$line" == extra-trusted-public-keys* ]] && continue
-        ;;
-      builders)
-        [[ "$line" == builders-use-substitutes* ]] && continue
-        ;;
-      hook)
-        [[ "$line" == post-build-hook* ]] && continue
-        ;;
-    esac
-    printf '%s\n' "$line"
-  done <<<"${NIX_CONFIG:-}"
+  substituter="$(config_value extra-substituters)"
+  public_key="$(config_value extra-trusted-public-keys)"
+  builders="$(config_value builders-use-substitutes)"
+  hook="$(config_value post-build-hook)"
+  [[ "${WRIX_FAKE_NIX_IGNORE:-}" == "substituter" ]] && substituter=""
+  [[ "${WRIX_FAKE_NIX_IGNORE:-}" == "key" ]] && public_key=""
+  [[ "${WRIX_FAKE_NIX_IGNORE:-}" == "builders" ]] && builders="false"
+  [[ "${WRIX_FAKE_NIX_IGNORE:-}" == "hook" ]] && hook=""
+  printf 'substituters = https://cache.nixos.org/ %s\n' "$substituter"
+  printf 'trusted-public-keys = cache.nixos.org-1:test %s\n' "$public_key"
+  printf 'builders-use-substitutes = %s\n' "${builders:-false}"
+  printf 'post-build-hook = %s\n' "$hook"
   exit 0
 fi
 printf 'unsupported fake nix command: %s\n' "$*" >&2
@@ -314,6 +322,20 @@ assert_not_contains() {
     fail "$label unexpectedly contains '$needle'"
     return 1
   fi
+}
+
+config_line_value() {
+  local config="$1"
+  local key="$2"
+  printf '%s\n' "$config" | awk -F '=' -v key="$key" '
+    $1 ~ "^[[:space:]]*" key "[[:space:]]*$" {
+      value = $0
+      sub("^[^=]*=[[:space:]]*", "", value)
+      sub("[[:space:]]*$", "", value)
+      print value
+      exit
+    }
+  '
 }
 
 has_json_tool() {
@@ -679,11 +701,52 @@ test_mkdevshell_loom_internal_worktree_uses_repo_service() {
   fi
 }
 
+test_fake_nix_config_show_matches_real_nix() {
+  local real_nix fake_nix fixture real_config fake_config
+  real_nix="$(command -v nix)"
+  with_fake_tools
+  fake_nix="$WRIX_NIX_BIN"
+  fixture="extra-substituters = file://$TEST_TMP/conformance-cache
+extra-trusted-public-keys = wrix-cache:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+builders-use-substitutes = true
+post-build-hook = $TEST_TMP/conformance-hook"
+
+  real_config="$(NIX_CONFIG="$fixture" "$real_nix" config show)"
+  fake_config="$(NIX_CONFIG="$fixture" "$fake_nix" config show)"
+  assert_contains \
+    "real Nix substituter" \
+    "$real_config" \
+    "file://$TEST_TMP/conformance-cache" \
+    || return 1
+  assert_contains \
+    "fake Nix substituter" \
+    "$fake_config" \
+    "file://$TEST_TMP/conformance-cache" \
+    || return 1
+  assert_contains \
+    "real Nix trusted key" \
+    "$real_config" \
+    "wrix-cache:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" \
+    || return 1
+  assert_contains \
+    "fake Nix trusted key" \
+    "$fake_config" \
+    "wrix-cache:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" \
+    || return 1
+  [[ "$(config_line_value "$fake_config" builders-use-substitutes)" == \
+    "$(config_line_value "$real_config" builders-use-substitutes)" ]] \
+    || { fail "fake Nix builders-use-substitutes diverges from real Nix"; return 1; }
+  [[ "$(config_line_value "$fake_config" post-build-hook)" == \
+    "$(config_line_value "$real_config" post-build-hook)" ]] \
+    || { fail "fake Nix post-build-hook diverges from real Nix"; return 1; }
+}
+
 test_host_nix_configures_cache_and_hook() {
   if ! has_json_tool; then
     exit 77
   fi
-  local wrix_bin workspace output endpoints state_root cache_root public_key hook_path wrapper
+  local real_nix wrix_bin workspace output endpoints state_root cache_root public_key hook_path wrapper
+  real_nix="$(command -v nix)"
   wrix_bin="$(build_wrix)"
   with_fake_tools
   export HOME="$TEST_TMP/home"
@@ -701,17 +764,18 @@ test_host_nix_configures_cache_and_hook() {
   output="$(
     (
       cd "$workspace"
+      export WRIX_NIX_BIN="$real_nix"
       WRIX_SERVICE_BIN="$wrix_bin" \
         WRIX_CACHE_HOOK_BIN="$REPO_ROOT/target/debug/wrix-cache-hook" \
         WRIX_CACHE_PUBLISH_BIN="$REPO_ROOT/target/debug/wrix-cache-publish" \
-        WRIX_HOST_NIX_CONFIG_PRINT=1 \
         . "$REPO_ROOT/lib/services/host-nix-config.sh"
+      "$real_nix" config show
     ) 2>"$TEST_TMP/reminder.err"
   )"
-  assert_contains "NIX_CONFIG" "$output" "extra-substituters = file://$cache_root" || return 1
-  assert_contains "NIX_CONFIG" "$output" "extra-trusted-public-keys = $public_key" || return 1
-  assert_contains "NIX_CONFIG" "$output" "builders-use-substitutes = true" || return 1
-  assert_contains "NIX_CONFIG" "$output" "post-build-hook = $TEST_TMP/fake-store/" || return 1
+  assert_contains "effective Nix config" "$output" "file://$cache_root" || return 1
+  assert_contains "effective Nix config" "$output" "$public_key" || return 1
+  assert_contains "effective Nix config" "$output" "builders-use-substitutes = true" || return 1
+  assert_contains "effective Nix config" "$output" "post-build-hook = $TEST_TMP/fake-store/" || return 1
 
   hook_path="$(printf '%s\n' "$output" | awk -F ' = ' '/post-build-hook/{print $2}')"
   wrapper="$hook_path"
@@ -831,6 +895,7 @@ ALL_TESTS=(
   test_mkdevshell_nix_cache
   test_mkdevshell_beads_workspace_does_not_run_raw_dolt
   test_mkdevshell_loom_internal_worktree_uses_repo_service
+  test_fake_nix_config_show_matches_real_nix
   test_host_nix_configures_cache_and_hook
   test_default_cache_state_layout
   test_host_nix_config_fails_when_trusted_setting_ignored
