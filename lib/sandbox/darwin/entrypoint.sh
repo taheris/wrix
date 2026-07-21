@@ -348,8 +348,8 @@ if [[ "$WRIX_AGENT" = "claude" ]]; then
 
     if [[ "$mcp_servers" != "{}" ]]; then
       jq --argjson servers "$mcp_servers" '.mcpServers = $servers' \
-        "$HOME/.claude/settings.json" > "$HOME/.claude/settings.json.tmp"
-      mv "$HOME/.claude/settings.json.tmp" "$HOME/.claude/settings.json"
+        "$HOME/.claude.json" > "$HOME/.claude.json.tmp"
+      mv "$HOME/.claude.json.tmp" "$HOME/.claude.json"
     fi
   fi
 

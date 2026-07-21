@@ -168,6 +168,15 @@ prepare_wrix_etc() {
   printf '{}\n' >"$etc_wrix/claude-config.json"
   printf '{}\n' >"$etc_wrix/claude-settings.json"
   printf '{}\n' >"$etc_wrix/pi-agent/settings.json"
+  if [[ "${WRIX_TEST_MCP_RUNTIME:-0}" == "1" ]]; then
+    mkdir -p "$etc_wrix/mcp"
+    if [[ -n "${WRIX_TEST_MCP_CONFIG:-}" ]]; then
+      jq -e '.mcpServers.tmux' "$WRIX_TEST_MCP_CONFIG" >"$etc_wrix/mcp/tmux.json"
+    else
+      printf '%s\n' '{"command":"tmux-mcp","env":{}}' >"$etc_wrix/mcp/tmux.json"
+    fi
+    printf '%s\n' '{"command":"unselected-mcp"}' >"$etc_wrix/mcp/unselected.json"
+  fi
 }
 
 run_entrypoint() {
@@ -196,6 +205,8 @@ run_entrypoint() {
     PATH="$tool_dir:$PATH" \
     WRIX_AGENT="$agent" \
     WRIX_FIREWALL_BACKEND=iptables \
+    WRIX_MCP="${WRIX_TEST_MCP_SELECTION:-}" \
+    WRIX_MCP_TMUX_AUDIT="${WRIX_TEST_MCP_TMUX_AUDIT:-}" \
     WRIX_NETWORK=open \
     WRIX_STDIO=1 \
     bash "$entrypoint" "$@" >"$stdout_path" 2>"$stderr_path"
@@ -309,6 +320,65 @@ test_agent_config_homes_both_entrypoints() {
   printf 'PASS: both entrypoints seed claude and pi config homes separately\n' >&2
 }
 
+test_runtime_mcp_registration_uses_claude_user_config_both_entrypoints() {
+  require_command jq
+  local platform
+  for platform in linux darwin; do
+    local workspace="$TEST_TMP/runtime-mcp-$platform/workspace"
+    local stdout_path="$TEST_TMP/runtime-mcp-$platform.out"
+    local stderr_path="$TEST_TMP/runtime-mcp-$platform.err"
+    local case_dir home_dir
+    case_dir="$TEST_TMP/$platform-claude-$(basename "$stdout_path" .out)"
+    home_dir="$case_dir/home"
+
+    if ! WRIX_TEST_MCP_RUNTIME=1 \
+      WRIX_TEST_MCP_SELECTION=tmux \
+      WRIX_TEST_MCP_TMUX_AUDIT=/workspace/.debug-audit.log \
+      run_entrypoint "$platform" claude "$stdout_path" "$stderr_path" "$workspace" true; then
+      fail "$platform runtime MCP entrypoint failed: $(<"$stderr_path")"
+      return 1
+    fi
+    if ! jq -e '
+      .mcpServers.tmux.command == "tmux-mcp"
+      and .mcpServers.tmux.env.TMUX_DEBUG_AUDIT == "/workspace/.debug-audit.log"
+      and .mcpServers.unselected == null
+    ' "$home_dir/.claude.json" >/dev/null; then
+      fail "$platform runtime MCP registration missing from Claude user config"
+      return 1
+    fi
+    if ! jq -e 'has("mcpServers") | not' "$home_dir/.claude/settings.json" >/dev/null; then
+      fail "$platform runtime MCP registration leaked into Claude settings"
+      return 1
+    fi
+  done
+  printf 'PASS: both entrypoints register runtime MCP servers in Claude user config\n' >&2
+}
+
+test_runtime_mcp_registration_is_discovered_by_selected_claude() {
+  require_command claude
+  require_command jq
+  require_command tmux
+  require_command tmux-mcp
+  local workspace="$TEST_TMP/runtime-mcp-live/workspace"
+  local stdout_path="$TEST_TMP/runtime-mcp-live.out"
+  local stderr_path="$TEST_TMP/runtime-mcp-live.err"
+  local output
+
+  if ! WRIX_TEST_MCP_RUNTIME=1 \
+    WRIX_TEST_MCP_SELECTION=tmux \
+    run_entrypoint linux claude "$stdout_path" "$stderr_path" "$workspace" \
+    claude mcp get tmux; then
+    fail "selected Claude runtime MCP health check failed: $(<"$stderr_path")"
+    return 1
+  fi
+  output="$(<"$stdout_path")$(<"$stderr_path")"
+  if [[ "$output" != *"tmux:"* || "$output" != *"Connected"* ]]; then
+    fail "selected Claude did not connect to the runtime tmux MCP server: $output"
+    return 1
+  fi
+  printf 'PASS: selected Claude discovers the runtime tmux MCP registration\n' >&2
+}
+
 run_core_hooks_path_case() {
   local platform="$1"
   local workspace="$TEST_TMP/hooks-$platform/workspace"
@@ -384,6 +454,7 @@ ALL_TESTS=(
   test_workspace_bin_path_prepend_both
   test_agent_dispatch_both_entrypoints
   test_agent_config_homes_both_entrypoints
+  test_runtime_mcp_registration_uses_claude_user_config_both_entrypoints
   test_linux_core_hooks_path
   test_darwin_core_hooks_path
   test_darwin_entrypoint_rejects_net_admin

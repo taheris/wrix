@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # Verifier for tmux-mcp's mkSandbox composition (specs/tmux-mcp.md).
 #
-# Instantiates `mkSandbox { profile = profiles.rust; agent = "claude";
-# mcp.tmux = {}; }` directly, loads the resulting image into the host's
-# rootless podman, and asserts that Claude discovers the registered server and
-# completes its MCP health check against tmux-mcp.
+# Builds explicit `mcp.tmux` composition, verifies both entrypoints' runtime
+# registration path through the selected Claude CLI, and exercises the built
+# image in rootless podman when a host container runtime is available.
 
 set -euo pipefail
 
@@ -32,12 +31,12 @@ require_command nix
 require_command podman
 require_command skopeo
 
+env REPO_ROOT="$REPO_ROOT" bash "$REPO_ROOT/tests/sandbox/entrypoint-contract.sh" \
+  test_runtime_mcp_registration_uses_claude_user_config_both_entrypoints
+
 PODMAN_BIN="$(command -v podman)"
 SKOPEO_BIN="$(command -v skopeo)"
-NESTED_RUNTIME_DIR=""
-NESTED_UID=""
-NESTED_GID=""
-NESTED_PODMAN_READY=0
+NESTED_CONTAINER=0
 PODMAN_COMMAND=("$PODMAN_BIN")
 PODMAN_RUN_OPTIONS=(--network=none --cap-add=NET_ADMIN)
 MCP_HEALTH_TIMEOUT=10
@@ -50,22 +49,14 @@ podman() {
 }
 
 skopeo() {
-  if [[ -z "$NESTED_RUNTIME_DIR" ]]; then
-    "$SKOPEO_BIN" "$@"
-    return
-  fi
-
-  setpriv --reuid="$NESTED_UID" --regid="$NESTED_GID" --clear-groups \
-    env CONTAINERS_STORAGE_CONF="$NESTED_RUNTIME_DIR/storage.conf" \
-    HOME="$NESTED_RUNTIME_DIR/home" TMPDIR="$NESTED_RUNTIME_DIR/tmp" \
-    "$SKOPEO_BIN" "$@"
+  "$SKOPEO_BIN" "$@"
 }
 
 cleanup() {
   local status="$?"
   trap - EXIT
   rm -f "$build_log"
-  if podman container exists "$CONTAINER_NAME"; then
+  if [[ -n "$IMAGE_REF" ]] && podman container exists "$CONTAINER_NAME"; then
     if ! podman rm --force "$CONTAINER_NAME" >/dev/null; then
       printf 'WARN: could not remove test container %s\n' "$CONTAINER_NAME" >&2
     fi
@@ -75,46 +66,30 @@ cleanup() {
       printf 'WARN: could not remove test image %s\n' "$IMAGE_REF" >&2
     fi
   fi
-  if [[ "$NESTED_PODMAN_READY" -eq 1 ]]; then
-    if ! podman system migrate; then
-      printf 'WARN: could not stop nested Podman user namespace\n' >&2
-    fi
-  fi
-  if [[ -n "$NESTED_RUNTIME_DIR" ]]; then
-    rm -rf "$NESTED_RUNTIME_DIR"
-  fi
   exit "$status"
 }
 trap cleanup EXIT
 
+verify_claude_mcp_health() {
+  local label="$1"
+  local selected_agent="$2"
+  shift 2
+  local result
+
+  if ! result=$(timeout "$MCP_HEALTH_TIMEOUT" \
+    "${PODMAN_COMMAND[@]}" run "${PODMAN_RUN_OPTIONS[@]}" --rm \
+    --name "$CONTAINER_NAME" -e "WRIX_AGENT=$selected_agent" "$@" "$IMAGE_REF" \
+    bash -c 'command -v tmux >/dev/null && command -v tmux-mcp >/dev/null && exec claude mcp get tmux' 2>&1); then
+    fail "$label Claude MCP health check failed: $result"
+  fi
+
+  if [[ "$result" != *"tmux:"* || "$result" != *"Connected"* ]]; then
+    fail "$label Claude did not connect to the registered tmux MCP server: $result"
+  fi
+}
+
 if [[ -e /run/.containerenv ]]; then
-  require_command setpriv
-  if ! NESTED_UID="$(id -u wrix)"; then
-    fail "nested Podman requires the wrix runtime user"
-  fi
-  if ! NESTED_GID="$(id -g wrix)"; then
-    fail "nested Podman requires the wrix runtime group"
-  fi
-  NESTED_RUNTIME_DIR="$(mktemp -d -t wrix-e2e-podman.XXXXXX)"
-  mkdir -p "$NESTED_RUNTIME_DIR/home/.config/containers" "$NESTED_RUNTIME_DIR/tmp"
-  cat >"$NESTED_RUNTIME_DIR/storage.conf" <<EOF
-[storage]
-driver = "vfs"
-runroot = "$NESTED_RUNTIME_DIR/runroot"
-graphroot = "$NESTED_RUNTIME_DIR/graphroot"
-EOF
-  printf '%s\n' '{"default":[{"type":"insecureAcceptAnything"}]}' \
-    >"$NESTED_RUNTIME_DIR/home/.config/containers/policy.json"
-  chown -R "$NESTED_UID:$NESTED_GID" "$NESTED_RUNTIME_DIR"
-  PODMAN_COMMAND=(
-    setpriv --reuid="$NESTED_UID" --regid="$NESTED_GID" --clear-groups
-    env CONTAINERS_STORAGE_CONF="$NESTED_RUNTIME_DIR/storage.conf"
-    HOME="$NESTED_RUNTIME_DIR/home" TMPDIR="$NESTED_RUNTIME_DIR/tmp"
-    "$PODMAN_BIN"
-  )
-  PODMAN_RUN_OPTIONS+=(--pid=host --ipc=host --uts=host)
-  MCP_HEALTH_TIMEOUT=120
-  NESTED_PODMAN_READY=1
+  NESTED_CONTAINER=1
 fi
 
 cd "$REPO_ROOT"
@@ -139,9 +114,14 @@ PROFILE_CONFIG=$(grep -oE -- '--profile-config[[:space:]]+[^[:space:]]+' "$PACKA
 IMAGE_STREAM=$(jq -r '.image.source' "$PROFILE_CONFIG")
 WRAPPER_IMAGE_REF=$(jq -r '.image.ref' "$PROFILE_CONFIG")
 SELECTED_AGENT=$(jq -r '.agent.kind' "$PROFILE_CONFIG")
+SELECTED_SYSTEM=$(jq -r '.system' "$PROFILE_CONFIG")
 
 [[ "$SELECTED_AGENT" == "claude" ]] || {
   echo "FAIL: explicit mcp.tmux sandbox did not select the Claude agent" >&2
+  exit 1
+}
+[[ -n "$SELECTED_SYSTEM" && "$SELECTED_SYSTEM" != "null" ]] || {
+  echo "FAIL: explicit mcp.tmux sandbox did not declare its system" >&2
   exit 1
 }
 [[ -n "$IMAGE_STREAM" && -e "$IMAGE_STREAM" ]] || {
@@ -183,20 +163,40 @@ if ! jq -e '
   exit 1
 fi
 
-IMAGE_REF=$(wrix_unique_image_ref "wrix-test-tmux-e2e-sandbox")
-wrix_load_test_image "$IMAGE_STREAM" "$(wrix_image_short_name "$WRAPPER_IMAGE_REF")" "$IMAGE_REF"
-
-if ! result=$(timeout "$MCP_HEALTH_TIMEOUT" \
-  "${PODMAN_COMMAND[@]}" run "${PODMAN_RUN_OPTIONS[@]}" --rm \
-  --name "$CONTAINER_NAME" -e "WRIX_AGENT=$SELECTED_AGENT" "$IMAGE_REF" \
-  bash -c 'command -v tmux >/dev/null && command -v tmux-mcp >/dev/null && exec claude mcp get tmux' 2>&1); then
-  echo "FAIL: Claude MCP health check failed: $result" >&2
-  exit 1
+if ! LIVE_AGENT_ENV=$(nix build --no-link --print-out-paths --no-warn-dirty --impure --expr "
+  let
+    flake = builtins.getFlake \"git+file://$REPO_ROOT\";
+    system = \"$SELECTED_SYSTEM\";
+    pkgs = import flake.inputs.nixpkgs {
+      inherit system;
+      config.allowUnfreePredicate = pkg: pkgs.lib.getName pkg == \"claude-code\";
+    };
+  in
+    pkgs.buildEnv {
+      name = \"wrix-tmux-mcp-live-agent\";
+      paths = [ pkgs.claude-code pkgs.tmux flake.packages.\${system}.tmux-mcp ];
+      pathsToLink = [ \"/bin\" ];
+    }
+" 2>>"$build_log"); then
+  cat "$build_log" >&2
+  fail "nix build selected Claude and tmux-mcp binaries"
+fi
+if ! env \
+  PATH="$LIVE_AGENT_ENV/bin:$PATH" \
+  REPO_ROOT="$REPO_ROOT" \
+  WRIX_TEST_MCP_CONFIG="$AUDIT_CONFIG" \
+  bash "$REPO_ROOT/tests/sandbox/entrypoint-contract.sh" \
+  test_runtime_mcp_registration_is_discovered_by_selected_claude; then
+  fail "selected Claude runtime MCP verifier"
 fi
 
-[[ "$result" == *"tmux:"* && "$result" == *"Connected"* ]] || {
-  echo "FAIL: Claude did not connect to the registered tmux MCP server: $result" >&2
-  exit 1
-}
+if [[ "$NESTED_CONTAINER" -eq 1 ]]; then
+  echo "PASS: built explicit tmux-mcp sandbox and verified runtime registration through selected Claude" >&2
+  exit 0
+fi
 
-echo "PASS: tmux-mcp-e2e-sandbox" >&2
+IMAGE_REF=$(wrix_unique_image_ref "wrix-test-tmux-e2e-sandbox")
+wrix_load_test_image "$IMAGE_STREAM" "$(wrix_image_short_name "$WRAPPER_IMAGE_REF")" "$IMAGE_REF"
+verify_claude_mcp_health "explicit mcp.tmux" "$SELECTED_AGENT"
+
+echo "PASS: explicit tmux-mcp sandbox and runtime-selected Claude registration" >&2
