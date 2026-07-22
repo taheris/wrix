@@ -596,6 +596,7 @@ wrix_verify_firewall_policy() {
     iptables) wrix_verify_iptables_policy ;;
     *) wrix_die "firewall backend was not selected" ;;
   esac
+  printf 'Network policy verified: IPv6 output default-drop (firewall=%s)\n' "$WRIX_FIREWALL_BACKEND" >&2
 }
 
 wrix_reset_firewall_policy() {

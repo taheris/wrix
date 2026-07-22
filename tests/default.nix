@@ -154,7 +154,6 @@ let
     services-devshell-start-independent = import ./services/devshell-lifecycle.nix {
       inherit pkgs wrix;
     };
-    services-cache-network = import ./services/cache-network.nix { inherit pkgs; };
   };
 
   prePushSmokeTests = removeAttrs smokeTests [

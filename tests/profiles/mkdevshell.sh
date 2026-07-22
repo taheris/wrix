@@ -61,6 +61,27 @@ eval_expr_json() {
   "
 }
 
+assert_eval_error_contains() {
+  local expr="$1"
+  local expected="$2"
+  local label="$3"
+  local stderr_file
+  stderr_file=$(mktemp -p "$TMP_BASE")
+
+  if eval_expr_raw "$expr" >/dev/null 2>"$stderr_file"; then
+    printf 'FAIL: %s should error at evaluation\n' "$label" >&2
+    rm -f "$stderr_file"
+    return 1
+  fi
+  if ! grep -F -- "$expected" "$stderr_file" >/dev/null; then
+    printf 'FAIL: %s did not emit expected diagnostic: %s\n' "$label" "$expected" >&2
+    cat "$stderr_file" >&2
+    rm -f "$stderr_file"
+    return 1
+  fi
+  rm -f "$stderr_file"
+}
+
 write_fake_devshell_tools() {
   local bin_dir="$1"
   mkdir -p "$bin_dir"
@@ -163,22 +184,22 @@ test_profile_required() {
   local sandbox_expr
   sandbox_expr="let sandbox = lib.mkSandbox { profile = lib.profiles.base; }; in"
 
-  if eval_expr_raw "(lib.mkDevShell {}).shellHook" >/dev/null 2>/dev/null; then
-    echo "FAIL: lib.mkDevShell {} should error at evaluation (missing profile)" >&2
-    return 1
-  fi
-  if eval_expr_raw "$sandbox_expr (lib.mkDevShell { inherit sandbox; profile = lib.profiles.base; }).shellHook" >/dev/null 2>/dev/null; then
-    echo "FAIL: lib.mkDevShell should reject simultaneous sandbox and profile" >&2
-    return 1
-  fi
-  if eval_expr_raw "$sandbox_expr (sandbox.devShell { profile = lib.profiles.base; }).shellHook" >/dev/null 2>/dev/null; then
-    echo "FAIL: sandbox.devShell should reject profile override" >&2
-    return 1
-  fi
-  if eval_expr_raw "$sandbox_expr (sandbox.devShell { sandbox = sandbox; }).shellHook" >/dev/null 2>/dev/null; then
-    echo "FAIL: sandbox.devShell should reject sandbox override" >&2
-    return 1
-  fi
+  assert_eval_error_contains \
+    "(lib.mkDevShell {}).shellHook" \
+    "mkDevShell requires either \`profile\` or \`sandbox\`" \
+    "lib.mkDevShell missing profile"
+  assert_eval_error_contains \
+    "$sandbox_expr (lib.mkDevShell { inherit sandbox; profile = lib.profiles.base; }).shellHook" \
+    "mkDevShell accepts either \`sandbox\` or \`profile\`, not both" \
+    "lib.mkDevShell ambiguous profile"
+  assert_eval_error_contains \
+    "$sandbox_expr (sandbox.devShell { profile = lib.profiles.base; }).shellHook" \
+    "sandbox.devShell does not accept \`sandbox\` or \`profile\`" \
+    "sandbox.devShell profile override"
+  assert_eval_error_contains \
+    "$sandbox_expr (sandbox.devShell { sandbox = sandbox; }).shellHook" \
+    "sandbox.devShell does not accept \`sandbox\` or \`profile\`" \
+    "sandbox.devShell sandbox override"
 }
 
 # ============================================================================

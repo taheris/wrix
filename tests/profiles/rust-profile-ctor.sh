@@ -57,31 +57,45 @@ eval_expr_json() {
   "
 }
 
-# Assert that evaluating $1 fails (errors at evaluation). $2 is the label
-# used in failure messages.
-assert_eval_errors() {
-  local expr="$1" label="$2"
-  if eval_expr_raw "$expr" >/dev/null 2>/dev/null; then
-    echo "FAIL: [$label] expected evaluation error, got success" >&2
-    echo "  expr: $expr" >&2
+assert_eval_error_contains() {
+  local expr="$1"
+  local expected="$2"
+  local label="$3"
+  local stderr_file
+  stderr_file=$(mktemp)
+
+  if eval_expr_raw "$expr" >/dev/null 2>"$stderr_file"; then
+    printf 'FAIL: [%s] expected evaluation error, got success\n' "$label" >&2
+    printf '  expr: %s\n' "$expr" >&2
+    rm -f "$stderr_file"
     return 1
   fi
+  if ! grep -F -- "$expected" "$stderr_file" >/dev/null; then
+    printf 'FAIL: [%s] did not emit expected diagnostic: %s\n' "$label" "$expected" >&2
+    cat "$stderr_file" >&2
+    rm -f "$stderr_file"
+    return 1
+  fi
+  rm -f "$stderr_file"
 }
 
 # ============================================================================
 # rustProfile requires toolchain and sha256
 # ============================================================================
 test_required_args() {
-  assert_eval_errors \
+  assert_eval_error_contains \
     "lib.rustProfile {}" \
+    "function 'rustProfile' called without required argument 'toolchain'" \
     "empty args"
 
-  assert_eval_errors \
+  assert_eval_error_contains \
     "lib.rustProfile { toolchain = $REPO_ROOT/tests/fixtures/rust-toolchain.toml; }" \
+    "function 'rustProfile' called without required argument 'sha256'" \
     "missing sha256"
 
-  assert_eval_errors \
+  assert_eval_error_contains \
     "lib.rustProfile { sha256 = \"$TOOLCHAIN_FIXTURE_SHA\"; }" \
+    "function 'rustProfile' called without required argument 'toolchain'" \
     "missing toolchain"
 }
 

@@ -13,13 +13,6 @@ let
   hostNix = serviceScriptWithWrix "host-nix-config";
   sandboxNix = serviceScript "sandbox-nix-config";
   dolt = serviceScriptWithWrix "dolt-endpoints";
-  linuxSystem =
-    if system == "aarch64-darwin" then
-      "aarch64-linux"
-    else if system == "x86_64-darwin" then
-      "x86_64-linux"
-    else
-      system;
 in
 {
   "services.devshell-start-independent" =
@@ -64,12 +57,8 @@ in
     ${hostNix "test_host_nix_config_rejects_non_wrix_hook"}
   '';
 
-  "services.limit-mode-cache-endpoint" = ''
-    local root
-    root="$(repo_root)"
-    nix build --no-link --no-warn-dirty \
-      "$root#legacyPackages.${linuxSystem}.systemTests.services-cache-network"
-  '';
+  "services.limit-mode-cache-endpoint" =
+    serviceScript "cache-network-live" "test_limit_mode_cache_endpoint";
 
   "services.cache-transport-http-only" = ''
     local root

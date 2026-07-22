@@ -82,13 +82,29 @@ darwin_vmnet_gateway() {
   '
 }
 
-start_darwin_lan_server() {
+start_controlled_lan_server() {
   local pid_output="$1"
   local target_output="$2"
   local port_output="$3"
-  local target port_file server_script server_log server_pid port attempt
+  local target bind_host host_probe port_file server_script server_log server_pid port attempt
 
-  target=$(darwin_vmnet_gateway)
+  case "$(uname -s)" in
+    Darwin)
+      target=$(darwin_vmnet_gateway)
+      bind_host="$target"
+      host_probe="$target"
+      ;;
+    Linux)
+      target="169.254.1.2"
+      bind_host="127.0.0.1"
+      host_probe="$bind_host"
+      ;;
+    *)
+      fail "unsupported LAN test host: $(uname -s)"
+      return 1
+      ;;
+  esac
+
   port_file="$TEST_TMP/lan-server.port"
   server_script="$TEST_TMP/lan-server.py"
   server_log="$TEST_TMP/lan-server.log"
@@ -110,7 +126,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
             connection.recv(4096)
             connection.sendall(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
 PYTHON
-  python3 "$server_script" "$target" "$port_file" >"$server_log" 2>&1 &
+  python3 "$server_script" "$bind_host" "$port_file" >"$server_log" 2>&1 &
   server_pid=$!
   printf -v "$pid_output" '%s' "$server_pid"
   printf -v "$target_output" '%s' "$target"
@@ -121,25 +137,25 @@ PYTHON
     fi
     if ! kill -0 "$server_pid" 2>/dev/null; then
       cat "$server_log" >&2
-      fail "Darwin LAN test server exited before accepting connections"
+      fail "LAN test server exited before accepting connections"
       return 1
     fi
     sleep 0.1
   done
   [[ -s "$port_file" ]] || {
-    fail "Darwin LAN test server did not publish its port"
+    fail "LAN test server did not publish its port"
     return 1
   }
   port=$(<"$port_file")
   [[ "$port" =~ ^[0-9]+$ ]] || {
-    fail "Darwin LAN test server published an invalid port: $port"
+    fail "LAN test server published an invalid port: $port"
     return 1
   }
   printf -v "$port_output" '%s' "$port"
   if ! curl --noproxy '*' --fail --silent --show-error --connect-timeout 2 --max-time 5 \
-    "http://$target:$port/" >/dev/null; then
+    "http://$host_probe:$port/" >/dev/null; then
     cat "$server_log" >&2
-    fail "host could not reach the Darwin LAN test server"
+    fail "host could not reach the controlled LAN test server"
     return 1
   fi
 }
@@ -184,27 +200,25 @@ dump_probe_error() {
 
 test_open_blocks_lan() {
   local label="open-blocks-lan"
+  local control_label="open-lan-exception-control"
   local rc=0
-  local probe
+  local control_probe probe lan_target lan_port
 
-  if [[ "$(uname -s)" = "Darwin" ]]; then
-    local control_label="open-lan-exception-control"
-    local control_probe lan_target lan_port
-    start_darwin_lan_server LAN_SERVER_PID lan_target lan_port || return 1
-    control_probe=$(cat <<PROBE
+  start_controlled_lan_server LAN_SERVER_PID lan_target lan_port || return 1
+  control_probe=$(cat <<PROBE
 set -euo pipefail
 curl --noproxy '*' --fail --silent --show-error --connect-timeout 2 --max-time 5 http://$lan_target:$lan_port/ >/tmp/wrix-lan-control
 PROBE
 )
-    run_sandbox_probe "$control_label" open "" "$control_probe" \
-      "$lan_target" "$lan_port" || rc=$?
-    if [[ "$rc" -ne 0 ]]; then
-      fail "Darwin sandbox could not reach the controlled LAN listener through an exact endpoint exception"
-      dump_probe_error "$control_label"
-      return 1
-    fi
+  run_sandbox_probe "$control_label" open "" "$control_probe" \
+    "$lan_target" "$lan_port" || rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    fail "sandbox could not reach the controlled LAN listener through an exact endpoint exception"
+    dump_probe_error "$control_label"
+    return 1
+  fi
 
-    probe=$(cat <<PROBE
+  probe=$(cat <<PROBE
 set -euo pipefail
 curl -4 --fail --silent --show-error --connect-timeout 10 --max-time 30 https://cache.nixos.org/nix-cache-info >/tmp/wrix-public-egress
 if curl --noproxy '*' --fail --silent --show-error --connect-timeout 2 --max-time 5 http://$lan_target:$lan_port/ >/tmp/wrix-private-probe 2>&1; then
@@ -213,28 +227,15 @@ if curl --noproxy '*' --fail --silent --show-error --connect-timeout 2 --max-tim
 fi
 PROBE
 )
-  else
-    probe=$(cat <<'PROBE'
-set -euo pipefail
-curl -4 --fail --silent --show-error --connect-timeout 10 --max-time 30 https://cache.nixos.org/nix-cache-info >/tmp/wrix-public-egress
-for target in 10.0.0.1 172.16.0.1 192.168.0.1 169.254.169.254; do
-  if nc -z -w 2 "$target" 80 >/tmp/wrix-private-probe 2>&1; then
-    printf 'private target reachable despite baseline block: %s\n' "$target" >&2
-    exit 1
-  fi
-done
-PROBE
-)
-  fi
 
   rc=0
   run_sandbox_probe "$label" open "" "$probe" || rc=$?
   if [[ "$rc" -ne 0 ]]; then
-    fail "open mode did not allow public egress while blocking private ranges"
+    fail "open mode did not allow public egress while blocking the controlled LAN listener"
     dump_probe_error "$label"
     return 1
   fi
-  pass "open mode public egress works and private-range probes fail in a live sandbox"
+  pass "open mode permits public egress and blocks a proven-reachable LAN listener"
 }
 
 test_limit_allowlist() {
@@ -275,9 +276,7 @@ PROBE
 }
 
 test_ipv6_blocked() {
-  local label="ipv6-blocked"
-  local rc=0
-  local probe
+  local mode label rc probe
 
   probe=$(cat <<'PROBE'
 set -euo pipefail
@@ -288,13 +287,22 @@ fi
 PROBE
 )
 
-  run_sandbox_probe "$label" open "" "$probe" || rc=$?
-  if [[ "$rc" -ne 0 ]]; then
-    fail "IPv6 probe did not fail closed as expected"
-    dump_probe_error "$label"
-    return 1
-  fi
-  pass "IPv6 egress is blocked in a live sandbox"
+  for mode in open limit; do
+    label="ipv6-blocked-$mode"
+    rc=0
+    run_sandbox_probe "$label" "$mode" "" "$probe" || rc=$?
+    if [[ "$rc" -ne 0 ]]; then
+      fail "IPv6 probe did not fail closed in $mode mode"
+      dump_probe_error "$label"
+      return 1
+    fi
+    if ! grep -F -- "Network policy verified: IPv6 output default-drop" "$TEST_TMP/$label.err" >/dev/null; then
+      fail "assembled $mode-mode sandbox did not attest its inspected IPv6 output-drop policy"
+      dump_probe_error "$label"
+      return 1
+    fi
+  done
+  pass "assembled sandbox verifies IPv6 output-drop policy in open and limit modes"
 }
 
 test_fail_closed() {
