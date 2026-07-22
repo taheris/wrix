@@ -20,6 +20,10 @@
 #     current HEAD after a passing pre-push check, then consumes that stamp
 #     on a retry of the same HEAD.
 #
+#   test_no_verify_bypasses_pre_commit_and_pre_push
+#     Git bypasses otherwise-blocking hooks from the materialized bundle when
+#     commit or push is invoked with --no-verify.
+#
 # Usage:
 #   tests/profiles/prek-hooks-bundle.sh                  # run all tests
 #   tests/profiles/prek-hooks-bundle.sh test_<name>      # run a single test
@@ -253,6 +257,99 @@ YAML
   [[ "$failed" -eq 0 ]]
 }
 
+# ============================================================================
+test_no_verify_bypasses_pre_commit_and_pre_push() (
+  local bundle
+  if ! bundle=$(require_bundle "$@"); then
+    echo "FAIL: nix build lib.prekHooks failed" >&2
+    return 1
+  fi
+
+  local test_tmp worktree remote commit_sentinel push_sentinel
+  test_tmp=$(mktemp -d)
+  worktree="$test_tmp/worktree"
+  remote="$test_tmp/remote.git"
+  commit_sentinel="$worktree/.git/pre-commit-fired"
+  push_sentinel="$worktree/.git/pre-push-fired"
+  trap 'rm -rf "$test_tmp"' EXIT
+
+  mkdir -p "$worktree"
+  git -C "$worktree" init -q -b main
+  git -C "$worktree" config user.email test@example.com
+  git -C "$worktree" config user.name Test
+  printf 'seed\n' >"$worktree/seed.txt"
+  git -C "$worktree" add seed.txt
+  git -C "$worktree" commit -q -m initial
+
+  cat >"$worktree/.git/fail-pre-commit" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+touch .git/pre-commit-fired
+exit 1
+SCRIPT
+  cat >"$worktree/.git/fail-pre-push" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+touch .git/pre-push-fired
+exit 1
+SCRIPT
+  chmod +x "$worktree/.git/fail-pre-commit" "$worktree/.git/fail-pre-push"
+  cat >"$worktree/.pre-commit-config.yaml" <<'YAML'
+repos:
+  - repo: local
+    hooks:
+      - id: fail-pre-commit
+        name: fail-pre-commit
+        entry: .git/fail-pre-commit
+        language: system
+        stages: [pre-commit]
+        always_run: true
+        pass_filenames: false
+      - id: fail-pre-push
+        name: fail-pre-push
+        entry: .git/fail-pre-push
+        language: system
+        stages: [pre-push]
+        always_run: true
+        pass_filenames: false
+YAML
+  git -C "$worktree" config --local core.hooksPath "$bundle"
+  git -C "$worktree" add .pre-commit-config.yaml
+
+  if git -C "$worktree" commit -m blocked; then
+    echo "FAIL: pre-commit control unexpectedly passed" >&2
+    return 1
+  fi
+  [[ -f "$commit_sentinel" ]] || {
+    echo "FAIL: pre-commit control did not execute the blocking hook" >&2
+    return 1
+  }
+  rm -f "$commit_sentinel"
+  git -C "$worktree" commit --no-verify -q -m bypass-commit
+  [[ ! -e "$commit_sentinel" ]] || {
+    echo "FAIL: git commit --no-verify executed the pre-commit hook" >&2
+    return 1
+  }
+
+  git -C "$worktree" init --bare -q "$remote"
+  git -C "$worktree" remote add origin "$remote"
+  if git -C "$worktree" push origin main; then
+    echo "FAIL: pre-push control unexpectedly passed" >&2
+    return 1
+  fi
+  [[ -f "$push_sentinel" ]] || {
+    echo "FAIL: pre-push control did not execute the blocking hook" >&2
+    return 1
+  }
+  rm -f "$push_sentinel"
+  git -C "$worktree" push --no-verify -q origin main
+  [[ ! -e "$push_sentinel" ]] || {
+    echo "FAIL: git push --no-verify executed the pre-push hook" >&2
+    return 1
+  }
+  [[ "$(git -C "$remote" rev-parse refs/heads/main)" = "$(git -C "$worktree" rev-parse HEAD)" ]]
+)
+
 # ----------------------------------------------------------------------------
 
 ALL_TESTS=(
@@ -260,6 +357,7 @@ ALL_TESTS=(
   test_shims_use_hook_impl
   test_shims_no_flock
   test_pre_push_stamp_written_and_consumed
+  test_no_verify_bypasses_pre_commit_and_pre_push
 )
 
 run_all() {

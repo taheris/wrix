@@ -29,6 +29,13 @@ let
   containerScript = path: ''
     ${containerRuntimeEnvironment}run_repo_script ${escapeShellArg path}
   '';
+
+  profileContainerHook =
+    linuxPath: darwinFunction:
+    if pkgs.stdenv.isDarwin then
+      repoScript "tests/sandbox/container-hooks-darwin.sh" darwinFunction
+    else
+      containerScript linuxPath;
 in
 {
   "prek.bundle-contents" = repoScript "tests/profiles/prek-hooks-bundle.sh" "test_bundle_contents";
@@ -39,6 +46,8 @@ in
   "prek.shims-no-flock" = repoScript "tests/profiles/prek-hooks-bundle.sh" "test_shims_no_flock";
   "prek.pre-push-stamp" =
     repoScript "tests/profiles/prek-hooks-bundle.sh" "test_pre_push_stamp_written_and_consumed";
+  "prek.no-verify-bypasses-hooks" =
+    repoScript "tests/profiles/prek-hooks-bundle.sh" "test_no_verify_bypasses_pre_commit_and_pre_push";
   "prek.wrappers-on-devshell-path" =
     repoScript "tests/profiles/mkdevshell-prek.sh" "test_wrappers_exposed_and_on_devshell_path";
   "prek.config-stage-set" = repoScript "tests/prek/wrix-hook-stages.sh" "test_wrix_config_stage_set";
@@ -50,7 +59,9 @@ in
   "prek.skip-if-missing-present" = wholeRepoScript "tests/prek/skip-if-missing-present.sh";
   "prek.skip-if-missing-absent" = wholeRepoScript "tests/prek/skip-if-missing-absent.sh";
   "prek.config-wrapper-contract" = wholeRepoScript "tests/prek/wrix-pre-push-config.sh";
-  "prek.container-pre-commit" = containerScript "tests/sandbox/container-pre-commit.sh";
-  "prek.container-pre-push" = containerScript "tests/sandbox/container-pre-push.sh";
+  "prek.container-pre-commit" =
+    profileContainerHook "tests/sandbox/container-pre-commit.sh" "test_pre_commit_fires_in_darwin_profile_container";
+  "prek.container-pre-push" =
+    profileContainerHook "tests/sandbox/container-pre-push.sh" "test_pre_push_fires_in_darwin_profile_container";
   "prek.ci-only-heavy-checks" = wholeRepoScript "tests/prek/ci-only-heavy-checks.sh";
 }

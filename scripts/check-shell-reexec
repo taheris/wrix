@@ -3,9 +3,8 @@
 # explicitly. The kernel resolves the script's shebang on `exec "$0"`, and
 # `#!/usr/bin/env bash` fails with ENOENT in a real nix-build sandbox
 # (`/usr/bin/env` is not on `sandbox-paths`). Applies repo-wide because
-# any script can end up staged into a nix-build derivation. Caught the
-# hard way by commit 5531020 — see specs/image-builder.md for why the
-# in-container Nix sandbox is disabled (the gap that exposes this).
+# any script can be staged into a nix-build derivation where /usr/bin/env is
+# unavailable.
 #
 # This script's own shebang is fine: it runs in the dev environment, never
 # inside a nix-build derivation.
@@ -18,7 +17,19 @@ set -euo pipefail
 # docs). The whitelist is anchored to `exec` so the filename's `.sh`
 # suffix in the `file:line:` prefix doesn't match \b(bash|sh)\b and
 # accidentally pass the bad pattern through.
-bad=$(grep -HnE '^[^#]*exec[^"]*"\$0"' "$@" | grep -vE 'exec[^"]*\b(bash|sh)\b[^"]*"\$0"' || true)
+candidates=""
+bad=""
+if candidates=$(grep -HnE '^[^#]*exec[^"]*"\$0"' "$@"); then
+    if bad=$(printf '%s\n' "$candidates" | grep -vE 'exec[^"]*\b(bash|sh)\b[^"]*"\$0"'); then
+        :
+    else
+        status=$?
+        [[ "$status" -eq 1 ]] || exit "$status"
+    fi
+else
+    status=$?
+    [[ "$status" -eq 1 ]] || exit "$status"
+fi
 if [[ -n "$bad" ]]; then
     printf '%s\n' "$bad" >&2
     echo "" >&2

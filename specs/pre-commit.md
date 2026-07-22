@@ -148,6 +148,8 @@ See `image-builder.md` § Hook installation for the build-side mechanism (which 
   [system](verify:prek.container-pre-commit)
 - A pre-push hook configured in `.pre-commit-config.yaml` fires when `git push` runs inside a profile container
   [system](verify:prek.container-pre-push)
+- `git commit --no-verify` and `git push --no-verify` bypass otherwise-blocking pre-commit and pre-push hooks served by `wrix.prekHooks`
+  [system](verify:prek.no-verify-bypasses-hooks)
 - Heavy realization checks — those whose input closure includes the full sandbox base image or the full Rust workspace build — are referenced from a CI-only flake output (e.g., `.#test-ci`), not from `flake.nix#checks` which pre-push's `nix flake check` runs
   [check](verify:prek.ci-only-heavy-checks)
 - Full image realization criteria use `test-ci:<app>` targets instead of the generic `verify:` registry; pre-push runs those targets on Linux and reports a policy skip without realizing them on Darwin
