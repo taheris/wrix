@@ -15,20 +15,43 @@ pub enum RequestId {
     String(String),
 }
 
-/// JSON-RPC 2.0 Request
-#[derive(Debug, Clone, Deserialize)]
-pub struct JsonRpcRequest {
-    pub jsonrpc: String,
-    pub id: Option<RequestId>,
-    pub method: String,
+const JSON_RPC_VERSION: &str = "2.0";
+
+/// Supported JSON-RPC wire version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JsonRpcVersion {
+    V2,
+}
+
+impl Serialize for JsonRpcVersion {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(JSON_RPC_VERSION)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct RawJsonRpcRequest {
+    jsonrpc: String,
+    id: Option<RequestId>,
+    method: String,
     #[serde(default)]
-    pub params: Option<Value>,
+    params: Option<Value>,
+}
+
+/// Valid JSON-RPC 2.0 request with a parsed MCP method.
+#[derive(Debug)]
+pub struct JsonRpcRequest {
+    pub id: Option<RequestId>,
+    pub method: McpMethod,
 }
 
 /// JSON-RPC 2.0 Response
 #[derive(Debug, Clone, Serialize)]
 pub struct JsonRpcResponse {
-    pub jsonrpc: String,
+    pub jsonrpc: JsonRpcVersion,
     /// The request ID. Always serialized (as null if unknown) per JSON-RPC 2.0 spec.
     pub id: Option<RequestId>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -47,9 +70,9 @@ pub struct JsonRpcError {
 }
 
 impl JsonRpcResponse {
-    pub fn success(id: Option<RequestId>, result: Value) -> Self {
+    pub const fn success(id: Option<RequestId>, result: Value) -> Self {
         Self {
-            jsonrpc: "2.0".to_string(),
+            jsonrpc: JsonRpcVersion::V2,
             id,
             result: Some(result),
             error: None,
@@ -58,7 +81,7 @@ impl JsonRpcResponse {
 
     pub fn error(id: Option<RequestId>, code: i32, message: impl Into<String>) -> Self {
         Self {
-            jsonrpc: "2.0".to_string(),
+            jsonrpc: JsonRpcVersion::V2,
             id,
             result: None,
             error: Some(JsonRpcError {
@@ -115,10 +138,19 @@ pub struct ToolDefinition {
     pub input_schema: InputSchema,
 }
 
+/// JSON Schema primitive used by MCP tool definitions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SchemaType {
+    Object,
+    String,
+    Number,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct InputSchema {
     #[serde(rename = "type")]
-    pub schema_type: String,
+    pub schema_type: SchemaType,
     pub properties: HashMap<String, PropertyDefinition>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub required: Vec<String>,
@@ -127,7 +159,7 @@ pub struct InputSchema {
 #[derive(Debug, Clone, Serialize)]
 pub struct PropertyDefinition {
     #[serde(rename = "type")]
-    pub prop_type: String,
+    pub prop_type: SchemaType,
     pub description: String,
 }
 
@@ -476,18 +508,25 @@ impl ToolCallParams {
     }
 }
 
-/// MCP tool call result content
+/// MCP content kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ContentType {
+    Text,
+}
+
+/// MCP tool call result content.
 #[derive(Debug, Clone, Serialize)]
 pub struct TextContent {
     #[serde(rename = "type")]
-    pub content_type: String,
+    pub content_type: ContentType,
     pub text: String,
 }
 
 impl TextContent {
     pub fn new(text: impl Into<String>) -> Self {
         Self {
-            content_type: "text".to_string(),
+            content_type: ContentType::Text,
             text: text.into(),
         }
     }
@@ -530,13 +569,13 @@ pub fn get_tool_definitions() -> Vec<ToolDefinition> {
                           operations."
                 .to_string(),
             input_schema: InputSchema {
-                schema_type: "object".to_string(),
+                schema_type: SchemaType::Object,
                 properties: {
                     let mut props = HashMap::new();
                     props.insert(
                         "command".to_string(),
                         PropertyDefinition {
-                            prop_type: "string".to_string(),
+                            prop_type: SchemaType::String,
                             description:
                                 "Command to run in the pane (e.g., 'RUST_LOG=debug cargo run')"
                                     .to_string(),
@@ -545,7 +584,7 @@ pub fn get_tool_definitions() -> Vec<ToolDefinition> {
                     props.insert(
                         "name".to_string(),
                         PropertyDefinition {
-                            prop_type: "string".to_string(),
+                            prop_type: SchemaType::String,
                             description: "Optional human-readable name for the pane".to_string(),
                         },
                     );
@@ -560,13 +599,13 @@ pub fn get_tool_definitions() -> Vec<ToolDefinition> {
                           additional commands, or sending signals (e.g., Ctrl-C as '^C')."
                 .to_string(),
             input_schema: InputSchema {
-                schema_type: "object".to_string(),
+                schema_type: SchemaType::Object,
                 properties: {
                     let mut props = HashMap::new();
                     props.insert(
                         "pane_id".to_string(),
                         PropertyDefinition {
-                            prop_type: "string".to_string(),
+                            prop_type: SchemaType::String,
                             description: "Target pane ID from tmux_create_pane or tmux_list_panes"
                                 .to_string(),
                         },
@@ -574,7 +613,7 @@ pub fn get_tool_definitions() -> Vec<ToolDefinition> {
                     props.insert(
                         "keys".to_string(),
                         PropertyDefinition {
-                            prop_type: "string".to_string(),
+                            prop_type: SchemaType::String,
                             description:
                                 "Keystrokes to send. Use '^C' for Ctrl-C, 'Enter' for newline."
                                     .to_string(),
@@ -591,20 +630,20 @@ pub fn get_tool_definitions() -> Vec<ToolDefinition> {
                           output, or error messages. Works on both running and exited panes."
                 .to_string(),
             input_schema: InputSchema {
-                schema_type: "object".to_string(),
+                schema_type: SchemaType::Object,
                 properties: {
                     let mut props = HashMap::new();
                     props.insert(
                         "pane_id".to_string(),
                         PropertyDefinition {
-                            prop_type: "string".to_string(),
+                            prop_type: SchemaType::String,
                             description: "Target pane ID".to_string(),
                         },
                     );
                     props.insert(
                         "lines".to_string(),
                         PropertyDefinition {
-                            prop_type: "number".to_string(),
+                            prop_type: SchemaType::Number,
                             description: "Number of lines to capture (default: 100, max: 1000)"
                                 .to_string(),
                         },
@@ -620,13 +659,13 @@ pub fn get_tool_definitions() -> Vec<ToolDefinition> {
                           debugging."
                 .to_string(),
             input_schema: InputSchema {
-                schema_type: "object".to_string(),
+                schema_type: SchemaType::Object,
                 properties: {
                     let mut props = HashMap::new();
                     props.insert(
                         "pane_id".to_string(),
                         PropertyDefinition {
-                            prop_type: "string".to_string(),
+                            prop_type: SchemaType::String,
                             description: "Target pane ID".to_string(),
                         },
                     );
@@ -641,7 +680,7 @@ pub fn get_tool_definitions() -> Vec<ToolDefinition> {
                           exited), and running commands."
                 .to_string(),
             input_schema: InputSchema {
-                schema_type: "object".to_string(),
+                schema_type: SchemaType::Object,
                 properties: HashMap::new(),
                 required: vec![],
             },
@@ -662,20 +701,16 @@ pub enum McpMethod {
 }
 
 impl McpMethod {
-    /// Parse a JSON-RPC request into a typed MCP method
-    pub fn from_request(request: &JsonRpcRequest) -> Result<Self, ToolCallParseError> {
-        match request.method.as_str() {
-            "initialize" => Ok(McpMethod::Initialize),
-            "notifications/initialized" | "initialized" => Ok(McpMethod::Initialized),
-            "tools/list" => Ok(McpMethod::ToolsList),
+    fn from_wire(method: String, params: Option<&Value>) -> Result<Self, ToolCallParseError> {
+        match method.as_str() {
+            "initialize" => Ok(Self::Initialize),
+            "notifications/initialized" | "initialized" => Ok(Self::Initialized),
+            "tools/list" => Ok(Self::ToolsList),
             "tools/call" => {
-                let params = request
-                    .params
-                    .as_ref()
-                    .ok_or(ToolCallParseError::MissingParams)?;
-                Ok(McpMethod::ToolsCall(ToolCallParams::from_value(params)?))
+                let params = params.ok_or(ToolCallParseError::MissingParams)?;
+                Ok(Self::ToolsCall(ToolCallParams::from_value(params)?))
             }
-            other => Ok(McpMethod::Unknown(other.to_string())),
+            _ => Ok(Self::Unknown(method)),
         }
     }
 }
@@ -707,7 +742,6 @@ impl McpHandler {
 
     /// Handle initialized notification (no response needed)
     pub const fn handle_initialized(&mut self) {
-        // Mark as fully initialized, ready for tool calls
         self.initialized = true;
     }
 
@@ -739,25 +773,37 @@ impl Default for McpHandler {
     }
 }
 
-/// Parse a line of input as a JSON-RPC request
+/// Parse a line into a version-checked request with typed MCP parameters.
 pub fn parse_request(line: &str) -> Result<JsonRpcRequest, Box<JsonRpcResponse>> {
-    let request: JsonRpcRequest = serde_json::from_str(line).map_err(|e| {
+    let request: RawJsonRpcRequest = serde_json::from_str(line).map_err(|error| {
         Box::new(JsonRpcResponse::error(
             None,
             PARSE_ERROR,
-            format!("Parse error: {e}"),
+            format!("Parse error: {error}"),
         ))
     })?;
 
-    if request.jsonrpc == "2.0" {
-        Ok(request)
-    } else {
-        Err(Box::new(JsonRpcResponse::error(
+    if request.jsonrpc != JSON_RPC_VERSION {
+        return Err(Box::new(JsonRpcResponse::error(
             request.id,
             INVALID_REQUEST,
             "Invalid JSON-RPC version. Expected '2.0'.",
-        )))
+        )));
     }
+
+    let method =
+        McpMethod::from_wire(request.method, request.params.as_ref()).map_err(|error| {
+            Box::new(JsonRpcResponse::error(
+                request.id.clone(),
+                INVALID_PARAMS,
+                error.to_string(),
+            ))
+        })?;
+
+    Ok(JsonRpcRequest {
+        id: request.id,
+        method,
+    })
 }
 
 /// Serialize a response to a JSON string (single line)
@@ -775,23 +821,11 @@ pub fn serialize_response(response: &JsonRpcResponse) -> String {
 mod tests {
     use super::*;
 
-    struct HandlerPathExecutor;
-
-    impl crate::tmux::CommandExecutor for HandlerPathExecutor {
-        fn execute(&self, _args: &[&str]) -> std::io::Result<std::process::Output> {
-            Ok(std::process::Output {
-                status: std::process::ExitStatus::default(),
-                stdout: Vec::new(),
-                stderr: Vec::new(),
-            })
-        }
-    }
-
-    fn handler_path_state() -> crate::AppState<HandlerPathExecutor> {
+    fn handler_path_state() -> crate::AppState {
         crate::AppState {
             mcp_handler: McpHandler::new(),
-            pane_manager: crate::pane::PaneManager::new(),
-            tmux_session: crate::tmux::TmuxSession::with_executor(HandlerPathExecutor),
+            pane_manager: crate::pane::Manager::new(),
+            tmux_session: crate::tmux::TmuxSession::new(),
             audit: crate::audit::MaybeAuditLogger::disabled(),
         }
     }
@@ -812,9 +846,8 @@ mod tests {
         let json = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#;
         let request = parse_request(json).unwrap();
 
-        assert_eq!(request.jsonrpc, "2.0");
         assert_eq!(request.id, Some(RequestId::Number(1)));
-        assert_eq!(request.method, "initialize");
+        assert!(matches!(request.method, McpMethod::Initialize));
     }
 
     #[test]
@@ -841,9 +874,7 @@ mod tests {
         }"#;
         let request = parse_request(json).unwrap();
 
-        assert_eq!(request.method, "tools/call");
-        let method = McpMethod::from_request(&request).unwrap();
-        match method {
+        match request.method {
             McpMethod::ToolsCall(params) => match params.call {
                 ToolCall::CreatePane(args) => {
                     assert_eq!(args.command, "cargo run");
@@ -871,8 +902,7 @@ mod tests {
         }"#;
         let request = parse_request(json).unwrap();
 
-        let method = McpMethod::from_request(&request).unwrap();
-        match method {
+        match request.method {
             McpMethod::ToolsCall(params) => match params.call {
                 ToolCall::Invalid(ToolInputError::InvalidPaneId { source }) => {
                     assert_eq!(
@@ -902,8 +932,7 @@ mod tests {
         }"#;
         let request = parse_request(json).unwrap();
 
-        let method = McpMethod::from_request(&request).unwrap();
-        match method {
+        match request.method {
             McpMethod::ToolsCall(params) => match params.call {
                 ToolCall::CapturePane(args) => assert_eq!(args.lines.as_i32(), 1000),
                 _ => panic!("Expected capture_pane call"),
@@ -927,7 +956,17 @@ mod tests {
         let request = parse_request(json).unwrap();
 
         assert!(request.id.is_none());
-        assert_eq!(request.method, "notifications/initialized");
+        assert!(matches!(request.method, McpMethod::Initialized));
+    }
+
+    #[test]
+    fn test_parse_rejects_unsupported_json_rpc_version() {
+        let json = r#"{"jsonrpc":"1.0","id":7,"method":"initialize"}"#;
+
+        let response = parse_request(json).unwrap_err();
+
+        assert_eq!(response.id, Some(RequestId::Number(7)));
+        assert_eq!(response.error.unwrap().code, INVALID_REQUEST);
     }
 
     // --- Response Serialization Tests ---
@@ -997,7 +1036,14 @@ mod tests {
             .find(|t| t.name == ToolName::CreatePane)
             .unwrap();
 
-        assert_eq!(create_pane.input_schema.schema_type, "object");
+        assert_eq!(create_pane.input_schema.schema_type, SchemaType::Object);
+        assert_eq!(
+            create_pane.input_schema.properties["command"].prop_type,
+            SchemaType::String
+        );
+        let schema = serde_json::to_value(&create_pane.input_schema).unwrap();
+        assert_eq!(schema["type"], "object");
+        assert_eq!(schema["properties"]["command"]["type"], "string");
         assert!(create_pane.input_schema.properties.contains_key("command"));
         assert!(create_pane.input_schema.properties.contains_key("name"));
         assert!(
@@ -1029,60 +1075,32 @@ mod tests {
     // --- MCP Method Parsing Tests ---
 
     #[test]
-    fn test_method_from_request_initialize() {
-        let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            id: Some(RequestId::Number(1)),
-            method: "initialize".to_string(),
-            params: None,
-        };
-
-        match McpMethod::from_request(&request).unwrap() {
-            McpMethod::Initialize => {}
-            _ => panic!("Expected Initialize"),
-        }
+    fn test_method_from_wire_initialize() {
+        assert!(matches!(
+            McpMethod::from_wire("initialize".to_string(), None).unwrap(),
+            McpMethod::Initialize
+        ));
     }
 
     #[test]
-    fn test_method_from_request_tools_list() {
-        let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            id: Some(RequestId::Number(1)),
-            method: "tools/list".to_string(),
-            params: None,
-        };
-
-        match McpMethod::from_request(&request).unwrap() {
-            McpMethod::ToolsList => {}
-            _ => panic!("Expected ToolsList"),
-        }
+    fn test_method_from_wire_tools_list() {
+        assert!(matches!(
+            McpMethod::from_wire("tools/list".to_string(), None).unwrap(),
+            McpMethod::ToolsList
+        ));
     }
 
     #[test]
-    fn test_method_from_request_unknown() {
-        let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            id: Some(RequestId::Number(1)),
-            method: "some/unknown/method".to_string(),
-            params: None,
-        };
-
-        match McpMethod::from_request(&request).unwrap() {
-            McpMethod::Unknown(m) => assert_eq!(m, "some/unknown/method"),
+    fn test_method_from_wire_unknown() {
+        match McpMethod::from_wire("some/unknown/method".to_string(), None).unwrap() {
+            McpMethod::Unknown(method) => assert_eq!(method, "some/unknown/method"),
             _ => panic!("Expected Unknown"),
         }
     }
 
     #[test]
     fn test_tools_call_missing_params() {
-        let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            id: Some(RequestId::Number(1)),
-            method: "tools/call".to_string(),
-            params: None,
-        };
-
-        let result = McpMethod::from_request(&request);
+        let result = McpMethod::from_wire("tools/call".to_string(), None);
         assert!(result.is_err());
     }
 
@@ -1212,10 +1230,9 @@ mod tests {
         let request_json = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{}}}"#;
 
         let request = parse_request(request_json).unwrap();
-        let method = McpMethod::from_request(&request).unwrap();
 
         let mut handler = McpHandler::new();
-        match method {
+        match request.method {
             McpMethod::Initialize => {
                 let result = handler.handle_initialize();
                 let response =

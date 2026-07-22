@@ -141,9 +141,9 @@ start_mcp_server() {
 
     # Start MCP server with optional environment variables
     if [[ ${#env_vars[@]} -gt 0 ]]; then
-        env "${env_vars[@]}" "$mcp_bin" < "$MCP_FIFO_IN" > "$MCP_FIFO_OUT" 2>/dev/null &
+        env "${env_vars[@]}" "$mcp_bin" < "$MCP_FIFO_IN" > "$MCP_FIFO_OUT" &
     else
-        "$mcp_bin" < "$MCP_FIFO_IN" > "$MCP_FIFO_OUT" 2>/dev/null &
+        "$mcp_bin" < "$MCP_FIFO_IN" > "$MCP_FIFO_OUT" &
     fi
     MCP_PID=$!
 
@@ -301,7 +301,7 @@ mcp_list_panes() {
 json_get() {
     local json="$1"
     local path="$2"
-    echo "$json" | jq -r "$path" 2>/dev/null
+    jq -r "$path" <<<"$json"
 }
 
 # Check if response has an error

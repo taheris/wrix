@@ -140,15 +140,15 @@ impl PaneState {
     }
 }
 
-/// Manages all pane state for the MCP server.
+/// Tracks pane state for one MCP server.
 #[derive(Debug)]
-pub struct PaneManager {
+pub struct Manager {
     panes: HashMap<PaneId, PaneState>,
     next_id: u64,
 }
 
-impl PaneManager {
-    /// Create a new `PaneManager`.
+impl Manager {
+    /// Create an empty manager.
     pub fn new() -> Self {
         Self {
             panes: HashMap::new(),
@@ -233,7 +233,7 @@ impl PaneManager {
     }
 }
 
-impl Default for PaneManager {
+impl Default for Manager {
     fn default() -> Self {
         Self::new()
     }
@@ -347,14 +347,14 @@ mod tests {
 
     #[test]
     fn test_manager_generate_id_format() {
-        let mut manager = PaneManager::new();
+        let mut manager = Manager::new();
         let id1 = manager.generate_id().unwrap();
         assert!(id1.as_str().starts_with("debug-"));
     }
 
     #[test]
     fn test_manager_generate_id_sequential() {
-        let mut manager = PaneManager::new();
+        let mut manager = Manager::new();
 
         let id1 = manager.generate_id().unwrap();
         let id2 = manager.generate_id().unwrap();
@@ -367,7 +367,7 @@ mod tests {
 
     #[test]
     fn test_manager_generate_id_unique() {
-        let mut manager = PaneManager::new();
+        let mut manager = Manager::new();
         let mut ids = std::collections::HashSet::new();
 
         for _ in 0..100 {
@@ -378,7 +378,7 @@ mod tests {
 
     #[test]
     fn test_manager_create_pane_without_name() {
-        let mut manager = PaneManager::new();
+        let mut manager = Manager::new();
         let id = manager.create_pane("cargo run", None).unwrap();
 
         assert_eq!(id.as_str(), "debug-1");
@@ -389,7 +389,7 @@ mod tests {
 
     #[test]
     fn test_manager_create_pane_with_name() {
-        let mut manager = PaneManager::new();
+        let mut manager = Manager::new();
         let id = manager.create_pane("cargo run", Some("server")).unwrap();
 
         assert_eq!(id.as_str(), "debug-1");
@@ -400,7 +400,7 @@ mod tests {
 
     #[test]
     fn test_manager_create_multiple_panes() {
-        let mut manager = PaneManager::new();
+        let mut manager = Manager::new();
 
         let id1 = manager.create_pane("cargo run", Some("server")).unwrap();
         let id2 = manager.create_pane("bash", Some("client")).unwrap();
@@ -414,7 +414,7 @@ mod tests {
 
     #[test]
     fn test_manager_get_existing_pane() {
-        let mut manager = PaneManager::new();
+        let mut manager = Manager::new();
         let id = manager.create_pane("cargo run", Some("server")).unwrap();
 
         let pane = manager.get(&id);
@@ -424,14 +424,14 @@ mod tests {
 
     #[test]
     fn test_manager_get_nonexistent_pane() {
-        let manager = PaneManager::new();
+        let manager = Manager::new();
         let pane = manager.get(&pane_id("debug-999"));
         assert!(pane.is_none());
     }
 
     #[test]
     fn test_manager_get_mut() {
-        let mut manager = PaneManager::new();
+        let mut manager = Manager::new();
         let id = manager.create_pane("cargo run", Some("server")).unwrap();
 
         let pane = manager.get_mut(&id).unwrap();
@@ -442,7 +442,7 @@ mod tests {
 
     #[test]
     fn test_manager_contains() {
-        let mut manager = PaneManager::new();
+        let mut manager = Manager::new();
         let id = manager.create_pane("cargo run", None).unwrap();
 
         assert!(manager.contains(&id));
@@ -451,7 +451,7 @@ mod tests {
 
     #[test]
     fn test_manager_remove_existing_pane() {
-        let mut manager = PaneManager::new();
+        let mut manager = Manager::new();
         let id = manager.create_pane("cargo run", Some("server")).unwrap();
 
         assert!(manager.contains(&id));
@@ -463,14 +463,14 @@ mod tests {
 
     #[test]
     fn test_manager_remove_nonexistent_pane() {
-        let mut manager = PaneManager::new();
+        let mut manager = Manager::new();
         let removed = manager.remove(&pane_id("debug-999"));
         assert!(removed.is_none());
     }
 
     #[test]
     fn test_manager_remove_does_not_affect_other_panes() {
-        let mut manager = PaneManager::new();
+        let mut manager = Manager::new();
         let id1 = manager.create_pane("cargo run", Some("server")).unwrap();
         let id2 = manager.create_pane("bash", Some("client")).unwrap();
 
@@ -483,7 +483,7 @@ mod tests {
 
     #[test]
     fn test_manager_update_status_existing() {
-        let mut manager = PaneManager::new();
+        let mut manager = Manager::new();
         let id = manager.create_pane("cargo run", None).unwrap();
 
         assert!(manager.get(&id).unwrap().is_running());
@@ -494,14 +494,14 @@ mod tests {
 
     #[test]
     fn test_manager_update_status_nonexistent() {
-        let mut manager = PaneManager::new();
+        let mut manager = Manager::new();
         let result = manager.update_status(&pane_id("debug-999"), PaneStatus::Exited);
         assert!(!result);
     }
 
     #[test]
     fn test_manager_iter() {
-        let mut manager = PaneManager::new();
+        let mut manager = Manager::new();
         manager.create_pane("cargo run", Some("server")).unwrap();
         manager.create_pane("bash", Some("client")).unwrap();
 
@@ -510,7 +510,7 @@ mod tests {
 
     #[test]
     fn test_manager_pane_ids() {
-        let mut manager = PaneManager::new();
+        let mut manager = Manager::new();
         let id1 = manager.create_pane("cargo run", None).unwrap();
         let id2 = manager.create_pane("bash", None).unwrap();
 
@@ -522,7 +522,7 @@ mod tests {
 
     #[test]
     fn test_manager_len() {
-        let mut manager = PaneManager::new();
+        let mut manager = Manager::new();
         assert_eq!(manager.len(), 0);
 
         manager.create_pane("cargo run", None).unwrap();
@@ -534,7 +534,7 @@ mod tests {
 
     #[test]
     fn test_manager_is_empty() {
-        let mut manager = PaneManager::new();
+        let mut manager = Manager::new();
         assert!(manager.is_empty());
 
         let id = manager.create_pane("cargo run", None).unwrap();
@@ -546,7 +546,7 @@ mod tests {
 
     #[test]
     fn test_full_pane_lifecycle() {
-        let mut manager = PaneManager::new();
+        let mut manager = Manager::new();
 
         let id = manager
             .create_pane("RUST_LOG=debug cargo run", Some("server"))
@@ -568,7 +568,7 @@ mod tests {
 
     #[test]
     fn test_multiple_panes_independent_status() {
-        let mut manager = PaneManager::new();
+        let mut manager = Manager::new();
 
         let id1 = manager.create_pane("server", Some("server")).unwrap();
         let id2 = manager.create_pane("client", Some("client")).unwrap();
@@ -584,7 +584,7 @@ mod tests {
 
     #[test]
     fn test_manager_default() {
-        let manager = PaneManager::default();
+        let manager = Manager::default();
         assert!(manager.is_empty());
     }
 }

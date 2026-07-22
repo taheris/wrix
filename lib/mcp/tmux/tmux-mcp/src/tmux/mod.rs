@@ -63,7 +63,7 @@ impl SocketPath {
     }
 }
 
-/// Trait for executing tmux commands, allowing for mocking in tests.
+/// Executes a tmux subcommand and returns its process output.
 pub trait CommandExecutor: Send + Sync {
     fn execute(&self, args: &[&str]) -> io::Result<Output>;
 }

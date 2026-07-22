@@ -7,11 +7,11 @@ mod tmux;
 
 use audit::MaybeAuditLogger;
 use mcp::{
-    CapturePaneArgs, CreatePaneArgs, INTERNAL_ERROR, INVALID_PARAMS, JsonRpcResponse, KillPaneArgs,
+    CapturePaneArgs, CreatePaneArgs, INTERNAL_ERROR, JsonRpcResponse, KillPaneArgs,
     METHOD_NOT_FOUND, McpHandler, McpMethod, RequestId, SendKeysArgs, ToolCall, ToolCallParams,
     ToolCallResult,
 };
-use pane::{PaneManager, PaneStatus};
+use pane::{Manager, PaneStatus};
 use serde::Serialize;
 use std::io::{self, BufRead, Write};
 use std::sync::{
@@ -29,7 +29,7 @@ struct AppState<E: CommandExecutor = RealExecutor> {
     /// MCP protocol handler
     mcp_handler: McpHandler,
     /// Pane state manager
-    pane_manager: PaneManager,
+    pane_manager: Manager,
     /// Tmux session manager
     tmux_session: TmuxSession<E>,
     /// Optional audit logger
@@ -40,7 +40,7 @@ impl AppState<RealExecutor> {
     fn new() -> Self {
         Self {
             mcp_handler: McpHandler::new(),
-            pane_manager: PaneManager::new(),
+            pane_manager: Manager::new(),
             tmux_session: TmuxSession::new(),
             audit: MaybeAuditLogger::from_env(),
         }
@@ -292,59 +292,51 @@ fn handle_list_panes<E: CommandExecutor>(state: &mut AppState<E>) -> ToolCallRes
     }
 }
 
-/// Process a single JSON-RPC request and return a response (if needed)
-fn process_request<E: CommandExecutor>(
+fn dispatch_method<E: CommandExecutor>(
     state: &mut AppState<E>,
-    line: &str,
+    id: Option<RequestId>,
+    method: McpMethod,
 ) -> Option<JsonRpcResponse> {
-    // Parse the request
-    let request = match mcp::parse_request(line) {
-        Ok(req) => req,
-        Err(err_response) => return Some(*err_response),
-    };
-
-    // Parse the method
-    let method = match McpMethod::from_request(&request) {
-        Ok(m) => m,
-        Err(e) => {
-            return Some(JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                e.to_string(),
-            ));
-        }
-    };
-
-    // Validate request against current state
-    if let Err(e) = state.mcp_handler.validate_request(&method) {
-        return Some(JsonRpcResponse::error(request.id, INTERNAL_ERROR, e));
-    }
-
-    // Handle the method
     match method {
         McpMethod::Initialize => {
             let result = state.mcp_handler.handle_initialize();
-            Some(json_success(request.id, result))
+            Some(json_success(id, result))
         }
         McpMethod::Initialized => {
             state.mcp_handler.handle_initialized();
-            // Notification - no response
             None
         }
         McpMethod::ToolsList => {
             let result = McpHandler::handle_tools_list();
-            Some(json_success(request.id, result))
+            Some(json_success(id, result))
         }
         McpMethod::ToolsCall(params) => {
             let result = handle_tool_call(state, &params);
-            Some(json_success(request.id, result))
+            Some(json_success(id, result))
         }
         McpMethod::Unknown(name) => Some(JsonRpcResponse::error(
-            request.id,
+            id,
             METHOD_NOT_FOUND,
-            format!("Unknown method: {}", name),
+            format!("Unknown method: {name}"),
         )),
     }
+}
+
+/// Process one JSON-RPC request into an optional response.
+fn process_request<E: CommandExecutor>(
+    state: &mut AppState<E>,
+    line: &str,
+) -> Option<JsonRpcResponse> {
+    let request = match mcp::parse_request(line) {
+        Ok(request) => request,
+        Err(response) => return Some(*response),
+    };
+
+    if let Err(error) = state.mcp_handler.validate_request(&request.method) {
+        return Some(JsonRpcResponse::error(request.id, INTERNAL_ERROR, error));
+    }
+
+    dispatch_method(state, request.id, request.method)
 }
 
 /// Set up signal handlers for graceful shutdown
@@ -439,11 +431,24 @@ mod tests {
         PaneId::parse(value).unwrap()
     }
 
-    // Mock executor for tests
-    struct MockExecutor;
+    #[derive(Default)]
+    struct MockExecutor {
+        calls: std::sync::Mutex<Vec<Vec<String>>>,
+    }
+
+    impl MockExecutor {
+        fn calls(&self) -> Vec<Vec<String>> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
 
     impl CommandExecutor for MockExecutor {
         fn execute(&self, args: &[&str]) -> std::io::Result<std::process::Output> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(args.iter().map(std::string::ToString::to_string).collect());
+
             let stdout = match args.first() {
                 Some(&"display-message" | &"list-windows") => "debug-1|12345|0\n",
                 Some(&"capture-pane") => "line 1\nline 2\nline 3\n",
@@ -458,12 +463,11 @@ mod tests {
         }
     }
 
-    // Helper to create test state with mock executor
     fn test_state() -> AppState<MockExecutor> {
         AppState {
             mcp_handler: McpHandler::new(),
-            pane_manager: PaneManager::new(),
-            tmux_session: TmuxSession::with_executor(MockExecutor),
+            pane_manager: Manager::new(),
+            tmux_session: TmuxSession::with_executor(MockExecutor::default()),
             audit: MaybeAuditLogger::disabled(),
         }
     }
@@ -497,6 +501,22 @@ mod tests {
 
     fn pane_id_value(value: &str) -> PaneId {
         PaneId::parse(value).unwrap()
+    }
+
+    #[test]
+    fn mock_executor_preserves_command_output_contract() {
+        let executor = MockExecutor::default();
+        let args = ["capture-pane", "-t", "debug-1:debug-1"];
+
+        let output = executor.execute(&args).unwrap();
+
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"line 1\nline 2\nline 3\n");
+        assert!(output.stderr.is_empty());
+        assert_eq!(
+            executor.calls(),
+            vec![args.map(std::string::ToString::to_string).to_vec()]
+        );
     }
 
     // --- Initialize/Protocol Tests ---

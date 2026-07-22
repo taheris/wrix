@@ -97,7 +97,7 @@ main() {
         }
 
         status=$(echo "$pane_data" | jq -r '.status')
-        ((attempts++)) || true
+        attempts=$((attempts + 1))
     done
 
     assert_eq "exited" "$status" "Pane status should be 'exited' after process terminates"
@@ -145,7 +145,7 @@ main() {
         }
 
         status=$(echo "$pane_data" | jq -r '.status')
-        ((attempts++)) || true
+        attempts=$((attempts + 1))
     done
 
     assert_eq "exited" "$status" "Quick-exit pane status should be 'exited'"
