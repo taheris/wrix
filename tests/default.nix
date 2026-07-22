@@ -662,7 +662,7 @@ in
     };
 
     downstream-change-leaf-only = {
-      meta.description = "Verify a leaf change leaves every tier-0, tier-1, and tier-2 layer blob byte-identical (Linux only)";
+      meta.description = "Verify a leaf change leaves every tier-0, tier-1, and tier-2 layer blob byte-identical.";
       type = "app";
       program = "${sandboxImageChecks.downstreamChangeLeafOnlyTest}/bin/test-downstream-change-leaf-only";
     };
@@ -674,7 +674,7 @@ in
     };
 
     agent-tier-isolated = {
-      meta.description = "Verify the agent runtime rides its own tier; an agent-version bump leaves tier-0 and tier-1 blobs byte-identical (Linux only)";
+      meta.description = "Verify the agent runtime rides its own tier while lower-tier blobs stay byte-identical.";
       type = "app";
       program = "${sandboxImageChecks.agentTierIsolatedTest}/bin/test-agent-tier-isolated";
     };
@@ -698,7 +698,7 @@ in
     };
 
     agent-pkg-threaded = {
-      meta.description = "Verify agentPkg is threaded into the selected agent image closure";
+      meta.description = "Verify agentPkg is owned by the selected agent image tier.";
       type = "app";
       program = "${sandboxImageChecks.agentPkgThreadedTest}/bin/test-agent-pkg-threaded";
     };
@@ -716,13 +716,13 @@ in
     };
 
     image-nix-db-consistent = {
-      meta.description = "Verify the baked image's Nix DB registers its full on-disk store with no orphan (Linux only)";
+      meta.description = "Verify the baked image's Nix DB registers its full on-disk store with no orphan.";
       type = "app";
       program = "${sandboxImageChecks.imageNixDbConsistentTest}/bin/test-image-nix-db-consistent";
     };
 
     image-nix-db-no-dangling = {
-      meta.description = "Verify the baked image's Nix DB registers no dangling (registered-but-absent) path (Linux only)";
+      meta.description = "Verify the baked image's Nix DB registers no dangling path.";
       type = "app";
       program = "${sandboxImageChecks.imageNixDbNoDanglingTest}/bin/test-image-nix-db-no-dangling";
     };
