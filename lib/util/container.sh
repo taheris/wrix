@@ -61,11 +61,25 @@ cr_exists() {
   esac
 }
 
+_cr_apple_container_state() {
+  local fallback="$1"
+  jq -r --arg fallback "$fallback" '
+    .[0] as $container
+    | (
+        if ($container.status | type) == "object" then
+          $container.status.state
+        else
+          $container.state // $container.status
+        end
+      ) // $fallback
+  '
+}
+
 cr_is_running() {
   case "$CR" in
     container)
       local state
-      state=$(container inspect "$1" 2>/dev/null | jq -r '.[0] | .state // .status // empty') || return 1
+      state=$(container inspect "$1" 2>/dev/null | _cr_apple_container_state "") || return 1
       [[ "$state" == "running" ]]
       ;;
     podman)
@@ -76,7 +90,7 @@ cr_is_running() {
 
 cr_status() {
   case "$CR" in
-    container) container inspect "$1" 2>/dev/null | jq -r '.[0] | .state // .status // "not found"' ;;
+    container) container inspect "$1" 2>/dev/null | _cr_apple_container_state "not found" ;;
     podman) podman inspect --format '{{.State.Status}}' "$1" 2>/dev/null || echo "not found" ;;
   esac
 }

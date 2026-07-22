@@ -11,6 +11,22 @@ let
 
 in
 {
+  container-runtime-state =
+    runCommandLocal "test-container-runtime-state"
+      {
+        nativeBuildInputs = [
+          pkgs.bash
+          pkgs.jq
+        ];
+      }
+      ''
+        set -euo pipefail
+
+        CONTAINER_UTIL="${../../lib/util/container.sh}" \
+          bash "${../util/container-status.sh}"
+        mkdir "$out"
+      '';
+
   # Security test: expand_path only expands safe variables
   # This is a positive security finding (wx-560) - the function prevents
   # command injection by only expanding ~, $HOME, and $USER.
