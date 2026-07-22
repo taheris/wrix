@@ -97,9 +97,22 @@ let
         container_name_exists "$CONTAINER_NAME"
       }
 
+      container_state_from_json() {
+        "$WRIX_BUILDER_JQ" -er '
+          ((if type == "array" then .[0] else . end) // {}) as $container
+          | if ($container.status | type) == "object" then
+              $container.status.state
+            else
+              $container.state // $container.status
+            end
+          | strings
+          | select(length > 0)
+        '
+      }
+
       container_state() {
         local name="$1"
-        container inspect "$name" 2>/dev/null | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4
+        container inspect "$name" 2>/dev/null | container_state_from_json
       }
 
       cleanup_container() {
@@ -547,7 +560,7 @@ let
           exit 1
         fi
 
-        state=$(printf '%s\n' "$output" | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4)
+        state=$(printf '%s\n' "$output" | container_state_from_json)
         if [[ "$state" != "running" ]]; then
           echo "Error: Builder container is not running (state: $state)"
           echo "Run 'wrix-builder start' first"

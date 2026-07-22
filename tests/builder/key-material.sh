@@ -297,7 +297,15 @@ JSON
       exit 64
     fi
     if status="$(container_status "$2")"; then
-      printf '{"status":"%s"}\n' "$status"
+      cat <<JSON
+[
+  {
+    "status" : {
+      "state" : "$status"
+    }
+  }
+]
+JSON
     else
       printf '[]\n'
     fi
@@ -485,6 +493,16 @@ fake_write_image() {
   printf '%s\n%s\n%s\n%s\n' "$ref" "$digest" "$managed" "$kind" >"$path"
 }
 
+run_fake_container() {
+  local test_root="$1"
+
+  shift
+  WRIX_BUILDER_FAKE_STATE="$test_root/state" \
+    WRIX_BUILDER_FAKE_LOG="$test_root/container.log" \
+    WRIX_BUILDER_FAKE_TAR_ROOT="$test_root/tar-root" \
+    "$test_root/bin/container" "$@"
+}
+
 run_builder() {
   local test_root="$1"
   local builder
@@ -564,6 +582,28 @@ assert_file_lacks() {
   if grep -Fq -- "$unexpected" "$path"; then
     fail "$message"
   fi
+}
+
+test_fake_container_inspect_matches_apple_shape() {
+  local inspect_output
+  local test_root="$TEST_TMP/inspect-contract"
+
+  require_command jq
+  prepare_builder_fixture "$test_root"
+
+  run_fake_container "$test_root" run --name wrix-builder fake-image >/dev/null
+  inspect_output="$(run_fake_container "$test_root" inspect wrix-builder)"
+
+  if ! printf '%s\n' "$inspect_output" | jq -e '
+    type == "array" and
+    length == 1 and
+    (.[0].status | type == "object") and
+    .[0].status.state == "running"
+  ' >/dev/null; then
+    fail "fake container inspect output does not match the Apple status shape"
+  fi
+  [[ "$inspect_output" == *$'\n'* ]] \
+    || fail "fake container inspect output is not pretty-printed like Apple container"
 }
 
 test_generates_per_user_ed25519_material() {
@@ -716,6 +756,7 @@ test_preserves_existing_private_keys() {
   local first_client_key
   local second_host_key
   local second_client_key
+  local second_start_output
 
   require_command ssh-keygen
   require_command base64
@@ -725,6 +766,10 @@ test_preserves_existing_private_keys() {
   run_builder "$test_root" start
   first_host_key="$(cat "$keys_dir/host_ed25519")"
   first_client_key="$(cat "$keys_dir/client_ed25519")"
+
+  second_start_output="$(run_builder "$test_root" start)"
+  [[ "$second_start_output" == *"Builder container is already running"* ]] \
+    || fail "repeated start did not parse the running Apple container state"
 
   run_builder "$test_root" stop
   run_builder "$test_root" start
@@ -751,6 +796,7 @@ main() {
     return 0
   fi
 
+  run_one test_fake_container_inspect_matches_apple_shape
   run_one test_generates_per_user_ed25519_material
   run_one test_loads_image_through_source_kind_contract
   run_one test_builder_cleanup_is_wrix_scoped

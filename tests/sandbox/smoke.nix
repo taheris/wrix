@@ -11,6 +11,7 @@
 let
   inherit (pkgs)
     bash
+    jq
     runCommandLocal
     writeShellApplication
     writeShellScriptBin
@@ -344,12 +345,14 @@ in
           pkgs.coreutils
           pkgs.gnugrep
           pkgs.gnutar
+          jq
           pkgs.openssh
         ];
       }
       ''
         echo "Checking builder key structure..."
         for test_name in \
+          test_fake_container_inspect_matches_apple_shape \
           test_generates_per_user_ed25519_material \
           test_builder_cleanup_is_wrix_scoped \
           test_setup_routes_parses_spaced_apple_network_json \
