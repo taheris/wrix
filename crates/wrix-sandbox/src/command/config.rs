@@ -1,7 +1,7 @@
-use std::{collections::BTreeMap, fs, io, path::Path};
+use std::{collections::BTreeMap, fmt, fs, io, path::Path};
 
 use displaydoc::Display;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer, de};
 use serde_json::Value;
 use thiserror::Error;
 
@@ -119,6 +119,45 @@ pub struct Resources {
 #[derive(Clone, Debug)]
 pub struct Security {
     pub deploy_key: Option<String>,
+    pub runtime_secrets: BTreeMap<EnvName, RuntimeSecretPolicy>,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct EnvName(String);
+
+impl EnvName {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for EnvName {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for EnvName {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let name = String::deserialize(deserializer)?;
+        if is_valid_env_name(&name) {
+            Ok(Self(name))
+        } else {
+            Err(de::Error::custom(format!(
+                "invalid environment variable name: {name}"
+            )))
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum RuntimeSecretPolicy {
+    Optional,
+    Required,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -186,6 +225,8 @@ pub enum ConfigError {
     },
     /// ProfileConfig agent.kind must be direct, claude, or pi
     MissingAgentKind,
+    /// ProfileConfig profile.env cannot contain runtime credential {name}
+    StaticCredentialInProfileEnv { name: EnvName },
     /// invalid ProfileConfig schema: {source}
     InvalidProfileConfigSchemaShape { source: serde_json::Error },
     /// spawn-config file not found: {path}
@@ -304,27 +345,44 @@ fn parse_profile_value(value: Value, platform: Platform) -> Result<ProfileConfig
 
     let raw = serde_json::from_value::<RawProfileConfig>(value)
         .map_err(|source| ConfigError::InvalidProfileConfigSchemaShape { source })?;
-    let digest = raw.image.digest;
+    let RawProfileConfig {
+        profile,
+        image,
+        resources,
+        security,
+        services,
+    } = raw;
+    let RawSecurity {
+        deploy_key,
+        runtime_secrets,
+    } = security.unwrap_or_default();
+    if let Some(name) = profile.env.keys().find(|name| {
+        is_known_credential_env(name)
+            || runtime_secrets
+                .keys()
+                .any(|secret| secret.as_str() == *name)
+    }) {
+        return Err(ConfigError::StaticCredentialInProfileEnv {
+            name: EnvName(name.clone()),
+        });
+    }
     Ok(ProfileConfig {
-        profile: raw.profile,
+        profile,
         image: Image {
             reference,
             source,
             source_kind,
-            digest,
+            digest: image.digest,
         },
         agent: Agent { kind },
-        resources: raw.resources.unwrap_or_default(),
+        resources: resources.unwrap_or_default(),
         security: Security {
-            deploy_key: raw
-                .security
-                .and_then(|security| security.deploy_key)
-                .filter(|value| !value.is_empty()),
+            deploy_key: deploy_key.filter(|value| !value.is_empty()),
+            runtime_secrets,
         },
         services: Services {
             nix_cache: NixCacheService {
-                enabled: raw
-                    .services
+                enabled: services
                     .and_then(|services| services.nix_cache)
                     .and_then(|service| service.enable)
                     .unwrap_or(true),
@@ -413,10 +471,12 @@ struct RawImage {
     digest: Option<Digest>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct RawSecurity {
     #[serde(default)]
     deploy_key: Option<String>,
+    #[serde(default)]
+    runtime_secrets: BTreeMap<EnvName, RuntimeSecretPolicy>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -451,6 +511,21 @@ const fn default_memory_mb() -> u32 {
 
 const fn default_pids_limit() -> u32 {
     4096
+}
+
+pub fn is_known_credential_env(name: &str) -> bool {
+    matches!(
+        name,
+        "ANTHROPIC_API_KEY" | "CLAUDE_CODE_OAUTH_TOKEN" | "OPENAI_API_KEY"
+    )
+}
+
+fn is_valid_env_name(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    bytes
+        .next()
+        .is_some_and(|first| first == b'_' || first.is_ascii_alphabetic())
+        && bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
 }
 
 #[cfg(test)]
@@ -509,7 +584,7 @@ mod test {
     }
 
     #[test]
-    fn profile_config_parses_profile_env_and_deploy_key() {
+    fn profile_config_parses_static_env_and_runtime_secret_policy() {
         let value = json!({
             "schema": 1,
             "profile": { "name": "base", "env": { "FOO": "bar" } },
@@ -519,11 +594,83 @@ mod test {
                 "source_kind": "nix-descriptor"
             },
             "agent": { "kind": "direct" },
-            "security": { "deploy_key": "repo-key" }
+            "security": {
+                "deploy_key": "repo-key",
+                "runtime_secrets": { "CUSTOM_TOKEN": "required" }
+            }
         });
         let config = parse_profile_value(value, Platform::Linux).unwrap();
         assert_eq!(config.profile.env.get("FOO"), Some(&String::from("bar")));
         assert_eq!(config.security.deploy_key, Some(String::from("repo-key")));
+        let (name, policy) = config.security.runtime_secrets.first_key_value().unwrap();
+        assert_eq!(name.as_str(), "CUSTOM_TOKEN");
+        assert_eq!(*policy, super::RuntimeSecretPolicy::Required);
+    }
+
+    #[test]
+    fn profile_config_rejects_credentials_in_static_env() {
+        for (name, runtime_secrets) in [
+            ("OPENAI_API_KEY", json!({})),
+            ("CUSTOM_TOKEN", json!({ "CUSTOM_TOKEN": "optional" })),
+        ] {
+            let value = json!({
+                "schema": 1,
+                "profile": { "name": "base", "env": { (name): "secret" } },
+                "image": {
+                    "ref": "wrix:test",
+                    "source": "/nix/store/fake",
+                    "source_kind": "nix-descriptor"
+                },
+                "agent": { "kind": "direct" },
+                "security": { "runtime_secrets": runtime_secrets }
+            });
+            let error = parse_profile_value(value, Platform::Linux).unwrap_err();
+            assert!(matches!(
+                error,
+                ConfigError::StaticCredentialInProfileEnv { .. }
+            ));
+            assert!(error.to_string().contains(name));
+        }
+    }
+
+    #[test]
+    fn profile_config_rejects_invalid_runtime_secret_name() {
+        let value = json!({
+            "schema": 1,
+            "profile": { "name": "base" },
+            "image": {
+                "ref": "wrix:test",
+                "source": "/nix/store/fake",
+                "source_kind": "nix-descriptor"
+            },
+            "agent": { "kind": "direct" },
+            "security": { "runtime_secrets": { "NOT-AN-ENV-NAME": "optional" } }
+        });
+        let error = parse_profile_value(value, Platform::Linux).unwrap_err();
+        assert!(matches!(
+            error,
+            ConfigError::InvalidProfileConfigSchemaShape { .. }
+        ));
+    }
+
+    #[test]
+    fn profile_config_rejects_invalid_runtime_secret_policy() {
+        let value = json!({
+            "schema": 1,
+            "profile": { "name": "base" },
+            "image": {
+                "ref": "wrix:test",
+                "source": "/nix/store/fake",
+                "source_kind": "nix-descriptor"
+            },
+            "agent": { "kind": "direct" },
+            "security": { "runtime_secrets": { "CUSTOM_TOKEN": "sometimes" } }
+        });
+        let error = parse_profile_value(value, Platform::Linux).unwrap_err();
+        assert!(matches!(
+            error,
+            ConfigError::InvalidProfileConfigSchemaShape { .. }
+        ));
     }
 
     #[test]

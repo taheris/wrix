@@ -10,12 +10,17 @@
 
 let
   inherit (builtins)
+    attrNames
+    attrValues
     concatMap
     elem
+    filter
+    isAttrs
     mapAttrs
-    attrValues
+    match
+    seq
     ;
-  inherit (pkgs.lib) makeBinPath optionals;
+  inherit (pkgs.lib) concatStringsSep makeBinPath optionals;
 
   isDarwin = elem system [
     "aarch64-darwin"
@@ -49,6 +54,52 @@ let
   # through `wrix.rustProfile { toolchain; sha256; }`.
   profiles = builtins.removeAttrs profilesModule [ "rustProfileFromFile" ];
   inherit (profilesModule) rustProfileFromFile;
+
+  knownCredentialNames = attrNames profiles.base.runtimeSecrets;
+  runtimeSecretPolicies = [
+    "optional"
+    "required"
+  ];
+
+  validateRuntimeSecrets =
+    runtimeSecrets:
+    if !isAttrs runtimeSecrets then
+      throw "runtimeSecrets must be an attribute set mapping environment names to 'optional' or 'required'"
+    else
+      let
+        invalidNames = filter (name: match "^[A-Za-z_][A-Za-z0-9_]*$" name == null) (
+          attrNames runtimeSecrets
+        );
+        invalidPolicies = filter (name: !elem runtimeSecrets.${name} runtimeSecretPolicies) (
+          attrNames runtimeSecrets
+        );
+      in
+      if invalidNames != [ ] then
+        throw "runtimeSecrets contains invalid environment names: ${concatStringsSep ", " invalidNames}"
+      else if invalidPolicies != [ ] then
+        throw "runtimeSecrets policies must be 'optional' or 'required': ${concatStringsSep ", " invalidPolicies}"
+      else
+        runtimeSecrets;
+
+  validateStaticEnv =
+    label: runtimeSecrets: staticEnv:
+    let
+      forbidden = filter (name: elem name knownCredentialNames || builtins.hasAttr name runtimeSecrets) (
+        attrNames staticEnv
+      );
+    in
+    if forbidden == [ ] then
+      null
+    else
+      throw "${label} cannot contain runtime credentials: ${concatStringsSep ", " forbidden}";
+
+  validateProfile =
+    profile:
+    let
+      runtimeSecrets = validateRuntimeSecrets (profile.runtimeSecrets or { });
+      staticEnvValidation = validateStaticEnv "profile.env" runtimeSecrets (profile.env or { });
+    in
+    seq runtimeSecrets (seq staticEnvValidation (profile // { inherit runtimeSecrets; }));
 
   # Separate profile instance whose buildPackage targets the image platform
   # (linuxPkgs). Used to construct the in-image MCP server binaries that get
@@ -205,15 +256,19 @@ let
       packages ? [ ],
       mounts ? [ ],
       env ? { },
+      runtimeSecrets ? { },
       networkAllowlist ? [ ],
     }:
-    profile
-    // {
-      packages = (profile.packages or [ ]) ++ packages;
-      mounts = (profile.mounts or [ ]) ++ mounts;
-      env = (profile.env or { }) // env;
-      networkAllowlist = (profile.networkAllowlist or [ ]) ++ networkAllowlist;
-    };
+    validateProfile (
+      profile
+      // {
+        packages = (profile.packages or [ ]) ++ packages;
+        mounts = (profile.mounts or [ ]) ++ mounts;
+        env = (profile.env or { }) // env;
+        runtimeSecrets = (profile.runtimeSecrets or { }) // runtimeSecrets;
+        networkAllowlist = (profile.networkAllowlist or [ ]) ++ networkAllowlist;
+      }
+    );
 
   # Build MCP server configurations from the mcp attrset
   # Returns { packages, mcpServers } where:
@@ -249,6 +304,7 @@ let
       packages ? [ ],
       mounts ? [ ],
       env ? { },
+      runtimeSecrets ? { },
       mcp ? { },
       mcpRuntime ? false,
       # Agent runtime axis composed onto the workspace profile. "direct" is
@@ -275,7 +331,7 @@ let
       # Extend profile with wrix-owned sandbox tools, user packages, and MCP server packages.
       finalProfile = extendProfile profile {
         packages = sandboxToolPackages ++ packages ++ mcpConfig.packages;
-        inherit mounts env;
+        inherit mounts env runtimeSecrets;
       };
 
       defaultAgentPkg =
@@ -290,7 +346,7 @@ let
         if agent == "direct" && agentSettings != { } then
           throw "mkSandbox: agentSettings is only supported for agent='claude' or agent='pi'"
         else
-          null;
+          validateStaticEnv "agentSettings.env" finalProfile.runtimeSecrets (agentSettings.env or { });
 
       finalAgentPkg = builtins.seq _validateAgentSettings (
         if agentPkg == null then defaultAgentPkg else agentPkg
@@ -402,6 +458,7 @@ let
           };
           security = {
             deploy_key = deployKey;
+            runtime_secrets = finalProfile.runtimeSecrets;
           };
           network = {
             default_mode = "open";

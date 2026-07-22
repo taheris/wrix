@@ -94,6 +94,9 @@ assert_profile_config_is_runtime_only() {
     if jq -e --arg key "$key" '.profile.env | has($key)' "$profile_config" >/dev/null; then
       fail "ProfileConfig statically defines provider credential $key"
     fi
+    if ! jq -e --arg key "$key" '.security.runtime_secrets[$key] == "optional"' "$profile_config" >/dev/null; then
+      fail "ProfileConfig does not declare optional runtime provider credential $key"
+    fi
   done
   if grep -aFq -e "$OPENAI_CANARY" -e "$ANTHROPIC_CANARY" "$profile_config"; then
     fail "ProfileConfig contains a runtime provider credential value"

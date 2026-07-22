@@ -116,6 +116,7 @@ test_extension_args() {
     packages = [ pkgs.hello ];
     hostPackages = [ pkgs.cowsay ];
     env = { CTOR_TEST_KEY = \"ctor_test_value\"; SCCACHE_CACHE_SIZE = \"99G\"; };
+    runtimeSecrets = { CTOR_PROVIDER_TOKEN = \"required\"; };
     mounts = [ { source = \"/host/ctor\"; dest = \"/ctn/ctor\"; mode = \"ro\"; optional = true; } ];
     networkAllowlist = [ \"ctor.example.com\" ];
   }"
@@ -133,6 +134,8 @@ test_extension_args() {
       envExtAdded        = ext.env.CTOR_TEST_KEY or null;
       envRightMergeWins  = ext.env.SCCACHE_CACHE_SIZE;
       baseSccacheSize    = base.env.SCCACHE_CACHE_SIZE;
+      runtimeSecretPolicy = ext.runtimeSecrets.CTOR_PROVIDER_TOKEN or null;
+      baseRuntimeSecretPolicy = ext.runtimeSecrets.OPENAI_API_KEY or null;
       hostPackagePresent = builtins.elem pkgs.cowsay.outPath (map (p: p.outPath) ext.hostPackages);
       hostPackageImageAbsent = ! (builtins.elem pkgs.cowsay.outPath (map (p: p.outPath) ext.packages));
       imagePackageHostAbsent = ! (builtins.elem pkgs.hello.outPath (map (p: p.outPath) ext.hostPackages));
@@ -146,8 +149,9 @@ test_extension_args() {
   fi
 
   local packages_diff host_packages_diff mounts_diff network_diff env_added env_override base_sccache \
-    host_package_present host_package_image_absent image_package_host_absent mount_present \
-    network_present base_net_preserved
+    runtime_secret_policy base_runtime_secret_policy host_package_present \
+    host_package_image_absent image_package_host_absent mount_present network_present \
+    base_net_preserved
   packages_diff=$(echo "$result"             | jq -r '.packagesDiff')
   host_packages_diff=$(echo "$result"        | jq -r '.hostPackagesDiff')
   mounts_diff=$(echo "$result"               | jq -r '.mountsDiff')
@@ -155,6 +159,8 @@ test_extension_args() {
   env_added=$(echo "$result"                 | jq -r '.envExtAdded')
   env_override=$(echo "$result"              | jq -r '.envRightMergeWins')
   base_sccache=$(echo "$result"              | jq -r '.baseSccacheSize')
+  runtime_secret_policy=$(echo "$result"     | jq -r '.runtimeSecretPolicy')
+  base_runtime_secret_policy=$(echo "$result" | jq -r '.baseRuntimeSecretPolicy')
   host_package_present=$(echo "$result"      | jq -r '.hostPackagePresent')
   host_package_image_absent=$(echo "$result" | jq -r '.hostPackageImageAbsent')
   image_package_host_absent=$(echo "$result" | jq -r '.imagePackageHostAbsent')
@@ -188,6 +194,14 @@ test_extension_args() {
   fi
   if [[ "$base_sccache" != "50G" ]]; then
     echo "FAIL: base env.SCCACHE_CACHE_SIZE expected '50G', got '$base_sccache' — base profile drift" >&2
+    return 1
+  fi
+  if [[ "$runtime_secret_policy" != "required" ]]; then
+    echo "FAIL: runtimeSecrets.CTOR_PROVIDER_TOKEN expected 'required', got '$runtime_secret_policy'" >&2
+    return 1
+  fi
+  if [[ "$base_runtime_secret_policy" != "optional" ]]; then
+    echo "FAIL: base OPENAI_API_KEY runtime-secret policy was not preserved" >&2
     return 1
   fi
   if [[ "$host_package_present" != "true" ]]; then

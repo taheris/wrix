@@ -159,7 +159,14 @@ wrix_write_profile_config() {
       },
       agent: { kind: $agent },
       resources: { cpus: null, memory_mb: 4096, pids_limit: 4096 },
-      security: { deploy_key: null },
+      security: {
+        deploy_key: null,
+        runtime_secrets: {
+          ANTHROPIC_API_KEY: "optional",
+          CLAUDE_CODE_OAUTH_TOKEN: "optional",
+          OPENAI_API_KEY: "optional"
+        }
+      },
       network: { default_mode: "open", ipv6: "disabled" },
       services: {
         beads: { enable: "auto" },

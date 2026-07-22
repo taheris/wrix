@@ -45,6 +45,7 @@ test_mksandbox_accepts_documented_parameters() {
         packages = [ extraPkg ];
         mounts = [ extraMount ];
         env = { WRIX_API_CONTRACT = \"1\"; };
+        runtimeSecrets = { WRIX_API_SECRET = \"required\"; };
         mcp = { };
         mcpRuntime = false;
         agent = \"direct\";
@@ -55,6 +56,38 @@ test_mksandbox_accepts_documented_parameters() {
       shell = sandbox.devShell { };
       profileOverride = builtins.tryEval ((sandbox.devShell { profile = flake.legacyPackages.\${system}.lib.profiles.base; }).shellHook);
       sandboxOverride = builtins.tryEval ((sandbox.devShell { sandbox = sandbox; }).shellHook);
+      staticProfileCredential = builtins.tryEval (
+        (lib.mkSandbox {
+          profile = lib.deriveProfile lib.profiles.base {
+            env = { OPENAI_API_KEY = \"must-not-enter-nix\"; };
+          };
+        }).profile.name
+      );
+      staticArgumentCredential = builtins.tryEval (
+        (lib.mkSandbox { env = { ANTHROPIC_API_KEY = \"must-not-enter-nix\"; }; }).profile.name
+      );
+      staticAgentCredential = builtins.tryEval (
+        builtins.deepSeq
+          (lib.mkSandbox {
+            agent = \"claude\";
+            agentSettings.env = { CLAUDE_CODE_OAUTH_TOKEN = \"must-not-enter-nix\"; };
+          }).image.source
+          true
+      );
+      staticPiCredential = builtins.tryEval (
+        builtins.deepSeq
+          (lib.mkSandbox {
+            agent = \"pi\";
+            agentSettings.env = { OPENAI_API_KEY = \"must-not-enter-nix\"; };
+          }).image.source
+          true
+      );
+      invalidSecretName = builtins.tryEval (
+        (lib.mkSandbox { runtimeSecrets = { \"NOT-AN-ENV-NAME\" = \"optional\"; }; }).profile.name
+      );
+      invalidSecretPolicy = builtins.tryEval (
+        (lib.mkSandbox { runtimeSecrets = { WRIX_API_SECRET = \"sometimes\"; }; }).profile.name
+      );
     in
     {
       required_present = builtins.all (name: builtins.hasAttr name sandbox) required;
@@ -65,6 +98,14 @@ test_mksandbox_accepts_documented_parameters() {
       profile_name = sandbox.profile.name;
       shell_name = shell.name or \"\";
       env_value = sandbox.profile.env.WRIX_API_CONTRACT or \"\";
+      runtime_secret_policy = sandbox.profile.runtimeSecrets.WRIX_API_SECRET or \"\";
+      base_openai_policy = sandbox.profile.runtimeSecrets.OPENAI_API_KEY or \"\";
+      static_profile_credential_accepted = staticProfileCredential.success;
+      static_argument_credential_accepted = staticArgumentCredential.success;
+      static_agent_credential_accepted = staticAgentCredential.success;
+      static_pi_credential_accepted = staticPiCredential.success;
+      invalid_secret_name_accepted = invalidSecretName.success;
+      invalid_secret_policy_accepted = invalidSecretPolicy.success;
       mount_present = builtins.any (
         mount:
           mount.source == extraMount.source
@@ -88,6 +129,14 @@ test_mksandbox_accepts_documented_parameters() {
     .profile_name == "base" and
     (.shell_name | type == "string" and length > 0) and
     .env_value == "1" and
+    .runtime_secret_policy == "required" and
+    .base_openai_policy == "optional" and
+    .static_profile_credential_accepted == false and
+    .static_argument_credential_accepted == false and
+    .static_agent_credential_accepted == false and
+    .static_pi_credential_accepted == false and
+    .invalid_secret_name_accepted == false and
+    .invalid_secret_policy_accepted == false and
     .mount_present == true and
     (.package_count > .base_package_count)
   ' <<<"$result" >/dev/null; then

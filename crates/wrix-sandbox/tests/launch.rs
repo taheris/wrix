@@ -1,6 +1,6 @@
 mod common;
 
-use std::{ffi::OsString, fs, path::Path};
+use std::{collections::BTreeMap, ffi::OsString, fs, path::Path};
 
 use serde_json::json;
 use wrix_sandbox::command::Command;
@@ -207,6 +207,78 @@ fn host_provider_credentials_reach_run_environment() -> TestResult {
     assert!(run.stdout.contains("ENV=ANTHROPIC_API_KEY=[REDACTED]"));
     assert!(!run.stdout.contains("openai-test"));
     assert!(!run.stdout.contains("anthropic-test"));
+    Ok(())
+}
+
+#[test]
+fn declared_custom_runtime_secret_reaches_run_environment() -> TestResult {
+    let root = tempfile::Builder::new()
+        .prefix("custom-runtime-secret")
+        .tempdir()?;
+    let workspace = root.path().join("workspace");
+    let profile_config = root.path().join("profile.json");
+    fs::create_dir_all(&workspace)?;
+    common::write_profile_config(
+        &profile_config,
+        &ProfileFixture {
+            runtime_secrets: BTreeMap::from([(
+                String::from("CUSTOM_PROVIDER_TOKEN"),
+                String::from("optional"),
+            )]),
+            ..ProfileFixture::default()
+        },
+    )?;
+
+    let run = run_launch(
+        root.path(),
+        "custom-runtime-secret",
+        &profile_config,
+        &workspace,
+        vec![(
+            String::from("CUSTOM_PROVIDER_TOKEN"),
+            OsString::from("custom-secret-value"),
+        )],
+    )?;
+
+    assert!(run.success, "{}", run.stderr);
+    assert!(run.stdout.contains("ENV=CUSTOM_PROVIDER_TOKEN=[REDACTED]"));
+    assert!(!run.stdout.contains("custom-secret-value"));
+    Ok(())
+}
+
+#[test]
+fn required_runtime_secret_fails_before_container_start() -> TestResult {
+    let root = tempfile::Builder::new()
+        .prefix("required-runtime-secret")
+        .tempdir()?;
+    let workspace = root.path().join("workspace");
+    let profile_config = root.path().join("profile.json");
+    fs::create_dir_all(&workspace)?;
+    common::write_profile_config(
+        &profile_config,
+        &ProfileFixture {
+            runtime_secrets: BTreeMap::from([(
+                String::from("WRIX_REQUIRED_SECRET_TEST_VALUE"),
+                String::from("required"),
+            )]),
+            ..ProfileFixture::default()
+        },
+    )?;
+
+    let run = run_launch(
+        root.path(),
+        "required-runtime-secret",
+        &profile_config,
+        &workspace,
+        Vec::new(),
+    )?;
+
+    assert!(!run.success);
+    assert!(
+        run.stderr
+            .contains("required runtime secret WRIX_REQUIRED_SECRET_TEST_VALUE")
+    );
+    assert_no_launch_plan(&run.stdout);
     Ok(())
 }
 

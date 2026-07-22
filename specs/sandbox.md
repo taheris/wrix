@@ -68,7 +68,7 @@ Exactly one agent rides each image — `agent = "direct"` bakes neither `claude-
 **Per-agent configuration is delivered, not abstracted.** Each agent keeps its own config system; wrix only delivers config to it:
 
 - *Config home* — the entrypoint seeds the agent's config home from baked defaults and persists session data via `/workspace`, per agent: claude → `~/.claude`, pi → `~/.pi/agent`; `direct` has none.
-- *Credentials* — API keys and OAuth/subscription tokens reach the agent via ordinary env passthrough (`env`, host env, `SpawnConfig.env`) and mounts; secrets are never baked into the image. The credential invariants are owned by `security.md`.
+- *Credentials* — API keys and OAuth/subscription tokens reach the agent through declared `runtimeSecrets`, same-named host env or `SpawnConfig.env`, and credential-file mounts. Static profile/mkSandbox env is non-secret and image-baked. The credential invariants are owned by `security.md`.
 - *Package/settings overrides* — `agentPkg` overrides the selected agent package; `agentSettings` merges into the selected agent's settings schema. `agentSettings` is rejected for `agent = "direct"` until direct has a settings schema.
 
 **MCP servers** — `mkSandbox`'s `mcp` parameter opts servers in per sandbox (`mcp.tmux = { … }`, `mcp.playwright = { … }`). Server contracts live in their own specs (`tmux-mcp.md`, `playwright-mcp.md`). `mcpRuntime = true` is an all-server runtime-selection axis: it bakes every registered server into the image and defers selection to the entrypoint at run time. Profile output names for the runtime bundle live in `profiles.md`.
@@ -87,7 +87,10 @@ mkSandbox {
     dest = "/home/wrix/.config";
     mode = "ro";                    # "ro" or "rw"
   } ];
-  env = { FOO = "bar"; };           # Extra env merged into profile.env
+  env = { FOO = "bar"; };           # Non-secret env merged into profile.env
+  runtimeSecrets = {                 # Runtime values resolved by the host launcher
+    OPENAI_API_KEY = "required";     # "required" or "optional"
+  };
   mcp.tmux = { };                   # MCP server opt-in
   mcpRuntime = false;               # Bake ALL MCP servers, defer selection to entrypoint
   agent = "direct";                 # "direct" (default), "claude", or "pi"
@@ -142,7 +145,12 @@ Before launching the agent container, `wrix` ensures the per-workspace service c
     "pids_limit": 4096
   },
   "security": {
-    "deploy_key": null
+    "deploy_key": null,
+    "runtime_secrets": {
+      "ANTHROPIC_API_KEY": "optional",
+      "CLAUDE_CODE_OAUTH_TOKEN": "optional",
+      "OPENAI_API_KEY": "optional"
+    }
   },
   "network": {
     "default_mode": "open",
@@ -158,7 +166,7 @@ Before launching the agent container, `wrix` ensures the per-workspace service c
 }
 ```
 
-`profile.mounts` are profile-level mounts and are additive with `mkSandbox.mounts` and `SpawnConfig.mounts`. `profile.env` is profile/default container environment and is overridden only by explicit per-launch env rules. `agent.kind` is one of `direct`, `claude`, or `pi`; callers may not change it independently of `image`. `services.beads.enable = "auto"` means start Dolt when the workspace has `.beads/dolt`; `services.nix_cache.enable` controls project-cache endpoint injection. `network.default_mode` defaults to `open` and may be overridden at launch by `WRIX_NETWORK=open|limit`; both modes keep the local-network isolation baseline.
+`profile.mounts` are profile-level mounts and are additive with `mkSandbox.mounts` and `SpawnConfig.mounts`. `profile.env` is non-secret profile/default container environment; it enters the Nix store and OCI image metadata and is overridden only by explicit per-launch env rules. `security.runtime_secrets` maps validated environment names to `optional` or `required` and contains no values; the launcher resolves values from `SpawnConfig.env` or same-named host env immediately before launch. `agent.kind` is one of `direct`, `claude`, or `pi`; callers may not change it independently of `image`. `services.beads.enable = "auto"` means start Dolt when the workspace has `.beads/dolt`; `services.nix_cache.enable` controls project-cache endpoint injection. `network.default_mode` defaults to `open` and may be overridden at launch by `WRIX_NETWORK=open|limit`; both modes keep the local-network isolation baseline.
 
 `SpawnConfig` JSON has stable top-level fields:
 
@@ -166,7 +174,7 @@ Before launching the agent container, `wrix` ensures the per-workspace service c
 - `image_source` — optional per-launch Nix store path of the image source; when absent, `ProfileConfig.image.source` is used.
 - `image_source_kind` — optional per-launch source-kind override (`nix-descriptor` or `docker-archive`); when absent, `ProfileConfig.image.source_kind` is used. If `image_source` is present, `image_source_kind` must also be present, even when it matches the profile kind, so source overrides never rely on launcher inference. For an `image_source` override, the installer derives and validates the selected image digest from that override source before preflight instead of reusing `ProfileConfig.image.digest`. The installer installs the selected image into the platform store before the launcher invokes the container CLI; preflight + dispatch semantics are documented in *Image install path* above.
 - `workspace` — host path bind-mounted at `/workspace`
-- `env` — allowlist of `[key, value]` pairs to pass through
+- `env` — per-launch `[key, value]` pairs to pass through; pairs matching `security.runtime_secrets` are runtime credential sources and never enter Nix or image data
 - `agent_args` — argv tail passed to the agent binary
 - `mounts` — optional `[{host_path, container_path, read_only}]` list; omitted or empty means no per-launch mounts. Additive to `profile.mounts` and `mkSandbox.mounts`.
 
@@ -194,7 +202,7 @@ Plus consumer-defined fields the entrypoint reads from the original config mount
 
 ## Success Criteria
 
-- `mkSandbox` accepts the documented parameter set (`profile`, `cpus`, `memoryMb`, `deployKey`, `packages`, `mounts`, `env`, `mcp`, `mcpRuntime`, `agent`, `agentPkg`, `agentSettings`) and returns `{ package, image, launcher, profile, devShell }`
+- `mkSandbox` accepts the documented parameter set (`profile`, `cpus`, `memoryMb`, `deployKey`, `packages`, `mounts`, `env`, `runtimeSecrets`, `mcp`, `mcpRuntime`, `agent`, `agentPkg`, `agentSettings`) and returns `{ package, image, launcher, profile, devShell }`
   [check](verify:sandbox.mksandbox-api)
 - Platform dispatch picks the Linux implementation on Linux hosts and the macOS implementation on Darwin hosts
   [check](verify:sandbox.platform-dispatch)
@@ -299,10 +307,10 @@ Plus consumer-defined fields the entrypoint reads from the original config mount
 2. **Platform dispatch** — Linux selects the Podman launcher; macOS selects the Apple `container` CLI launcher; unsupported systems throw.
 3. **Workspace mount** — CWD bind-mounts at `/workspace`; profile mounts merge on top.
 4. **UID mapping** — files created in `/workspace` carry host UID/GID.
-5. **Custom mounts and env** — `mkSandbox`'s `mounts` and `env` extend the profile rather than replace it.
+5. **Custom mounts and env** — `mkSandbox`'s `mounts`, non-secret `env`, and `runtimeSecrets` extend the profile rather than replace it. Runtime-secret maps right-merge by environment name; values are resolved only by the launcher.
 6. **Deploy keys** — `deployKey = "<name>"` mounts the host key into the container at `/etc/wrix/keys/<name>` (and `/etc/wrix/keys/<name>-signing` when a signing key is present). The `.pub` file is not mounted; the entrypoint regenerates it on demand via `ssh-keygen -y`. Host-source resolution and the env-first override (`WRIX_DEPLOY_KEY`, `WRIX_SIGNING_KEY`) are owned by `security.md`.
 7. **MCP opt-in** — `mcp.<server>` enables a named server per `tmux-mcp.md` / `playwright-mcp.md`. `mcpRuntime = true` is the all-server runtime-selection path: it bakes every registered server and defers selection to the entrypoint while profile output naming remains in `profiles.md`.
-8. **Agent runtime axis** — `agent` selects, at build time, the single agent binary baked into the image and launched by the entrypoint; exactly one agent per image (a non-claude image carries no `claude-code`). Selection is encoded in immutable `ProfileConfig`, not caller env. `WRIX_AGENT` remains only the launcher→entrypoint wire derived from that config. The entrypoint guards on binary presence (`command -v`) and seeds/persists each agent's own config home (claude `~/.claude`, pi `~/.pi/agent`). Agent selection adds only that agent's required config: Claude images get Claude settings, Pi images get non-secret Pi settings (`openai-codex`, `gpt-5.6-sol`, xhigh reasoning, `defaultProjectTrust = "always"`, `editorPaddingX = 1`, `enableInstallTelemetry = false`, steering/follow-up modes set to `"all"`, explicit `/workspace/.pi/agent/sessions` session dir) plus a runtime `auth.json` mount when selected, and direct images get no agent config. `agentPkg` overrides the selected agent package; `agentSettings` merges into the selected agent's settings schema and is rejected for direct. Pi does not import arbitrary files from `/workspace/.pi/agent`; only the session directory and auth mount are wired. Secrets are delivered through env passthrough, credential-file mounts, and `agent_args` (owned by `security.md`). The agent runtime is its own image tier (`image-builder.md`), composing orthogonally with the profile.
+8. **Agent runtime axis** — `agent` selects, at build time, the single agent binary baked into the image and launched by the entrypoint; exactly one agent per image (a non-claude image carries no `claude-code`). Selection is encoded in immutable `ProfileConfig`, not caller env. `WRIX_AGENT` remains only the launcher→entrypoint wire derived from that config. The entrypoint guards on binary presence (`command -v`) and seeds/persists each agent's own config home (claude `~/.claude`, pi `~/.pi/agent`). Agent selection adds only that agent's required config: Claude images get Claude settings, Pi images get non-secret Pi settings (`openai-codex`, `gpt-5.6-sol`, xhigh reasoning, `defaultProjectTrust = "always"`, `editorPaddingX = 1`, `enableInstallTelemetry = false`, steering/follow-up modes set to `"all"`, explicit `/workspace/.pi/agent/sessions` session dir) plus a runtime `auth.json` mount when selected, and direct images get no agent config. `agentPkg` overrides the selected agent package; `agentSettings` merges into the selected agent's settings schema and is rejected for direct. Pi does not import arbitrary files from `/workspace/.pi/agent`; only the session directory and auth mount are wired. Secrets are delivered through declared runtime environment sources or credential-file mounts (owned by `security.md`). The agent runtime is its own image tier (`image-builder.md`), composing orthogonally with the profile.
 9. **Launcher contract** — `wrix run` reads immutable Nix-generated `ProfileConfig` JSON plus CLI/host-env runtime inputs; `wrix spawn` reads the same `ProfileConfig` plus per-launch `SpawnConfig` JSON. Both share container construction, including workspace service startup and endpoint injection when services are enabled. Wrapper config-generation rules are owned by *Architecture > `package`*; workspace service contracts are owned by `services.md`.
 10. **Image source dispatch** — image install dispatches on explicit source kind, not filename or platform guessing. `nix-descriptor` sources are Linux archive-less descriptor sources and `docker-archive` sources are tar-loadable archive sources. A per-launch `image_source` override must carry a matching `image_source_kind`; it may not silently inherit an incompatible kind from `ProfileConfig`. The selected source's digest is derived or validated before preflight.
 11. **Image retention** — runtime image cleanup is wrix-scoped and bounded: keep the image selected for the current operation, images used by existing containers, and eight shared cross-workspace MRU records (ref plus digest/image ID when available) before pruning; prune wrix-managed images outside the keep set; never automatically delete unlabelled `<none>:<none>` images.

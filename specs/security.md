@@ -143,24 +143,37 @@ accepting env pointers adds no new attack surface.
 
 #### Agent API Credentials
 
-The agent's API credentials reach the container at **runtime only** — they
-are never baked into an image layer (an image is content-addressed and
-widely shared, so a secret in a layer leaks). Two delivery channels, both
-with mechanics owned by `sandbox.md`:
+The agent's API credentials reach the container at **runtime only**. Image
+layers are content-addressed and widely shared, so secret material in a layer
+leaks beyond the session that supplied it.
 
-- **Env passthrough** — claude's `CLAUDE_CODE_OAUTH_TOKEN`, or a non-claude
-  agent's provider key (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, …), passed
-  through `env` / host env / `SpawnConfig.env`. The exposure surface inside
-  the container is `/proc/$pid/environ` of the agent's own process.
-- **Credential-file mount** — a file-based agent auth store. For Pi, the
-  launcher resolves `WRIX_PI_AUTH_FILE` or falls back to
-  `~/.pi/agent/auth.json`. Interactive `wrix run` creates an empty fallback
-  file for first `/login` use when it is missing; non-interactive
-  `wrix spawn` fails loudly when the file is absent. The launcher mounts only
-  that credential path into Pi's `~/.pi/agent/auth.json` when `WRIX_AGENT=pi`.
-  Linux uses a single-file bind; macOS mounts the auth file's parent directory
-  at an internal staging path because Apple Container/VirtioFS is
-  directory-oriented, then exposes only the selected auth file to Pi.
+The environment surface is split into static defaults and runtime secrets:
+
+- `profile.env`, `mkSandbox.env`, and agent-settings env are non-secret static
+  defaults. They enter Nix evaluation and may be serialized into a Nix-store
+  `ProfileConfig`, OCI config `Env`, or agent-settings image layer. Nix rejects
+  known provider credential names and every declared runtime-secret name from
+  these static surfaces.
+- `runtimeSecrets` is a typed attrset from validated environment-variable name
+  to `"optional"` or `"required"`. Built-in profiles declare
+  `CLAUDE_CODE_OAUTH_TOKEN`, `OPENAI_API_KEY`, and `ANTHROPIC_API_KEY` optional.
+  `ProfileConfig.security.runtime_secrets` contains only those names and
+  policies, never their values.
+- Immediately before launch, the host launcher resolves each declaration. A
+  matching `SpawnConfig.env` pair wins for `wrix spawn`; otherwise the launcher
+  reads the same-named host environment variable. An absent optional source is
+  omitted, while an absent required source fails before container startup.
+  Dry-run output redacts known and declared secret values.
+
+The second delivery channel is a **credential-file mount**: a file-based agent
+store. For Pi, the launcher resolves `WRIX_PI_AUTH_FILE` or falls back to
+`~/.pi/agent/auth.json`. Interactive `wrix run` creates an empty fallback file
+for first `/login` use when it is missing; non-interactive `wrix spawn` fails
+loudly when the file is absent. The launcher mounts only that credential path
+into Pi's `~/.pi/agent/auth.json` when `WRIX_AGENT=pi`. Linux uses a single-file
+bind; macOS mounts the auth file's parent directory at an internal staging path
+because Apple Container/VirtioFS is directory-oriented, then exposes only the
+selected auth file to Pi.
 
 Acceptable because:
 
@@ -170,18 +183,21 @@ Acceptable because:
   root. The microVM path is equivalent — krun maps the host user to root and
   uses `LD_PRELOAD` libfakeuid). There is no second principal, so the only
   processes that can read `/proc` are ones the agent itself started.
-- The credential is already present in the operator's environment (or in an
-  on-host auth file); passing it through adds no new host-side exposure.
+- The credential is already present in the operator's environment,
+  `SpawnConfig`, or an on-host auth file; passing it through adds no new
+  host-side exposure.
 - Tokens are session-scoped, with limits set by the provider.
 
 A secrets-file mount (`/run/secrets/oauth_token`) would prevent
 `/proc/environ` exposure but adds complexity for marginal benefit
 against the stated threat model. wrix does not model providers or keys
 itself — provider/model defaults and the agent's own credential resolution are
-the agent's concern. Pi gets image-baked non-secret `settings.json` defaults and
-a runtime `auth.json` mount; its project session persistence uses an explicit
-`sessionDir`, not a broad import of `~/.pi/agent`. Claude gets its settings
-surface. Wrix only delivers the secret into the container.
+the agent's concern. Wrix validates only runtime-secret environment names and
+required/optional policy, not provider semantics or key formats. Pi gets
+image-baked non-secret `settings.json` defaults and a runtime `auth.json` mount;
+its project session persistence uses an explicit `sessionDir`, not a broad
+import of `~/.pi/agent`. Claude gets its settings surface. Wrix only delivers
+the secret into the container.
 
 ### Network Exfil Baseline
 
@@ -298,10 +314,18 @@ this section is the index, not a restatement.
   `exit_code`, `mode`, and `agent_session_dir` fields are populated;
   and `agent_session_dir` resolves to an existing directory.
   [system](verify:security.audit-trail-anchor)
-- Host provider credentials supplied through `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` reach the selected runtime without being baked into the image
+- Host provider credentials declared through `runtimeSecrets` reach the selected runtime while `ProfileConfig` and assembled image content contain no secret values
   [system](verify:security.provider-credential-env)
-- Launcher dry-run output identifies provider credential env names but redacts their values
+- Launcher dry-run output identifies built-in provider credential env names but redacts their values
   [test](../crates/wrix-sandbox/tests/launch.rs::host_provider_credentials_reach_run_environment)
+- A custom provider name declared through `runtimeSecrets` resolves from the host environment and is redacted in launcher dry-run output
+  [test](../crates/wrix-sandbox/tests/launch.rs::declared_custom_runtime_secret_reaches_run_environment)
+- A missing `"required"` runtime-secret source fails before the container starts
+  [test](../crates/wrix-sandbox/tests/launch.rs::required_runtime_secret_fails_before_container_start)
+- `profile.env`, `mkSandbox.env`, and agent-settings env reject known provider credential names, and `runtimeSecrets` rejects invalid names or policies at Nix evaluation
+  [check](verify:sandbox.mksandbox-api)
+- A declared runtime secret supplied through `SpawnConfig.env` satisfies required-source policy and is redacted in launcher dry-run output
+  [test](../crates/wrix-sandbox/tests/spawn_config.rs::provider_credentials_in_spawn_config_are_redacted)
 - Linux delivers Pi's selected auth file as a single-file runtime bind
   [test](../crates/wrix-sandbox/tests/launch.rs::pi_auth_file_uses_platform_delivery_path)
 - Darwin mounts the Pi auth file's parent at an internal staging directory and points Pi at only the selected filename
@@ -330,7 +354,7 @@ this section is the index, not a restatement.
    repo deploy/signing keys with strict pinned GitHub host-key
    verification, and fail rather than falling back to ambient user
    SSH identities or trust-on-first-use host keys.
-5. **Agent credentials** — provider keys cross the boundary only through runtime environment delivery, while Pi auth crosses through the platform-specific file delivery described in *Credential Surfaces*. Neither channel contributes secret material to an image layer.
+5. **Agent credentials** — provider keys cross the boundary only through declared runtime environment delivery, while Pi auth crosses through the platform-specific file delivery described in *Credential Surfaces*. Runtime declarations serialize only validated names plus required/optional policy; neither channel contributes secret values to Nix evaluation, `ProfileConfig`, image config, or image layers.
 6. **Audit anchor** — every sandbox session writes a session-metadata
    index whose `agent_session_dir` field points at the directory
    containing the selected agent's transcript for that session.

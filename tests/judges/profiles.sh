@@ -20,7 +20,7 @@ test_python_profile() {
 
 test_derive_profile_merge() {
   judge_files "lib/profile/default.nix" "lib/sandbox/profiles.nix"
-  judge_criterion "deriveProfile correctly merges packages, hostPackages, mounts, env, and networkAllowlist from a base profile and extension attrset. packages/hostPackages/mounts/networkAllowlist are concatenated on their own surfaces; env is right-biased (extension wins). Other fields pass through from the extension if set, otherwise the base."
+  judge_criterion "deriveProfile correctly merges packages, hostPackages, mounts, env, runtimeSecrets, and networkAllowlist from a base profile and extension attrset. packages/hostPackages/mounts/networkAllowlist are concatenated on their own surfaces; env and runtimeSecrets are right-biased (extension wins). Other fields pass through from the extension if set, otherwise the base."
 }
 
 test_rust_profile_rebuild_stable() {
@@ -35,7 +35,7 @@ test_rust_analyzer_sysroot() {
 
 test_rust_profile_constructor() {
   judge_files "lib/default.nix" "lib/profile/default.nix" "lib/sandbox/profiles.nix" "lib/sandbox/default.nix"
-  judge_criterion "wrix.rustProfile is a top-level constructor in lib/default.nix (alongside deriveProfile/mkDevShell/mkSandbox) with signature { toolchain, sha256, packages ? [], hostPackages ? [], env ? {}, mounts ? [], networkAllowlist ? [] }. Both toolchain and sha256 are required (Nix destructuring errors when omitted; no silent unpinned-profile fallback). Internally it consumes fenix.fromToolchainFile via the helper exposed from lib/sandbox/profiles.nix, combines rust-src and fenix.stable.rust-analyzer-preview on top with fenix.combine, then applies extension args using the same merge rules as deriveProfile (packages/hostPackages/mounts/networkAllowlist concatenated on their own surfaces, env right-biased — consumer wins on conflict). Pass-through fields (name/enabledPlugins/shellHook/writableDirs/toolchain/buildPackage) come from the pinned-profile base. profiles.rust.withToolchain is no longer exposed."
+  judge_criterion "wrix.rustProfile is a top-level constructor in lib/default.nix (alongside deriveProfile/mkDevShell/mkSandbox) with signature { toolchain, sha256, packages ? [], hostPackages ? [], env ? {}, runtimeSecrets ? {}, mounts ? [], networkAllowlist ? [] }. Both toolchain and sha256 are required (Nix destructuring errors when omitted; no silent unpinned-profile fallback). Internally it consumes fenix.fromToolchainFile via the helper exposed from lib/sandbox/profiles.nix, combines rust-src and fenix.stable.rust-analyzer-preview on top with fenix.combine, then applies extension args using the same merge rules as deriveProfile (packages/hostPackages/mounts/networkAllowlist concatenated on their own surfaces, env and runtimeSecrets right-biased — consumer wins on conflict). Pass-through fields (name/enabledPlugins/shellHook/writableDirs/toolchain/buildPackage) come from the pinned-profile base. profiles.rust.withToolchain is no longer exposed."
 }
 
 test_host_sandbox_rustc_same_store_path() {

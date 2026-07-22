@@ -9,8 +9,8 @@ Different projects need different toolchains, but every project benefits from a 
 ## Architecture
 
 A profile is a Nix attrset that bundles image packages (`packages`), host
-packages (`hostPackages`), `env`, `mounts`, `networkAllowlist`,
-`shellHook`, plus optional fields and toolchain-specific extras
+packages (`hostPackages`), non-secret `env`, `runtimeSecrets`, `mounts`,
+`networkAllowlist`, `shellHook`, plus optional fields and toolchain-specific extras
 (`profile.toolchain` and
 `profile.buildPackage` on the rust profile). Built-in profiles ship as
 constants at `profiles.<name>`; per-toolchain pinned variants come from
@@ -52,7 +52,8 @@ A profile is a Nix attrset produced by the internal `mkProfile` helper. Fields:
 | `packages` | list of derivations | Image-platform packages baked into the container image. This is the image package surface, not the host devshell PATH source. |
 | `hostPackages` | list of derivations | Host-platform packages placed on the `mkDevShell` PATH. This is the host package surface; it does not get baked into the image. |
 | `corePackages` | list of derivations | The wrix-controlled, fixed-per-instance subset of `packages` — the `basePackages` floor plus the profile toolchain (default or pinned). Set at construction by `mkProfile`/`rustProfile`; downstream extension never appends to it. The image builder assigns it to the stable layer tier and treats `packages` − `corePackages` as the downstream-added delta that rides in the volatile leaf tier (see `image-builder.md` § Provenance-Tiered Layering). |
-| `env` | attrset of strings | Environment variables set inside the container |
+| `env` | attrset of strings | Non-secret environment defaults set inside the container and baked into image metadata |
+| `runtimeSecrets` | attrset of `"optional"` / `"required"` | Validated environment-variable names whose values the host launcher resolves at runtime; values are absent from the profile, Nix store, and image |
 | `mounts` | list of mount specs | Host → container bind mounts; each `{ source, dest, mode, optional }` |
 | `networkAllowlist` | list of strings | Domains permitted when `WRIX_NETWORK=limit` (merged with base allowlist) |
 | `enabledPlugins` | attrset | Claude Code plugins merged into `~/.claude/settings.json` (e.g. `"rust-analyzer-lsp@claude-plugins-official" = true`) |
@@ -61,7 +62,7 @@ A profile is a Nix attrset produced by the internal `mkProfile` helper. Fields:
 
 Mount specs use `optional = true` to mean "skip this bind silently if the host source path does not exist", letting profiles declare cache mounts that no-op on hosts that haven't yet populated them.
 
-`deriveProfile` merges `packages`, `hostPackages`, `mounts`, `env`, and `networkAllowlist` (package/mount/allowlist lists concatenated; env right-biased). Extension `packages` append to the image package surface only; extension `hostPackages` append to the host devshell surface only. Neither package surface crosses into the other. `corePackages` passes through from the base unchanged, so the wrix-controlled floor + toolchain stays distinguishable from downstream additions for image layer tiering (`image-builder.md` § Provenance-Tiered Layering). Other fields (`name`, `enabledPlugins`, `shellHook`, `writableDirs`) pass through from the extensions attrset if set, otherwise inherit from the base — they are not deep-merged. Callers extending a profile with extra plugins or shell hooks must compose those values themselves.
+`deriveProfile` merges `packages`, `hostPackages`, `mounts`, `env`, `runtimeSecrets`, and `networkAllowlist` (package/mount/allowlist lists concatenated; env and runtime-secret attrsets right-biased). Extension `packages` append to the image package surface only; extension `hostPackages` append to the host devshell surface only. Neither package surface crosses into the other. `corePackages` passes through from the base unchanged, so the wrix-controlled floor + toolchain stays distinguishable from downstream additions for image layer tiering (`image-builder.md` § Provenance-Tiered Layering). Other fields (`name`, `enabledPlugins`, `shellHook`, `writableDirs`) pass through from the extensions attrset if set, otherwise inherit from the base — they are not deep-merged. Callers extending a profile with extra plugins or shell hooks must compose those values themselves.
 
 The rust profile additionally exposes `toolchain` (the resolved fenix `combine` derivation) and `buildPackage` (a crane-backed Rust package builder); both pass through `deriveProfile` since extensions don't override them. For project-pinned rust toolchains, consumers use the top-level `rustProfile { toolchain; sha256; }` constructor — see [wrix.rustProfile](#wrixrustprofile) and [Rust Profile](#rust-profile) for details.
 
@@ -90,7 +91,7 @@ profile attrset depend on the wrix workspace build.
 
 `treefmt` is the project-wide formatter wrapper (nixfmt, rustfmt, shellcheck, deadnix, statix) built via `treefmt-nix.lib.mkWrapper`. Including it in the base profile ensures every consumer gets the same formatters.
 
-**Base env:** none.
+**Base env:** none. `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, and `OPENAI_API_KEY` are optional runtime-secret declarations, not static env.
 **Base mounts:** none. Host `~/.claude` is intentionally NOT mounted — containers use `$PROJECT_DIR/.claude` so user-level settings stay separate from project-level settings.
 **Base network allowlist:** `api.anthropic.com`, `github.com`, `ssh.github.com`, `cache.nixos.org` — always permitted regardless of profile, used only when `WRIX_NETWORK=limit`.
 
@@ -275,6 +276,7 @@ wrix.mkSandbox {
     sha256    = "sha256-...";
     packages  = [ linuxPkgs.sqlx-cli ];
     env       = { DATABASE_URL = "postgres://localhost/db"; };
+    runtimeSecrets = { DATABASE_PASSWORD = "required"; };
   };
 }
 
@@ -354,7 +356,8 @@ wrix.rustProfile {
   sha256;                         # REQUIRED — fenix purity hash
   packages         ? [ ];         # appended to image-side profile.packages
   hostPackages     ? [ ];         # appended to host-side profile.hostPackages
-  env              ? { };         # right-merged into profile.env
+  env              ? { };         # right-merged into profile.env (non-secret)
+  runtimeSecrets   ? { };         # right-merged name → required/optional policy
   mounts           ? [ ];         # appended to profile.mounts
   networkAllowlist ? [ ];         # appended to profile.networkAllowlist
 }
@@ -363,9 +366,10 @@ wrix.rustProfile {
 Both `toolchain` and `sha256` are required. The constructor uses
 `fenix.fromToolchainFile` under the hood, then combines `rust-src` and
 `stable.rust-analyzer-preview` on top of whatever components the toolchain
-file declares. Extension args (`packages`/`hostPackages`/`env`/`mounts`/
+file declares. Extension args (`packages`/`hostPackages`/`env`/`runtimeSecrets`/`mounts`/
 `networkAllowlist`) follow the same merge rules as `deriveProfile`: list
-surfaces concatenate independently, env is right-biased.
+surfaces concatenate independently, while env and runtime-secret attrsets are
+right-biased.
 
 **Caveat:** do not list `rust-analyzer` in your `rust-toolchain.toml`
 `components`. The constructor always combines `stable.rust-analyzer-preview`
@@ -685,7 +689,7 @@ dests live under `/home/wrix/` inside the container, not under
   [judge](../tests/judges/profiles.sh#test_rust_analyzer_sysroot)
 - `wrix.rustProfile { toolchain = ./rust-toolchain.toml; sha256 = "..."; }` produces a working profile whose `toolchain` field is a fenix-combine derivation reflecting the file's component set
   [judge](../tests/judges/profiles.sh#test_rust_profile_constructor)
-- `wrix.rustProfile { toolchain; sha256; packages = [p]; hostPackages = [h]; env = { K = "v"; }; mounts = [m]; networkAllowlist = [a]; }` lands extension args in the matching profile slots (package/mount/allowlist surfaces appended, env right-merged)
+- `wrix.rustProfile { toolchain; sha256; packages = [p]; hostPackages = [h]; env = { K = "v"; }; runtimeSecrets = { TOKEN = "required"; }; mounts = [m]; networkAllowlist = [a]; }` lands extension args in the matching profile slots (package/mount/allowlist surfaces appended, env and runtime-secret attrsets right-merged)
   [check](verify:profiles.rust-extension-args)
 - `wrix.rustProfile {}` (omitting required `toolchain`/`sha256`) errors at evaluation rather than silently producing an unpinned profile
   [check](verify:profiles.rust-required-args)
@@ -705,7 +709,7 @@ dests live under `/home/wrix/` inside the container, not under
   [check](verify:profiles.extra-packages-not-core)
 - `deriveProfile p { packages = [image]; hostPackages = [host]; }` keeps image and host package extensions on their respective package surfaces without crossing either direction
   [check](verify:profiles.host-image-package-split)
-- Profiles are composable (can extend extended profiles)
+- Profiles are composable (can extend extended profiles), and `runtimeSecrets` right-merges validated name-to-policy declarations while preserving built-in optional provider names
   [check](verify:profiles.nested-derive)
 - `wrix.mkDevShell { profile = wrix.rustProfile { ... }; }` produces a devshell whose env contains an absolute `RUSTC` under `profile.toolchain`, `RUSTC_WRAPPER=sccache`, `SCCACHE_DIR`, `SCCACHE_CACHE_SIZE`, and `CARGO_INCREMENTAL=0` (the rust profile's `shellHook` was spliced)
   [check](verify:devshell.profile-shellhook-spliced)
@@ -776,7 +780,7 @@ dests live under `/home/wrix/` inside the container, not under
 2. **Language Profiles** — Pre-configured Rust and Python environments
 3. **Profile Extension** — `deriveProfile` API to extend existing profiles
 4. **Package Bundling** — Profiles specify `packages` to include in the container image and `hostPackages` to include in host devshells. A profile also exposes `corePackages`, the wrix-controlled fixed-per-instance subset of image packages, so the image builder can layer wrix-default content separately from downstream additions (see `image-builder.md` § Provenance-Tiered Layering).
-5. **Environment Configuration** — Profiles set required environment variables
+5. **Environment Configuration** — Profiles separate non-secret image environment defaults from runtime-secret name/policy declarations; secret values are launcher inputs, not profile data
 6. **Mount Specifications** — Profiles can define default mounts (e.g., cargo cache)
 7. **Toolchain Configuration** — Top-level `rustProfile { toolchain; sha256; ... }` constructor produces a project-pinned rust profile from a `rust-toolchain.toml`
 8. **Rust Package Construction** — Rust profile exposes `buildPackage` for crane-backed Rust packages with split `bin`/`clippy`/`nextest` derivations

@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     env,
     ffi::OsString,
     fs, io,
@@ -28,6 +29,7 @@ pub struct ProfileFixture {
     pub agent_kind: String,
     pub deploy_key: Option<String>,
     pub mounts: Vec<Value>,
+    pub runtime_secrets: BTreeMap<String, String>,
     pub source_kind: String,
 }
 
@@ -37,6 +39,14 @@ impl Default for ProfileFixture {
             agent_kind: String::from("direct"),
             deploy_key: None,
             mounts: Vec::new(),
+            runtime_secrets: BTreeMap::from([
+                (String::from("ANTHROPIC_API_KEY"), String::from("optional")),
+                (
+                    String::from("CLAUDE_CODE_OAUTH_TOKEN"),
+                    String::from("optional"),
+                ),
+                (String::from("OPENAI_API_KEY"), String::from("optional")),
+            ]),
             source_kind: String::from(expected_source_kind()),
         }
     }
@@ -88,6 +98,8 @@ pub fn run_child(
         .env_remove("OPENAI_API_KEY")
         .env_remove("ANTHROPIC_API_KEY")
         .env_remove("CLAUDE_CODE_OAUTH_TOKEN")
+        .env_remove("CUSTOM_PROVIDER_TOKEN")
+        .env_remove("WRIX_REQUIRED_SECRET_TEST_VALUE")
         .env_remove("TMUX");
     if let Some(profile_config) = spec.profile_config {
         command.env("WRIX_SANDBOX_PROFILE_CONFIG", profile_config);
@@ -160,7 +172,10 @@ pub fn write_profile_config(path: &Path, fixture: &ProfileFixture) -> TestResult
         },
         "agent": { "kind": fixture.agent_kind },
         "resources": { "cpus": null, "memory_mb": 4096, "pids_limit": 4096 },
-        "security": { "deploy_key": fixture.deploy_key },
+        "security": {
+            "deploy_key": fixture.deploy_key,
+            "runtime_secrets": fixture.runtime_secrets
+        },
         "network": { "default_mode": "open", "ipv6": "disabled" },
         "services": { "beads": { "enable": "auto" }, "nix_cache": { "enable": false } },
         "features": { "mcp_runtime": false }

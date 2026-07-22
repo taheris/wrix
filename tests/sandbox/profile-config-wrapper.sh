@@ -61,6 +61,7 @@ build_wrapper_package() {
         system = builtins.currentSystem;
         lib = flake.legacyPackages.\${system}.lib;
         profile = lib.deriveProfile lib.profiles.base {
+          runtimeSecrets = { WRIX_RUNTIME_CONTRACT_TOKEN = \"optional\"; };
           mounts = [
             {
               source = \"$OPTIONAL_MOUNT_SOURCE\";
@@ -167,7 +168,12 @@ test_profile_config_contains_launcher_contract_fields() {
     (.agent.kind == "direct") and
     (.resources.memory_mb | type == "number") and
     (.resources.pids_limit | type == "number") and
-    (.security | type == "object") and
+    (.security.runtime_secrets == {
+      ANTHROPIC_API_KEY: "optional",
+      CLAUDE_CODE_OAUTH_TOKEN: "optional",
+      OPENAI_API_KEY: "optional",
+      WRIX_RUNTIME_CONTRACT_TOKEN: "optional"
+    }) and
     (.network.default_mode == "open") and
     (.network.ipv6 == "disabled") and
     (.services.beads.enable == "auto") and

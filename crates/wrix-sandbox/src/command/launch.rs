@@ -18,7 +18,8 @@ use crate::image::{
 };
 
 use super::config::{
-    AgentKind, MountMode, Platform, ProfileConfig, ProfileMount, SpawnConfig, SpawnMount,
+    AgentKind, EnvName, MountMode, Platform, ProfileConfig, ProfileMount, RuntimeSecretPolicy,
+    Security, SpawnConfig, SpawnMount, is_known_credential_env,
 };
 
 pub struct Request {
@@ -81,6 +82,10 @@ pub enum LaunchError {
     SpawnDeployKeyMissing { path: String },
     /// wrix spawn: no signing key resolved — set WRIX_SIGNING_KEY to an existing file, place one at {path}, or set WRIX_GIT_SIGN=0 to disable commit signing
     SpawnSigningKeyMissing { path: String },
+    /// required runtime secret {name} is not set in the host environment or SpawnConfig.env
+    RequiredRuntimeSecretMissing { name: EnvName },
+    /// runtime secret {name} is not valid Unicode in the host environment
+    RuntimeSecretNotUnicode { name: EnvName },
     /// WRIX_PI_AUTH_FILE={path}: file does not exist
     PiAuthMissing { path: String },
     /// wrix spawn: Pi auth file not found at {path} — run 'pi' and /login on the host, or set WRIX_PI_AUTH_FILE to an existing auth.json
@@ -170,6 +175,7 @@ struct Plan<'a> {
     stdio: bool,
     agent_args: Vec<String>,
     spawn_env: Vec<(String, String)>,
+    runtime_secret_env: Vec<(String, String)>,
     spawn_mounts: Vec<RenderedMount>,
     services: ServicesState,
     host_podman_socket: Option<HostPodmanSocket>,
@@ -480,6 +486,7 @@ impl<'a> Plan<'a> {
                     .collect(),
             ),
         };
+        let runtime_secret_env = resolve_runtime_secret_env(&profile.security, &spawn_env)?;
         let host_podman_socket = if Platform::CURRENT == Platform::Linux {
             host_podman_socket_from_env()?
         } else {
@@ -496,6 +503,7 @@ impl<'a> Plan<'a> {
             stdio,
             agent_args,
             spawn_env,
+            runtime_secret_env,
             spawn_mounts,
             services,
             host_podman_socket,
@@ -561,8 +569,11 @@ impl<'a> Plan<'a> {
             for (key, value) in self.launcher_identity_env_pairs() {
                 writeln!(stdout, "ENV={key}={value}")?;
             }
-            for (key, value) in Self::runtime_host_env_pairs() {
-                writeln!(stdout, "ENV={key}={}", dry_run_env_value(&key, &value))?;
+            for (key, value) in Self::runtime_passthrough_env_pairs() {
+                writeln!(stdout, "ENV={key}={value}")?;
+            }
+            for (key, value) in &self.runtime_secret_env {
+                writeln!(stdout, "ENV={key}={}", self.dry_run_env_value(key, value))?;
             }
             if let Some(path) = self.spawn_config_container_path() {
                 writeln!(stdout, "ENV=WRIX_SPAWN_CONFIG={path}")?;
@@ -596,7 +607,7 @@ impl<'a> Plan<'a> {
                 }
             }
             for (key, value) in &self.spawn_env {
-                writeln!(stdout, "ENV={key}={}", dry_run_env_value(key, value))?;
+                writeln!(stdout, "ENV={key}={}", self.dry_run_env_value(key, value))?;
             }
             for arg in &self.agent_args {
                 writeln!(stdout, "CMD={arg}")?;
@@ -1023,7 +1034,8 @@ impl<'a> Plan<'a> {
             .iter()
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect::<Vec<_>>();
-        pairs.extend(Self::runtime_host_env_pairs());
+        pairs.extend(Self::runtime_passthrough_env_pairs());
+        pairs.extend(self.runtime_secret_env.iter().cloned());
         if self.spawn() {
             pairs.extend(self.spawn_env.iter().cloned());
             if self.stdio {
@@ -1099,11 +1111,8 @@ impl<'a> Plan<'a> {
         pairs
     }
 
-    fn runtime_host_env_pairs() -> Vec<(String, String)> {
-        const PASSTHROUGH: [&str; 7] = [
-            "ANTHROPIC_API_KEY",
-            "CLAUDE_CODE_OAUTH_TOKEN",
-            "OPENAI_API_KEY",
+    fn runtime_passthrough_env_pairs() -> Vec<(String, String)> {
+        const PASSTHROUGH: [&str; 4] = [
             "WRIX_MCP",
             "WRIX_MCP_TMUX_AUDIT",
             "WRIX_MCP_TMUX_AUDIT_FULL",
@@ -1113,6 +1122,22 @@ impl<'a> Plan<'a> {
             .iter()
             .filter_map(|name| env::var(name).ok().map(|value| ((*name).to_owned(), value)))
             .collect()
+    }
+
+    fn dry_run_env_value<'b>(&self, name: &str, value: &'b str) -> &'b str {
+        if is_known_credential_env(name)
+            || self
+                .request
+                .profile_config
+                .security
+                .runtime_secrets
+                .keys()
+                .any(|secret| secret.as_str() == name)
+        {
+            "[REDACTED]"
+        } else {
+            value
+        }
     }
 
     fn launcher_identity_env_pairs(&self) -> Vec<(String, String)> {
@@ -2000,19 +2025,27 @@ fn first_configured_value(values: &[Option<String>]) -> Option<String> {
     values.iter().find_map(Clone::clone)
 }
 
-fn dry_run_env_value<'a>(name: &str, value: &'a str) -> &'a str {
-    if is_secret_env(name) {
-        "[REDACTED]"
-    } else {
-        value
+fn resolve_runtime_secret_env(
+    security: &Security,
+    spawn_env: &[(String, String)],
+) -> Result<Vec<(String, String)>, LaunchError> {
+    let mut resolved = Vec::new();
+    for (name, policy) in &security.runtime_secrets {
+        if spawn_env.iter().any(|(key, _value)| key == name.as_str()) {
+            continue;
+        }
+        match env::var(name.as_str()) {
+            Ok(value) => resolved.push((name.as_str().to_owned(), value)),
+            Err(env::VarError::NotPresent) if *policy == RuntimeSecretPolicy::Optional => {}
+            Err(env::VarError::NotPresent) => {
+                return Err(LaunchError::RequiredRuntimeSecretMissing { name: name.clone() });
+            }
+            Err(env::VarError::NotUnicode(_value)) => {
+                return Err(LaunchError::RuntimeSecretNotUnicode { name: name.clone() });
+            }
+        }
     }
-}
-
-fn is_secret_env(name: &str) -> bool {
-    matches!(
-        name,
-        "ANTHROPIC_API_KEY" | "CLAUDE_CODE_OAUTH_TOKEN" | "OPENAI_API_KEY"
-    )
+    Ok(resolved)
 }
 
 fn env_value(name: &str) -> Option<String> {

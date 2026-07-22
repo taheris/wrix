@@ -70,6 +70,10 @@ test_nested_derive_profile() {
           WRIX_COMPOSE_A = "first";
           WRIX_COMPOSE_B = "first";
         };
+        runtimeSecrets = {
+          FIRST_PROVIDER_TOKEN = "optional";
+          SHARED_PROVIDER_TOKEN = "optional";
+        };
         mounts = [ { source = "/tmp/first"; dest = "/mnt/first"; mode = "ro"; optional = true; } ];
         networkAllowlist = [ "first.example" ];
       };
@@ -78,6 +82,10 @@ test_nested_derive_profile() {
         env = {
           WRIX_COMPOSE_B = "second";
           WRIX_COMPOSE_C = "second";
+        };
+        runtimeSecrets = {
+          SECOND_PROVIDER_TOKEN = "optional";
+          SHARED_PROVIDER_TOKEN = "required";
         };
         mounts = [ { source = "/tmp/second"; dest = "/mnt/second"; mode = "rw"; optional = true; } ];
         networkAllowlist = [ "second.example" ];
@@ -93,6 +101,7 @@ test_nested_derive_profile() {
       envA = second.env.WRIX_COMPOSE_A;
       envB = second.env.WRIX_COMPOSE_B;
       envC = second.env.WRIX_COMPOSE_C;
+      runtimeSecrets = second.runtimeSecrets;
       hasHelloLeaf = hasPackage "hello" (leaf second);
       hasCowsayLeaf = hasPackage "cowsay" (leaf second);
       hasHelloCore = hasPackage "hello" second.corePackages;
@@ -115,6 +124,12 @@ test_nested_derive_profile() {
   [[ "$(json_field "$result" envC)" == "second" ]] || fail "second-level env value was not added"
   jq -e '.mounts == ["/mnt/first", "/mnt/second"]' <<<"$result" >/dev/null || fail "mounts were not concatenated in order"
   jq -e '.allowlist | index("first.example") and index("second.example")' <<<"$result" >/dev/null || fail "network allowlist did not include both extensions"
+  jq -e '
+    .runtimeSecrets.OPENAI_API_KEY == "optional" and
+    .runtimeSecrets.FIRST_PROVIDER_TOKEN == "optional" and
+    .runtimeSecrets.SECOND_PROVIDER_TOKEN == "optional" and
+    .runtimeSecrets.SHARED_PROVIDER_TOKEN == "required"
+  ' <<<"$result" >/dev/null || fail "runtime secret policies were not right-merged across profile derivation"
   [[ "$(json_field "$result" hasHelloLeaf)" == "true" ]] || fail "first extension package is missing from leaf delta"
   [[ "$(json_field "$result" hasCowsayLeaf)" == "true" ]] || fail "second extension package is missing from leaf delta"
   [[ "$(json_field "$result" hasHelloCore)" == "false" ]] || fail "first extension package leaked into corePackages"

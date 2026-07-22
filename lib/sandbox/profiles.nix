@@ -93,6 +93,12 @@ let
   # Environment variables in all profiles
   baseEnv = { };
 
+  baseRuntimeSecrets = {
+    ANTHROPIC_API_KEY = "optional";
+    CLAUDE_CODE_OAUTH_TOKEN = "optional";
+    OPENAI_API_KEY = "optional";
+  };
+
   # Base network allowlist for WRIX_NETWORK=limit mode
   # These domains are always permitted regardless of profile
   baseNetworkAllowlist = [
@@ -120,6 +126,7 @@ let
       corePackages ? [ ],
       hostPackages ? [ ],
       env ? { },
+      runtimeSecrets ? { },
       mounts ? [ ],
       networkAllowlist ? [ ],
       enabledPlugins ? { },
@@ -137,6 +144,7 @@ let
       packages = basePackages ++ corePackages ++ packages;
       hostPackages = hostBasePackages ++ hostPackages;
       env = baseEnv // env;
+      runtimeSecrets = baseRuntimeSecrets // runtimeSecrets;
       mounts = baseMounts ++ mounts;
       networkAllowlist = baseNetworkAllowlist ++ networkAllowlist;
     };

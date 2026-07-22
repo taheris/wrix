@@ -1,6 +1,6 @@
 mod common;
 
-use std::fs;
+use std::{collections::BTreeMap, fs};
 
 use serde_json::{Value, json};
 use wrix_sandbox::command::Command;
@@ -81,6 +81,17 @@ fn consumer_spawn_config_fields_are_mounted_for_entrypoint() -> TestResult {
 #[test]
 fn provider_credentials_in_spawn_config_are_redacted() -> TestResult {
     let fixture = SpawnFixture::new("spawn-provider-redaction")?;
+    common::write_profile_config(
+        &fixture.profile_config,
+        &ProfileFixture {
+            deploy_key: Some(String::from("repo-key")),
+            runtime_secrets: BTreeMap::from([(
+                String::from("OPENAI_API_KEY"),
+                String::from("required"),
+            )]),
+            ..ProfileFixture::default()
+        },
+    )?;
     let config = fixture.write(
         "provider-redaction",
         &json!({
