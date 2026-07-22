@@ -1,9 +1,25 @@
 { pkgs, ... }:
 
 let
-  inherit (pkgs.lib) escapeShellArg;
+  inherit (pkgs.lib) escapeShellArg makeBinPath optionals;
+  fixture = import ../standalone/notify-fixture.nix { inherit pkgs; };
+  notifyPath = makeBinPath (
+    [
+      fixture.client
+      fixture.daemon
+      pkgs.netcat
+      pkgs.socat
+    ]
+    ++ optionals pkgs.stdenv.isLinux [
+      pkgs.podman
+      pkgs.shadow
+      pkgs.skopeo
+      pkgs.util-linux
+    ]
+  );
 
   notifyTest = function: ''
+    export PATH="${notifyPath}:$PATH"
     run_repo_script ${escapeShellArg "tests/standalone/notify-test.sh"} ${escapeShellArg function}
   '';
 in

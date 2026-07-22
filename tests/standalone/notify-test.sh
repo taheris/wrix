@@ -143,21 +143,6 @@ wait_for_capture_within_one_second() {
   [[ -s "$capture" ]]
 }
 
-start_unix_capture() {
-  local socket="$1"
-  local capture="$2"
-  local log_file="$3"
-  local pid
-
-  mkdir -p "$(dirname "$socket")"
-  rm -f "$socket"
-  : >"$capture"
-  socat -u UNIX-LISTEN:"$socket",fork OPEN:"$capture",creat,append >"$log_file" 2>&1 &
-  pid=$!
-  BACKGROUND_PIDS+=("$pid")
-  wait_for_unix_socket "$socket"
-}
-
 start_tcp_capture() {
   local host="$1"
   local port="$2"
@@ -170,6 +155,28 @@ start_tcp_capture() {
   pid=$!
   BACKGROUND_PIDS+=("$pid")
   wait_for_tcp_listener "$host" "$port"
+}
+
+start_notify_daemon() {
+  local runtime_dir="$1"
+  local capture="$2"
+  local log_file="$3"
+  local pid
+
+  mkdir -p "$runtime_dir/wrix"
+  : >"$capture"
+  XDG_RUNTIME_DIR="$runtime_dir" \
+    WRIX_NOTIFY_ALWAYS=1 \
+    WRIX_NOTIFY_TEST_DISPATCH_CAPTURE="$capture" \
+    wrix-notifyd >"$log_file" 2>&1 &
+  pid=$!
+  BACKGROUND_PIDS+=("$pid")
+
+  case "$(uname -s)" in
+    Linux) wait_for_unix_socket "$runtime_dir/wrix/notify.sock" ;;
+    Darwin) wait_for_tcp_listener "$DARWIN_GATEWAY" "$TCP_PORT" ;;
+    *) return 1 ;;
+  esac
 }
 
 assert_single_json_envelope() {
@@ -194,6 +201,30 @@ assert_json_field() {
   if [[ "$actual" != "$expected" ]]; then
     fail "captured .$field was '$actual', expected '$expected'"
   fi
+}
+
+assert_native_dispatch() {
+  local capture="$1"
+  local title="$2"
+  local message="$3"
+  local sound="$4"
+
+  case "$(uname -s)" in
+    Linux)
+      if ! jq -se --arg title "$title" --arg message "$message" \
+        'length == 1 and .[0] == [$title, $message]' "$capture" >/dev/null; then
+        fail_with_output "wrix-notifyd did not dispatch the Linux notification payload" "$capture"
+      fi
+      ;;
+    Darwin)
+      if ! jq -se --arg title "$title" --arg message "$message" --arg sound "$sound" \
+        'length == 1 and .[0] == ["-title", $title, "-message", $message, "-sound", $sound]' \
+        "$capture" >/dev/null; then
+        fail_with_output "wrix-notifyd did not dispatch the Darwin notification payload" "$capture"
+      fi
+      ;;
+    *) fail "unsupported platform: $(uname -s)" ;;
+  esac
 }
 
 run_notify_with_timeout() {
@@ -345,18 +376,19 @@ test_container_transport_linux() {
   require_command jq
   require_command nc
   require_command nix
-  require_command socat
+  require_command wrix-notifyd
   require_command_or_skip podman
 
   if ! podman info >/dev/null 2>&1; then
     skip "podman runtime is not available"
   fi
+  if [[ ! -c /dev/net/tun ]]; then
+    skip "podman runtime cannot launch wrix networking without /dev/net/tun"
+  fi
 
   local runtime_dir="$TEST_TMP/runtime"
-  local socket_dir="$runtime_dir/wrix"
-  local socket="$socket_dir/notify.sock"
-  local capture="$TEST_TMP/linux-capture.jsonl"
-  local listener_log="$TEST_TMP/linux-listener.log"
+  local capture="$TEST_TMP/linux-dispatch.jsonl"
+  local daemon_log="$TEST_TMP/wrix-notifyd.log"
   local output_file="$TEST_TMP/wrix-spawn.log"
   local workspace="$TEST_TMP/workspace"
   local spawn_config="$TEST_TMP/spawn.json"
@@ -368,27 +400,24 @@ test_container_transport_linux() {
   local repo_root
 
   repo_root=$(resolve_repo_root)
-  mkdir -p "$workspace" "$socket_dir"
+  mkdir -p "$runtime_dir/libpod/tmp" "$workspace"
   cp "$repo_root/tests/standalone/notify-test.sh" "$workspace/notify-test.sh"
   printf 'not-a-real-key\n' >"$deploy_key"
   chmod 600 "$deploy_key"
 
-  if ! start_unix_capture "$socket" "$capture" "$listener_log"; then
-    fail_with_output "could not start Unix socket capture listener" "$listener_log"
+  if ! start_notify_daemon "$runtime_dir" "$capture" "$daemon_log"; then
+    fail_with_output "could not start wrix-notifyd Unix socket listener" "$daemon_log"
   fi
 
   write_spawn_config "$spawn_config" "$workspace" "$title" "$message" "$sound" "$session_id"
   run_spawned_container_check "$spawn_config" "$output_file" "$repo_root" "$runtime_dir" "$deploy_key"
 
   if ! wait_for_capture "$capture"; then
-    fail_with_output "fake Unix daemon did not receive container wrix-notify payload" "$listener_log"
+    fail_with_output "wrix-notifyd did not dispatch the container payload" "$daemon_log"
   fi
 
-  assert_json_field "$capture" title "$title"
-  assert_json_field "$capture" message "$message"
-  assert_json_field "$capture" sound "$sound"
-  assert_json_field "$capture" session_id "$session_id"
-  pass "container wrix-notify reaches host Unix socket daemon"
+  assert_native_dispatch "$capture" "$title" "$message" "$sound"
+  pass "container wrix-notify reaches the host Unix socket daemon and native bridge"
 }
 
 test_container_transport_darwin() {
@@ -396,11 +425,12 @@ test_container_transport_darwin() {
   require_command jq
   require_command nc
   require_command nix
-  require_command socat
+  require_command wrix-notifyd
   require_command_or_skip container
 
-  local capture="$TEST_TMP/darwin-capture.jsonl"
-  local listener_log="$TEST_TMP/darwin-listener.log"
+  local runtime_dir="$TEST_TMP/runtime"
+  local capture="$TEST_TMP/darwin-dispatch.jsonl"
+  local daemon_log="$TEST_TMP/wrix-notifyd.log"
   local output_file="$TEST_TMP/wrix-spawn.log"
   local workspace="$TEST_TMP/workspace"
   local spawn_config="$TEST_TMP/spawn.json"
@@ -411,28 +441,25 @@ test_container_transport_darwin() {
   local session_id="notify-test:0.1"
   local repo_root
 
-  if ! start_tcp_capture "$DARWIN_GATEWAY" "$TCP_PORT" "$capture" "$listener_log"; then
-    skip "could not bind fake daemon to $DARWIN_GATEWAY:$TCP_PORT"
-  fi
-
   repo_root=$(resolve_repo_root)
   mkdir -p "$workspace"
   cp "$repo_root/tests/standalone/notify-test.sh" "$workspace/notify-test.sh"
   printf 'not-a-real-key\n' >"$deploy_key"
   chmod 600 "$deploy_key"
 
-  write_spawn_config "$spawn_config" "$workspace" "$title" "$message" "$sound" "$session_id"
-  run_spawned_container_check "$spawn_config" "$output_file" "$repo_root" "$TEST_TMP/runtime" "$deploy_key"
-
-  if ! wait_for_capture "$capture"; then
-    fail_with_output "fake TCP daemon did not receive container wrix-notify payload" "$listener_log"
+  if ! start_notify_daemon "$runtime_dir" "$capture" "$daemon_log"; then
+    fail_with_output "could not start wrix-notifyd TCP listener" "$daemon_log"
   fi
 
-  assert_json_field "$capture" title "$title"
-  assert_json_field "$capture" message "$message"
-  assert_json_field "$capture" sound "$sound"
-  assert_json_field "$capture" session_id "$session_id"
-  pass "container wrix-notify reaches host TCP daemon"
+  write_spawn_config "$spawn_config" "$workspace" "$title" "$message" "$sound" "$session_id"
+  run_spawned_container_check "$spawn_config" "$output_file" "$repo_root" "$runtime_dir" "$deploy_key"
+
+  if ! wait_for_capture "$capture"; then
+    fail_with_output "wrix-notifyd did not dispatch the container payload" "$daemon_log"
+  fi
+
+  assert_native_dispatch "$capture" "$title" "$message" "$sound"
+  pass "container wrix-notify reaches the host TCP daemon and native bridge"
 }
 
 test_container_transport() {

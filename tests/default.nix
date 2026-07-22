@@ -491,13 +491,13 @@ let
       "$REPO_ROOT#legacyPackages.${ciLinuxSystem}.systemTests.beads-live-system"
   '';
 
-  notifyClient = import ../lib/notify/client.nix { inherit pkgs; };
+  notifyFixture = import ./standalone/notify-fixture.nix { inherit pkgs; };
 
   testNotify = writeShellScriptBin "test-notify" ''
     set -euo pipefail
     : "''${REPO_ROOT:=$(${git}/bin/git -C "''${PWD}" rev-parse --show-toplevel)}"
     export REPO_ROOT
-    export PATH="${notifyClient}/bin:${bash}/bin:${coreutils}/bin:${gawk}/bin:${git}/bin:${gnugrep}/bin:${gnused}/bin:${jq}/bin:${netcat}/bin:${nix}/bin:${socat}/bin:$PATH"
+    export PATH="${notifyFixture.client}/bin:${notifyFixture.daemon}/bin:${bash}/bin:${coreutils}/bin:${gawk}/bin:${git}/bin:${gnugrep}/bin:${gnused}/bin:${jq}/bin:${netcat}/bin:${nix}/bin:${socat}/bin:$PATH"
     exec ${bash}/bin/bash "$REPO_ROOT/tests/standalone/notify-test.sh" "$@"
   '';
 
