@@ -102,6 +102,10 @@ wrix_build_live_launcher() {
   nix build --no-link --print-out-paths --no-warn-dirty .#sandbox-claude.launcher
 }
 
+wrix_build_packaged_live_sandbox() {
+  nix build --no-link --print-out-paths --no-warn-dirty .#sandbox
+}
+
 wrix_realize_test_image_source() {
   local agent="$1"
   local image_attr

@@ -3,6 +3,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
+# shellcheck source=tests/lib/live-sandbox.sh
+source "$SCRIPT_DIR/../lib/live-sandbox.sh"
+
 TEST_TMP="$(mktemp -d -t wrix-darwin-network-bootstrap.XXXXXX)"
 
 cleanup() {
@@ -11,119 +14,106 @@ cleanup() {
 trap cleanup EXIT
 
 fail() {
-  printf 'FAIL: %s\n' "$1" >&2
-  exit 1
+  local message="$1"
+  printf 'FAIL: %s\n' "$message" >&2
+  return 1
 }
 
-tools="$TEST_TMP/trusted-tools"
-poison="$TEST_TMP/workspace-bin"
-bootstrap="$TEST_TMP/network-bootstrap.sh"
-stage_two="$TEST_TMP/entrypoint.sh"
-ready_file="$TEST_TMP/run/wrix-network-ready"
-nft_log="$TEST_TMP/nft.log"
-capsh_log="$TEST_TMP/capsh.log"
-stage_two_log="$TEST_TMP/stage-two.log"
-poison_log="$TEST_TMP/poison.log"
-mkdir -p "$tools" "$poison" "${ready_file%/*}"
-: >"$nft_log"
+assert_contains() {
+  local label="$1"
+  local haystack="$2"
+  local needle="$3"
+  if [[ "$haystack" != *"$needle"* ]]; then
+    fail "$label: missing '$needle' in output: $haystack"
+  fi
+}
 
-sed \
-  -e "s|/usr/local/libexec/wrix-network|$tools|g" \
-  -e "s|/entrypoint.sh|$stage_two|g" \
-  -e "s|/run/wrix-network-ready|$ready_file|g" \
-  "$REPO_ROOT/lib/sandbox/darwin/network-bootstrap.sh" >"$bootstrap"
-chmod +x "$bootstrap"
+test_darwin_network_bootstrap() {
+  wrix_require_live_sandbox_darwin
+  cd "$REPO_ROOT"
 
-cat >"$tools/nft" <<'EOF'
+  local command_line output sandbox stage_line verification_line workspace
+  local -a command
+  workspace="$TEST_TMP/workspace"
+  mkdir -p "$workspace/bin"
+
+  cat >"$workspace/assert-bootstrap.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-printf '%s\n' "$*" >>"${WRIX_TEST_NFT_LOG:?}"
-if [[ "${1:-}" == "-f" ]]; then
-  /bin/cat >>"${WRIX_TEST_NFT_LOG:?}"
-  exit 0
-fi
-if [[ "${1:-} ${2:-} ${3:-} ${4:-} ${5:-}" == "list chain inet wrix input" ]]; then
-  printf 'chain input { policy drop; }\n'
-elif [[ "${1:-} ${2:-} ${3:-} ${4:-} ${5:-}" == "list chain inet wrix output" ]]; then
-  printf 'chain output { policy drop; ip daddr 10.0.0.0/8 reject; }\n'
-fi
-EOF
 
-cat >"$tools/capsh" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-printf '%s\n' "$*" >"${WRIX_TEST_CAPSH_LOG:?}"
-tool_dir="${0%/*}"
-"$tool_dir/grep" -qF 'list chain inet wrix output' "${WRIX_TEST_NFT_LOG:?}" || {
-  echo 'capsh ran before firewall verification' >&2
+[[ -f /run/wrix-network-ready ]] || {
+  printf 'network bootstrap marker is missing\n' >&2
   exit 1
 }
-[[ "${1:-}" == "--drop=cap_net_admin" && "${2:-}" == "--" && "${3:-}" == "-c" ]] || {
-  echo "unexpected capsh invocation: $*" >&2
+[[ "$PATH" == /workspace/bin:* ]] || {
+  printf 'workspace poison directory is not reachable during stage two\n' >&2
   exit 1
 }
-script="$4"
-shift 4
-exec /bin/bash -c "$script" "$@"
+[[ "${1:-}" == "alpha" ]] || {
+  printf 'first bootstrap argument was not preserved\n' >&2
+  exit 1
+}
+[[ "${2:-}" == "two words" ]] || {
+  printf 'second bootstrap argument was not preserved\n' >&2
+  exit 1
+}
+seen=0
+while read -r field value _rest; do
+  case "$field" in
+    CapInh:|CapPrm:|CapEff:|CapBnd:|CapAmb:)
+      [[ "$value" =~ ^[0-9A-Fa-f]+$ ]] || exit 1
+      low="${value: -8}"
+      if (( (16#$low & 16#1000) != 0 )); then
+        printf 'NET_ADMIN survived in %s\n' "$field" >&2
+        exit 1
+      fi
+      seen=$((seen + 1))
+      ;;
+  esac
+done < /proc/self/status
+[[ "$seen" -eq 5 ]] || {
+  printf 'Linux capability state could not be verified\n' >&2
+  exit 1
+}
+[[ ! -e /workspace/poison.log ]] || {
+  printf 'bootstrap executed a workspace-controlled tool\n' >&2
+  exit 1
+}
+printf 'DARWIN_BOOTSTRAP_STAGE_TWO=%s|%s\n' "$1" "$2"
 EOF
+  chmod +x "$workspace/assert-bootstrap.sh"
 
-cat >"$tools/getent" <<'EOF'
+  local tool
+  for tool in nft capsh getent awk sort grep; do
+    cat >"$workspace/bin/$tool" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-printf '93.184.216.34 STREAM %s\n' "${2:-example.com}"
-EOF
 
-cat >"$tools/iptables" <<'EOF'
-#!/usr/bin/env bash
-exit 99
-EOF
-cat >"$tools/ip6tables" <<'EOF'
-#!/usr/bin/env bash
-exit 99
-EOF
-cat >"$tools/nc" <<'EOF'
-#!/usr/bin/env bash
-exit 0
-EOF
-
-for tool in awk sort grep sleep; do
-  ln -s "$(command -v "$tool")" "$tools/$tool"
-done
-chmod +x "$tools/nft" "$tools/capsh" "$tools/getent" "$tools/iptables" "$tools/ip6tables" "$tools/nc"
-
-cat >"$stage_two" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-[[ -f "${WRIX_TEST_READY_FILE:?}" ]]
-printf '%s\n' "$@" >"${WRIX_TEST_STAGE_TWO_LOG:?}"
-EOF
-chmod +x "$stage_two"
-
-for tool in nft capsh getent awk sort grep; do
-  cat >"$poison/$tool" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-: >"${WRIX_TEST_POISON_LOG:?}"
+printf '%s\n' "$0" >>/workspace/poison.log
 exit 97
 EOF
-  chmod +x "$poison/$tool"
-done
+    chmod +x "$workspace/bin/$tool"
+  done
 
-PATH="$poison:$PATH" \
-WRIX_NETWORK=open \
-WRIX_NETWORK_DNS_SERVERS=1.1.1.1 \
-WRIX_TEST_CAPSH_LOG="$capsh_log" \
-WRIX_TEST_NFT_LOG="$nft_log" \
-WRIX_TEST_POISON_LOG="$poison_log" \
-WRIX_TEST_READY_FILE="$ready_file" \
-WRIX_TEST_STAGE_TWO_LOG="$stage_two_log" \
-  /bin/bash "$bootstrap" alpha 'two words'
+  sandbox=$(wrix_build_packaged_live_sandbox)
+  command=(
+    "$sandbox/bin/wrix" run "$workspace"
+    /workspace/assert-bootstrap.sh alpha 'two words'
+  )
+  printf -v command_line '%q ' "${command[@]}"
+  output=$(WRIX_NETWORK=open wrix_run_with_pty "$command_line")
 
-[[ ! -e "$poison_log" ]] || fail "bootstrap executed a workspace-controlled tool"
-[[ -f "$ready_file" ]] || fail "bootstrap did not write its trusted completion marker"
-grep -qF -- '--drop=cap_net_admin -- -c' "$capsh_log" || fail "bootstrap did not drop NET_ADMIN through capsh"
-grep -qF 'flush ruleset' "$nft_log" || fail "bootstrap did not install the nft base policy"
-[[ "$(sed -n '1p' "$stage_two_log")" == "alpha" ]] || fail "bootstrap did not preserve the first agent argument"
-[[ "$(sed -n '2p' "$stage_two_log")" == "two words" ]] || fail "bootstrap did not preserve the quoted agent argument"
+  assert_contains "firewall verification" "$output" "Network policy verified:" || return 1
+  assert_contains "stage two" "$output" "DARWIN_BOOTSTRAP_STAGE_TWO=alpha|two words" || return 1
+  [[ ! -e "$workspace/poison.log" ]] || fail "bootstrap executed a workspace-controlled tool"
 
-printf 'PASS: Darwin network bootstrap uses trusted tools and drops NET_ADMIN before stage two\n'
+  verification_line=$(printf '%s\n' "$output" | awk '/Network policy verified:/ { print NR; exit }')
+  stage_line=$(printf '%s\n' "$output" | awk '/DARWIN_BOOTSTRAP_STAGE_TWO=/ { print NR; exit }')
+  if [[ "$verification_line" -ge "$stage_line" ]]; then
+    fail "stage two ran before the packaged bootstrap reported firewall verification"
+  fi
+
+  printf 'PASS: packaged Darwin launcher verifies network bootstrap before stage two\n'
+}
+
+test_darwin_network_bootstrap

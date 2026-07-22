@@ -10,18 +10,12 @@ source "$SCRIPT_DIR/../lib/podman-image.sh"
 
 TEST_TMP="$(mktemp -d -t wrix-container-start.XXXXXX)"
 PODMAN_IMAGE_REFS=()
-CONTAINER_IMAGE_REFS=()
 
 cleanup() {
   local ref
   for ref in "${PODMAN_IMAGE_REFS[@]}"; do
     if command -v podman >/dev/null 2>&1 && podman image exists "$ref"; then
       podman rmi "$ref" >/dev/null 2>&1 || true # best-effort: cleanup must not mask the verifier result when an image is pinned.
-    fi
-  done
-  for ref in "${CONTAINER_IMAGE_REFS[@]}"; do
-    if command -v container >/dev/null 2>&1 && container image inspect "$ref" >/dev/null 2>&1; then
-      container image delete "$ref" >/dev/null 2>&1 || true # best-effort: cleanup must not mask the verifier result when an image is pinned.
     fi
   done
   rm -rf "$TEST_TMP"
@@ -73,57 +67,26 @@ test_linux_container_starts() {
   printf 'PASS: linux container-start\n' >&2
 }
 
-loaded_ref_from_container_load() {
-  local load_output="$1"
-  local loaded_ref
-  loaded_ref=$(printf '%s\n' "$load_output" | sed -n 's/.*\(untagged@sha256:[a-f0-9]\{64\}\).*/\1/p' | head -n 1)
-  if [[ -n "$loaded_ref" ]]; then
-    printf '%s\n' "$loaded_ref"
-    return 0
-  fi
-  loaded_ref=$(printf '%s\n' "$load_output" | sed -n 's/^Loaded image: //p; s/^Loaded image(s): //p' | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | head -n 1)
-  [[ -n "$loaded_ref" ]] || return 1
-  printf '%s\n' "$loaded_ref"
-}
-
 test_darwin_container_starts() {
   wrix_require_live_sandbox_darwin
-  command -v skopeo >/dev/null 2>&1 || wrix_live_skip "skopeo not on PATH"
   cd "$REPO_ROOT"
 
-  local image_source workspace image_ref oci_tar load_output loaded_ref result
-  image_source=$(wrix_realize_test_image_source direct)
+  local command_line result sandbox workspace
+  local -a command
+  sandbox=$(wrix_build_packaged_live_sandbox)
   workspace="$TEST_TMP/darwin-workspace"
   mkdir -p "$workspace"
-  image_ref=$(wrix_live_image_ref "container-starts-$$")
-  CONTAINER_IMAGE_REFS+=("$image_ref")
-  oci_tar="$TEST_TMP/darwin-container-starts.oci.tar"
+  command=(
+    "$sandbox/bin/wrix" run "$workspace"
+    /bin/bash -c 'printf "container-started\\n"; grep localhost /etc/hosts'
+  )
+  printf -v command_line '%q ' "${command[@]}"
 
-  skopeo --insecure-policy copy --quiet "docker-archive:$image_source" "oci-archive:$oci_tar"
-  load_output=$(container image load --input "$oci_tar" 2>&1)
-  if ! loaded_ref=$(loaded_ref_from_container_load "$load_output"); then
-    fail "could not determine loaded Darwin image ref: $load_output"
-    return 1
-  fi
-  container image tag "$loaded_ref" "$image_ref"
-
-  result=$(container run --rm \
-    -w / \
-    -v "$workspace:/workspace" \
-    -- \
-    "$image_ref" \
-    /bin/bash -c "echo container-started")
+  result=$(wrix_run_with_pty "$command_line")
   assert_contains "darwin start" "$result" "container-started" || return 1
-
-  result=$(container run --rm \
-    -w / \
-    -v "$workspace:/workspace" \
-    -- \
-    "$image_ref" \
-    /bin/bash -c "grep localhost /etc/hosts")
   assert_contains "darwin loopback" "$result" "localhost" || return 1
 
-  printf 'PASS: darwin container-start\n' >&2
+  printf 'PASS: packaged Darwin sandbox container-start\n' >&2
 }
 
 test_current_platform_container_starts() {
