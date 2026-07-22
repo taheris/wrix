@@ -25,17 +25,6 @@ playwright_eval_raw() {
         | jq -r .
 }
 
-playwright_instantiate_mode() {
-    local mode="$1"
-    shift
-
-    nix-instantiate "$PLAYWRIGHT_EVAL_NIX" \
-        --argstr repoRoot "$PLAYWRIGHT_REPO_ROOT" \
-        --argstr system "$PLAYWRIGHT_SYSTEM" \
-        --argstr mode "$mode" \
-        "$@"
-}
-
 playwright_build_mode() {
     local mode="$1"
     shift

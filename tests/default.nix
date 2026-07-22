@@ -473,7 +473,7 @@ let
     };
   testPlaywrightChromiumClosure =
     mkPlaywrightCiApp "test-playwright-chromium-closure" "tests/mcp/playwright/build-test.sh"
-      "test_image_derivation_closes_over_chromium";
+      "test_image_contains_chromium";
   testPlaywrightChromiumExecutablePath =
     mkPlaywrightCiApp "test-playwright-chromium-executable-path" "tests/mcp/playwright/smoke-test.sh"
       "test_chromium_executable_path_derives_from_playwright_browsers";
