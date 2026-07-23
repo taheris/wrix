@@ -1844,7 +1844,7 @@ let
   # image's chained `fromImage` base (image.baseImage) and assert one drvPath
   # across all of them. A regression that threads a profile input into
   # base-image.nix would split the drvPaths and fail here.
-  baseImageOf = args: (sandboxLib.mkSandbox args).image.baseImage.drvPath;
+  baseImageOf = args: discardContext (sandboxLib.mkSandbox args).image.baseImage.drvPath;
   referenceBaseImage = baseImageOf { profile = sandboxLib.profiles.base; };
   baseImagePermutations = {
     packages = baseImageOf {
@@ -1909,7 +1909,8 @@ let
   # settings JSON, and MCP configs — holding the profile fixed, then assert one
   # drvPath across all of them. A regression threading a tier-2 input into
   # stable-profile-image.nix would split the drvPaths and fail here.
-  stableProfileImageOf = args: (sandboxLib.mkSandbox args).image.stableProfileImage.drvPath;
+  stableProfileImageOf =
+    args: discardContext (sandboxLib.mkSandbox args).image.stableProfileImage.drvPath;
   referenceStableProfile = stableProfileImageOf { profile = sandboxLib.profiles.base; };
   stableProfilePermutations = {
     packages = stableProfileImageOf {
