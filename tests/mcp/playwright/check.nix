@@ -232,6 +232,19 @@ let
   registryPackagesIncluded = builtins.all (
     package: builtins.elem package sandbox.profile.packages
   ) server.packages;
+  registryEntries = builtins.filter (
+    entry: entry.name == "playwright"
+  ) sandbox.image.mcpAvailable.servers;
+  registryConfigValid =
+    builtins.length registryEntries == 1
+    && (
+      let
+        entry = builtins.head registryEntries;
+      in
+      entry.command == "playwright-mcp"
+      && builtins.elemAt entry.args 0 == "--config"
+      && entry.env.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD == "1"
+    );
   registryTripleCheck =
     assert server.name == "playwright";
     assert builtins.isFunction server.mkServerConfig;
@@ -239,15 +252,7 @@ let
     assert registryPackagesIncluded;
     assert serverConfig.command == "playwright-mcp";
     assert builtins.elemAt serverConfig.args 0 == "--config";
-    mkCheck "test-playwright-registry-triple" [ pkgs.jq ] ''
-      jq -e '
-        .servers[]
-        | select(.name == "playwright")
-        | .command == "playwright-mcp"
-          and .args[0] == "--config"
-          and .env.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD == "1"
-      ' ${sandbox.image.mcpAvailableJson} >/dev/null
-    '';
+    mkEvaluationCheck "test-playwright-registry-triple" registryConfigValid;
 in
 {
   inherit

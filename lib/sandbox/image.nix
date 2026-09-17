@@ -108,7 +108,7 @@ let
   piSettingsJson =
     if agent == "pi" then pkgs.writeText "pi-settings.json" (toJSON piSettings) else null;
 
-  mcpAvailableJson = pkgs.writeText "wrix-mcp-available.json" (toJSON {
+  mcpAvailable = {
     schema = 1;
     runtime_selection = mcpRuntime;
     servers = mapAttrsToList (name: config: {
@@ -117,7 +117,8 @@ let
       args = config.args or [ ];
       env = config.env or { };
     }) mcpServerConfigs;
-  });
+  };
+  mcpAvailableJson = pkgs.writeText "wrix-mcp-available.json" (toJSON mcpAvailable);
 
   # Agent runtime selection. Exactly one agent package rides the agent tier —
   # new runtimes plug in by extending the supported `agent` values. No
@@ -478,6 +479,7 @@ rawImage
     claudeConfigJson
     claudeSettingsJson
     materializedRoots
+    mcpAvailable
     mcpAvailableJson
     piSettingsJson
     ;

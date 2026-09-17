@@ -195,8 +195,8 @@ test_core_membership() {
       pythonPackages = sortPaths python.packages;
       pinnedCore = sortPaths pinned.corePackages;
       pinnedPackages = sortPaths pinned.packages;
-      rustToolchainCoreCount = countPath rust.toolchain.outPath rust.corePackages;
-      pinnedToolchainCoreCount = countPath pinned.toolchain.outPath pinned.corePackages;
+      rustImageToolchainCoreCount = countPath (imageToolchain rust) rust.corePackages;
+      pinnedImageToolchainCoreCount = countPath (imageToolchain pinned) pinned.corePackages;
     }
   ")
 
@@ -210,8 +210,8 @@ test_core_membership() {
     .pythonPackages == .expectedPythonCore and
     .pinnedCore == .expectedPinnedCore and
     .pinnedPackages == .expectedPinnedPackages and
-    .rustToolchainCoreCount == 1 and
-    .pinnedToolchainCoreCount == 1
+    .rustImageToolchainCoreCount == 1 and
+    .pinnedImageToolchainCoreCount == 1
   ' <<<"$result" >/dev/null || fail "profile package membership differs from the documented exact sets"
 }
 

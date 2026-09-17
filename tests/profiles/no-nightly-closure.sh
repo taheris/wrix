@@ -25,6 +25,7 @@ copy_tracked_flake() {
   local destination
   local relative_path
   destination=$(mktemp -d -t wrix-fresh-flake.XXXXXX)
+  destination=$(cd "$destination" && pwd -P)
   while IFS= read -r -d '' relative_path; do
     mkdir -p "$destination/$(dirname "$relative_path")"
     cp -a "$REPO_ROOT/$relative_path" "$destination/$relative_path"
