@@ -9,6 +9,7 @@ BUILDER_UID=1000
 BUILDER_HOME="/home/$BUILDER_USER"
 
 . /usr/lib/wrix-builder/sshd.sh
+. /usr/lib/wrix-builder/nix-daemon.sh
 
 # Verify /nix/store is populated (bootstrap is done by CLI before container start)
 if [[ ! -d /nix/store ]] || [[ -z "$(/bin/ls -A /nix/store 2>/dev/null)" ]]; then
@@ -16,9 +17,9 @@ if [[ ! -d /nix/store ]] || [[ -z "$(/bin/ls -A /nix/store 2>/dev/null)" ]]; the
     exit 1
 fi
 
-# Note: Permissions are set at bootstrap time (image build + CLI init).
-# VirtioFS UID mapping shows host-owned files as owned by builder inside container,
-# so no runtime chmod needed. Skipping chmod saves 30-60+ seconds on large stores.
+# Store ownership and permissions are established by the canonical Nix import.
+# The root daemon writes the store on behalf of the trusted builder client, so
+# no recursive runtime chmod is needed.
 
 echo "Configuring sshd..."
 mkdir -p /etc/ssh
@@ -67,18 +68,10 @@ chmod 600 "$BUILDER_HOME/.ssh/authorized_keys"
 chown "$BUILDER_UID:$BUILDER_UID" "$BUILDER_HOME/.ssh/authorized_keys"
 
 # Configure the Nix daemon
-# Use /run for the client endpoint to avoid VirtioFS permission issues with /nix
+# Keep the client endpoint outside the persistent /nix volume.
 echo "Configuring nix..."
 mkdir -p /etc/nix /run/nix
-cat > /etc/nix/nix.conf <<EOF
-experimental-features = nix-command flakes
-sandbox = false
-trusted-users = root $BUILDER_USER
-max-jobs = auto
-cores = 0
-min-free = 1073741824
-max-free = 3221225472
-EOF
+wrix_builder_write_nix_config "$BUILDER_USER" /etc/nix/nix.conf
 
 # Set NIX_DAEMON_SOCKET_PATH for SSH sessions (non-interactive commands need this)
 echo "NIX_DAEMON_SOCKET_PATH=/run/nix/daemon.sock" > "$BUILDER_HOME/.ssh/environment"

@@ -124,11 +124,17 @@ in
       if ! extract_layer_member "$tmp/image" "$tmp/image.layers" "usr/lib/wrix-builder/sshd.sh" "$tmp/sshd.sh"; then
           fail "builder image is missing /usr/lib/wrix-builder/sshd.sh"
       fi
+      if ! extract_layer_member "$tmp/image" "$tmp/image.layers" "usr/lib/wrix-builder/nix-daemon.sh" "$tmp/nix-daemon.sh"; then
+          fail "builder image is missing /usr/lib/wrix-builder/nix-daemon.sh"
+      fi
       if [[ "$(sha256sum "$tmp/entrypoint.sh" | cut -d ' ' -f 1)" != "$(sha256sum "${../../lib/sandbox/builder/entrypoint.sh}" | cut -d ' ' -f 1)" ]]; then
           fail "builder image /entrypoint.sh does not match the entrypoint source"
       fi
       if [[ "$(sha256sum "$tmp/sshd.sh" | cut -d ' ' -f 1)" != "$(sha256sum "${../../lib/sandbox/builder/sshd.sh}" | cut -d ' ' -f 1)" ]]; then
           fail "builder image sshd helper does not match the helper source"
+      fi
+      if [[ "$(sha256sum "$tmp/nix-daemon.sh" | cut -d ' ' -f 1)" != "$(sha256sum "${../../lib/sandbox/builder/nix-daemon.sh}" | cut -d ' ' -f 1)" ]]; then
+          fail "builder image Nix daemon helper does not match the helper source"
       fi
 
       # shellcheck source=/dev/null
@@ -142,6 +148,17 @@ in
       require_directive allowusers builder
       require_directive authorizedkeysfile /home/%u/.ssh/authorized_keys
       require_directive hostkey /etc/ssh/ssh_host_ed25519_key
+
+      nix_config="$tmp/nix.conf"
+      # shellcheck source=/dev/null
+      source "$tmp/nix-daemon.sh"
+      wrix_builder_write_nix_config builder "$nix_config"
+      grep -Fxq 'sandbox = false' "$nix_config" \
+        || fail "builder nix.conf does not disable unsupported nested sandboxing"
+      grep -Fxq 'build-users-group =' "$nix_config" \
+        || fail "builder nix.conf requires a missing nixbld group"
+      grep -Fxq 'trusted-users = root builder' "$nix_config" \
+        || fail "builder nix.conf does not trust the authenticated builder user"
 
       WRIX_BUILDER_BIN='${fixtureBuilder}/bin/wrix-builder' \
         bash ${./key-material.sh} test_start_publishes_ssh_only_on_host_loopback

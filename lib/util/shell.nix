@@ -190,7 +190,7 @@ in
   fixVmnetRoute = ''
     _vpn_conflict=false
     _fix_vmnet_route() {
-      local _subnet _net _default_if _prefix _vmnet_if
+      local _subnet _net _default_if _prefix _vmnet_if _route_table _interfaces
       _subnet=$(container network inspect default 2>/dev/null \
         | ${jqBin} -r '
             (if type == "array" then .[0] else . end)
@@ -203,10 +203,21 @@ in
       [[ "$_default_if" == utun* ]] || return 0
       _vpn_conflict=true
       _prefix="''${_net%.*}"
-      netstat -rn | grep -q "^''${_prefix}\.128.*bridge" && return 0
-      _vmnet_if=$(ifconfig 2>/dev/null \
-        | grep -B5 "192.168.64" \
-        | grep -oE '^[a-z][a-z0-9]+' | head -1)
+      _route_table=$(netstat -rn 2>/dev/null) || return 0
+      if grep -q "^''${_prefix}\.128.*bridge" <<<"$_route_table"; then
+        return 0
+      fi
+      _interfaces=$(ifconfig 2>/dev/null) || return 0
+      _vmnet_if=$(awk '
+        /^[a-z][a-z0-9]*:/ {
+          interface = $1
+          sub(/:$/, "", interface)
+        }
+        /inet 192\.168\.64\./ {
+          print interface
+          exit
+        }
+      ' <<<"$_interfaces")
       if [[ -n "$_vmnet_if" ]]; then
         echo "Adding vmnet route (VPN detected on $_default_if)" >&2
         sudo route add -net "$_net/25" \

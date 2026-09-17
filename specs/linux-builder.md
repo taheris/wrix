@@ -17,12 +17,12 @@ nix-daemon                         sshd (:22)
                                        │
                                    nix-daemon
                                        │
-                                   /nix (VirtioFS mount)
+                                   /nix (ext4 volume)
                                        │
-~/.local/share/wrix/builder-nix/ ◄───┘
+Apple volume: wrix-builder-nix ◄─────┘
 ```
 
-The builder runs under Apple's `container` CLI (Virtualization.framework microVM, same boundary class as wrix sandboxes on macOS — see `specs/security.md`). Its image system follows the macOS host architecture: `aarch64-linux` on Apple Silicon and `x86_64-linux` on Intel. `/nix` is bind-mounted from `~/.local/share/wrix/builder-nix/` so the store persists across container restarts. SSH host and client keys live next to the store under `builder-keys/`.
+The builder runs under Apple's `container` CLI (Virtualization.framework microVM, same boundary class as wrix sandboxes on macOS — see `specs/security.md`). Its image system follows the macOS host architecture: `aarch64-linux` on Apple Silicon and `x86_64-linux` on Intel. `/nix` is backed by the case-sensitive Apple volume `wrix-builder-nix`, so the store persists across container restarts without passing Linux store filenames through macOS's case-insensitive filesystem. SSH host and client keys remain under the host user's `builder-keys/` directory.
 
 ### Trust Model
 
@@ -47,21 +47,27 @@ The `wrix-builder` bootstrap image follows the support-image metadata and label 
 
 ```
 ~/.local/share/wrix/
-├── builder-nix/      # Persistent /nix store
-└── builder-keys/     # SSH keys
-    ├── host_ed25519
-    └── client_ed25519
+├── builder-keys/                 # SSH keys
+│   ├── host_ed25519
+│   └── client_ed25519
+└── builder-volume-image-version  # Verified image version for the volume
+
+Apple container volumes:
+└── wrix-builder-nix              # 40 GB ext4 volume mounted at /nix
 ```
+
+The former `~/.local/share/wrix/builder-nix/` bind store is never mounted or deleted automatically. If present, `wrix-builder` reports it as preserved legacy data so the user can remove it after validating the new volume.
 
 ## Setup Process
 
-1. `wrix-builder start` exports the bootstrap image's initial `/nix` through a temporary container on first use, then creates the builder with the persistent VirtioFS `/nix` mount
-2. `wrix-builder setup` adds the host route, installs the client identity under `/etc/nix`, and adds the SSH host key to root's `known_hosts` (sudo required)
-3. User adds `builders = ssh-ng://builder@localhost:2222 <native-linux-system> /etc/nix/wrix_builder_ed25519 4 1 big-parallel,benchmark` to `~/.config/nix/nix.conf` or uses the pure nix-darwin module printed by `wrix-builder config`
+1. On Darwin, `wrix-builder start` creates the labelled ext4 volume on first use and streams the bootstrap closure through Nix's canonical export/import format into a chrooted store on that volume
+2. The import is accepted only after `nix-store --verify --check-contents` succeeds; the builder then mounts the volume at `/nix`
+3. `start` repairs a conflicting VPN route before waiting for authenticated SSH, while `wrix-builder setup` installs the client identity under `/etc/nix` and adds the SSH host key to root's `known_hosts` (sudo required)
+4. User adds `builders = ssh-ng://builder@localhost:2222 <native-linux-system> /etc/nix/wrix_builder_ed25519 4 1 big-parallel,benchmark` to `~/.config/nix/nix.conf` or uses the pure nix-darwin module printed by `wrix-builder config`
 
 ## Success Criteria
 
-- The `wrix-builder` integration suite passes on macOS 26+ (`start` waits for nix-daemon and authenticated SSH, status, remote `nixpkgs#hello` build using the generated native-system configuration, store persistence across `stop`/`start`, pure `config` snippet evaluation); skips with exit 77 on non-Darwin or older macOS
+- The `wrix-builder` integration suite passes on macOS 26+ (`start` repairs routes before waiting for nix-daemon and authenticated SSH, the imported store passes full content verification, status, remote `nixpkgs#hello` build using the generated native-system configuration, store persistence across `stop`/`start`, pure `config` snippet evaluation); skips with exit 77 on non-Darwin or older macOS
   [system](verify:linux-builder.integration)
 - The host publishes SSH on `127.0.0.1:2222` only, while sshd has `PasswordAuthentication no` and listens on guest `0.0.0.0:22` so Apple port forwarding can reach it
   [check](test-ci:test-linux-builder-sshd-hardening)
@@ -77,7 +83,7 @@ The `wrix-builder` bootstrap image follows the support-image metadata and label 
 ### Functional
 
 1. **Container lifecycle** — `wrix-builder start` / `stop` / `status` manage a single Apple `container` instance named for the builder.
-2. **Persistent Nix store** — `/nix` is bind-mounted from `~/.local/share/wrix/builder-nix/`; the first `start` seeds it from the image's initial store, subsequent starts reuse it.
+2. **Persistent Nix store** — on Darwin, `/nix` is mounted from the labelled `wrix-builder-nix` ext4 volume; the first `start` populates it with canonical Nix export/import and verifies every registered path, while subsequent starts reuse the verified volume.
 3. **SSH access** — sshd listens on `0.0.0.0:22` inside the isolated builder VM; the Apple `container` CLI forwards `127.0.0.1:2222` on the host to it. Authentication is key-based only.
 4. **Route and known_hosts setup** — `wrix-builder setup` runs sudo-required host configuration so the nix-daemon can reach the listener and trust the host key.
 5. **Key management** — host and client SSH keys are generated on first run, stored under `~/.local/share/wrix/builder-keys/`, and never regenerated unless the user opts in.

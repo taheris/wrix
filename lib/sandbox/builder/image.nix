@@ -3,7 +3,7 @@
 # This creates a layered container image with:
 # - nix-daemon for remote building
 # - sshd for ssh-ng:// access
-# - Builder user with UID 1000 for VirtioFS compatibility
+# - Builder user with UID 1000 for remote build sessions
 #
 {
   pkgs,
@@ -108,7 +108,7 @@ let
       "PATH=${builderEnv}/bin:/bin:/usr/bin"
       "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
       "NIX_SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
-      # Use /run to avoid VirtioFS permission issues
+      # Keep the daemon socket outside the persistent store volume
       "NIX_DAEMON_SOCKET_PATH=/run/nix/daemon.sock"
     ];
     Entrypoint = [ "/entrypoint.sh" ];
@@ -152,6 +152,8 @@ let
       mkdir -p usr/lib/wrix-builder
       cp ${./sshd.sh} usr/lib/wrix-builder/sshd.sh
       chmod 644 usr/lib/wrix-builder/sshd.sh
+      cp ${./nix-daemon.sh} usr/lib/wrix-builder/nix-daemon.sh
+      chmod 644 usr/lib/wrix-builder/nix-daemon.sh
 
       # Fix Nix permissions for non-root users
       # Store must be writable to add new paths and create lock files
@@ -245,6 +247,7 @@ rawImage
 // {
   digest = digestFile;
   inherit labels;
+  darwin_seed_roots = if hostPkgs.stdenv.hostPlatform.isDarwin then contents else [ ];
   ref = "${refPrefix}${imageName}:${imageTag}";
   source = imageSource;
   source_kind = sourceKind;

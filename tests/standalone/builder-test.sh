@@ -119,6 +119,7 @@ if [[ "$MACOS_MAJOR" -lt 26 ]]; then
 fi
 
 TMP_DIR="$(mktemp -d)"
+TMP_DIR="$(cd "$TMP_DIR" && pwd -P)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 FAILED=0
 
@@ -147,8 +148,8 @@ else
   echo "  FAIL: Builder not running"
   FAILED=1
 fi
-if echo "$STATUS_OUTPUT" | grep -q "Nix store:"; then
-  echo "  PASS: Status shows Nix store path"
+if echo "$STATUS_OUTPUT" | grep -q "Nix store volume:"; then
+  echo "  PASS: Status shows the Nix store volume"
 else
   echo "  FAIL: Status missing Nix store info"
   FAILED=1
@@ -185,9 +186,19 @@ else
   FAILED=1
 fi
 
-# Test 6: Host setup for remote builds
+# Test 6: Verify the persistent store is internally consistent
 echo ""
-echo "Test 6: Host setup for remote builds"
+echo "Test 6: Nix store integrity"
+if "$BUILDER" ssh "nix-store --verify --check-contents" >/dev/null 2>&1; then
+  echo "  PASS: Nix store contents match the registered hashes"
+else
+  echo "  FAIL: Nix store integrity verification failed"
+  FAILED=1
+fi
+
+# Test 7: Host setup for remote builds
+echo ""
+echo "Test 7: Host setup for remote builds"
 SETUP_OUTPUT="$TMP_DIR/setup.log"
 if run_builder_setup >"$SETUP_OUTPUT" 2>&1; then
   echo "  PASS: Host SSH setup completed"
@@ -197,9 +208,9 @@ else
   FAILED=1
 fi
 
-# Test 7: Config output
+# Test 8: Config output
 echo ""
-echo "Test 7: Config command"
+echo "Test 8: Config command"
 CONFIG_FILE="$TMP_DIR/builder-config.nix"
 CONFIG_FLAKE="$TMP_DIR/flake.nix"
 CONFIG_JSON=""
@@ -211,9 +222,9 @@ else
   FAILED=1
 fi
 
-# Test 8: Remote build test
+# Test 9: Remote build test
 echo ""
-echo "Test 8: Remote build (nixpkgs#hello)"
+echo "Test 9: Remote build (nixpkgs#hello)"
 REMOTE_BUILD_OUTPUT="$TMP_DIR/remote-build.log"
 if [[ -n "$CONFIG_JSON" ]]; then
   BUILDER_SPEC="$(builder_spec_from_config <<<"$CONFIG_JSON")"
@@ -233,9 +244,9 @@ else
   FAILED=1
 fi
 
-# Test 9: Store persistence across restart
+# Test 10: Store persistence across restart
 echo ""
-echo "Test 9: Store persistence"
+echo "Test 10: Store persistence"
 echo "  Building a test derivation..."
 PERSISTENCE_BUILD_OUTPUT="$TMP_DIR/persistence-build.log"
 if TEST_STORE_PATH=$("$BUILDER" ssh "nix build --no-link --print-out-paths nixpkgs#hello" 2>"$PERSISTENCE_BUILD_OUTPUT"); then

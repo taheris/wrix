@@ -1,4 +1,4 @@
-# wrix-builder: CLI wrapper for Linux remote builder
+# wrix-builder: Darwin CLI wrapper for a Linux remote builder
 #
 # Manages a container that serves as an ssh-ng:// remote builder
 # for Nix on macOS. Uses Apple's container CLI (macOS 26+).
@@ -13,7 +13,7 @@
 {
   pkgs,
   linuxPkgs,
-  asTarball ? pkgs.stdenv.hostPlatform.isDarwin,
+  asTarball ? true,
   builderImage ? import ../sandbox/builder/image.nix {
     pkgs = linuxPkgs;
     hostPkgs = pkgs;
@@ -24,14 +24,21 @@
 let
   shellLib = import ../util/shell.nix { inherit pkgs; };
   builderSystem = linuxPkgs.stdenv.hostPlatform.system;
+  builderSeedRoots = builderImage.darwin_seed_roots or [ ];
+  builderStoreExport = import ./darwin-store-export.nix {
+    inherit pkgs;
+    seedRoots = builderSeedRoots;
+  };
 
   script = pkgs.writeShellScriptBin "wrix-builder" ''
       set -euo pipefail
       . ${./keys.sh}
+      . ${./darwin-store.sh}
       WRIX_BUILDER_SSH_KEYGEN="''${WRIX_BUILDER_SSH_KEYGEN:-${pkgs.openssh}/bin/ssh-keygen}"
       WRIX_BUILDER_BASE64="''${WRIX_BUILDER_BASE64:-${pkgs.coreutils}/bin/base64}"
       WRIX_BUILDER_SKOPEO="''${WRIX_BUILDER_SKOPEO:-${pkgs.skopeo}/bin/skopeo}"
       WRIX_BUILDER_JQ="''${WRIX_BUILDER_JQ:-${pkgs.jq}/bin/jq}"
+      WRIX_BUILDER_STORE_EXPORT="''${WRIX_BUILDER_STORE_EXPORT:-${builderStoreExport}}"
 
       resolve_user_home() {
         local user="$1"
@@ -62,7 +69,10 @@ let
       CLIENT_KNOWN_HOSTS="$BUILDER_KEYS_DIR/known_hosts"
       SYSTEM_CLIENT_KEY="/etc/nix/wrix_builder_ed25519"
       SYSTEM_HOST_KEY="/etc/nix/wrix_builder_host_key_base64"
-      NIX_STORE="$WRIX_DATA/builder-nix"
+      LEGACY_NIX_STORE="$WRIX_DATA/builder-nix"
+      NIX_VOLUME="wrix-builder-nix"
+      NIX_VOLUME_SIZE="40G"
+      NIX_VOLUME_VERSION_FILE="$WRIX_DATA/builder-volume-image-version"
       CONTAINER_NAME="wrix-builder"
       BUILDER_IMAGE="${builderImage.ref}"
       BUILDER_IMAGE_SOURCE="${builderImage.source}"
@@ -313,7 +323,7 @@ let
         local needs_load=false
         local oci_tar
         local source_ref
-        local store_version_file="$NIX_STORE/.image-version"
+        local store_version_file="$NIX_VOLUME_VERSION_FILE"
 
         current_image=$(builder_image_digest)
         if ! container image inspect "$BUILDER_IMAGE" >/dev/null 2>&1; then
@@ -354,11 +364,9 @@ let
 
       cmd_start() {
         local current_image
-        local initialized_size
         local needs_init=false
+        local seed_container
         local state
-        local store_version_file="$NIX_STORE/.image-version"
-        local temp_container
 
         current_image=$(builder_image_digest)
         check_macos_version
@@ -378,49 +386,34 @@ let
         ensure_ssh_client_material
         load_builder_image
 
-        mkdir -p "$NIX_STORE"
-
-        if [[ ! -d "$NIX_STORE/store" || -z "$(ls -A "$NIX_STORE/store" 2>/dev/null)" ]]; then
+        if ! wrix_builder_nix_volume_exists; then
           needs_init=true
           echo "Initializing persistent Nix store (first run)..."
-        elif [[ ! -f "$store_version_file" || "$(cat "$store_version_file")" != "$current_image" ]]; then
+        elif ! wrix_builder_nix_volume_is_managed; then
+          echo "Error: refusing to use unmanaged volume $NIX_VOLUME" >&2
+          exit 1
+        elif [[ ! -f "$NIX_VOLUME_VERSION_FILE" || "$(cat "$NIX_VOLUME_VERSION_FILE")" != "$current_image" ]]; then
           needs_init=true
           echo "Builder image changed, re-initializing persistent Nix store..."
-          if ! chmod -R u+w "$NIX_STORE"; then
-            echo "Error: Failed to make existing Nix store writable" >&2
-            exit 1
-          fi
-          rm -rf "$NIX_STORE"
-          mkdir -p "$NIX_STORE"
         fi
 
         if [[ "$needs_init" == true ]]; then
           echo "This may take a few minutes..."
+          wrix_builder_remove_nix_volume
+          wrix_builder_create_nix_volume
 
-          temp_container="wrix-builder-init-$$"
-          container run \
-            --name "$temp_container" \
-            -d \
-            -v "$BUILDER_KEYS_DIR:/run/keys:ro" \
-            "$BUILDER_IMAGE" >/dev/null 2>&1
-          sleep 3
-
-          if ! container exec "$temp_container" tar -cf - -C / nix 2>/dev/null | tar -xf - -C "$NIX_STORE" --strip-components=1 2>/dev/null; then
-            echo "Warning: Nix store export reported errors; verifying copied store" >&2
-          fi
-
-          if [[ ! -d "$NIX_STORE/store" || -z "$(ls -A "$NIX_STORE/store" 2>/dev/null)" ]]; then
-            echo "Error: Failed to initialize Nix store"
-            cleanup_container "$temp_container"
+          seed_container="wrix-builder-seed-$$"
+          if ! wrix_builder_seed_nix_volume "$seed_container"; then
             exit 1
           fi
 
-          cleanup_container "$temp_container"
+          mkdir -p "$WRIX_DATA"
+          echo "$current_image" > "$NIX_VOLUME_VERSION_FILE"
+          echo "Nix store initialized and verified"
+        fi
 
-          echo "$current_image" > "$store_version_file"
-
-          initialized_size=$(du -sh "$NIX_STORE" 2>/dev/null | cut -f1) || initialized_size="unknown"
-          echo "Nix store initialized ($initialized_size)"
+        if [[ -d "$LEGACY_NIX_STORE" ]]; then
+          echo "Legacy Nix store preserved at $LEGACY_NIX_STORE (not used)"
         fi
 
         echo "Creating builder container..."
@@ -433,8 +426,10 @@ let
           --network default \
           -p "127.0.0.1:$SSH_PORT:22" \
           -v "$BUILDER_KEYS_DIR:/run/keys:ro" \
-          -v "$NIX_STORE:/nix" \
+          -v "$NIX_VOLUME:/nix" \
           "$BUILDER_IMAGE"
+
+        ${shellLib.fixVmnetRoute}
 
         echo "Waiting for services to start..."
         wait_for_builder_services
@@ -456,7 +451,6 @@ let
 
       cmd_status() {
         local state
-        local store_size
 
         if container_exists; then
           state=$(container_state "$CONTAINER_NAME")
@@ -466,16 +460,15 @@ let
           echo "  wrix-builder ssh"
           echo ""
           echo "SSH keys: $BUILDER_KEYS_DIR"
-          echo "Nix store: $NIX_STORE"
-          if [[ "$state" == "running" && -d "$NIX_STORE" ]]; then
-            store_size=$(du -sh "$NIX_STORE" 2>/dev/null | cut -f1) || store_size="unknown"
-            echo "Store size: $store_size"
-          fi
+          echo "Nix store volume: $NIX_VOLUME ($NIX_VOLUME_SIZE)"
         else
           echo "Builder: not created"
           echo ""
-          echo "Nix store: $NIX_STORE"
+          echo "Nix store volume: $NIX_VOLUME ($NIX_VOLUME_SIZE)"
           echo "Run 'wrix-builder start' to create and start the builder"
+        fi
+        if [[ -d "$LEGACY_NIX_STORE" ]]; then
+          echo "Legacy Nix store: $LEGACY_NIX_STORE (preserved; not used)"
         fi
       }
 

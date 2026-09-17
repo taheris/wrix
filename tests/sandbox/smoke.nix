@@ -85,7 +85,7 @@ let
   inherit (sandboxLib) serviceImage;
   sandbox = sandboxLib.mkSandbox { profile = sandboxLib.profiles.base; };
   wrix = sandbox.package;
-  wrixBuilder = import ../../lib/builder { inherit pkgs linuxPkgs; };
+  wrixBuilder = import ../builder/fixture.nix { inherit pkgs linuxPkgs; };
   wrixLauncher = sandbox.launcher;
 
   pathProbeCli = writeShellScriptBin "wrix" ''
@@ -318,7 +318,11 @@ in
           test_fake_ssh_models_service_readiness \
           test_generates_per_user_ed25519_material \
           test_builder_cleanup_is_wrix_scoped \
+          test_start_uses_verified_case_sensitive_volume \
+          test_start_repairs_routes_before_ssh_readiness \
+          test_start_refuses_unmanaged_named_volume \
           test_setup_routes_parses_spaced_apple_network_json \
+          test_setup_routes_reuses_existing_split_routes \
           test_config_flake_evaluates_without_impure_host_reads \
           test_config_uses_native_linux_builder_system \
           test_config_uses_setup_installed_ssh_identity \

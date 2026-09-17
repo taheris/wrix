@@ -57,7 +57,7 @@ set -euo pipefail
 log_file="${WRIX_BUILDER_FAKE_LOG:?}"
 state_dir="${WRIX_BUILDER_FAKE_STATE:?}"
 tar_root="${WRIX_BUILDER_FAKE_TAR_ROOT:?}"
-mkdir -p "$state_dir/containers" "$state_dir/images"
+mkdir -p "$state_dir/containers" "$state_dir/images" "$state_dir/volumes"
 printf 'container|%s\n' "$*" >>"$log_file"
 
 image_file() {
@@ -166,6 +166,65 @@ image_load() {
   printf 'Loaded image: %s\n' "$loaded_ref"
 }
 
+volume_file() {
+  local name="$1"
+
+  printf '%s\n' "$state_dir/volumes/$name"
+}
+
+volume_create() {
+  local arg
+  local name=""
+  local path
+
+  for arg in "$@"; do
+    name="$arg"
+  done
+  [[ -n "$name" ]] || return 64
+  path="$(volume_file "$name")"
+  printf '%s\n' "$name" >"$path"
+}
+
+volume_inspect() {
+  local kind="builder-nix"
+  local managed="true"
+  local name="$1"
+  local path
+
+  path="$(volume_file "$name")"
+  [[ -f "$path" ]] || return 1
+  if [[ "${WRIX_BUILDER_FAKE_UNMANAGED_VOLUME:-false}" == true ]]; then
+    managed="false"
+    kind="user"
+  fi
+  cat <<JSON
+[
+  {
+    "configuration" : {
+      "format" : "ext4",
+      "labels" : {
+        "wrix.managed" : "$managed",
+        "wrix.volume.kind" : "$kind"
+      },
+      "name" : "$name",
+      "options" : {
+        "size" : "40G"
+      }
+    },
+    "id" : "$name"
+  }
+]
+JSON
+}
+
+volume_remove() {
+  local name="$1"
+  local path
+
+  path="$(volume_file "$name")"
+  rm -f "$path"
+}
+
 container_file() {
   local name="$1"
 
@@ -248,6 +307,31 @@ JSON
       exit 0
     fi
     ;;
+  volume)
+    case "${2:-}" in
+      create)
+        shift 2
+        volume_create "$@"
+        exit 0
+        ;;
+      inspect)
+        if [[ "$#" -lt 3 ]]; then
+          printf 'fake container: volume inspect requires a name\n' >&2
+          exit 64
+        fi
+        volume_inspect "$3"
+        exit 0
+        ;;
+      delete)
+        if [[ "$#" -lt 3 ]]; then
+          printf 'fake container: volume delete requires a name\n' >&2
+          exit 64
+        fi
+        volume_remove "$3"
+        exit 0
+        ;;
+    esac
+    ;;
   image)
     case "${2:-}" in
       inspect)
@@ -318,6 +402,12 @@ JSON
       exit 64
     fi
     write_status "$name" "running"
+    for arg in "$@"; do
+      if [[ "$arg" == "-i" || "$arg" == "--interactive" ]]; then
+        cat >/dev/null
+        break
+      fi
+    done
     printf '%s\n' "$name"
     exit 0
     ;;
@@ -417,7 +507,14 @@ ROUTE
   cat >>"$bin_dir/netstat" <<'NETSTAT'
 set -euo pipefail
 
-printf 'default link#29 UCSg utun11\n'
+if [[ "${WRIX_BUILDER_FAKE_ROUTES_CONFIGURED:-false}" == true ]]; then
+  cat <<'OUTPUT'
+192.168.64/25      link#32            UCSc            bridge100
+192.168.64.128/25  link#32            UCSc            bridge100
+OUTPUT
+else
+  printf 'default link#29 UCSg utun11\n'
+fi
 NETSTAT
   chmod +x "$bin_dir/netstat"
 
@@ -473,6 +570,16 @@ printf 'fake skopeo: unexpected args: %s\n' "$*" >&2
 exit 64
 SKOPEO
   chmod +x "$bin_dir/skopeo"
+
+  printf '#!%s\n' "$bash_bin" >"$bin_dir/store-export"
+  cat >>"$bin_dir/store-export" <<'STORE_EXPORT'
+set -euo pipefail
+
+log_file="${WRIX_BUILDER_FAKE_LOG:?}"
+printf 'store-export|canonical-nar\n' >>"$log_file"
+printf 'fixture-nix-export\n'
+STORE_EXPORT
+  chmod +x "$bin_dir/store-export"
 }
 
 prepare_builder_fixture() {
@@ -516,6 +623,8 @@ run_fake_container() {
     WRIX_BUILDER_FAKE_LOG="$test_root/container.log" \
     WRIX_BUILDER_FAKE_TAR_ROOT="$test_root/tar-root" \
     WRIX_BUILDER_FAKE_MISSING_PROCESS="${WRIX_BUILDER_FAKE_MISSING_PROCESS:-}" \
+    WRIX_BUILDER_FAKE_ROUTES_CONFIGURED="${WRIX_BUILDER_FAKE_ROUTES_CONFIGURED:-false}" \
+    WRIX_BUILDER_FAKE_UNMANAGED_VOLUME="${WRIX_BUILDER_FAKE_UNMANAGED_VOLUME:-false}" \
     "$test_root/bin/container" "$@"
 }
 
@@ -540,9 +649,12 @@ run_builder() {
     WRIX_BUILDER_FAKE_TAR_ROOT="$test_root/tar-root" \
     WRIX_BUILDER_FAKE_MISSING_PROCESS="${WRIX_BUILDER_FAKE_MISSING_PROCESS:-}" \
     WRIX_BUILDER_FAKE_SSH_UNAVAILABLE="${WRIX_BUILDER_FAKE_SSH_UNAVAILABLE:-false}" \
+    WRIX_BUILDER_FAKE_ROUTES_CONFIGURED="${WRIX_BUILDER_FAKE_ROUTES_CONFIGURED:-false}" \
+    WRIX_BUILDER_FAKE_UNMANAGED_VOLUME="${WRIX_BUILDER_FAKE_UNMANAGED_VOLUME:-false}" \
     WRIX_BUILDER_SSH_KEYGEN="$keygen_bin" \
     WRIX_BUILDER_BASE64="$base64_bin" \
     WRIX_BUILDER_SKOPEO="$test_root/bin/skopeo" \
+    WRIX_BUILDER_STORE_EXPORT="$test_root/bin/store-export" \
     "$builder" "$@"
 }
 
@@ -704,6 +816,95 @@ test_start_publishes_ssh_only_on_host_loopback() {
     "wrix-builder start published SSH on a wildcard host address"
 }
 
+test_start_uses_verified_case_sensitive_volume() {
+  local legacy_store
+  local output
+  local test_root="$TEST_TMP/case-sensitive-volume"
+  local version_file
+
+  require_command ssh-keygen
+  require_command base64
+  prepare_builder_fixture "$test_root"
+  legacy_store="$test_root/home/.local/share/wrix/builder-nix"
+  version_file="$test_root/home/.local/share/wrix/builder-volume-image-version"
+  mkdir -p "$legacy_store/store"
+  printf 'preserve me\n' >"$legacy_store/store/sentinel"
+
+  output="$(run_builder "$test_root" start)"
+
+  assert_file_contains \
+    "$test_root/container.log" \
+    "container|volume create --label wrix.managed=true --label wrix.volume.kind=builder-nix -s 40G wrix-builder-nix" \
+    "wrix-builder start did not create its labelled ext4 volume"
+  assert_file_contains \
+    "$test_root/container.log" \
+    "store-export|canonical-nar" \
+    "wrix-builder start did not export the canonical Nix closure"
+  assert_file_contains \
+    "$test_root/container.log" \
+    "-v wrix-builder-nix:/persistent-root/nix" \
+    "wrix-builder start did not mount the seed volume under a chroot store root"
+  assert_file_contains \
+    "$test_root/container.log" \
+    "nix-store --store /persistent-root --import" \
+    "wrix-builder start did not import the canonical Nix export"
+  assert_file_contains \
+    "$test_root/container.log" \
+    "nix-store --store /persistent-root --verify --check-contents" \
+    "wrix-builder start did not verify the imported Nix store"
+  assert_file_contains \
+    "$test_root/container.log" \
+    "-v wrix-builder-nix:/nix" \
+    "wrix-builder start did not mount the persistent volume at /nix"
+  assert_file_lacks \
+    "$test_root/container.log" \
+    "-v $legacy_store:/nix" \
+    "wrix-builder start reused the case-insensitive legacy bind store"
+  [[ -f "$legacy_store/store/sentinel" ]] \
+    || fail "wrix-builder start removed the legacy bind store"
+  [[ -s "$version_file" ]] \
+    || fail "wrix-builder start did not record the verified volume image version"
+  [[ "$output" == *"Legacy Nix store preserved at $legacy_store (not used)"* ]] \
+    || fail "wrix-builder start did not report the preserved legacy store"
+}
+
+test_start_repairs_routes_before_ssh_readiness() {
+  local route_line
+  local ssh_line
+  local test_root="$TEST_TMP/start-route-order"
+
+  require_command ssh-keygen
+  require_command base64
+  prepare_builder_fixture "$test_root"
+
+  run_builder "$test_root" start
+
+  route_line="$(grep -nF "sudo|route add -net 192.168.64.0/25" "$test_root/container.log" | head -1 | cut -d: -f1)"
+  ssh_line="$(grep -nF "ssh|-p 2222" "$test_root/container.log" | head -1 | cut -d: -f1)"
+  [[ -n "$route_line" && -n "$ssh_line" && "$route_line" -lt "$ssh_line" ]] \
+    || fail "wrix-builder start did not repair vmnet routes before checking SSH readiness"
+}
+
+test_start_refuses_unmanaged_named_volume() {
+  local output
+  local test_root="$TEST_TMP/unmanaged-volume"
+
+  require_command ssh-keygen
+  require_command base64
+  prepare_builder_fixture "$test_root"
+  run_fake_container "$test_root" volume create wrix-builder-nix >/dev/null
+
+  if output="$(WRIX_BUILDER_FAKE_UNMANAGED_VOLUME=true run_builder "$test_root" start 2>&1)"; then
+    fail "wrix-builder start accepted an unmanaged volume with its reserved name"
+  fi
+  [[ "$output" == *"Error: refusing to use unmanaged volume wrix-builder-nix"* ]] \
+    || fail "wrix-builder start did not explain the unmanaged-volume refusal"
+  assert_file_lacks \
+    "$test_root/container.log" \
+    "container|volume delete wrix-builder-nix" \
+    "wrix-builder start deleted an unmanaged volume"
+}
+
 test_generates_per_user_ed25519_material() {
   local test_root="$TEST_TMP/generate"
   local keys_dir="$test_root/home/.local/share/wrix/builder-keys"
@@ -847,6 +1048,19 @@ test_setup_routes_parses_spaced_apple_network_json() {
     "builder route setup did not add the upper vmnet split route"
 }
 
+test_setup_routes_reuses_existing_split_routes() {
+  local test_root="$TEST_TMP/setup-routes-idempotent"
+
+  prepare_builder_fixture "$test_root"
+
+  WRIX_BUILDER_FAKE_ROUTES_CONFIGURED=true run_builder "$test_root" setup-routes
+
+  assert_file_lacks \
+    "$test_root/container.log" \
+    "sudo|route add" \
+    "builder route setup tried to recreate existing split routes"
+}
+
 test_config_flake_evaluates_without_impure_host_reads() {
   evaluate_builder_config "$TEST_TMP/config-pure" >/dev/null
 }
@@ -942,6 +1156,8 @@ test_preserves_existing_private_keys() {
 
   [[ "$second_host_key" == "$first_host_key" ]] || fail "host private key was regenerated"
   [[ "$second_client_key" == "$first_client_key" ]] || fail "client private key was regenerated"
+  [[ "$(grep -c '^store-export|canonical-nar$' "$test_root/container.log")" -eq 1 ]] \
+    || fail "verified Nix volume was re-imported on an unchanged restart"
   assert_file_contains \
     "$test_root/container.log" \
     "container|stop wrix-builder" \
@@ -964,10 +1180,14 @@ main() {
   run_one test_fake_container_models_process_readiness
   run_one test_fake_ssh_models_service_readiness
   run_one test_start_publishes_ssh_only_on_host_loopback
+  run_one test_start_uses_verified_case_sensitive_volume
+  run_one test_start_repairs_routes_before_ssh_readiness
+  run_one test_start_refuses_unmanaged_named_volume
   run_one test_generates_per_user_ed25519_material
   run_one test_loads_image_through_source_kind_contract
   run_one test_builder_cleanup_is_wrix_scoped
   run_one test_setup_routes_parses_spaced_apple_network_json
+  run_one test_setup_routes_reuses_existing_split_routes
   run_one test_config_flake_evaluates_without_impure_host_reads
   run_one test_config_uses_native_linux_builder_system
   run_one test_config_uses_setup_installed_ssh_identity

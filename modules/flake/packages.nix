@@ -98,6 +98,7 @@ _:
         "aarch64-linux"
         "x86_64-linux"
       ];
+      isDarwin = pkgs.stdenv.hostPlatform.isDarwin;
     in
     {
       packages =
@@ -133,8 +134,10 @@ _:
           wrix-cache-publish = wrix.rustPackage.cachePublish;
           wrix-cache-serve = wrix.rustPackage.cacheServe;
           wrix-service-image = wrix.serviceImage;
-          wrix-builder = import ../../lib/builder { inherit pkgs linuxPkgs; };
           wrix-notifyd = import ../../lib/notify/daemon.nix { inherit pkgs; };
-        };
+        }
+        // (
+          if isDarwin then { wrix-builder = import ../../lib/builder { inherit pkgs linuxPkgs; }; } else { }
+        );
     };
 }
