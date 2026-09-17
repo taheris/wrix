@@ -132,7 +132,13 @@ impl WorkspaceHash {
         let mut value = 0_u16;
         for byte in self.0.bytes().take(16) {
             let next = (u32::from(value) * 16 + u32::from(hex_nibble(byte))) % u32::from(width);
-            value = u16::try_from(next).map_or(0, |offset| offset);
+            #[expect(
+                clippy::map_or_identity,
+                reason = "the modulo-u16 value is infallible, while Result::unwrap_or is banned"
+            )]
+            {
+                value = u16::try_from(next).map_or(0, |offset| offset);
+            }
         }
         value
     }

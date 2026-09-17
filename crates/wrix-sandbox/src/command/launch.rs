@@ -620,7 +620,7 @@ impl NetworkMode {
         }
     }
 
-    fn parse(value: &str) -> Option<Self> {
+    const fn parse(value: &str) -> Option<Self> {
         match value.as_bytes() {
             b"open" => Some(Self::Open),
             b"limit" => Some(Self::Limit),

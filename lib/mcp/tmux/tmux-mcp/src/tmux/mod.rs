@@ -282,6 +282,10 @@ impl<E: CommandExecutor> TmuxSession<E> {
     }
 
     fn keep_recent_lines(output: &str, max_lines: i32) -> String {
+        #[expect(
+            clippy::map_or_identity,
+            reason = "the positive i32 fits supported usize targets, while Result::unwrap_or is banned"
+        )]
         let max_lines = usize::try_from(max_lines.max(1)).map_or(1, std::convert::identity);
         let mut lines: Vec<&str> = output.lines().collect();
         while lines.last().is_some_and(|line| line.is_empty()) {

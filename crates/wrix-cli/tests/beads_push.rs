@@ -260,6 +260,12 @@ impl Fixture {
 #[test]
 fn bd_fake_config_matches_real_bd() -> TestResult {
     let fixture = Fixture::new("bd-fake-contract")?;
+    let metrics_config_dir = fixture.home().join(".config/bd");
+    fs::create_dir_all(&metrics_config_dir)?;
+    fs::write(
+        metrics_config_dir.join("config.yaml"),
+        "metrics:\n    disabled: true\n",
+    )?;
     setup_minimal_repo(fixture.repo())?;
     let reference_repo = fixture.repo().with_file_name("reference-repo");
     fs::create_dir_all(&reference_repo)?;

@@ -43,6 +43,10 @@ result=$(nix eval --impure --no-warn-dirty --json --expr "
         };
       };
     };
+    piDefault = lib.mkSandbox {
+      profile = lib.profiles.base;
+      agent = \"pi\";
+    };
     pi = lib.mkSandbox {
       profile = lib.profiles.base;
       agent = \"pi\";
@@ -52,6 +56,7 @@ result=$(nix eval --impure --no-warn-dirty --json --expr "
       };
     };
     claudeSettings = builtins.fromJSON (builtins.readFile claude.image.claudeSettingsJson);
+    piDefaultSettings = builtins.fromJSON (builtins.readFile piDefault.image.piSettingsJson);
     piSettings = builtins.fromJSON (builtins.readFile pi.image.piSettingsJson);
   in
   {
@@ -67,6 +72,7 @@ result=$(nix eval --impure --no-warn-dirty --json --expr "
       && pi.image.piSettingsJson != null;
     claudeModel = claudeSettings.env.ANTHROPIC_MODEL or \"\";
     claudeProbe = claudeSettings.env.WRIX_AGENT_SETTINGS_PROBE or \"\";
+    piDefaultModel = piDefaultSettings.defaultModel or \"\";
     piEditorPadding = piSettings.editorPaddingX or null;
     piInstallTelemetry = piSettings.enableInstallTelemetry or null;
     piModel = piSettings.defaultModel or \"\";
@@ -81,6 +87,7 @@ if ! jq -e '
   .piConfigScoped == true and
   .claudeModel == "wrix-agent-settings-probe" and
   .claudeProbe == "1" and
+  .piDefaultModel == "gpt-6-astra" and
   .piEditorPadding == 1 and
   .piInstallTelemetry == false and
   .piModel == "wrix-pi-settings-probe" and

@@ -239,7 +239,7 @@ let
   # launcher when WRIX_AGENT=pi).
   basePiSettings = {
     defaultProvider = "openai-codex";
-    defaultModel = "gpt-5.6-sol";
+    defaultModel = "gpt-6-astra";
     defaultThinkingLevel = "xhigh";
     defaultProjectTrust = "always";
     editorPaddingX = 1;

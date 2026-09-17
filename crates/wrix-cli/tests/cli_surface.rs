@@ -331,7 +331,7 @@ fn assert_described_options(label: &str, help: &str, expected: &[&str]) {
             description_start.is_some(),
             "{label}: option has no description: {line:?}",
         );
-        let description_start = description_start.map_or(option.len(), |index| index);
+        let description_start = description_start.unwrap_or(option.len());
         let (syntax, description) = option.split_at(description_start);
         assert!(
             !description.trim().is_empty(),
