@@ -38,6 +38,11 @@ let
   };
 in
 {
-  client = import ../../lib/notify/client.nix { inherit pkgs; };
+  client = import ../../lib/notify/client.nix {
+    inherit pkgs;
+    # Host-side tests always provide an explicit TCP endpoint. Fail visibly if
+    # one accidentally exercises Linux-only default-gateway discovery.
+    ipCommand = "${pkgs.coreutils}/bin/false";
+  };
   daemon = import ../../lib/notify/daemon.nix { pkgs = daemonPkgs; };
 }

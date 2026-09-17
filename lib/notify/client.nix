@@ -7,7 +7,10 @@
 # Succeeds when the best-effort notification daemon is unavailable.
 #
 # Usage: wrix-notify "Title" "Message" ["Sound"]
-{ pkgs }:
+{
+  pkgs,
+  ipCommand ? "${pkgs.iproute2}/bin/ip",
+}:
 
 pkgs.writeShellScriptBin "wrix-notify" ''
   set -euo pipefail
@@ -41,7 +44,7 @@ pkgs.writeShellScriptBin "wrix-notify" ''
   }
 
   resolve_default_gateway() {
-    ${pkgs.iproute2}/bin/ip route | ${pkgs.gawk}/bin/awk '/default/ {print $3; exit}'
+    ${ipCommand} route | ${pkgs.gawk}/bin/awk '/default/ {print $3; exit}'
   }
 
   tcp_endpoint="''${WRIX_NOTIFY_TCP:-}"
