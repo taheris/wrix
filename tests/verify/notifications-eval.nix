@@ -26,7 +26,7 @@ let
   ensure = condition: message: if condition then true else throw "verify:${target}: ${message}";
   daemonText = import "${rootString}/lib/notify/daemon.nix" {
     pkgs = {
-      stdenv.isDarwin = true;
+      stdenv.hostPlatform.isDarwin = true;
       bash = "bash";
       coreutils = "coreutils";
       jq = "jq";

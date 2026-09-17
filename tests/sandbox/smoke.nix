@@ -23,7 +23,7 @@ let
     "x86_64-linux"
     "aarch64-linux"
   ];
-  inherit (pkgs.stdenv) isDarwin;
+  inherit (pkgs.stdenv.hostPlatform) isDarwin;
 
   # Skip heavy image tests when SKIP_IMAGE_TEST=1 (saves ~20s)
   skipImageTest = getEnv "SKIP_IMAGE_TEST" != "";

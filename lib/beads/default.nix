@@ -4,7 +4,7 @@
 }:
 
 let
-  inherit (pkgs.stdenv) isDarwin;
+  inherit (pkgs.stdenv.hostPlatform) isDarwin;
 
   wrixBin = if wrix == null then "wrix" else "${wrix}/bin/wrix";
   jqBin = "${pkgs.jq}/bin/jq";

@@ -21,7 +21,7 @@ let
   inherit (pkgs.lib) escapeShellArgs toShellVars;
 
   hostNixConfig = pkgs.writeText "wrix-host-nix-config.sh" (readFile ../services/host-nix-config.sh);
-  startIndependent = import ../services/start.nix { inherit (pkgs.stdenv) isDarwin; };
+  startIndependent = import ../services/start.nix { inherit (pkgs.stdenv.hostPlatform) isDarwin; };
   prekHooksBundle = import ../prek/bundle.nix { inherit pkgs; };
   prekWrappers = import ../prek/wrappers.nix { inherit pkgs; };
 

@@ -1,9 +1,9 @@
 { pkgs }:
 
 let
-  bridgeName = if pkgs.stdenv.isDarwin then "terminal-notifier" else "notify-send";
+  bridgeName = if pkgs.stdenv.hostPlatform.isDarwin then "terminal-notifier" else "notify-send";
   bridgeContract =
-    if pkgs.stdenv.isDarwin then
+    if pkgs.stdenv.hostPlatform.isDarwin then
       ''
         if [[ "$#" -ne 4 && "$#" -ne 6 ]]; then
           exit 64

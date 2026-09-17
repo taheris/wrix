@@ -21,7 +21,7 @@ let
   platform = sandboxScript "platform-dispatch";
   darwinOnly =
     body:
-    if pkgs.stdenv.isDarwin then
+    if pkgs.stdenv.hostPlatform.isDarwin then
       body
     else
       ''
@@ -30,7 +30,7 @@ let
       '';
   linuxOnly =
     body:
-    if pkgs.stdenv.isLinux then
+    if pkgs.stdenv.hostPlatform.isLinux then
       body
     else
       ''

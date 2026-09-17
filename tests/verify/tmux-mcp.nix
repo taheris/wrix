@@ -9,7 +9,7 @@ let
     ;
 
   containerRuntimePath = makeBinPath (
-    optionals pkgs.stdenv.isLinux [
+    optionals pkgs.stdenv.hostPlatform.isLinux [
       pkgs.gnutar
       pkgs.podman
       pkgs.shadow
@@ -17,7 +17,7 @@ let
       pkgs.util-linux
     ]
   );
-  containerRuntimeEnvironment = optionalString pkgs.stdenv.isLinux "PATH=${escapeShellArg containerRuntimePath}:$PATH ";
+  containerRuntimeEnvironment = optionalString pkgs.stdenv.hostPlatform.isLinux "PATH=${escapeShellArg containerRuntimePath}:$PATH ";
   repoScript = script: ''
     run_repo_script ${escapeShellArg "tests/mcp/tmux/${script}.sh"}
   '';

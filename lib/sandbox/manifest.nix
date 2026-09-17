@@ -21,7 +21,7 @@ let
   # rejects the `localhost/` prefix and uses bare `<name>:<tag>`. Match the
   # platform convention used by the corresponding launcher (linux/darwin
   # sandbox default.nix).
-  refPrefix = if pkgs.stdenv.isDarwin then "" else "localhost/";
+  refPrefix = if pkgs.stdenv.hostPlatform.isDarwin then "" else "localhost/";
 
   mkImageEntry =
     image:

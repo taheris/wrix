@@ -10,7 +10,7 @@ let
       pkgs.netcat
       pkgs.socat
     ]
-    ++ optionals pkgs.stdenv.isLinux [
+    ++ optionals pkgs.stdenv.hostPlatform.isLinux [
       pkgs.podman
       pkgs.shadow
       pkgs.skopeo

@@ -180,7 +180,7 @@ let
         layer_paths="$tmp/layers"
 
         ${
-          if pkgs.stdenv.isLinux then
+          if pkgs.stdenv.hostPlatform.isLinux then
             ''
               descriptor=${escapeShellArg (toString sandbox.image.source)}
               layout=$(jq -er '.oci_layout' "$descriptor")

@@ -15,7 +15,7 @@
 let
   inherit (pkgs) runCommandLocal;
 
-  inherit (pkgs.stdenv) isDarwin;
+  inherit (pkgs.stdenv.hostPlatform) isDarwin;
   runIntegration = isDarwin && builtins.getEnv "WRIX_DARWIN_INTEGRATION" != "";
 
   # Use Linux packages for image building (requires remote builder on Darwin)

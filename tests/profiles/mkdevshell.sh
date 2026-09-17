@@ -288,7 +288,7 @@ test_rust_host_env_uses_host_packages() {
         shell.RUSTC == "${profile.toolchain}/bin/rustc" &&
         shell.RUST_SRC_PATH == "${profile.toolchain}/lib/rustlib/src/rust/library";
       platformSplitMatches =
-        if pkgs.stdenv.isDarwin then
+        if pkgs.stdenv.hostPlatform.isDarwin then
           shell.LIBRARY_PATH != profile.env.LIBRARY_PATH &&
           shell.OPENSSL_INCLUDE_DIR != profile.env.OPENSSL_INCLUDE_DIR &&
           shell.OPENSSL_LIB_DIR != profile.env.OPENSSL_LIB_DIR &&

@@ -13,7 +13,7 @@ let
       ${escapeShellArg "${script}.sh"} ${concatMapStringsSep " " escapeShellArg functions}
   '';
   playwrightFunctions =
-    if pkgs.stdenv.isDarwin then playwrightGuestFunctions else playwrightScriptFunctions;
+    if pkgs.stdenv.hostPlatform.isDarwin then playwrightGuestFunctions else playwrightScriptFunctions;
   playwrightAll = script: playwrightFunctions script [ ];
 in
 {

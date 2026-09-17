@@ -5,7 +5,7 @@
 }:
 
 let
-  inherit (pkgs.stdenv) isDarwin;
+  inherit (pkgs.stdenv.hostPlatform) isDarwin;
 
   # Use Linux packages for building the container image (requires remote builder on Darwin)
   linuxPkgs =

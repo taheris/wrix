@@ -160,7 +160,7 @@ let
 
   verify = import ./verify { inherit pkgs system linuxPkgs; };
 
-  systemTests = optionalAttrs pkgs.stdenv.isLinux {
+  systemTests = optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
     beads-live-system = import ./services/beads-system.nix {
       inherit pkgs wrix;
       beadsImage = testImages.baseBeads;
@@ -482,7 +482,7 @@ let
       pkgs.findutils
       pkgs.openssh
     ]
-    ++ optionals pkgs.stdenv.isLinux [
+    ++ optionals pkgs.stdenv.hostPlatform.isLinux [
       pkgs.podman
       pkgs.shadow
       pkgs.skopeo
@@ -493,8 +493,12 @@ let
     name: linuxScript: darwinFunction:
     mkRepoScriptCiApp {
       inherit name;
-      script = if pkgs.stdenv.isDarwin then "tests/sandbox/container-hooks-darwin.sh" else linuxScript;
-      args = optionals pkgs.stdenv.isDarwin [ darwinFunction ];
+      script =
+        if pkgs.stdenv.hostPlatform.isDarwin then
+          "tests/sandbox/container-hooks-darwin.sh"
+        else
+          linuxScript;
+      args = optionals pkgs.stdenv.hostPlatform.isDarwin [ darwinFunction ];
       environment = ''
         export PATH="${profileContainerHookPath}:$PATH"
       '';
@@ -547,7 +551,7 @@ let
     export WRIX_TEST_WRIX_BIN=${escapeShellArg "${wrix.rustPackage.wrix}/bin/wrix"}
   '';
   testServicesDevshellStartIndependent =
-    if pkgs.stdenv.isLinux then
+    if pkgs.stdenv.hostPlatform.isLinux then
       mkSystemTestCiApp "test-services-devshell-start-independent" systemTests.services-devshell-start-independent
     else
       mkRepoScriptCiApp {
@@ -557,7 +561,7 @@ let
         environment = serviceCiEnvironment;
       };
   testServicesLimitModeCacheEndpoint =
-    if pkgs.stdenv.isLinux then
+    if pkgs.stdenv.hostPlatform.isLinux then
       mkSystemTestCiApp "test-services-limit-mode-cache-endpoint" systemTests.services-limit-mode-cache-endpoint
     else
       mkRepoScriptCiApp {
@@ -572,7 +576,7 @@ let
       pkgs.findutils
       pkgs.openssh
     ]
-    ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
+    ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
       pkgs.podman
       pkgs.skopeo
     ]

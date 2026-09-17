@@ -71,7 +71,7 @@ write_shellhook() {
   nix eval --impure --raw --expr "
     let
       pkgs = {
-        stdenv = { isDarwin = $is_darwin; };
+        stdenv.hostPlatform.isDarwin = $is_darwin;
         jq = { outPath = \"$jq_out\"; };
       };
     in (import $REPO_ROOT/lib/beads/default.nix { inherit pkgs; wrix = null; }).shellHook

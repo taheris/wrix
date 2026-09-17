@@ -16,7 +16,7 @@
 { pkgs }:
 
 let
-  inherit (pkgs.stdenv) isDarwin;
+  inherit (pkgs.stdenv.hostPlatform) isDarwin;
   tcpPort = "5959";
 
   # Platform-specific session directory
