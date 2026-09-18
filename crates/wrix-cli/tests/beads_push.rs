@@ -78,6 +78,16 @@ set_origin_from_query() {
 log_invocation "$@"
 
 if [[ "$#" -eq 4 && "$arg1" == "config" && "$arg2" == "set" && "$arg3" == "export.auto" && "$arg4" == "false" ]]; then
+  if [[ "${WRIX_BEADS_FAKE_CONFIG-}" == "1" ]]; then
+    config="${root}/.beads/config.yaml"
+    if grep -q '^export\.auto:' "$config"; then
+      sed 's/^export\.auto:.*/export.auto: false/' "$config" > "${config}.tmp"
+      mv "${config}.tmp" "$config"
+    else
+      printf '\nexport.auto: false\n' >> "$config"
+    fi
+    exit 0
+  fi
   exec "$real_bd" "$@"
 fi
 
@@ -628,6 +638,8 @@ fn recovers_orphaned_worktree_relative_to_root() -> TestResult {
 
     let output = invoke_push(fixture.repo(), &[fixture.fake_bin()], |command| {
         configure_bd(command, &fixture, "success");
+        // The recovery payload intentionally is not a valid Dolt database.
+        command.env("WRIX_BEADS_FAKE_CONFIG", "1");
     })?;
 
     assert_eq!(output.code, 0, "stderr:\n{}", output.stderr);
