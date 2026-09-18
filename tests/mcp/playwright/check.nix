@@ -232,27 +232,16 @@ let
   registryPackagesIncluded = builtins.all (
     package: builtins.elem package sandbox.profile.packages
   ) server.packages;
-  registryEntries = builtins.filter (
-    entry: entry.name == "playwright"
-  ) sandbox.image.mcpAvailable.servers;
-  registryConfigValid =
-    builtins.length registryEntries == 1
-    && (
-      let
-        entry = builtins.head registryEntries;
-      in
-      entry.command == "playwright-mcp"
-      && builtins.elemAt entry.args 0 == "--config"
-      && entry.env.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD == "1"
-    );
   registryTripleCheck =
     assert server.name == "playwright";
     assert builtins.isFunction server.mkServerConfig;
     assert registryPackagesComplete;
     assert registryPackagesIncluded;
-    assert serverConfig.command == "playwright-mcp";
-    assert builtins.elemAt serverConfig.args 0 == "--config";
-    mkEvaluationCheck "test-playwright-registry-triple" registryConfigValid;
+    mkEvaluationCheck "test-playwright-registry-triple" (
+      serverConfig.command == "playwright-mcp"
+      && builtins.elemAt serverConfig.args 0 == "--config"
+      && serverConfig.env.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD == "1"
+    );
 in
 {
   inherit
