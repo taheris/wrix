@@ -1,3 +1,5 @@
+mod apple;
+
 use std::{
     env, fs, io,
     net::{SocketAddr, TcpListener, TcpStream},
@@ -86,6 +88,8 @@ pub enum Error {
         path: String,
         source: serde_json::Error,
     },
+    /// invalid Apple container JSON: {source}
+    AppleJson { source: serde_json::Error },
     /// invalid persisted workspace hash: {value}
     InvalidPersistedWorkspaceHash { value: String },
     /// invalid beads sync branch: {source}
@@ -1019,14 +1023,11 @@ impl Runtime {
         {
             return Ok(false);
         }
-        if self.kind == RuntimeKind::Podman {
-            let published_ports = self.published_ports(name.as_str())?;
-            return Ok(plan
-                .selected_host_ports()
-                .iter()
-                .all(|port| published_ports.contains(port)));
-        }
-        Ok(true)
+        let published_ports = self.published_ports(name.as_str())?;
+        Ok(plan
+            .selected_host_ports()
+            .iter()
+            .all(|port| published_ports.contains(port)))
     }
 
     fn reconcile_legacy_containers(&self, plan: &Plan) -> Result<bool> {
@@ -1133,7 +1134,11 @@ impl Runtime {
 
     fn list_container_infos(&self) -> Result<Vec<ContainerInfo>> {
         if self.kind == RuntimeKind::Container {
-            return Ok(Vec::new());
+            return Ok(self
+                .apple_snapshots(&["list", "--all", "--format", "json"])?
+                .into_iter()
+                .map(apple::Snapshot::into_info)
+                .collect());
         }
         let names = self.list_container_names()?;
         let mut containers = Vec::with_capacity(names.len());
@@ -1174,7 +1179,38 @@ impl Runtime {
             .collect())
     }
 
+    fn apple_snapshots(&self, args: &[&str]) -> Result<Vec<apple::Snapshot>> {
+        let output = Command::new(&self.binary)
+            .args(args)
+            .stdin(Stdio::null())
+            .output()?;
+        if !output.status.success() {
+            let message = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            if args.first() == Some(&"inspect") && is_missing_container_remove_error(&message) {
+                return Ok(Vec::new());
+            }
+            return Err(Error::Operation { message });
+        }
+        serde_json::from_slice(&output.stdout).map_err(|source| Error::AppleJson { source })
+    }
+
+    fn apple_snapshot(&self, name: &str) -> Result<Option<apple::Snapshot>> {
+        Ok(self
+            .apple_snapshots(&["inspect", name])?
+            .into_iter()
+            .find(|snapshot| snapshot.configuration.id == name))
+    }
+
     fn inspect_label(&self, name: &str, label: &str) -> Result<Option<String>> {
+        if self.kind == RuntimeKind::Container {
+            return Ok(self
+                .apple_snapshot(name)?
+                .and_then(|mut snapshot| snapshot.configuration.labels.remove(label)));
+        }
         let template = format!("{{{{ index .Config.Labels \"{label}\" }}}}");
         self.inspect_format(name, &template)
     }
@@ -1209,6 +1245,12 @@ impl Runtime {
     }
 
     fn published_ports(&self, name: &str) -> Result<Vec<u16>> {
+        if self.kind == RuntimeKind::Container {
+            return Ok(self
+                .apple_snapshot(name)?
+                .map(|snapshot| snapshot.into_info().published_ports)
+                .unwrap_or_default());
+        }
         let output = Command::new(&self.binary)
             .arg("port")
             .arg(name)
@@ -1345,38 +1387,23 @@ impl Runtime {
     }
 
     fn status(&self, name: &ContainerName) -> Result<RuntimeStatus> {
-        let mut command = Command::new(&self.binary);
-        match self.kind {
-            RuntimeKind::Container => {
-                command.arg("inspect");
-            }
-            RuntimeKind::Podman => {
-                command
-                    .arg("inspect")
-                    .arg("--format")
-                    .arg("{{.State.Running}}");
-            }
+        if self.kind == RuntimeKind::Container {
+            return Ok(self
+                .apple_snapshot(name.as_str())?
+                .as_ref()
+                .map_or(RuntimeStatus::Missing, apple::Snapshot::runtime_status));
         }
-        let output = command.arg(name.as_str()).stdin(Stdio::null()).output()?;
+        let output = Command::new(&self.binary)
+            .args(["inspect", "--format", "{{.State.Running}}", name.as_str()])
+            .stdin(Stdio::null())
+            .output()?;
         if !output.status.success() {
             return Ok(RuntimeStatus::Missing);
         }
-        match self.kind {
-            RuntimeKind::Container => {
-                let text = String::from_utf8_lossy(&output.stdout);
-                if text.contains(r#""status":"running""#) {
-                    Ok(RuntimeStatus::Running)
-                } else {
-                    Ok(RuntimeStatus::Stopped)
-                }
-            }
-            RuntimeKind::Podman => {
-                if String::from_utf8_lossy(&output.stdout).trim() == "true" {
-                    Ok(RuntimeStatus::Running)
-                } else {
-                    Ok(RuntimeStatus::Stopped)
-                }
-            }
+        if String::from_utf8_lossy(&output.stdout).trim() == "true" {
+            Ok(RuntimeStatus::Running)
+        } else {
+            Ok(RuntimeStatus::Stopped)
         }
     }
 }

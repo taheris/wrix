@@ -111,10 +111,18 @@ case "${1:-}" in
   inspect)
     name="$(last_arg "$@")"
     if [[ -f "$(state_file "$name")" ]]; then
-      printf 'true\n'
+      if [[ "${0##*/}" == "container" ]]; then
+        printf '[{"configuration":{"id":"%s"},"status":{"state":"running"}}]\n' "$name"
+      else
+        printf 'true\n'
+      fi
       exit 0
     fi
+    printf 'Error: no such object: "%s"\n' "$name" >&2
     exit 1
+    ;;
+  list)
+    printf '[]\n'
     ;;
   ps)
     ;;
@@ -299,6 +307,14 @@ test_fake_runtime_contract() {
   if "$WRIX_CONTAINER_RUNTIME" container exists demo; then
     fail "demo should be removed"
   fi
+
+  with_fake_runtime_env container
+  assert_equals "empty Apple inventory" "[]" "$("$WRIX_CONTAINER_RUNTIME" list --all --format json)"
+  "$WRIX_CONTAINER_RUNTIME" run -d --name demo image sh -c 'sleep infinity'
+  assert_equals "Apple inspect shape" \
+    '[{"configuration":{"id":"demo"},"status":{"state":"running"}}]' \
+    "$("$WRIX_CONTAINER_RUNTIME" inspect demo)"
+  "$WRIX_CONTAINER_RUNTIME" rm -f demo
 }
 
 test_linux_dolt_uses_workspace_socket() {

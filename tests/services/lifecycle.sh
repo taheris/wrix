@@ -74,6 +74,35 @@ image_file() {
   printf '%s/%s.image\n' "$STATE_DIR" "$name"
 }
 
+apple_snapshot() {
+  python3 - "$STATE_DIR" "${1:-}" <<'PY'
+import json
+import pathlib
+import sys
+
+state = pathlib.Path(sys.argv[1])
+name = sys.argv[2]
+paths = [state / f"run-{name}"] if name else sorted(state.glob("run-*"))
+containers = []
+for path in paths:
+    tokens = path.read_text().split()
+    labels = {}
+    ports = []
+    for option, value in zip(tokens, tokens[1:]):
+        if option == "--label":
+            key, label = value.split("=", 1)
+            labels[key] = label
+        elif option == "-p":
+            host, host_port, container_port = value.rsplit(":", 2)
+            ports.append({"hostAddress": host, "hostPort": int(host_port),
+                          "containerPort": int(container_port), "proto": "tcp", "count": 1})
+    containers.append({"configuration": {"id": path.name.removeprefix("run-"),
+                                         "labels": labels, "publishedPorts": ports},
+                       "status": {"state": "running"}})
+print(json.dumps(containers, indent=2))
+PY
+}
+
 image_exists() {
   local name="$1"
   [[ -f "$(image_file "$name")" ]]
@@ -373,7 +402,7 @@ case "${1:-}" in
         printf '<no value>\n'
       fi
     else
-      printf '[{"status":"running"}]\n'
+      apple_snapshot "$name"
     fi
     ;;
   port)
@@ -408,7 +437,7 @@ case "${1:-}" in
     rm -f "$(image_file "$target")"
     ;;
   list)
-    printf '[]\n'
+    apple_snapshot
     ;;
   run)
     name=""
@@ -807,6 +836,15 @@ test_fake_runtime_contract() {
     "abc123" \
     "$($WRIX_CONTAINER_RUNTIME inspect --format '{{ index .Config.Labels "wrix.workspace.hash" }}' labelled)"
   assert_contains "port listing" "$($WRIX_CONTAINER_RUNTIME port labelled)" "8080/tcp -> 127.0.0.1:21042"
+  "$WRIX_CONTAINER_RUNTIME" inspect labelled | python3 -c '
+import json
+import sys
+snapshot, = json.load(sys.stdin)
+assert snapshot["status"]["state"] == "running"
+assert snapshot["configuration"]["id"] == "labelled"
+assert snapshot["configuration"]["labels"]["wrix.workspace.hash"] == "abc123"
+assert snapshot["configuration"]["publishedPorts"][0]["hostPort"] == 21042
+'
   if "$WRIX_CONTAINER_RUNTIME" run -d --name conflict -p 127.0.0.1:21042:8080 image sh -c 'sleep infinity' 2>"$TEST_TMP/fake-conflict.err"; then
     fail "fake runtime allowed duplicate host port"
   fi
