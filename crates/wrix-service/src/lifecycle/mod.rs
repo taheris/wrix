@@ -1,4 +1,5 @@
 mod apple;
+mod dolt;
 
 use std::{
     env, fs, io,
@@ -32,6 +33,8 @@ const DOLT_PORT_START: u16 = 23_000;
 const DOLT_PORT_WIDTH: u16 = 2_000;
 const CACHE_ENABLED_LABEL: &str = "wrix.cache.enabled";
 const DOLT_TRANSPORT_LABEL: &str = "wrix.dolt.transport";
+const DOLT_AUTH_LABEL: &str = "wrix.dolt.auth";
+const DOLT_AUTH_VERSION: &str = "tcp-root-v1";
 const DOLT_DISABLED_LABEL_VALUE: &str = "disabled";
 const DOLT_READY_TIMEOUT: Duration = Duration::from_secs(6);
 const DOLT_READY_INTERVAL: Duration = Duration::from_millis(200);
@@ -61,7 +64,7 @@ pub enum Error {
     UnknownDoltTransport { value: String },
     /// failed to remove stale Dolt socket {path}: {source}
     StaleDoltSocketRemoval { path: String, source: io::Error },
-    /// Dolt endpoint {endpoint} did not become reachable within {timeout} seconds: {source}
+    /// Dolt endpoint {endpoint} did not become ready within {timeout} seconds: {source}
     DoltEndpointUnavailable {
         endpoint: String,
         timeout: u64,
@@ -941,6 +944,11 @@ impl Runtime {
                 .arg(format!("{}:/cache:ro", plan.paths().cache_root().display()));
         }
         if let Some(dolt) = plan.dolt() {
+            if dolt.transport() == DoltTransport::Tcp {
+                command
+                    .arg("--label")
+                    .arg(format!("{DOLT_AUTH_LABEL}={DOLT_AUTH_VERSION}"));
+            }
             command.arg("-v").arg(format!(
                 "{}:/var/lib/wrix/beads/dolt:rw",
                 plan.workspace()
@@ -1017,11 +1025,21 @@ impl Runtime {
         {
             return Ok(false);
         }
-        if let Some(dolt) = plan.dolt()
-            && dolt.transport() == DoltTransport::UnixSocket
-            && !is_unix_socket(dolt.socket_path())?
-        {
-            return Ok(false);
+        if let Some(dolt) = plan.dolt() {
+            match dolt.transport() {
+                DoltTransport::UnixSocket if !is_unix_socket(dolt.socket_path())? => {
+                    return Ok(false);
+                }
+                DoltTransport::Tcp
+                    if self
+                        .inspect_label(name.as_str(), DOLT_AUTH_LABEL)?
+                        .as_deref()
+                        != Some(DOLT_AUTH_VERSION) =>
+                {
+                    return Ok(false);
+                }
+                DoltTransport::UnixSocket | DoltTransport::Tcp => {}
+            }
         }
         let published_ports = self.published_ports(name.as_str())?;
         Ok(plan
@@ -1560,13 +1578,12 @@ fn container_command(plan: &Plan) -> String {
 }
 
 fn dolt_server_command(dolt: &DoltEndpoint) -> String {
-    let base = "mkdir -p /run/wrix && exec dolt sql-server --data-dir /var/lib/wrix/beads/dolt";
-    match dolt.transport() {
-        DoltTransport::UnixSocket => {
-            format!("{base} --host 127.0.0.1 --socket /run/wrix/dolt.sock")
-        }
-        DoltTransport::Tcp => format!("{base} --host 0.0.0.0 --port 3306"),
-    }
+    dolt::server_command(
+        dolt.transport(),
+        Path::new("/var/lib/wrix/beads/dolt"),
+        Path::new("/run/wrix"),
+        3306,
+    )
 }
 
 fn expected_dolt_transport_label(plan: &Plan) -> &'static str {
@@ -1605,22 +1622,25 @@ fn wait_for_dolt_plan(plan: &Plan) -> Result<()> {
     };
     let deadline = Instant::now() + DOLT_READY_TIMEOUT;
     loop {
-        match probe_dolt_endpoint(dolt) {
+        match probe_dolt_endpoint(dolt, deadline) {
             Ok(()) => return Ok(()),
-            Err(source) if Instant::now() >= deadline => {
-                return Err(Error::DoltEndpointUnavailable {
-                    endpoint: dolt_endpoint_description(dolt),
-                    timeout: DOLT_READY_TIMEOUT.as_secs(),
-                    source,
-                });
+            Err(source) => {
+                thread::sleep(
+                    DOLT_READY_INTERVAL.min(deadline.saturating_duration_since(Instant::now())),
+                );
+                if Instant::now() >= deadline {
+                    return Err(Error::DoltEndpointUnavailable {
+                        endpoint: dolt_endpoint_description(dolt),
+                        timeout: DOLT_READY_TIMEOUT.as_secs(),
+                        source,
+                    });
+                }
             }
-            Err(_) => {}
         }
-        thread::sleep(DOLT_READY_INTERVAL);
     }
 }
 
-fn probe_dolt_endpoint(dolt: &DoltEndpoint) -> io::Result<()> {
+fn probe_dolt_endpoint(dolt: &DoltEndpoint, deadline: Instant) -> io::Result<()> {
     match dolt.transport() {
         DoltTransport::UnixSocket => connect_unix_socket(dolt.socket_path()),
         DoltTransport::Tcp => {
@@ -1631,7 +1651,8 @@ fn probe_dolt_endpoint(dolt: &DoltEndpoint) -> io::Result<()> {
                 ));
             };
             let addr = SocketAddr::from(([127, 0, 0, 1], port));
-            TcpStream::connect_timeout(&addr, DOLT_READY_INTERVAL).map(|_| ())
+            TcpStream::connect_timeout(&addr, DOLT_READY_INTERVAL)?;
+            dolt::probe_tcp(port, deadline.saturating_duration_since(Instant::now()))
         }
     }
 }

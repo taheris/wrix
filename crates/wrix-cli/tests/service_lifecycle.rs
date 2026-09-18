@@ -1,6 +1,12 @@
 mod common;
 
-use std::{fs, net::TcpListener, path::PathBuf, process::Command};
+use std::{
+    fs,
+    net::TcpListener,
+    path::PathBuf,
+    process::Command,
+    time::{Duration, Instant},
+};
 
 use common::{RunResult, TestResult, run_command, set_mode, wrix_command};
 use serde_json::{Value, json};
@@ -11,6 +17,15 @@ printf '%s\n' "$*" >>"${WRIX_TEST_RUNTIME_LOG:?}"
 case "$*" in
   'list --all --format json') ;;
   "inspect ${WRIX_TEST_SERVICE_NAME:?}") ;;
+  "rm -f ${WRIX_TEST_SERVICE_NAME:?}")
+    printf '[]\n' >"${WRIX_TEST_RUNTIME_JSON:?}"
+    exit 0
+    ;;
+  "run -d --name ${WRIX_TEST_SERVICE_NAME:?} "*)
+    printf '%s\n' "$@" >"${WRIX_TEST_RUN_ARGS:?}"
+    cp "${WRIX_TEST_RUNTIME_REPLACEMENT:?}" "${WRIX_TEST_RUNTIME_JSON:?}"
+    exit 0
+    ;;
   *) printf 'unexpected Apple container command: %s\n' "$*" >&2; exit 64 ;;
 esac
 cat "${WRIX_TEST_RUNTIME_JSON:?}"
@@ -50,7 +65,8 @@ impl Fixture {
                     "wrix.workspace": fixture.metadata["workspace_path"],
                     "wrix.workspace.hash": fixture.metadata["workspace_hash"],
                     "wrix.cache.enabled": "true",
-                    "wrix.dolt.transport": "tcp"
+                    "wrix.dolt.transport": "tcp",
+                    "wrix.dolt.auth": "tcp-root-v1"
                 },
                 "publishedPorts": [
                     {"hostAddress": "127.0.0.1", "hostPort": fixture.port("cache_http")?, "containerPort": 8080, "proto": "tcp", "count": 1},
@@ -60,6 +76,10 @@ impl Fixture {
             "status": {"state": "running"}
         }]);
         fixture.write_snapshot()?;
+        fs::write(
+            fixture.root.path().join("replacement.json"),
+            serde_json::to_vec_pretty(&fixture.snapshot)?,
+        )?;
         let state_root = fixture.state_root()?;
         fs::create_dir_all(state_root.join("keys"))?;
         fs::write(
@@ -91,6 +111,11 @@ impl Fixture {
                 "WRIX_TEST_RUNTIME_JSON",
                 self.root.path().join("runtime.json"),
             )
+            .env("WRIX_TEST_RUN_ARGS", self.root.path().join("run.argv"))
+            .env(
+                "WRIX_TEST_RUNTIME_REPLACEMENT",
+                self.root.path().join("replacement.json"),
+            )
             .env(
                 "WRIX_TEST_SERVICE_NAME",
                 self.metadata["container_name"].as_str().unwrap_or("unused"),
@@ -98,6 +123,17 @@ impl Fixture {
             .env_remove("WRIX_SERVICE_IMAGE_SOURCE")
             .env_remove("WRIX_SERVICE_IMAGE_SOURCE_KIND")
             .env_remove("WRIX_SERVICE_IMAGE_DIGEST");
+        Ok(command)
+    }
+
+    fn runtime_command(&self) -> TestResult<Command> {
+        let environment = self.command()?;
+        let mut command = Command::new(&self.runtime);
+        command.envs(
+            environment
+                .get_envs()
+                .filter_map(|(key, value)| value.map(|value| (key, value))),
+        );
         Ok(command)
     }
 
@@ -149,6 +185,73 @@ fn repeated_apple_service_start_preserves_busy_owned_endpoints() -> TestResult {
         log.lines()
             .all(|line| line.starts_with("list ") || line.starts_with("inspect ")),
         "{log}"
+    );
+    Ok(())
+}
+
+#[test]
+fn apple_start_recreates_legacy_tcp_services_for_authentication_bootstrap() -> TestResult {
+    let mut fixture = Fixture::new()?;
+    fixture.snapshot[0]["configuration"]["labels"]
+        .as_object_mut()
+        .unwrap()
+        .remove("wrix.dolt.auth");
+    fixture.write_snapshot()?;
+    let marker = fixture.workspace.join(".beads/dolt/keep");
+    fs::write(&marker, "persistent database")?;
+
+    for _ in 0..2 {
+        let output = fixture.run("start")?;
+        assert!(output.status.success(), "{}", output.stderr);
+    }
+    let log = fs::read_to_string(fixture.root.path().join("runtime.log"))?;
+    assert_eq!(
+        log.lines()
+            .filter(|line| line.starts_with("rm -f "))
+            .count(),
+        1,
+        "{log}"
+    );
+    assert_eq!(
+        log.lines().filter(|line| line.starts_with("run ")).count(),
+        1,
+        "{log}"
+    );
+    let args = fs::read_to_string(fixture.root.path().join("run.argv"))?;
+    assert!(
+        args.lines().any(|arg| arg == "wrix.dolt.auth=tcp-root-v1"),
+        "{args}"
+    );
+    assert!(
+        args.lines()
+            .any(|arg| arg == format!("127.0.0.1:{}:3306", fixture.port("dolt_tcp").unwrap())),
+        "{args}"
+    );
+    assert!(
+        args.contains("CREATE USER IF NOT EXISTS 'root'@'%'"),
+        "{args}"
+    );
+    assert_eq!(fs::read_to_string(marker)?, "persistent database");
+    Ok(())
+}
+
+#[test]
+fn tcp_wait_rejects_a_listener_without_sql_authentication() -> TestResult {
+    let fixture = Fixture::new()?;
+    let _listener = TcpListener::bind(("127.0.0.1", fixture.port("dolt_tcp")?))?;
+    let start = Instant::now();
+    let output = run_command(fixture.command()?.args(["service", "dolt", "wait"]))?;
+    assert!(start.elapsed() < Duration::from_secs(8));
+    assert!(!output.status.success());
+    assert!(
+        output.stderr.contains("did not become ready"),
+        "{}",
+        output.stderr
+    );
+    assert!(
+        output.stderr.contains("SQL authentication probe"),
+        "{}",
+        output.stderr
     );
     Ok(())
 }
@@ -255,5 +358,36 @@ fn fake_apple_runtime_exposes_native_json_and_rejects_podman_flags() -> TestResu
         )
         .output()?;
     assert_eq!(output.status.code(), Some(64));
+
+    let name = fixture.metadata["container_name"].as_str().unwrap();
+    assert!(
+        fixture
+            .runtime_command()?
+            .args(["rm", "-f", name])
+            .status()?
+            .success()
+    );
+    let removed: Value =
+        serde_json::from_slice(&fs::read(fixture.root.path().join("runtime.json"))?)?;
+    assert_eq!(removed, json!([]));
+    assert!(
+        fixture
+            .runtime_command()?
+            .args([
+                "run",
+                "-d",
+                "--name",
+                name,
+                "image",
+                "sh",
+                "-c",
+                "sleep infinity"
+            ])
+            .status()?
+            .success()
+    );
+    let replacement: Value =
+        serde_json::from_slice(&fs::read(fixture.root.path().join("runtime.json"))?)?;
+    assert_eq!(replacement, fixture.snapshot);
     Ok(())
 }

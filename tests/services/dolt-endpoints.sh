@@ -256,35 +256,24 @@ PY
   fail "Unix listener did not create $socket_path"
 }
 
-start_tcp_listener() {
+start_tcp_dolt() {
   local port="$1"
-  command -v python3 >/dev/null 2>&1 || { printf 'SKIP: python3 is required for endpoint listeners\n' >&2; exit 77; }
-  python3 - "$port" <<'PY' &
-import socket
-import sys
-server = socket.socket()
-server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-server.bind(("127.0.0.1", int(sys.argv[1])))
-server.listen(8)
-while True:
-    connection, _ = server.accept()
-    connection.close()
-PY
+  local data="$TEST_TMP/tcp-data"
+  local log="$TEST_TMP/tcp-dolt.log"
+  command -v dolt >/dev/null 2>&1 || { printf 'SKIP: dolt is required for SQL readiness tests\n' >&2; exit 77; }
+  mkdir -p "$data"
+  dolt sql-server --data-dir "$data" --host 127.0.0.1 --port "$port" \
+    --socket "$TEST_TMP/tcp.sock" >"$log" 2>&1 &
   LISTENER_PIDS+=("$!")
   local attempt
   for ((attempt = 0; attempt < 100; attempt++)); do
-    if python3 - "$port" <<'PY'
-import socket
-import sys
-with socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=0.2):
-    pass
-PY
-    then
+    if dolt --host 127.0.0.1 --port "$port" --no-tls --user root --password '' \
+      sql -q 'SELECT 1' >/dev/null 2>&1; then
       return 0
     fi
     sleep 0.05
   done
-  fail "TCP listener did not bind 127.0.0.1:$port"
+  fail "Dolt did not become ready at 127.0.0.1:$port: $(<"$log")"
 }
 
 assert_port_range() {
@@ -345,7 +334,7 @@ test_linux_dolt_uses_workspace_socket() {
   assert_contains "dolt data mount" "$run_args" "$workspace/.beads/dolt:/var/lib/wrix/beads/dolt:rw"
   assert_contains "socket directory mount" "$run_args" "$workspace/.wrix:/run/wrix:rw"
   assert_contains "dolt server command" "$run_args" "dolt sql-server"
-  assert_contains "socket server option" "$run_args" "--socket /run/wrix/dolt.sock"
+  assert_contains "socket server option" "$run_args" "--socket '/run/wrix/dolt.sock'"
   assert_not_contains "no tcp publish on unix" "$run_args" ":3306"
   assert_not_contains "no whole workspace mount" "$run_args" "$workspace:/workspace"
 
@@ -383,7 +372,7 @@ test_container_dolt_uses_published_socket() {
   run_args="$(<"$WRIX_FAKE_RUNTIME_STATE/run-container-socket-repo-service")"
   assert_contains "dolt data mount" "$run_args" "$workspace/.beads/dolt:/var/lib/wrix/beads/dolt:rw"
   assert_contains "published dolt socket" "$run_args" "--publish-socket $socket:/run/wrix/dolt.sock"
-  assert_contains "socket server option" "$run_args" "--socket /run/wrix/dolt.sock"
+  assert_contains "socket server option" "$run_args" "--socket '/run/wrix/dolt.sock'"
   assert_not_contains "no virtiofs socket directory mount" "$run_args" "$workspace/.wrix:/run/wrix:rw"
   assert_not_contains "no tcp publish on container socket" "$run_args" ":3306"
 }
@@ -521,7 +510,7 @@ test_explicit_tcp_dolt_uses_loopback_tcp() {
   assert_not_contains "no unix socket mount" "$run_args" "$workspace/.wrix:/run/wrix:rw"
   assert_not_contains "no whole workspace mount" "$run_args" "$workspace:/workspace"
 
-  start_tcp_listener "$port"
+  start_tcp_dolt "$port"
   (cd "$workspace" && "$wrix_bin" service dolt wait)
   host_output="$(cd "$workspace" && "$wrix_bin" service dolt host)"
   port_output="$(cd "$workspace" && "$wrix_bin" service dolt port)"

@@ -93,6 +93,14 @@ The Dolt service exposes the same logical endpoint surfaces that beads uses toda
 
 When Darwin or another fallback needs Dolt TCP, the service binds only a host-loopback port and publishes the exact endpoint through `services.json` / `wrix service endpoints`. Linux does not publish a Dolt TCP port by default.
 
+TCP service startup provisions the workspace's default SQL login for forwarded
+connections, including when an existing privileges database contains only a
+localhost login. Startup preserves database contents, unrelated users/grants,
+and existing passwords. Services created without this initialization are
+recreated on the next `wrix service start`, using the same mounted database.
+TCP readiness requires a successful authenticated SQL query through the
+published endpoint; accepting a TCP connection alone is insufficient.
+
 ### Project Nix cache transport
 
 The project cache uses the Nix binary-cache protocol with different host and sandbox transports:
@@ -165,6 +173,18 @@ Direct remote-builder access to the local project cache is out of scope for v1. 
   [check](verify:services.rust-helper-binaries)
 - Linux beads clients reach Dolt through the workspace Unix socket, while Darwin beads clients receive the service container's TCP host/port endpoint
   [system](verify:services.dolt-platform-transport)
+- Fresh TCP Dolt services accept the default SQL login for forwarded connections
+  [test](lifecycle::dolt::test::fresh_tcp_service_provisions_a_forwarded_root_login)
+- TCP startup repairs persisted localhost-only grants idempotently without losing database contents or unrelated users/grants
+  [test](lifecycle::dolt::test::tcp_bootstrap_repairs_persisted_localhost_grants_without_losing_state)
+- TCP startup does not reset an existing SQL login password
+  [test](lifecycle::dolt::test::tcp_bootstrap_does_not_reset_an_existing_root_password)
+- Existing TCP services without authentication initialization are recreated once against the same database on service startup
+  [test](../crates/wrix-cli/tests/service_lifecycle.rs::apple_start_recreates_legacy_tcp_services_for_authentication_bootstrap)
+- TCP Dolt readiness rejects a reachable server that refuses SQL authentication
+  [test](lifecycle::dolt::test::sql_probe_rejects_a_reachable_server_with_invalid_credentials)
+- TCP Dolt readiness fails within a bounded startup budget when a listener accepts connections but never speaks SQL
+  [test](../crates/wrix-cli/tests/service_lifecycle.rs::tcp_wait_rejects_a_listener_without_sql_authentication)
 - Default `mkDevShell` cache enablement creates Linux XDG state/cache roots or Darwin Library state/cache roots, plus GC-root directory, signing key, public key, publish-root manifest, pending directory, lock file, status file, and endpoint metadata outside `/workspace`; `nixCache = false` does not create cache state solely for cache use
   [system](verify:services.cache-state-layout)
 - Host devshell Nix uses `file://<cache-root>` as the project cache substituter, trusts the generated public key, enables `builders-use-substitutes`, installs a project-specific immutable post-build hook, and fails loudly when the host Nix daemon ignores any required setting

@@ -76,6 +76,7 @@ in
     {
       nativeBuildInputs = nativeBuildInputs ++ [
         pkgs.beads
+        pkgs.dolt
         pkgs.hostname
         pkgs.jq
         pkgs.openssh
@@ -90,6 +91,13 @@ in
     "--set"
     "WRIX_PREK_HOOKS"
     "${prekHooksBundle}"
+    "--prefix"
+    "PATH"
+    ":"
+    "${pkgs.lib.makeBinPath [
+      pkgs.coreutils
+      pkgs.dolt
+    ]}"
   ];
   cacheHook = mkBinaryPackage "wrix-cache-hook";
   cachePublish = mkBinaryPackage "wrix-cache-publish";
