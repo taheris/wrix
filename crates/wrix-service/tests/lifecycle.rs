@@ -239,7 +239,12 @@ fn assert_cache_command_uses_workspace(path: &Path, expected: &WorkspaceHash) ->
     let home = fixture.path().join("home");
     let state_home = fixture.path().join("state");
     let cache_home = fixture.path().join("cache");
-    let state_root = state_home.join("wrix/workspaces").join(expected.as_str());
+    let state_workspaces = if cfg!(target_os = "macos") {
+        home.join("Library/Application Support/wrix/workspaces")
+    } else {
+        state_home.join("wrix/workspaces")
+    };
+    let state_root = state_workspaces.join(expected.as_str());
     fs::create_dir_all(&home)?;
     fs::create_dir_all(state_root.join("keys"))?;
     fs::write(state_root.join("keys/cache.secret"), "secret\n")?;
@@ -272,7 +277,7 @@ fn assert_cache_command_uses_workspace(path: &Path, expected: &WorkspaceHash) ->
         ))
         .into());
     }
-    let workspace_dirs = fs::read_dir(state_home.join("wrix/workspaces"))?
+    let workspace_dirs = fs::read_dir(state_workspaces)?
         .filter_map(std::result::Result::ok)
         .map(|entry| entry.file_name())
         .collect::<Vec<_>>();
