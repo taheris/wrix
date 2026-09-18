@@ -1,0 +1,11 @@
+.cache/
+.claude/
+.direnv/
+.loom/
+.pi/
+.playwright-mcp/
+.wrix/
+
+result
+result-*
+target/
