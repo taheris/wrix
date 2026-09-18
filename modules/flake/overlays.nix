@@ -29,7 +29,17 @@
         config.allowUnfree = true;
       };
 
-      hostOverlay = _final: _prev: { };
+      hostOverlay =
+        _final: prev:
+        prev.lib.optionalAttrs prev.stdenv.hostPlatform.isDarwin {
+          beads = prev.beads.overrideAttrs (old: {
+            # Darwin's orphan-server test needs process discovery tools on PATH.
+            nativeCheckInputs = (old.nativeCheckInputs or [ ]) ++ [
+              prev.ps
+              prev.lsof
+            ];
+          });
+        };
 
     in
     {

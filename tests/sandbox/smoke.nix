@@ -440,6 +440,28 @@ in
       mkdir $out
     '';
 
+  rust-compile-run-inputs =
+    let
+      profile = sandboxLib.profiles.rust;
+      probeFor = profile: import ../profiles/rust-compile-run.nix { inherit pkgs profile; };
+      probe = probeFor profile;
+      missingToolchain = builtins.tryEval (probeFor (profile // { hostPackages = [ pkgs.gcc ]; }));
+      missingCompiler = builtins.tryEval (
+        probeFor (profile // { hostPackages = [ profile.toolchain ]; })
+      );
+    in
+    assert
+      probe.nativeBuildInputs == [
+        profile.toolchain
+        pkgs.gcc
+      ];
+    assert !missingToolchain.success;
+    assert !missingCompiler.success;
+    runCommandLocal "smoke-rust-compile-run-inputs" { } ''
+      echo "PASS: Rust probe builds only its host-exposed toolchain and linker"
+      mkdir "$out"
+    '';
+
   # Every profile inherits the project formatter wrapper from base packages.
   profiles-contain-treefmt =
     let

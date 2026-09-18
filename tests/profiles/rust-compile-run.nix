@@ -1,8 +1,13 @@
 { pkgs, profile }:
 
+assert builtins.elem profile.toolchain profile.hostPackages;
+assert builtins.elem pkgs.gcc profile.hostPackages;
 pkgs.runCommand "verify-rust-profile-compile-run"
   {
-    nativeBuildInputs = profile.hostPackages;
+    nativeBuildInputs = [
+      profile.toolchain
+      pkgs.gcc
+    ];
   }
   ''
     set -euo pipefail
