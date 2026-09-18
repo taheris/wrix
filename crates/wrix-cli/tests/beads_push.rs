@@ -194,17 +194,18 @@ struct PushOutput {
 impl Fixture {
     fn new(name: &str) -> TestResult<Self> {
         let base = tempfile::Builder::new().prefix(name).tempdir()?;
-        let repo = base.path().join("repo");
-        let home = base.path().join("home");
-        let fake_bin = base.path().join("bin");
-        let state_dir = base.path().join("state");
+        let base_path = fs::canonicalize(base.path())?;
+        let repo = base_path.join("repo");
+        let home = base_path.join("home");
+        let fake_bin = base_path.join("bin");
+        let state_dir = base_path.join("state");
         fs::create_dir_all(&repo)?;
         fs::create_dir_all(&home)?;
         fs::create_dir_all(&fake_bin)?;
         fs::create_dir_all(&state_dir)?;
         let fixture = Self {
-            bd_log: base.path().join("bd.log"),
-            git_log: base.path().join("git.log"),
+            bd_log: base_path.join("bd.log"),
+            git_log: base_path.join("git.log"),
             real_bd: find_program("bd")?,
             _base: base,
             repo,
