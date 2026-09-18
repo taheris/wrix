@@ -80,10 +80,15 @@ The host package set is the host-native subset: it omits the Linux-only image
 network/process packages, getent, and the image treefmt wrapper, and supplies a
 host `whichQuiet` wrapper. `mkSandbox` adds the Linux `wrix` CLI separately.
 
-The base profile has no static environment or mounts. It declares
-`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, and `OPENAI_API_KEY` as optional
-runtime secrets. Its limit-mode allowlist is `api.anthropic.com`, `github.com`,
-`ssh.github.com`, and `cache.nixos.org`.
+All built-in profiles set `BD_DISABLE_METRICS=1` in their image and host
+environments, disabling Beads usage metrics in sandboxes and devshells even
+when the saved user preference enables them
+[check](verify:profiles.beads-metrics-disabled).
+
+The base profile has no mounts. It declares `ANTHROPIC_API_KEY`,
+`CLAUDE_CODE_OAUTH_TOKEN`, and `OPENAI_API_KEY` as optional runtime secrets. Its
+limit-mode allowlist is `api.anthropic.com`, `github.com`, `ssh.github.com`, and
+`cache.nixos.org`.
 
 `whichQuiet` suppresses unsuccessful lookup noise. `treefmt` is the project
 formatter wrapper. Host `~/.claude` is not mounted; project settings remain

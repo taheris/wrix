@@ -100,6 +100,25 @@ let
       ensure (lacks "prek install" devshellSource) "mkDevShell invokes prek install"
       && ensure (lacks ".git/hooks" devshellSource) "mkDevShell mutates .git/hooks";
 
+    "profiles.beads-metrics-disabled" = ensure (all
+      (
+        profile:
+        let
+          sandbox = wlib.mkSandbox { inherit profile; };
+        in
+        profile.env.BD_DISABLE_METRICS == "1"
+        && profile.hostEnv.BD_DISABLE_METRICS == "1"
+        && (wlib.mkDevShell { inherit profile; }).BD_DISABLE_METRICS == "1"
+        && sandbox.profile.env.BD_DISABLE_METRICS == "1"
+        && (sandbox.devShell { }).BD_DISABLE_METRICS == "1"
+      )
+      [
+        wlib.profiles.base
+        wlib.profiles.rust
+        wlib.profiles.python
+      ]
+    ) "profiles, sandboxes, and devshells must disable Beads metrics";
+
     "profiles.no-dev-toolchain-lib" = ensure (
       !(hasAttr "devToolchain" wlib)
     ) "wrix.devToolchain is still exposed";

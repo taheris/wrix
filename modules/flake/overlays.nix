@@ -16,7 +16,7 @@
 
       # Agent runtime packages exposed to consumers:
       #
-      #   claude-code — tracks nixos-unstable via flake.lock
+      #   claude-code — tracks nixpkgs-unstable via flake.lock
       #                 (stream-json framing for the claude backend);
       #                 bumping nixpkgs may bump claude-code's wire surface.
       linuxOverlay = _final: _prev: { };

@@ -62,6 +62,7 @@ in
   "devshell.shellhook-order" = mkDevShell "test_shellhook_order";
 
   "profiles.base-python-boundary" = corePackages "test_base_python_boundary";
+  "profiles.beads-metrics-disabled" = nixEval "profiles.beads-metrics-disabled";
   "profiles.core-membership" = corePackages "test_core_membership";
   "profiles.extra-packages-not-core" = corePackages "test_extra_not_in_core";
   "profiles.host-image-package-split" = profileComposition "test_host_packages_split";

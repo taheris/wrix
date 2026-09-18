@@ -2,7 +2,7 @@
   description = "Cross-platform sandbox for Claude Code";
 
   inputs = {
-    nixpkgs.url = "git+https://github.com/NixOS/nixpkgs.git?ref=nixos-unstable&shallow=1";
+    nixpkgs.url = "git+https://github.com/NixOS/nixpkgs.git?ref=nixpkgs-unstable&shallow=1";
 
     crane = {
       url = "git+https://github.com/ipetkov/crane.git?ref=master&shallow=1";

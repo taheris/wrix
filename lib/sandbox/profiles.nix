@@ -130,7 +130,9 @@ let
   baseMounts = [ ];
 
   # Environment variables in all profiles
-  baseEnv = { };
+  baseEnv = {
+    BD_DISABLE_METRICS = "1";
+  };
 
   baseRuntimeSecrets = {
     ANTHROPIC_API_KEY = "optional";
