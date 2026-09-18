@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 TEST_TMP="$(mktemp -d -t wrix-entrypoint-contract.XXXXXX)"
+unset WRIX_DIR_MOUNTS WRIX_FILE_MOUNTS
 
 cleanup() {
   rm -rf "$TEST_TMP"
@@ -56,13 +57,6 @@ fi
 exit 0
 EOF
   chmod +x "$bin_dir/git"
-
-  cat >"$bin_dir/sed" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-exit 0
-EOF
-  chmod +x "$bin_dir/sed"
 
   cat >"$bin_dir/iptables" <<'EOF'
 #!/usr/bin/env bash
@@ -124,6 +118,14 @@ set -euo pipefail
 log="${WRIX_FAKE_BD_LOG:?}"
 state="${WRIX_FAKE_BD_STATE:?}"
 printf '%s\n' "$*" >>"$log"
+if [[ "$*" == '--readonly sql SELECT 1' ]]; then
+  [[ "${BEADS_DOLT_AUTO_START:-}" == 0 && "${BD_IMPORT_AUTO:-}" == false ]]
+  if [[ "${WRIX_FAKE_BD_UNREACHABLE:-0}" == 1 ]]; then
+    echo 'Dolt server unreachable: connection refused' >&2
+    exit 1
+  fi
+  exit 0
+fi
 if [[ "$*" == "dolt remote list" ]]; then
   if [[ -f "$state" ]]; then
     printf 'origin %s\n' "$(<"$state")"
@@ -191,9 +193,11 @@ rewrite_entrypoint() {
   sed \
     -e "s|/workspace|$workspace|g" \
     -e "s|/home/wrix|$home_dir|g" \
-    -e "s|/etc/wrix/|$etc_wrix/|g" \
+    -e "s|/etc/|$(dirname "$etc_wrix")/|g" \
+    -e "s| -w /etc | -w $(dirname "$etc_wrix") |g" \
     -e "s|\. /git-ssh-setup\.sh|. $setup_path|g" \
     -e "s|\. /mcp-manifest\.sh|. $mcp_helper|g" \
+    -e "s|\. /beads-sandbox\.sh|. $REPO_ROOT/lib/beads/sandbox.sh|g" \
     -e "s|/proc/self/status|$capability_status|g" \
     -e "s|/run/wrix-network-ready|$ready_file|g" \
     "$source_path" >"$dest_path"
@@ -203,7 +207,10 @@ rewrite_entrypoint() {
 prepare_wrix_etc() {
   local etc_wrix="$1"
   local agent="$2"
-  mkdir -p "$etc_wrix/pi-agent"
+  mkdir -p "$etc_wrix/pi-agent" "$(dirname "$etc_wrix")/nix"
+  printf 'wrix:x:1000:1000:Wrix Sandbox:/home/wrix:/bin/bash\n' >"$(dirname "$etc_wrix")/passwd"
+  printf 'wrix:x:1000:\n' >"$(dirname "$etc_wrix")/group"
+  : >"$(dirname "$etc_wrix")/nix/nix.conf"
   printf '%s\n' "$agent" >"$etc_wrix/image-agent"
   printf '{}\n' >"$etc_wrix/claude-config.json"
   printf '{}\n' >"$etc_wrix/claude-settings.json"
@@ -251,7 +258,7 @@ run_entrypoint() {
   case_dir="$TEST_TMP/$platform-$agent-$case_name"
   tool_dir="$case_dir/tools"
   home_dir="$case_dir/home"
-  etc_wrix="$case_dir/etc-wrix"
+  etc_wrix="$case_dir/etc/wrix"
   entrypoint="$case_dir/entrypoint.sh"
 
   mkdir -p "$case_dir" "$home_dir" "$workspace/.claude" "$workspace/.wrix/log"
@@ -683,6 +690,30 @@ test_darwin_bd_remote_remap() {
   printf 'PASS: Darwin entrypoint remaps and restores the Dolt origin around pull and push\n' >&2
 }
 
+test_stale_beads_endpoint_blocks_agent_both() {
+  local platform workspace stdout_path stderr_path
+  for platform in linux darwin; do
+    workspace="$TEST_TMP/stale-beads-$platform"
+    stdout_path="$workspace.out"
+    stderr_path="$workspace.err"
+    mkdir -p "$workspace/.beads" "$workspace/bin"
+    printf '%s\n' '{"backend":"dolt","dolt_mode":"server"}' >"$workspace/.beads/metadata.json"
+    printf 'sync.mode: dolt-native\n' >"$workspace/.beads/config.yaml"
+    printf '#!/usr/bin/env bash\nset -euo pipefail\ntouch "%s/agent-ran"\n' "$workspace" >"$workspace/bin/loom-direct-runner"
+    chmod +x "$workspace/bin/loom-direct-runner"
+    export BEADS_DOLT_SERVER_HOST=192.0.2.10 BEADS_DOLT_SERVER_PORT=24470
+    export WRIX_FAKE_BD_UNREACHABLE=1 WRIX_FAKE_BD_LOG="$workspace.bd-log" WRIX_FAKE_BD_STATE="$workspace.bd-state"
+    if run_entrypoint "$platform" direct "$stdout_path" "$stderr_path" "$workspace"; then
+      fail "$platform accepted an unreachable Dolt endpoint"
+      return 1
+    fi
+    [[ ! -e "$workspace/agent-ran" ]] || { fail "$platform launched the agent before SQL readiness"; return 1; }
+    assert_output_contains "$platform diagnostic" "$(<"$stderr_path")" 'from this sandbox' || return 1
+    assert_output_contains "$platform cause" "$(<"$stderr_path")" 'connection refused' || return 1
+  done
+  unset BEADS_DOLT_SERVER_HOST BEADS_DOLT_SERVER_PORT WRIX_FAKE_BD_UNREACHABLE WRIX_FAKE_BD_LOG WRIX_FAKE_BD_STATE
+}
+
 test_darwin_entrypoint_rejects_net_admin() {
   local workspace="$TEST_TMP/net-admin-darwin/workspace"
   local stdout_path="$TEST_TMP/net-admin-darwin.out"
@@ -724,6 +755,7 @@ ALL_TESTS=(
   test_darwin_core_hooks_path
   test_linked_worktree_core_hooks_path_both
   test_darwin_bd_remote_remap
+  test_stale_beads_endpoint_blocks_agent_both
   test_darwin_file_mount_modes_sync_only_writable_files
   test_darwin_entrypoint_rejects_net_admin
 )

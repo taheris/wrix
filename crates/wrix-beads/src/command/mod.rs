@@ -210,12 +210,14 @@ fn prepare_dolt_origin_remote(
 
     let remote = format!("file://{}", context.worktree_remote_dir.display());
     let list = run_output("bd", &["dolt", "remote", "list"])?;
-    let origin = if list.status.success() {
-        let text = String::from_utf8_lossy(&list.stdout);
-        origin_remote_url(&text).map(ToOwned::to_owned)
-    } else {
-        None
-    };
+    if !list.status.success() {
+        return Err(Error::CommandFailed {
+            program: "bd dolt remote list (database unavailable; remote state unknown)",
+            stderr: String::from_utf8_lossy(&list.stderr).into_owned(),
+        });
+    }
+    let text = String::from_utf8_lossy(&list.stdout);
+    let origin = origin_remote_url(&text).map(ToOwned::to_owned);
     if origin.as_deref() == Some(remote.as_str()) {
         return Ok(DoltRemoteOverride::inactive());
     }

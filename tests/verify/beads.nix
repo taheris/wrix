@@ -15,6 +15,15 @@ in
 
   "beads.darwin-remote-remap" = sandboxScript "entrypoint-contract" "test_darwin_bd_remote_remap";
 
+  "beads.sandbox-readiness" =
+    sandboxScript "entrypoint-contract" "test_stale_beads_endpoint_blocks_agent_both";
+
+  "beads.shared-access" = ''
+    local beads
+    beads="$(build_flake_package beads)"
+    WRIX_TEST_BD_BIN="$beads/bin/bd" PATH="${pkgs.dolt}/bin:$PATH" run_repo_script tests/services/beads-access.sh
+  '';
+
   "beads.shellhook-darwin-runtime-fallback" =
     serviceScript "beads-shellhook" "test_darwin_shellhook_selects_podman_fallback";
 

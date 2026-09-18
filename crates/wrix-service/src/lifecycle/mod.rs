@@ -1,5 +1,6 @@
 mod apple;
 mod dolt;
+mod managed;
 
 use std::{
     env, fs, io,
@@ -14,6 +15,7 @@ use std::{
 use std::os::unix::{fs::FileTypeExt, net::UnixStream};
 
 use displaydoc::Display;
+use fs2::FileExt;
 use serde::{Deserialize, Deserializer, de};
 use thiserror::Error as ThisError;
 use wrix_core::{
@@ -47,6 +49,11 @@ pub enum Error {
     Io {
         #[from]
         source: io::Error,
+    },
+    /// managed Beads configuration failed: {source}
+    Beads {
+        #[from]
+        source: managed::Error,
     },
     /// project cache operation failed: {source}
     Cache {
@@ -292,7 +299,7 @@ impl Plan {
     }
 
     fn write_services(&self) -> Result<()> {
-        fs::write(self.paths.services_path(), self.services_json())?;
+        managed::atomic_write(&self.paths.services_path(), self.services_json().as_bytes())?;
         Ok(())
     }
 
@@ -518,7 +525,10 @@ impl Status {
 }
 
 pub fn start(cache_mode: CacheMode) -> Result<Status> {
-    let mut plan = Plan::for_current_dir(cache_mode)?;
+    let (mut plan, _lock) = locked_plan(cache_mode)?;
+    if plan.dolt().is_some() {
+        managed::configure(plan.workspace().canonical_path())?;
+    }
     let runtime = Runtime::from_env()?;
     if plan.has_services() && runtime.reconcile_legacy_containers(&plan)? {
         plan = Plan::for_workspace(plan.workspace().clone(), cache_mode)?;
@@ -531,8 +541,25 @@ pub fn start(cache_mode: CacheMode) -> Result<Status> {
     status_for_plan(plan)
 }
 
+fn locked_plan(cache_mode: CacheMode) -> Result<(Plan, fs::File)> {
+    let workspace = Workspace::from_service_current_dir()?;
+    let paths = Paths::for_workspace(workspace.hash())?;
+    fs::create_dir_all(paths.state_root())?;
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(paths.state_root().join("service.lock"))?;
+    lock.lock_exclusive()?;
+    Ok((
+        Plan::for_workspace_with_paths(workspace, cache_mode, paths)?,
+        lock,
+    ))
+}
+
 pub fn stop(cache_mode: CacheMode) -> Result<Status> {
-    let plan = Plan::for_current_dir(cache_mode)?;
+    let (plan, _lock) = locked_plan(cache_mode)?;
     let runtime = Runtime::from_env()?;
     runtime.remove(&plan.container_name())?;
     status_for_plan(plan)
@@ -551,6 +578,34 @@ pub fn logs(cache_mode: CacheMode) -> Result<Vec<u8>> {
 pub fn endpoints(cache_mode: CacheMode) -> Result<String> {
     let plan = Plan::for_current_dir(cache_mode)?;
     Ok(plan.services_json())
+}
+
+/// Resolve a TCP endpoint in the sandbox's network, not the host's loopback namespace.
+pub fn sandbox_dolt_endpoint(cache_mode: CacheMode) -> Result<String> {
+    let plan = Plan::for_current_dir(cache_mode)?;
+    let runtime = Runtime::from_env()?;
+    let unavailable = || Error::Operation {
+        message: String::from(
+            "no sandbox-reachable Dolt TCP endpoint; start the workspace service and check its runtime network",
+        ),
+    };
+    let port = plan.dolt_port().ok_or_else(unavailable)?;
+    let (host, port) = match runtime.kind {
+        RuntimeKind::Container => {
+            let snapshot = runtime
+                .apple_snapshot(plan.container_name().as_str())?
+                .ok_or_else(unavailable)?;
+            if snapshot.runtime_status() != RuntimeStatus::Running {
+                return Err(unavailable());
+            }
+            (snapshot.ipv4_address().ok_or_else(unavailable)?, 3306)
+        }
+        RuntimeKind::Podman if cfg!(target_os = "linux") => {
+            (std::net::Ipv4Addr::new(169, 254, 1, 2), port)
+        }
+        RuntimeKind::Podman => return Err(unavailable()),
+    };
+    Ok(format!("{{\"host\":\"{host}\",\"port\":{port}}}"))
 }
 
 pub fn wait_for_dolt(cache_mode: CacheMode) -> Result<()> {

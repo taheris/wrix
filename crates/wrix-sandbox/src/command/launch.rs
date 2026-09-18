@@ -318,6 +318,7 @@ struct BeadsSocket {
     mount_source: Option<PathBuf>,
 }
 
+#[derive(Deserialize)]
 struct BeadsTcp {
     host: Ipv4Addr,
     port: NonZeroU16,
@@ -1703,6 +1704,7 @@ impl ServicesState {
             run_service(workspace, &["service", "start", "--no-cache"])?;
         }
         if dolt {
+            run_service(workspace, &["service", "dolt", "wait"])?;
             state.load_dolt(workspace)?;
         }
         Ok(state)
@@ -1743,17 +1745,15 @@ impl ServicesState {
             let socket = trim_stdout(&output.stdout);
             self.beads_socket = Some(configure_dolt_socket(workspace, &socket)?);
         } else {
-            let port_text =
-                trim_stdout(&run_service(workspace, &["service", "dolt", "port"])?.stdout);
-            let port = port_text
-                .parse::<NonZeroU16>()
-                .map_err(|_source| LaunchError::InvalidDoltPort { port: port_text })?;
-            let host_text =
-                trim_stdout(&run_service(workspace, &["service", "dolt", "host"])?.stdout);
-            let host = host_text
-                .parse::<Ipv4Addr>()
-                .map_err(|_source| LaunchError::InvalidDoltHost { host: host_text })?;
-            self.beads_tcp = Some(BeadsTcp { host, port });
+            let output = run_service(workspace, &["service", "dolt", "sandbox-endpoint"])?;
+            let endpoint: BeadsTcp = serde_json::from_slice(&output.stdout)
+                .map_err(|source| LaunchError::ServiceJson { source })?;
+            if endpoint.host.is_loopback() || endpoint.host.is_unspecified() {
+                return Err(LaunchError::InvalidDoltHost {
+                    host: endpoint.host.to_string(),
+                });
+            }
+            self.beads_tcp = Some(endpoint);
         }
         Ok(())
     }

@@ -59,7 +59,7 @@ fn root_and_subcommand_help() -> TestResult {
     assert_contains(
         "service help",
         &service.stdout,
-        "dolt <status|socket|port|host|attach|gc|wait>",
+        "dolt <status|socket|port|host|sandbox-endpoint|attach|gc|wait>",
     );
 
     let dolt = run_wrix(&["service", "dolt", "--help"])?;

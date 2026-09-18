@@ -73,7 +73,10 @@ impl Fixture {
                     {"hostAddress": "127.0.0.1", "hostPort": fixture.port("dolt_tcp")?, "containerPort": 3306, "proto": "tcp", "count": 1}
                 ]
             },
-            "status": {"state": "running"}
+            "status": {
+                "state": "running",
+                "networks": [{"ipv4Address": "192.168.64.12/24"}]
+            }
         }]);
         fixture.write_snapshot()?;
         fs::write(
@@ -257,6 +260,140 @@ fn tcp_wait_rejects_a_listener_without_sql_authentication() -> TestResult {
 }
 
 #[test]
+fn apple_sandbox_endpoint_uses_service_vm_instead_of_host_loopback() -> TestResult {
+    let mut fixture = Fixture::new()?;
+    let output = run_command(
+        fixture
+            .command()?
+            .args(["service", "dolt", "sandbox-endpoint"]),
+    )?;
+    assert!(output.status.success(), "{}", output.stderr);
+    let endpoint: Value = serde_json::from_str(&output.stdout)?;
+    assert_eq!(endpoint, json!({"host": "192.168.64.12", "port": 3306}));
+    fixture.snapshot[0]["status"]["networks"] = json!([]);
+    fixture.write_snapshot()?;
+    let output = run_command(
+        fixture
+            .command()?
+            .args(["service", "dolt", "sandbox-endpoint"]),
+    )?;
+    assert!(!output.status.success());
+    assert!(
+        output.stderr.contains("no sandbox-reachable"),
+        "{}",
+        output.stderr
+    );
+    Ok(())
+}
+
+#[test]
+fn apple_sandbox_endpoint_accepts_legacy_network_layout() -> TestResult {
+    let mut fixture = Fixture::new()?;
+    let networks = fixture.snapshot[0]["status"]["networks"].take();
+    fixture.snapshot[0]["status"] = json!("running");
+    fixture.snapshot[0]["networks"] = networks;
+    fixture.write_snapshot()?;
+    let output = run_command(
+        fixture
+            .command()?
+            .args(["service", "dolt", "sandbox-endpoint"]),
+    )?;
+    assert!(output.status.success(), "{}", output.stderr);
+    let endpoint: Value = serde_json::from_str(&output.stdout)?;
+    assert_eq!(endpoint, json!({"host": "192.168.64.12", "port": 3306}));
+    Ok(())
+}
+
+#[test]
+fn concurrent_service_starts_share_one_lifecycle_owner() -> TestResult {
+    let mut fixture = Fixture::new()?;
+    fixture.snapshot[0]["configuration"]["labels"]
+        .as_object_mut()
+        .unwrap()
+        .remove("wrix.dolt.auth");
+    fixture.write_snapshot()?;
+    let mut children = Vec::new();
+    for _ in 0..4 {
+        children.push(
+            fixture
+                .command()?
+                .args(["service", "start"])
+                .stdout(std::process::Stdio::null())
+                .spawn()?,
+        );
+    }
+    for mut child in children {
+        assert!(child.wait()?.success());
+    }
+    let log = fs::read_to_string(fixture.root.path().join("runtime.log"))?;
+    assert_eq!(
+        log.lines().filter(|line| line.starts_with("run ")).count(),
+        1,
+        "{log}"
+    );
+    Ok(())
+}
+
+#[test]
+fn managed_checkout_outside_devshell_skips_import_and_preserves_chained_hooks() -> TestResult {
+    let fixture = Fixture::new()?;
+    let root = &fixture.workspace;
+    common::run_git(root, &["init", "-q"])?;
+    common::run_git(root, &["config", "user.name", "Wrix Test"])?;
+    common::run_git(root, &["config", "user.email", "test@example.invalid"])?;
+    fs::write(
+        root.join(".beads/config.yaml"),
+        "sync:\n  mode: dolt-native\nsync-branch: beads\nimport.auto: true\nexport.auto: false\n",
+    )?;
+    fs::write(
+        root.join(".beads/metadata.json"),
+        "{\"backend\":\"dolt\",\"dolt_mode\":\"server\",\"dolt_database\":\"beads\",\"last_bd_version\":\"1.3.0\"}\n",
+    )?;
+    fs::write(root.join(".beads/.local_version"), "1.3.0\n")?;
+    fs::write(
+        root.join(".beads/issues.jsonl"),
+        "legacy JSONL must not be imported\n",
+    )?;
+    common::run_git(root, &["add", ".beads/config.yaml", ".beads/metadata.json"])?;
+    common::run_git(root, &["commit", "-qm", "fixture"])?;
+    let output = fixture.run("start")?;
+    assert!(output.status.success(), "{}", output.stderr);
+    let hooks = root.join(".git/hooks");
+    fs::write(
+        hooks.join("post-checkout"),
+        "#!/usr/bin/env bash\nset -euo pipefail\nexec bd hooks run post-checkout \"$@\"\n",
+    )?;
+    fs::write(
+        hooks.join("post-checkout.old"),
+        "#!/usr/bin/env bash\nset -euo pipefail\ntouch chained-hook-ran\n",
+    )?;
+    set_mode(&hooks.join("post-checkout"), 0o755)?;
+    set_mode(&hooks.join("post-checkout.old"), 0o755)?;
+    let mut command = common::git_command(root, &["checkout", "-b", "after-managed-start"]);
+    command.env("HOME", fixture.root.path().join("home"));
+    for (name, _) in std::env::vars() {
+        if name.starts_with("BEADS_") || name.starts_with("BD_") {
+            command.env_remove(name);
+        }
+    }
+    let output = run_command(&mut command)?;
+    assert!(output.status.success(), "{}", output.stderr);
+    assert!(!output.stderr.contains("JSONL import"), "{}", output.stderr);
+    assert!(
+        !output.stderr.contains("no Dolt remote"),
+        "{}",
+        output.stderr
+    );
+    assert!(root.join("chained-hook-ran").is_file());
+    assert!(!root.join(".beads/dolt-server.pid").exists());
+    assert_eq!(
+        fs::read_to_string(root.join(".beads/issues.jsonl"))?,
+        "legacy JSONL must not be imported\n"
+    );
+    Ok(())
+}
+
+#[test]
 fn apple_status_accepts_pretty_nested_and_legacy_string_states() -> TestResult {
     let mut fixture = Fixture::new()?;
     for state in [json!({"state": "running"}), json!("running")] {
@@ -336,6 +473,11 @@ fn fake_apple_runtime_exposes_native_json_and_rejects_podman_flags() -> TestResu
         let actual: Value = serde_json::from_slice(&output.stdout)?;
         assert_eq!(actual, fixture.snapshot);
         assert_eq!(actual[0]["status"]["state"], "running");
+        assert_eq!(
+            actual[0]["status"]["networks"][0]["ipv4Address"],
+            "192.168.64.12/24"
+        );
+        assert!(actual[0].get("networks").is_none());
         assert_eq!(
             actual[0]["configuration"]["publishedPorts"][1]["hostPort"],
             fixture.port("dolt_tcp")?

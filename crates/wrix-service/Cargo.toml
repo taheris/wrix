@@ -6,15 +6,17 @@ version.workspace = true
 
 [dependencies]
 displaydoc = { workspace = true }
+fs2 = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml_ng = { workspace = true }
+tempfile = { workspace = true }
 thiserror = { workspace = true }
 wrix-cache = { workspace = true }
 wrix-core = { workspace = true }
 wrix-sandbox = { workspace = true }
 
 [dev-dependencies]
-tempfile = { workspace = true }
 wrix-cli = { workspace = true }
 
 [lints]

@@ -294,6 +294,7 @@ let
 
       cp ${entrypointSh} entrypoint.sh
       chmod +x entrypoint.sh
+      cp ${../beads/sandbox.sh} beads-sandbox.sh
       cp ${./mcp-manifest.sh} mcp-manifest.sh
       chmod +x mcp-manifest.sh
 

@@ -111,6 +111,10 @@ if [[ "$#" -eq 2 && "$arg1" == "dolt" && "$arg2" == "pull" ]]; then
 fi
 
 if [[ "$#" -eq 3 && "$arg1" == "dolt" && "$arg2" == "remote" && "$arg3" == "list" ]]; then
+  if [[ "$scenario" == "unreachable" ]]; then
+    printf 'Dolt server unreachable: connection refused\n' >&2
+    exit 1
+  fi
   if [[ -f "${state_dir}/origin-remote" ]]; then
     printf 'origin %s\n' "$(< "${state_dir}/origin-remote")"
   elif [[ -n "${WRIX_BEADS_BD_REMOTE_LIST-}" ]]; then
@@ -498,6 +502,55 @@ fn repairs_host_dolt_origin() -> TestResult {
         "CALL DOLT_REMOTE('add', 'origin', '{}')",
         expected_remote
     ))));
+    Ok(())
+}
+
+#[test]
+fn unavailable_database_does_not_trigger_remote_repair() -> TestResult {
+    let fixture = Fixture::new("unreachable-remote")?;
+    setup_repo_with_beads_branch(&fixture)?;
+    fs::create_dir_all(fixture.worktree_remote_dir())?;
+    let output = invoke_push(fixture.repo(), &[fixture.fake_bin()], |command| {
+        configure_bd(command, &fixture, "unreachable");
+    })?;
+    assert_ne!(output.code, 0);
+    assert!(
+        output
+            .stderr
+            .contains("database unavailable; remote state unknown"),
+        "{}",
+        output.stderr
+    );
+    assert!(output.stderr.contains("connection refused"));
+    assert!(!output.stderr.contains("repairing"));
+    let lines = fixture.bd_lines()?;
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.contains("DOLT_REMOTE") || line == "bd\tdolt\tpush")
+    );
+    Ok(())
+}
+
+#[test]
+fn existing_file_remote_is_preserved() -> TestResult {
+    let fixture = Fixture::new("existing-file-remote")?;
+    setup_repo_with_beads_branch(&fixture)?;
+    fs::create_dir_all(fixture.worktree_remote_dir())?;
+    let output = invoke_push(fixture.repo(), &[fixture.fake_bin()], |command| {
+        configure_bd(command, &fixture, "success");
+        command.env(
+            "WRIX_BEADS_BD_REMOTE_LIST",
+            format!("origin {}", file_url(&fixture.worktree_remote_dir())),
+        );
+    })?;
+    assert_eq!(output.code, 0, "{}", output.stderr);
+    assert!(
+        !fixture
+            .bd_lines()?
+            .iter()
+            .any(|line| line.contains("DOLT_REMOTE"))
+    );
     Ok(())
 }
 

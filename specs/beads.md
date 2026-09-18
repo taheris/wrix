@@ -231,6 +231,32 @@ upstream, not by this spec.
 
 ## Success Criteria
 
+- Service startup persists a local server-only policy with automatic startup,
+  JSONL import, and JSONL export disabled. Host checkout hooks honor that policy
+  outside a development shell while still running unrelated chained hooks
+  [test](../crates/wrix-cli/tests/service_lifecycle.rs::managed_checkout_outside_devshell_skips_import_and_preserves_chained_hooks)
+
+- Managed-policy installation preserves unrelated local configuration, database
+  identity, `sync.mode`, and `sync-branch`
+  [test](lifecycle::managed::test::managed_policy_preserves_sync_identity_and_unrelated_local_settings)
+
+- Both sandbox entrypoints authenticate a read-only SQL query from the guest
+  before executing the agent; unavailable endpoints fail without automatic
+  database startup or JSONL import
+  [system](verify:beads.sandbox-readiness)
+
+- Concurrent TCP and Unix-socket clients read the same existing issue data
+  without changing the configured file remote or starting another Dolt server
+  [system](verify:beads.shared-access)
+
+- An unavailable database during remote discovery aborts `wrix beads push`
+  without attempting remote repair
+  [test](../crates/wrix-cli/tests/beads_push.rs::unavailable_database_does_not_trigger_remote_repair)
+
+- An existing current-checkout `file://` Dolt remote remains unchanged during
+  `wrix beads push`
+  [test](../crates/wrix-cli/tests/beads_push.rs::existing_file_remote_is_preserved)
+
 - Git tracks exactly `.beads/.gitignore`, `.beads/config.yaml`, and
   `.beads/metadata.json` under the main worktree's `.beads/` directory
   [check](verify:beads.tracked-files)
@@ -438,6 +464,3 @@ upstream, not by this spec.
 - One-shot cleanup of historical `gc:session`-labelled rows and their
   events in the Dolt database — operator concern, not part of
   `wrix beads push`'s recurring responsibilities
-- Per-invocation suppression of bd auto-export via env var or flag —
-  current bd has no such opt-out; `wrix beads push` writes the persistent
-  config-file setting instead

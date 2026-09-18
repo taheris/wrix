@@ -8,6 +8,8 @@ use super::{ContainerInfo, RuntimeStatus};
 pub(super) struct Snapshot {
     pub configuration: Configuration,
     status: Status,
+    #[serde(default, rename = "networks")]
+    legacy_networks: Vec<Network>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -23,7 +25,11 @@ pub(super) struct Configuration {
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum Status {
-    Nested { state: State },
+    Nested {
+        state: State,
+        #[serde(default)]
+        networks: Vec<Network>,
+    },
     Legacy(State),
 }
 
@@ -35,16 +41,36 @@ enum State {
     Other,
 }
 
+#[derive(Debug, Deserialize)]
+struct Network {
+    #[serde(rename = "ipv4Address")]
+    address: String,
+}
+
 #[derive(Debug)]
 struct PublishedPort(RangeInclusive<u16>);
 
 impl Snapshot {
     pub const fn runtime_status(&self) -> RuntimeStatus {
-        let (Status::Nested { state } | Status::Legacy(state)) = self.status;
+        let (Status::Nested { state, .. } | Status::Legacy(state)) = &self.status;
         match state {
             State::Running => RuntimeStatus::Running,
             State::Other => RuntimeStatus::Stopped,
         }
+    }
+
+    pub fn ipv4_address(&self) -> Option<std::net::Ipv4Addr> {
+        let networks = match &self.status {
+            Status::Nested { networks, .. } => networks,
+            Status::Legacy(_) => &self.legacy_networks,
+        };
+        networks.iter().find_map(|network| {
+            let address = network.address.split('/').next()?;
+            match address.parse::<std::net::Ipv4Addr>() {
+                Ok(address) if !address.is_loopback() && !address.is_unspecified() => Some(address),
+                Ok(_) | Err(_) => None,
+            }
+        })
     }
 
     pub fn into_info(mut self) -> ContainerInfo {
@@ -87,6 +113,38 @@ mod test {
     use serde_json::json;
 
     use super::Snapshot;
+
+    #[test]
+    fn sandbox_address_uses_current_status_networks_not_stale_top_level_values() {
+        let snapshot: Snapshot = serde_json::from_value(json!({
+            "configuration": {"id": "service"},
+            "status": {"state": "running", "networks": []},
+            "networks": [{"ipv4Address": "192.168.64.99/24"}]
+        }))
+        .unwrap();
+        assert_eq!(snapshot.ipv4_address(), None);
+    }
+
+    #[test]
+    fn sandbox_address_skips_unusable_interfaces() {
+        let snapshot: Snapshot = serde_json::from_value(json!({
+            "configuration": {"id": "service"},
+            "status": {
+                "state": "running",
+                "networks": [
+                    {"ipv4Address": "127.0.0.1/8"},
+                    {"ipv4Address": "0.0.0.0/0"},
+                    {"ipv4Address": "invalid"},
+                    {"ipv4Address": "192.168.64.12/24"}
+                ]
+            }
+        }))
+        .unwrap();
+        assert_eq!(
+            snapshot.ipv4_address(),
+            Some(std::net::Ipv4Addr::new(192, 168, 64, 12))
+        );
+    }
 
     #[test]
     fn published_port_ranges_include_each_reserved_host_port() {

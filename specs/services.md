@@ -73,7 +73,7 @@ group:
 
 - lifecycle and diagnostics: `start`, `stop`, `status`, `logs`, `endpoints`;
 - Dolt endpoint and maintenance operations: `status`, `socket`, `port`, `host`,
-  `attach`, `gc`, `wait`;
+  `attach`, `gc`, `wait`, `sandbox-endpoint`;
 - project-cache operations: `status`, `publish`, `warm`, `prune`, `rotate-key`.
 
 The delegated implementation is Rust-first. Service internals are proper Rust
@@ -154,6 +154,15 @@ GC markers under `gcroots/` govern retention. Updating a root replaces that root
 Direct remote-builder access to the local project cache is out of scope for v1. Remote builders may build normally; after outputs are available in the host store, host-side publishing can publish eligible outputs into the local project cache for later sandbox substitution. Wrix does not bind the project cache to LAN/VPN addresses or configure remote builder trust for the local cache by default.
 
 ## Success Criteria
+
+- Concurrent service starts for the same workspace are serialized and create
+  at most one replacement service container
+  [test](../crates/wrix-cli/tests/service_lifecycle.rs::concurrent_service_starts_share_one_lifecycle_owner)
+
+- `wrix service dolt sandbox-endpoint` returns the running Apple service VM's
+  non-loopback TCP host and internal SQL port, or fails if no guest-visible
+  address exists; host publication remains loopback-only
+  [test](../crates/wrix-cli/tests/service_lifecycle.rs::apple_sandbox_endpoint_uses_service_vm_instead_of_host_loopback)
 
 - A workspace that starts services gets a container named `<repo>-service`; the same service identity path yields the same container name, preferred service ports, state roots, and cache root, while two different checkout paths do not collide
   [test](../crates/wrix-service/tests/lifecycle.rs::workspace_identity_is_stable_and_collision_resistant)

@@ -20,6 +20,7 @@ pub enum Dolt {
     Socket,
     Port,
     Host,
+    SandboxEndpoint,
     Attach,
     Gc,
     Wait,
@@ -45,6 +46,7 @@ impl Dolt {
             "socket" => Some(Self::Socket),
             "port" => Some(Self::Port),
             "host" => Some(Self::Host),
+            "sandbox-endpoint" => Some(Self::SandboxEndpoint),
             "attach" => Some(Self::Attach),
             "gc" => Some(Self::Gc),
             "wait" => Some(Self::Wait),
@@ -53,8 +55,8 @@ impl Dolt {
     }
 }
 
-pub const HELP: &str = "Manage workspace services.\n\nUsage: wrix service <command> [options]\n\nCommands:\n  start      Start the workspace services.\n  stop       Stop the workspace services.\n  status     Show workspace service status.\n  logs       Print workspace service logs.\n  endpoints  Print workspace service endpoints.\n  dolt <status|socket|port|host|attach|gc|wait>       Manage the workspace Dolt service.\n  cache <status|publish|warm|prune|rotate-key>        Manage the workspace project cache.\n\nOptions:\n  --no-cache  Disable project-cache handling for top-level service commands.\n  -h, --help  Print help.\n";
-pub const DOLT_HELP: &str = "Manage the workspace Dolt service.\n\nUsage: wrix service dolt <command>\n\nCommands:\n  status  Show Dolt service status and connection details.\n  socket  Print the Dolt Unix-socket path.\n  port    Print the Dolt TCP port.\n  host    Print the Dolt TCP host.\n  attach  Print a command that connects to Dolt.\n  gc      Print the Dolt garbage-collection target.\n  wait    Wait until the Dolt service is ready.\n\nOptions:\n  -h, --help  Print help.\n";
+pub const HELP: &str = "Manage workspace services.\n\nUsage: wrix service <command> [options]\n\nCommands:\n  start      Start the workspace services.\n  stop       Stop the workspace services.\n  status     Show workspace service status.\n  logs       Print workspace service logs.\n  endpoints  Print workspace service endpoints.\n  dolt <status|socket|port|host|sandbox-endpoint|attach|gc|wait>       Manage the workspace Dolt service.\n  cache <status|publish|warm|prune|rotate-key>        Manage the workspace project cache.\n\nOptions:\n  --no-cache  Disable project-cache handling for top-level service commands.\n  -h, --help  Print help.\n";
+pub const DOLT_HELP: &str = "Manage the workspace Dolt service.\n\nUsage: wrix service dolt <command>\n\nCommands:\n  status  Show Dolt service status and connection details.\n  socket  Print the Dolt Unix-socket path.\n  port    Print the Dolt TCP port.\n  host    Print the Dolt TCP host.\n  sandbox-endpoint  Print the sandbox-visible Dolt TCP endpoint.\n  attach  Print a command that connects to Dolt.\n  gc      Print the Dolt garbage-collection target.\n  wait    Wait until the Dolt service is ready.\n\nOptions:\n  -h, --help  Print help.\n";
 
 pub fn write_help(stdout: &mut impl Write) -> io::Result<()> {
     stdout.write_all(HELP.as_bytes())
@@ -131,6 +133,13 @@ pub fn run_dolt(command: Dolt, stdout: &mut impl Write) -> io::Result<ExitCode> 
                 writeln!(stdout, "dolt tcp host unavailable for unix transport")?;
                 return Ok(ExitCode::FAILURE);
             }
+        }
+        Dolt::SandboxEndpoint => {
+            writeln!(
+                stdout,
+                "{}",
+                lifecycle::sandbox_dolt_endpoint(CacheMode::Disabled).map_err(io::Error::other)?
+            )?;
         }
         Dolt::Attach => {
             writeln!(stdout, "{}", attach_command(endpoint))?;

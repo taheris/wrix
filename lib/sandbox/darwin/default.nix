@@ -166,6 +166,7 @@ in
             }
 
             wrix_ensure_workspace_services() {
+              local dolt_endpoint
               wrix_detect_workspace_dolt
               if [[ "$PROFILE_NIX_CACHE_ENABLE" = "1" ]]; then
                 (cd "$PROJECT_DIR" && "${serviceBin}" service start >/dev/null)
@@ -174,8 +175,10 @@ in
                 (cd "$PROJECT_DIR" && "${serviceBin}" service start --no-cache >/dev/null)
               fi
               if [[ "$WRIX_WORKSPACE_DOLT" = "1" ]]; then
-                BEADS_DOLT_PORT=$(cd "$PROJECT_DIR" && "${serviceBin}" service dolt port)
-                BEADS_DOLT_HOST=$(cd "$PROJECT_DIR" && "${serviceBin}" service dolt host)
+                (cd "$PROJECT_DIR" && "${serviceBin}" service dolt wait)
+                dolt_endpoint=$(cd "$PROJECT_DIR" && "${serviceBin}" service dolt sandbox-endpoint)
+                BEADS_DOLT_PORT=$(printf '%s\n' "$dolt_endpoint" | ${pkgs.jq}/bin/jq -er '.port')
+                BEADS_DOLT_HOST=$(printf '%s\n' "$dolt_endpoint" | ${pkgs.jq}/bin/jq -er '.host')
               fi
             }
 

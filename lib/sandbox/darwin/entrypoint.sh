@@ -1,6 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
+# shellcheck source=/dev/null
+. /beads-sandbox.sh
+
 SESSION_START_EPOCH=$(date +%s)
 SESSION_START_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 SESSION_LOG_WRITTEN=0
@@ -340,7 +343,8 @@ if [[ ! -d "$remote_dir" ]]; then
 fi
 desired="file://$remote_dir"
 if ! remote_list=$("$real_bd" dolt remote list); then
-  exec "$real_bd" "$@"
+  echo 'Error: cannot query Dolt remotes; refusing to treat an unavailable database as a missing remote' >&2
+  exit 1
 fi
 original=$(printf '%s\n' "$remote_list" | awk '$1 == "origin" { print $2; exit }')
 if [[ "$original" == "$desired" ]]; then
@@ -500,45 +504,12 @@ elif [[ "$WRIX_AGENT" = "pi" ]]; then
   fi
 fi
 
-# Connect bd to the host workspace service.
-# VirtioFS can't pass Unix sockets, so the launcher passes
-# BEADS_DOLT_SERVER_PORT for TCP. The socat bridge on the host retries
-# until the container network interface appears, so we wait here too.
+wrix_configure_beads_endpoint /workspace
+if [[ "$WRIX_BEADS_CONFIGURED" == "1" ]]; then
+  wrix_install_bd_remote_wrapper
+fi
+wrix_wait_for_beads_endpoint
 if [[ -f /workspace/.beads/config.yaml ]]; then
-  # best-effort: missing/malformed metadata.json -> default to sqlite backend
-  BACKEND=$(jq -r '.backend // "sqlite"' /workspace/.beads/metadata.json 2>/dev/null || echo "sqlite")
-
-  if [[ "$BACKEND" = "dolt" ]]; then
-    if [[ -n "${BEADS_DOLT_SERVER_HOST:-}" ]] && [[ -n "${BEADS_DOLT_SERVER_PORT:-}" ]]; then
-      export BEADS_DOLT_AUTO_START=0
-    elif [[ -n "${BEADS_DOLT_SERVER_SOCKET:-}" ]]; then
-      if [[ ! -S "$BEADS_DOLT_SERVER_SOCKET" ]]; then
-        echo "Error: configured Dolt socket is unavailable: $BEADS_DOLT_SERVER_SOCKET" >&2
-        exit 1
-      fi
-      export BEADS_DOLT_AUTO_START=0
-    elif [[ -n "${BEADS_DOLT_SERVER_PORT:-}" ]]; then
-      BEADS_DOLT_SERVER_HOST=$(ip route 2>/dev/null | awk '/default/ {print $3; exit}')
-      export BEADS_DOLT_SERVER_HOST
-      export BEADS_DOLT_AUTO_START=0
-      # Wait for the socat bridge on the host to become reachable
-      for _i in $(seq 1 30); do
-        if nc -z -w1 "$BEADS_DOLT_SERVER_HOST" "$BEADS_DOLT_SERVER_PORT" 2>/dev/null; then
-          break
-        fi
-        sleep 0.5
-      done
-    elif [[ -S /workspace/.wrix/dolt.sock ]]; then
-      export BEADS_DOLT_SERVER_SOCKET=/workspace/.wrix/dolt.sock
-      export BEADS_DOLT_AUTO_START=0
-    else
-      echo "Error: dolt backend configured but no connection available" >&2
-      _repo=$(git -C /workspace remote get-url origin 2>/dev/null | sed 's|.*/||;s|\.git$||')
-      echo "  Start the host ${_repo:-repo}-service container with wrix service start before launching this container." >&2
-      exit 1
-    fi
-    wrix_install_bd_remote_wrapper
-  fi
 
   if [[ -e /workspace/.git ]]; then
     WRIX_TRACKED_BEADS_GITIGNORE="$(git ls-files -- .beads/.gitignore)"
