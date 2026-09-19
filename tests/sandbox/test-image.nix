@@ -48,7 +48,8 @@ import ../../lib/sandbox/image.nix {
   pkgs = testPkgs;
   inherit profile;
   inherit agent;
-  agentPkg = testPkgs.hello;
+  agentPkg =
+    if agent == "pi" then import ../../lib/sandbox/pi.nix { pkgs = testPkgs; } else testPkgs.hello;
   entrypointSh = ../../lib/sandbox/linux/entrypoint.sh;
   # Mirror production (lib/sandbox/default.nix sets krunSupport = isLinux): bakes
   # /lib/libfakeuid.so + krun-relay for the krun microVM boundary. The default

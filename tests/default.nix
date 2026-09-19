@@ -217,6 +217,7 @@ let
     // tomlTests
     // {
       image-assembly-native = sandboxImageChecks.imageAssemblyNativeCheck;
+      pi-auth-storage = import ./security/pi-auth.nix { inherit pkgs; };
     };
 
   # ============================================================================

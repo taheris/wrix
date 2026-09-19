@@ -163,17 +163,51 @@ The environment surface is split into static defaults and runtime secrets:
   omitted, while an absent required source fails before container startup.
   Dry-run output redacts known and declared secret values.
 
-The second delivery channel is a **credential-file mount**: a file-based agent
-store. For Pi, the launcher resolves `WRIX_PI_AUTH_FILE` or falls back to
-`~/.pi/agent/auth.json`. Interactive `wrix run` creates an empty fallback file
-for first `/login` use when it is missing; non-interactive `wrix spawn` fails
-loudly when the file is absent. The launcher mounts only that credential path
-into Pi's `~/.pi/agent/auth.json` when `WRIX_AGENT=pi`. Linux uses a single-file
-bind. Because Apple Container/VirtioFS is directory-oriented, macOS copies the
-selected auth file into an otherwise empty per-launch staging directory, mounts
-that directory at an internal path, and synchronizes only the selected file
-back after the session. Sibling files beside the host auth file never enter the
-sandbox.
+The second delivery channel is **isolated persistent credential storage**. For
+Pi, `WRIX_PI_AUTH_FILE` selects the host auth file, otherwise
+`~/.pi/agent/auth.json` is used. Interactive `wrix run` initializes an empty
+missing fallback for first `/login`; a missing explicit override or missing
+non-interactive `wrix spawn` credential fails before container startup.
+
+Wrix migrates the selected file without parsing or copying its contents into
+an adjacent private `<selected-file>.wrix-auth/auth.json`, retaining the selected
+path as a symlink. The store is shared across repositories and containers using
+that credential source; different overrides retain independent stores.
+Directories are `0700` and credential files `0600`. Only that credential-only
+directory is mounted read-write at `/mnt/wrix/pi-agent-auth` on either platform;
+Pi's container-local `~/.pi/agent/auth.json` points into it. Neither the original
+parent directory nor unrelated host Pi settings, extensions, sessions, or
+credentials are exposed. Conflicting copies, non-regular credential targets,
+and unexpected store entries fail closed without following a guest-controlled
+auth symlink on the host.
+
+Completed Pi writes are immediately host-backed, independent of launcher exit,
+other mount synchronization, or cleanup. No session snapshot is copied back.
+The shared directory also carries Pi's sibling `auth.json.lock`: Wrix's bundled
+Pi enables `proper-lockfile` canonical-target resolution so file symlinks do not
+produce container-local locks. Synchronous readers use the same 30-second stale
+threshold as asynchronous refreshes, rather than stealing a live refresh's
+lease after ten seconds. Pi re-reads and merges credentials under that
+lock, including the expiry recheck and OAuth refresh; concurrent sessions reuse
+the winning refresh. Pi owns lock heartbeat/stale-lock recovery and credential
+write semantics; this does not promise power-loss atomicity of Pi's in-place
+writes or prevent provider-side revocation.
+
+Before the first migration, stop host Pi and containers launched by older Wrix
+versions (their eventual copyback cannot be coordinated by the new launcher).
+Migration serializes competing Wrix launchers, refuses an existing Pi lock, and
+recovers a rename interrupted before symlink creation without replacing saved
+credentials. Independently installed host Pi and `agentPkg` overrides need the
+same canonical-target locking and stale thresholds to run concurrently through
+symlinks; unpatched Pi versions using `realpath: false` are not safe concurrent
+writers.
+A host SDK can use the canonical credential path directly, but still needs
+matching stale thresholds. Wrix does not modify independently installed host software. The packaged-Pi verifier
+executes the real storage and Codex refresh implementation with a mock token
+endpoint; the live verifier additionally exercises Podman/Apple Container
+mounts and interrupted launcher shutdown.
+[system](verify:security.pi-auth-storage)
+[system](test-ci:test-security-pi-auth-isolation)
 
 Acceptable because:
 
@@ -350,14 +384,24 @@ section is a reference index only.
   [test](../crates/wrix-sandbox/tests/spawn_config.rs::invalid_environment_names_fail_before_launch)
 - A declared runtime secret supplied through `SpawnConfig.env` satisfies required-source policy and is redacted in launcher dry-run output
   [test](../crates/wrix-sandbox/tests/spawn_config.rs::provider_credentials_in_spawn_config_are_redacted)
-- On Linux, an assembled sandbox delivers Pi's selected auth file as a
-  single-file bind. On Darwin, its isolated staging directory exposes only the
-  selected file. On both platforms, auth updates synchronize only to the
-  selected host file.
+- Both platforms expose only durable Pi credential storage, preserve completed
+  writes before exit, share refreshes across overlapping containers and
+  repositories, and retain credentials after killed launchers and restarts.
   [system](test-ci:test-security-pi-auth-isolation)
-- Darwin auth synchronization rejects a guest-controlled symlink or other
-  non-regular staging source without reading its target.
-  [test](command::launch::test::darwin_pi_auth_sync_rejects_guest_controlled_symlink)
+- Bundled Pi locks the shared symlink target, performs only one concurrent Codex
+  refresh, keeps synchronous readers from stealing live refresh locks, merges
+  other provider updates, and recovers abandoned locks without
+  reverting saved credentials.
+  [system](verify:security.pi-auth-storage)
+- Pi migration preserves selected credentials with restrictive permissions
+  without exposing sibling files.
+  [test](command::launch::pi_auth::test::migration_preserves_credentials_and_isolates_siblings)
+- Interrupted Pi migration recovers the saved credential file rather than
+  initializing or copying over it.
+  [test](command::launch::pi_auth::test::interrupted_migration_recovers_without_overwriting_credentials)
+- Host preparation rejects guest-controlled auth symlinks without reading or
+  changing their targets.
+  [test](command::launch::pi_auth::test::unsafe_shared_storage_is_rejected_without_touching_symlink_target)
 - A transcript-producing built-in agent, or an external direct runner that
   persists its own transcript, provides fit-for-purpose audit content for the
   stated policy-leakage threat model without claiming adversarial-agent

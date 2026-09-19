@@ -376,7 +376,7 @@ let
         {
           direct = defaultDirectRunner;
           claude = linuxPkgs.claude-code;
-          pi = linuxPkgs.pi-coding-agent;
+          pi = import ./pi.nix { pkgs = linuxPkgs; };
         }
         .${agent} or (throw "mkSandbox: unknown agent '${agent}' (expected 'direct', 'claude', or 'pi')");
 

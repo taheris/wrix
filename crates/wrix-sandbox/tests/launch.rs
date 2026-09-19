@@ -580,37 +580,130 @@ fn pi_auth_file_uses_platform_delivery_path() -> TestResult {
     )?;
 
     assert!(run.success, "{}", run.stderr);
-    if cfg!(target_os = "macos") {
-        let mount = run
-            .stdout
-            .lines()
-            .find(|line| line.ends_with("/pi-auth:/mnt/wrix/pi-agent-auth"))
-            .ok_or("Darwin Pi auth did not use isolated staging")?;
-        assert!(mount.starts_with("MOUNT=-v "));
-        assert!(
-            !mount.contains(
-                &auth
-                    .parent()
-                    .ok_or("auth path has no parent")?
-                    .display()
-                    .to_string()
-            )
-        );
-        assert!(
-            run.stdout
-                .contains("ENV=WRIX_PI_AUTH_JSON=/mnt/wrix/pi-agent-auth/auth.json")
-        );
-        assert!(!run.stdout.contains("sibling"));
-    } else {
+    assert!(run.stdout.contains(&format!(
+        "MOUNT=-v {}.wrix-auth:/mnt/wrix/pi-agent-auth",
+        auth.display()
+    )));
+    assert!(
+        run.stdout
+            .contains("ENV=WRIX_PI_AUTH_JSON=/mnt/wrix/pi-agent-auth/auth.json")
+    );
+    assert!(!run.stdout.contains("sibling"));
+    assert!(auth.is_symlink());
+    assert_eq!(fs::read_to_string(&auth)?, "{}\n");
+    Ok(())
+}
+
+#[test]
+fn pi_default_auth_survives_new_repository_launch() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let profile = root.path().join("profile.json");
+    common::write_profile_config(
+        &profile,
+        &ProfileFixture {
+            agent_kind: String::from("pi"),
+            ..ProfileFixture::default()
+        },
+    )?;
+    let auth = root.path().join("home/.pi/agent/auth.json");
+    for (index, repo) in ["first-repo", "second-repo"].iter().enumerate() {
+        let workspace = root.path().join(repo);
+        fs::create_dir(&workspace)?;
+        let run = run_launch(root.path(), repo, &profile, &workspace, Vec::new())?;
+        assert!(run.success, "{}", run.stderr);
         assert!(run.stdout.contains(&format!(
-            "MOUNT=-v {}:/mnt/wrix/file/pi-auth.json",
+            "{}.wrix-auth:/mnt/wrix/pi-agent-auth",
             auth.display()
         )));
-        assert!(
-            run.stdout
-                .contains("ENV=WRIX_PI_AUTH_JSON=/mnt/wrix/file/pi-auth.json")
-        );
+        if index == 0 {
+            assert_eq!(fs::read_to_string(&auth)?, "{}\n");
+            fs::write(&auth, "fixture credentials")?;
+        } else {
+            assert_eq!(fs::read_to_string(&auth)?, "fixture credentials");
+        }
     }
+    Ok(())
+}
+
+#[test]
+fn missing_pi_auth_override_fails_without_initializing_it() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let profile = root.path().join("profile.json");
+    common::write_profile_config(
+        &profile,
+        &ProfileFixture {
+            agent_kind: String::from("pi"),
+            ..ProfileFixture::default()
+        },
+    )?;
+    let auth = root.path().join("missing.json");
+    let run = run_launch(
+        root.path(),
+        "missing",
+        &profile,
+        root.path(),
+        vec![(
+            String::from("WRIX_PI_AUTH_FILE"),
+            auth.clone().into_os_string(),
+        )],
+    )?;
+    assert!(!run.success);
+    assert!(run.stderr.contains("WRIX_PI_AUTH_FILE="));
+    assert!(!auth.exists());
+    Ok(())
+}
+
+#[test]
+fn pi_spawn_requires_existing_credentials() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let profile = root.path().join("profile.json");
+    let config = root.path().join("spawn.json");
+    let key = root.path().join("deploy-key");
+    fs::write(&key, "fixture key")?;
+    common::write_profile_config(
+        &profile,
+        &ProfileFixture {
+            agent_kind: String::from("pi"),
+            ..ProfileFixture::default()
+        },
+    )?;
+    write_spawn_config(&config, root.path())?;
+    let run = run_spawn_launch(
+        root.path(),
+        "spawn",
+        &profile,
+        &config,
+        vec![
+            (String::from("WRIX_DEPLOY_KEY"), key.into_os_string()),
+            (String::from("WRIX_GIT_SIGN"), OsString::from("0")),
+        ],
+    )?;
+    assert!(!run.success);
+    assert!(run.stderr.contains("wrix spawn: Pi auth file not found"));
+    assert!(!root.path().join("home/.pi/agent/auth.json").exists());
+    Ok(())
+}
+
+#[test]
+fn non_pi_launch_does_not_prepare_or_mount_pi_credentials() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let profile = root.path().join("profile.json");
+    common::write_profile_config(&profile, &ProfileFixture::default())?;
+    let auth = root.path().join("selected.json");
+    fs::write(&auth, "fixture credentials")?;
+    let run = run_launch(
+        root.path(),
+        "direct",
+        &profile,
+        root.path(),
+        vec![(
+            String::from("WRIX_PI_AUTH_FILE"),
+            auth.clone().into_os_string(),
+        )],
+    )?;
+    assert!(run.success, "{}", run.stderr);
+    assert!(!run.stdout.contains("pi-agent-auth"));
+    assert!(!auth.is_symlink());
     Ok(())
 }
 

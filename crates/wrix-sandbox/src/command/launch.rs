@@ -1,3 +1,7 @@
+mod pi_auth;
+
+use pi_auth::Storage as PiAuth;
+
 use std::{
     env, fmt, fs, io,
     io::Write,
@@ -98,8 +102,12 @@ pub enum LaunchError {
     PiAuthMissing { path: String },
     /// wrix spawn: Pi auth file not found at {path} — run 'pi' and /login on the host, or set WRIX_PI_AUTH_FILE to an existing auth.json
     SpawnPiAuthMissing { path: String },
-    /// Darwin Pi auth synchronization source is not a regular file: {path}
-    PiAuthSyncSourceInvalid { path: String },
+    /// Pi credential storage is not an isolated regular-file store: {path}
+    PiAuthStorageInvalid { path: String },
+    /// stop host Pi and older containers before migrating Pi auth; a Pi lock exists at {path}.lock
+    PiAuthMigrationBusy { path: String },
+    /// conflicting Pi auth files at {path} and its .wrix-auth store; resolve manually without discarding credentials
+    PiAuthMigrationConflict { path: String },
     /// WRIX_UNSAFE_PODMAN_SOCKET set but socket not found at {path}
     UnsafePodmanSocketMissing { path: String },
     /// path expansion requires environment variable {name}
@@ -222,7 +230,6 @@ const PODMAN_SOCKET_CONTAINER_PATH: &str = "/run/podman/podman.sock";
 const UNSAFE_PODMAN_SOCKET_ENV: &str = "WRIX_UNSAFE_PODMAN_SOCKET";
 const LINUX_SPAWN_CONFIG_PATH: &str = "/run/wrix/spawn-config.json";
 const DARWIN_SPAWN_CONFIG_DIR: &str = "/mnt/wrix/spawn-config";
-const DARWIN_PI_AUTH_DIR: &str = "/mnt/wrix/pi-agent-auth";
 
 #[derive(Clone, Debug)]
 struct RenderedMount {
@@ -805,10 +812,10 @@ impl<'a> Plan<'a> {
                 writeln!(stdout, "ENV=WRIX_SPAWN_CONFIG={path}")?;
             }
             if let Some(auth) = &pi_auth {
-                let path = PiAuth::container_path(Platform::CURRENT);
+                let path = pi_auth::CONTAINER_FILE;
                 writeln!(stdout, "ENV=WRIX_PI_AUTH_JSON={path}")?;
                 if Platform::CURRENT == Platform::Linux {
-                    writeln!(stdout, "MOUNT=-v {}", auth.linux_mount().podman_arg())?;
+                    writeln!(stdout, "MOUNT=-v {}", auth.mount().podman_arg())?;
                 }
             }
             if Platform::CURRENT == Platform::Linux {
@@ -870,7 +877,7 @@ impl<'a> Plan<'a> {
             }
             let pi_auth = self.pi_auth()?;
             if let Some(pi_auth) = &pi_auth {
-                volumes.push(pi_auth.linux_mount());
+                volumes.push(pi_auth.mount());
             }
             if let Some(spawn_mount) = self.linux_spawn_config_mount() {
                 volumes.push(spawn_mount);
@@ -939,7 +946,7 @@ impl<'a> Plan<'a> {
                 credentials.as_ref(),
                 pi_auth
                     .is_some()
-                    .then_some(PiAuth::container_path(Platform::Linux)),
+                    .then_some(pi_auth::CONTAINER_FILE.to_owned()),
             ) {
                 command.arg("-e").arg(format!("{key}={value}"));
             }
@@ -1014,7 +1021,7 @@ impl<'a> Plan<'a> {
                 credentials.as_ref(),
                 pi_auth
                     .is_some()
-                    .then_some(PiAuth::container_path(Platform::Darwin)),
+                    .then_some(pi_auth::CONTAINER_FILE.to_owned()),
             ) {
                 command.arg("-e").arg(format!("{key}={value}"));
             }
@@ -1039,9 +1046,6 @@ impl<'a> Plan<'a> {
                 .stderr(Stdio::inherit());
             let status = command.status()?;
             darwin_mounts.sync_files()?;
-            if let Some(auth) = &pi_auth {
-                auth.sync_darwin(staging)?;
-            }
             status_to_exit(status)
         })
     }
@@ -1089,7 +1093,7 @@ impl<'a> Plan<'a> {
             mounts.mounts.push(spawn_mount);
         }
         if let Some(auth) = pi_auth {
-            mounts.mounts.push(auth.darwin_mount(staging)?);
+            mounts.mounts.push(auth.mount());
         }
         Ok(mounts)
     }
@@ -1223,25 +1227,13 @@ impl<'a> Plan<'a> {
         }
         let path = env::var_os("WRIX_PI_AUTH_FILE")
             .map_or_else(|| home_dir().join(".pi/agent/auth.json"), PathBuf::from);
-        if env::var_os("WRIX_PI_AUTH_FILE").is_some() && !path.is_file() {
-            return Err(LaunchError::PiAuthMissing {
-                path: path.display().to_string(),
-            });
-        }
-        if self.spawn() && !path.is_file() {
-            return Err(LaunchError::SpawnPiAuthMissing {
-                path: path.display().to_string(),
-            });
-        }
-        if !self.spawn() {
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent)?;
+        let allow_create = !self.spawn() && env::var_os("WRIX_PI_AUTH_FILE").is_none();
+        match PiAuth::prepare(&path, allow_create) {
+            Err(LaunchError::PiAuthMissing { path }) if self.spawn() => {
+                Err(LaunchError::SpawnPiAuthMissing { path })
             }
-            if !path.exists() {
-                fs::write(&path, b"{}\n")?;
-            }
+            result => result.map(Some),
         }
-        Ok(Some(PiAuth { host: path }))
     }
 
     fn host_podman_socket_env_pairs(&self, staged_beads: Option<&Path>) -> Vec<(String, String)> {
@@ -1793,51 +1785,6 @@ struct Credentials {
     deploy: PathBuf,
     signing: Option<PathBuf>,
     name: KeyName,
-}
-
-struct PiAuth {
-    host: PathBuf,
-}
-
-impl PiAuth {
-    fn linux_mount(&self) -> RenderedMount {
-        RenderedMount {
-            host: self.host.display().to_string(),
-            container: String::from("/mnt/wrix/file/pi-auth.json"),
-            mode: MountMode::Rw,
-            optional: false,
-        }
-    }
-
-    fn darwin_mount(&self, staging: &Staging) -> Result<RenderedMount, LaunchError> {
-        let host = staging.root.join("pi-auth");
-        fs::create_dir_all(&host)?;
-        fs::copy(&self.host, host.join("auth.json"))?;
-        Ok(RenderedMount {
-            host: host.display().to_string(),
-            container: String::from(DARWIN_PI_AUTH_DIR),
-            mode: MountMode::Rw,
-            optional: false,
-        })
-    }
-
-    fn sync_darwin(&self, staging: &Staging) -> Result<(), LaunchError> {
-        let source = staging.root.join("pi-auth/auth.json");
-        if !fs::symlink_metadata(&source)?.file_type().is_file() {
-            return Err(LaunchError::PiAuthSyncSourceInvalid {
-                path: source.display().to_string(),
-            });
-        }
-        fs::copy(source, &self.host)?;
-        Ok(())
-    }
-
-    fn container_path(platform: Platform) -> String {
-        match platform {
-            Platform::Linux => String::from("/mnt/wrix/file/pi-auth.json"),
-            Platform::Darwin => format!("{DARWIN_PI_AUTH_DIR}/auth.json"),
-        }
-    }
 }
 
 impl Credentials {
@@ -2730,7 +2677,7 @@ mod test {
 
     use super::{
         DarwinMounts, DarwinNetwork, DarwinSplitRoute, HostPodmanSocket, LaunchError, NetworkMode,
-        PiAuth, RenderedMount, SessionId, SessionRegistration, Staging, darwin_split_routes,
+        RenderedMount, SessionId, SessionRegistration, Staging, darwin_split_routes,
         deploy_key_name, linux_podman_network, parse_darwin_network, route_interface,
         vmnet_interface,
     };
@@ -3038,70 +2985,6 @@ mod test {
             super::darwin_mounts_from_rendered(&profile_mounts, &[], &staging.root),
             Err(LaunchError::MountSourceMissing { .. })
         ));
-    }
-
-    #[test]
-    fn darwin_pi_auth_stages_only_selected_file_and_syncs_updates() {
-        let root = scratch_dir("darwin-pi-auth");
-        let host_dir = root.join("host");
-        let staging_root = root.join("stage");
-        std::fs::create_dir_all(&host_dir).unwrap();
-        std::fs::create_dir_all(&staging_root).unwrap();
-        std::fs::write(host_dir.join("auth.json"), b"original\n").unwrap();
-        std::fs::write(host_dir.join("sibling-secret"), b"private\n").unwrap();
-        let auth = PiAuth {
-            host: host_dir.join("auth.json"),
-        };
-        let staging = Staging { root: staging_root };
-
-        let mount = auth.darwin_mount(&staging).unwrap();
-
-        assert_eq!(
-            mount.host,
-            staging.root.join("pi-auth").display().to_string()
-        );
-        assert_eq!(mount.container, "/mnt/wrix/pi-agent-auth");
-        assert_eq!(
-            std::fs::read_dir(&mount.host).unwrap().count(),
-            1,
-            "Darwin auth staging exposed a sibling file"
-        );
-        assert_eq!(
-            PiAuth::container_path(Platform::Darwin),
-            "/mnt/wrix/pi-agent-auth/auth.json"
-        );
-        std::fs::write(staging.root.join("pi-auth/auth.json"), b"updated\n").unwrap();
-        auth.sync_darwin(&staging).unwrap();
-        assert_eq!(std::fs::read(&auth.host).unwrap(), b"updated\n");
-        assert_eq!(
-            std::fs::read(host_dir.join("sibling-secret")).unwrap(),
-            b"private\n"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn darwin_pi_auth_sync_rejects_guest_controlled_symlink() {
-        use std::os::unix::fs::symlink;
-
-        let root = scratch_dir("darwin-pi-auth-symlink");
-        let host_dir = root.join("host");
-        let staging_root = root.join("stage");
-        std::fs::create_dir_all(&host_dir).unwrap();
-        std::fs::create_dir_all(staging_root.join("pi-auth")).unwrap();
-        let host_auth = host_dir.join("auth.json");
-        let target = host_dir.join("target");
-        std::fs::write(&host_auth, b"original\n").unwrap();
-        std::fs::write(&target, b"private\n").unwrap();
-        symlink(&target, staging_root.join("pi-auth/auth.json")).unwrap();
-        let auth = PiAuth { host: host_auth };
-        let staging = Staging { root: staging_root };
-
-        let error = auth.sync_darwin(&staging).unwrap_err();
-
-        assert!(matches!(error, LaunchError::PiAuthSyncSourceInvalid { .. }));
-        assert_eq!(std::fs::read(&auth.host).unwrap(), b"original\n");
-        assert_eq!(std::fs::read(target).unwrap(), b"private\n");
     }
 
     #[test]

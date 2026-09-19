@@ -496,10 +496,11 @@ elif [[ "$WRIX_AGENT" = "pi" ]]; then
     cp -rn /etc/wrix/pi-agent/. "$HOME/.pi/agent/"
   fi
   if [[ -n "${WRIX_PI_AUTH_JSON:-}" ]]; then
-    if [[ ! -f "$WRIX_PI_AUTH_JSON" ]]; then
+    if [[ ! -f "$WRIX_PI_AUTH_JSON" || -L "$WRIX_PI_AUTH_JSON" ]]; then
       echo "Error: WRIX_PI_AUTH_JSON=$WRIX_PI_AUTH_JSON is not mounted" >&2
       exit 1
     fi
+    # Wrix's Pi package resolves this symlink for its shared sibling lock.
     ln -sf "$WRIX_PI_AUTH_JSON" "$HOME/.pi/agent/auth.json"
   fi
 fi
