@@ -411,12 +411,39 @@ JSON
     printf '%s\n' "$name"
     exit 0
     ;;
+  logs)
+    if [[ "${WRIX_BUILDER_FAKE_LOGS_UNAVAILABLE:-false}" == true ]] || ! container_status "$2" >/dev/null; then
+      printf 'fixture: container logs unavailable\n' >&2
+      exit 1
+    fi
+    printf 'fixture-oldest-log-line\n'
+    for ((line = 0; line < 100; line++)); do
+      printf 'fixture startup line %s\n' "$line"
+    done
+    printf 'fixture: sshd startup error\n'
+    exit 0
+    ;;
   exec)
     if [[ "$#" -lt 3 ]]; then
       printf 'fake container: exec requires a name and command\n' >&2
       exit 64
     fi
+    if ! container_status "$2" >/dev/null; then
+      printf 'fixture: container not found\n' >&2
+      exit 1
+    fi
     case "$3" in
+      /bin/sshd)
+        if [[ "${WRIX_BUILDER_FAKE_SSHD_INVALID:-false}" == true ]]; then
+          printf 'fixture: sshd configuration invalid\n' >&2
+          exit 1
+        fi
+        exit 0
+        ;;
+      /bin/df)
+        printf 'fixture: persistent store space\n'
+        exit 0
+        ;;
       pgrep)
         if [[ "${5:-}" == "${WRIX_BUILDER_FAKE_MISSING_PROCESS:-}" ]]; then
           exit 1
@@ -481,6 +508,7 @@ set -euo pipefail
 log_file="${WRIX_BUILDER_FAKE_LOG:?}"
 printf 'ssh|%s\n' "$*" >>"$log_file"
 if [[ "${WRIX_BUILDER_FAKE_SSH_UNAVAILABLE:-false}" == true ]]; then
+  printf 'fixture: Connection closed by 127.0.0.1 port 2222\n' >&2
   exit 255
 fi
 SSH
@@ -1127,6 +1155,101 @@ test_start_fails_when_ssh_is_unavailable() {
     "wrix-builder start did not clean up after SSH readiness failure"
 }
 
+test_start_reports_diagnostics_before_cleanup() {
+  local output logs_line cleanup_line
+  local test_root="$TEST_TMP/diagnostics-before-cleanup"
+
+  prepare_builder_fixture "$test_root"
+  if output="$(WRIX_BUILDER_FAKE_SSH_UNAVAILABLE=true run_builder "$test_root" start 2>&1)"; then
+    fail "start succeeded with unavailable SSH"
+  fi
+  [[ "$output" == *"Connection closed by 127.0.0.1 port 2222"* ]] || fail "SSH error was suppressed"
+  [[ "$output" == *"fixture: sshd startup error"* ]] || fail "startup logs were lost before cleanup"
+  [[ "$output" != *"fixture-oldest-log-line"* ]] || fail "container logs were not bounded"
+  [[ "$output" == *"fixture: persistent store space"* ]] || fail "store diagnostic was not collected"
+  assert_file_contains "$test_root/container.log" "exec wrix-builder /bin/sshd -t" "sshd configuration was not checked"
+  logs_line="$(grep -n '^container|logs wrix-builder$' "$test_root/container.log" | cut -d: -f1)"
+  cleanup_line="$(grep -n '^container|rm wrix-builder$' "$test_root/container.log" | cut -d: -f1)"
+  [[ "$logs_line" -lt "$cleanup_line" ]] || fail "container was removed before its logs were captured"
+  [[ -f "$test_root/state/volumes/wrix-builder-nix" ]] || fail "failure diagnostics removed the persistent store"
+}
+
+test_failed_diagnostics_do_not_skip_cleanup() {
+  local output
+  local test_root="$TEST_TMP/diagnostic-failure"
+
+  prepare_builder_fixture "$test_root"
+  if output="$(WRIX_BUILDER_FAKE_MISSING_PROCESS=nix-daemon WRIX_BUILDER_FAKE_SSHD_INVALID=true \
+    WRIX_BUILDER_FAKE_LOGS_UNAVAILABLE=true run_builder "$test_root" start 2>&1)"; then
+    fail "start succeeded without nix-daemon"
+  fi
+  [[ "$output" == *"Error: nix-daemon and SSH did not become ready"* ]] || fail "original readiness failure was lost"
+  [[ "$output" == *"fixture: sshd configuration invalid"* ]] || fail "configuration error was suppressed"
+  [[ "$output" == *"fixture: container logs unavailable"* ]] || fail "log collection error was suppressed"
+  [[ "$output" == *"SSH probe succeeded during diagnostic collection"* ]] || fail "missing nix-daemon prevented independent SSH diagnostics"
+  assert_file_contains "$test_root/container.log" "container|rm wrix-builder" "failed diagnostics skipped cleanup"
+}
+
+test_ssh_probe_preserves_error_and_security_options() {
+  local output status
+  local test_root="$TEST_TMP/ssh-probe"
+
+  # shellcheck source=lib/builder/diagnostics.sh
+  source "$REPO_ROOT/lib/builder/diagnostics.sh"
+  prepare_builder_fixture "$test_root"
+  if output="$(PATH="$test_root/bin:$PATH" WRIX_BUILDER_TIMEOUT="$(command -v timeout)" \
+    WRIX_BUILDER_FAKE_LOG="$test_root/container.log" WRIX_BUILDER_FAKE_SSH_UNAVAILABLE=true \
+    wrix_builder_check_ssh "$test_root/identity" "$test_root/known_hosts" 2222 5 2>&1)"; then
+    fail "SSH probe succeeded without a connection"
+  else
+    status="$?"
+  fi
+  [[ "$status" -eq 255 ]] || fail "SSH exit status was not preserved"
+  [[ "$output" == *"Connection closed by 127.0.0.1 port 2222"* ]] || fail "SSH stderr was not preserved"
+  assert_file_contains "$test_root/container.log" "-i $test_root/identity" "SSH used an unintended identity"
+  assert_file_contains "$test_root/container.log" "UserKnownHostsFile=$test_root/known_hosts" "SSH used unintended host trust"
+  assert_file_contains "$test_root/container.log" "StrictHostKeyChecking=yes" "SSH host-key checking was weakened"
+  assert_file_contains "$test_root/container.log" "IdentitiesOnly=yes" "SSH ambient identity restriction was lost"
+  assert_file_contains "$test_root/container.log" "ConnectTimeout=5" "SSH connection deadline was omitted"
+  assert_file_contains "$test_root/container.log" "ConnectionAttempts=1" "SSH probe retry policy was omitted"
+}
+
+test_fake_ssh_failure_matches_openssh_transport_failure() {
+  local actual_status fake_status output
+  local test_root="$TEST_TMP/ssh-failure-contract"
+
+  prepare_builder_fixture "$test_root"
+  # A failed proxy exercises OpenSSH's transport error without contacting any host.
+  if output="$(ssh -F /dev/null -o IdentityFile=none -o BatchMode=yes -o ProxyCommand=false \
+    -o ConnectTimeout=1 builder@fixture.invalid true 2>&1)"; then
+    fail "OpenSSH unexpectedly connected through a failed proxy"
+  else
+    actual_status="$?"
+  fi
+  [[ -n "$output" ]] || fail "OpenSSH did not report its transport error"
+  if output="$(WRIX_BUILDER_FAKE_LOG="$test_root/container.log" WRIX_BUILDER_FAKE_SSH_UNAVAILABLE=true \
+    "$test_root/bin/ssh" builder@localhost true 2>&1)"; then
+    fail "fake SSH unexpectedly connected"
+  else
+    fake_status="$?"
+  fi
+  [[ "$fake_status" -eq "$actual_status" && -n "$output" ]] || fail "fake SSH does not preserve OpenSSH failure behavior"
+}
+
+test_fake_logs_require_existing_container() {
+  local output
+  local test_root="$TEST_TMP/logs-contract"
+
+  prepare_builder_fixture "$test_root"
+  run_fake_container "$test_root" run --name wrix-builder fixture-image >/dev/null
+  output="$(run_fake_container "$test_root" logs wrix-builder)"
+  [[ "$output" == *"fixture: sshd startup error"* ]] || fail "fake container omitted available logs"
+  run_fake_container "$test_root" rm wrix-builder
+  if run_fake_container "$test_root" logs wrix-builder; then
+    fail "fake container retained logs after removal"
+  fi
+}
+
 test_preserves_existing_private_keys() {
   local test_root="$TEST_TMP/preserve"
   local keys_dir="$test_root/home/.local/share/wrix/builder-keys"
@@ -1194,6 +1317,11 @@ main() {
   run_one test_start_fails_when_nix_daemon_is_unavailable
   run_one test_start_fails_when_ssh_is_unavailable
   run_one test_preserves_existing_private_keys
+  run_one test_start_reports_diagnostics_before_cleanup
+  run_one test_failed_diagnostics_do_not_skip_cleanup
+  run_one test_ssh_probe_preserves_error_and_security_options
+  run_one test_fake_ssh_failure_matches_openssh_transport_failure
+  run_one test_fake_logs_require_existing_container
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

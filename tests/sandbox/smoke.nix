@@ -336,6 +336,34 @@ in
         mkdir $out
       '';
 
+  builder-startup-diagnostics =
+    runCommandLocal "smoke-builder-startup-diagnostics"
+      {
+        nativeBuildInputs = [
+          bash
+          pkgs.coreutils
+          pkgs.gnugrep
+          pkgs.gnused
+          pkgs.gnutar
+          jq
+          pkgs.openssh
+        ];
+      }
+      ''
+        set -euo pipefail
+        for test_name in \
+          test_start_reports_diagnostics_before_cleanup \
+          test_failed_diagnostics_do_not_skip_cleanup \
+          test_ssh_probe_preserves_error_and_security_options \
+          test_fake_ssh_failure_matches_openssh_transport_failure \
+          test_fake_logs_require_existing_container; do
+          WRIX_BUILDER_BIN="${wrixBuilder}/bin/wrix-builder" \
+            REPO_ROOT="${../..}" \
+            bash "${../../tests/builder/key-material.sh}" "$test_name"
+        done
+        touch "$out"
+      '';
+
   builder-sshd-security =
     runCommandLocal "smoke-builder-sshd-security"
       {

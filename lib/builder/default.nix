@@ -34,6 +34,8 @@ let
       set -euo pipefail
       . ${./keys.sh}
       . ${./darwin-store.sh}
+      . ${./diagnostics.sh}
+      WRIX_BUILDER_TIMEOUT="${pkgs.coreutils}/bin/timeout"
       WRIX_BUILDER_SSH_KEYGEN="''${WRIX_BUILDER_SSH_KEYGEN:-${pkgs.openssh}/bin/ssh-keygen}"
       WRIX_BUILDER_BASE64="''${WRIX_BUILDER_BASE64:-${pkgs.coreutils}/bin/base64}"
       WRIX_BUILDER_SKOPEO="''${WRIX_BUILDER_SKOPEO:-${pkgs.skopeo}/bin/skopeo}"
@@ -162,15 +164,8 @@ let
       }
 
       builder_ssh_ready() {
-        ssh \
-          -p "$SSH_PORT" \
-          -i "$CLIENT_KEY" \
-          -o BatchMode=yes \
-          -o ConnectTimeout=1 \
-          -o IdentitiesOnly=yes \
-          -o StrictHostKeyChecking=yes \
-          -o UserKnownHostsFile="$CLIENT_KNOWN_HOSTS" \
-          builder@localhost true >/dev/null 2>&1
+        # Quiet retry probe; terminal failures are reported before cleanup.
+        wrix_builder_check_ssh "$CLIENT_KEY" "$CLIENT_KNOWN_HOSTS" "$SSH_PORT" 1 >/dev/null 2>&1
       }
 
       wait_for_builder_services() {
@@ -186,6 +181,7 @@ let
         done
 
         echo "Error: nix-daemon and SSH did not become ready within 120 seconds" >&2
+        wrix_builder_startup_diagnostics "$CONTAINER_NAME" "$CLIENT_KEY" "$CLIENT_KNOWN_HOSTS" "$SSH_PORT"
         cleanup_container "$CONTAINER_NAME"
         return 1
       }
@@ -596,9 +592,11 @@ let
         } >> "$root_known_hosts"
         chmod 600 "$root_known_hosts"
 
-        if ! ssh -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$root_known_hosts" -i "$SYSTEM_CLIENT_KEY" -p "$SSH_PORT" builder@localhost true 2>/dev/null; then
-          echo "Error: Failed to connect to wrix-builder"
-          echo "Check that routes are configured: wrix-builder setup-routes"
+        local ssh_status=0
+        wrix_builder_check_ssh "$SYSTEM_CLIENT_KEY" "$root_known_hosts" "$SSH_PORT" 5 || ssh_status="$?"
+        if [[ "$ssh_status" -ne 0 ]]; then
+          echo "Error: Failed to connect to wrix-builder (exit $ssh_status)" >&2
+          echo "Check builder SSH service, port forwarding, routes, and identity permissions" >&2
           exit 1
         fi
         echo "Host key added to known_hosts"
