@@ -75,11 +75,16 @@ for the `rustProfile` constructor signature and devshell composition rules.
 | `agent` | `"direct"` \| `"claude"` \| `"pi"` | Agent runtime baked into the image (default `"direct"`) |
 | `agentPkg` | Linux derivation or `null` | Optional selected-agent package override |
 | `agentSettings` | attrset | Settings for the selected agent (`claude` or `pi`) |
-| `deployKey` | string | SSH key name for git push (see `scripts/setup-deploy-key`) |
+| `deployKey` | string | SSH key name for git push (provision with `wrix init --deploy --key <name>`) |
 | `mcp` | attrset of server configs | Baked-in MCP servers (e.g. `{ tmux = { }; }`) |
 | `mcpRuntime` | bool | Include all MCP servers, select at runtime via `WRIX_MCP` |
 
 See [specs/sandbox.md](specs/sandbox.md) for full details.
+
+`wrix init --deploy --key <name>` provisions GitHub deploy/signing keys and
+configures and verifies local Git policy, including hooks when configured.
+Matching keys are reused; `--force` permits replacing conflicting material.
+See [repository initialization](specs/cli.md#wrix-init) for prerequisites and options.
 
 ## Profiles
 

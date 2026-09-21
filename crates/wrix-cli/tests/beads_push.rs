@@ -97,6 +97,10 @@ fi
 
 if [[ "$#" -eq 2 && "$arg1" == "dolt" && "$arg2" == "push" ]]; then
   count="$(next_count dolt_push)"
+  if [[ -n "${WRIX_BEADS_PUSH_ERROR-}" ]]; then
+    printf '%s\n' "$WRIX_BEADS_PUSH_ERROR" >&2
+    exit 1
+  fi
   if [[ "$scenario" == "fallback_diverges" && "$count" == "1" ]]; then
     printf 'non-fast-forward update rejected\n' >&2
     exit 1
@@ -430,6 +434,28 @@ fn push_precedes_pull() -> TestResult {
     let push_index = command_index(&lines, "bd\tdolt\tpush")?;
     assert!(lines.iter().all(|line| line != "bd\tdolt\tpull"));
     assert!(command_index(&lines, "bd\tdolt\tcommit")? < push_index);
+    Ok(())
+}
+
+#[test]
+fn authentication_and_permission_failures_never_pull() -> TestResult {
+    for message in [
+        "authentication failed",
+        "permission denied",
+        "access denied",
+    ] {
+        let fixture = Fixture::new("push-auth-error")?;
+        setup_minimal_repo(fixture.repo())?;
+        let output = invoke_push(fixture.repo(), &[fixture.fake_bin()], |command| {
+            configure_bd(command, &fixture, "success");
+            command.env("WRIX_BEADS_PUSH_ERROR", message);
+        })?;
+        assert_eq!(output.code, 1);
+        assert!(output.stderr.contains(message), "{}", output.stderr);
+        let lines = fixture.bd_lines()?;
+        assert_eq!(count_command(&lines, "bd\tdolt\tpush"), 1);
+        assert_eq!(count_command(&lines, "bd\tdolt\tpull"), 0);
+    }
     Ok(())
 }
 

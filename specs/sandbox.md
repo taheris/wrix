@@ -310,6 +310,10 @@ Plus consumer-defined fields the entrypoint reads from the original config mount
   [system](test-ci:test-image-install-digest-skip)
 - On Linux, the runtime image installer dispatches the Linux source kind defined by `image-builder.md` through an archive-less descriptor-to-OCI-layout install path (`oci:<oci_layout>:<oci_ref>` → `containers-storage:<ref>` with skopeo, or equivalent wrix); the docker/OCI archive conversion path is not used for Linux descriptor sources
   [test](../crates/wrix-sandbox/tests/image_install.rs::linux_descriptor_sources_use_archiveless_install_path)
+- The packaged Linux launcher supplies a readable OCI layout to skopeo with the Podman store destination and skips installation when that image is already present
+  [system](test-ci:test-image-install-real-skopeo)
+- Digest preflight also works when the digest comes from the descriptor rather than ProfileConfig
+  [test](../crates/wrix-sandbox/tests/image_install.rs::descriptor_digest_preflight_works_without_profile_digest)
 - A second spawn of an already-loaded image performs no writes to the platform store's layer directory and does not execute the image source
   [test](../crates/wrix-sandbox/tests/image_install.rs::already_loaded_image_performs_no_store_writes)
 - The runtime image cleanup path records a bounded cross-workspace MRU of eight typed wrix image refs/digests/image IDs, preserves images used by Podman containers, prunes wrix-managed images outside the keep set, and does not automatically remove unlabelled `<none>:<none>` images

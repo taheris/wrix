@@ -5,7 +5,7 @@
 #   container-internal UID.
 #
 # Runs directly against the host's rootless podman on the default boundary
-# (no `--userns=keep-id`, matching lib/sandbox/linux/default.nix): the container
+# (no `--userns=keep-id` on the default Rust launcher path): the container
 # runs as rootless container-root, which maps to the invoking host user, so a
 # write to the /workspace bind mount lands on disk owned by the host caller.
 #

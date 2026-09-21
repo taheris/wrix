@@ -95,6 +95,27 @@ fn matching_deploy_keys_are_reused() -> TestResult {
 }
 
 #[test]
+fn legacy_setup_signing_registration_is_reused_without_rotation() -> TestResult {
+    let fixture = DeployFixture::new()?;
+    let repo = setup_committed_repo("legacy-deploy-setup", false)?;
+    let home = fixture.home("legacy-setup");
+    let args = ["--deploy", "--key", "deploy-key", "--no-hooks"];
+    assert_success_with_clean_stderr(&fixture.run_init(repo.path(), &home, &args)?);
+    let deploy_key = home.join(".ssh/deploy_keys/deploy-key");
+    let signing_key = home.join(".ssh/deploy_keys/deploy-key-signing");
+    let original = (fs::read(&deploy_key)?, fs::read(&signing_key)?);
+    fixture.seed_remote_signing("signing-deploy-key", &public_key(&signing_key)?)?;
+    fixture.clear_gh_log()?;
+
+    assert_success_with_clean_stderr(&fixture.run_init(repo.path(), &home, &args)?);
+
+    assert_eq!((fs::read(&deploy_key)?, fs::read(&signing_key)?), original);
+    assert_eq!(fixture.state_value("signing_title")?, "signing-deploy-key");
+    fixture.assert_no_remote_mutation("legacy signing registration")?;
+    Ok(())
+}
+
+#[test]
 fn local_key_conflict_requires_force() -> TestResult {
     let fixture = DeployFixture::new()?;
     let repo = setup_committed_repo("deploy-local-conflict", false)?;

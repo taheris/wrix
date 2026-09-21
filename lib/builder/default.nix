@@ -22,7 +22,7 @@
 }:
 
 let
-  shellLib = import ../util/shell.nix { inherit pkgs; };
+  fixVmnetRoute = import ./vmnet-route.nix { inherit pkgs; };
   builderSystem = linuxPkgs.stdenv.hostPlatform.system;
   builderSeedRoots = builderImage.darwin_seed_roots or [ ];
   builderRuntimeRoot = import ./runtime-root.nix {
@@ -437,7 +437,7 @@ let
           -v "$NIX_VOLUME:/nix" \
           "$BUILDER_IMAGE"
 
-        ${shellLib.fixVmnetRoute}
+        ${fixVmnetRoute}
 
         echo "Waiting for services to start..."
         wait_for_builder_services
@@ -538,7 +538,7 @@ let
       }
 
       cmd_setup_routes() {
-        ${shellLib.fixVmnetRoute}
+        ${fixVmnetRoute}
       }
 
       cmd_setup_ssh() {

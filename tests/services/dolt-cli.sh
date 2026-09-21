@@ -212,19 +212,6 @@ EOF
   printf '{"id":"wx-1"}\n' >"$workspace/.beads/issues.jsonl"
 }
 
-run_stage_beads() {
-  local workspace="$1"
-  local staging_root="$2"
-  local snippet
-  snippet="$(nix eval --impure --raw --expr "let snippets = import $REPO_ROOT/lib/util/shell.nix {}; in snippets.stageBeads")"
-  PROJECT_DIR="$workspace" STAGING_ROOT="$staging_root" bash -euo pipefail -c "$snippet
-    [[ -n \"\$BEADS_STAGING\" ]]
-    [[ -f \"\$BEADS_STAGING/config.yaml\" ]]
-    [[ -f \"\$BEADS_STAGING/metadata.json\" ]]
-    [[ ! -e \"\$BEADS_STAGING/issues.jsonl\" ]]
-  "
-}
-
 run_entrypoint_command() {
   local entrypoint="$1"
   local workspace="$2"
@@ -349,20 +336,9 @@ test_entrypoints_preserve_dirty_agents_documentation() {
   done
 }
 
-test_no_jsonl_staged() {
-  require_command nix
+test_entrypoints_reject_embedded_dolt_and_jsonl_fallback() {
   require_command python3
   require_command jq
-
-  local workspace="$TEST_TMP/stage-workspace"
-  local staging_root="$TEST_TMP/staging"
-  write_beads_files "$workspace" dolt
-  mkdir -p "$staging_root"
-
-  run_stage_beads "$workspace" "$staging_root"
-  assert_path_exists "$staging_root/beads/config.yaml"
-  assert_path_exists "$staging_root/beads/metadata.json"
-  assert_path_absent "$staging_root/beads/issues.jsonl"
 
   assert_dolt_endpoint_failure linux "$REPO_ROOT/lib/sandbox/linux/entrypoint.sh"
   assert_dolt_endpoint_failure darwin "$REPO_ROOT/lib/sandbox/darwin/entrypoint.sh"
@@ -371,7 +347,7 @@ test_no_jsonl_staged() {
 
 ALL_TESTS=(
   test_entrypoints_preserve_dirty_agents_documentation
-  test_no_jsonl_staged
+  test_entrypoints_reject_embedded_dolt_and_jsonl_fallback
 )
 
 run_all() {

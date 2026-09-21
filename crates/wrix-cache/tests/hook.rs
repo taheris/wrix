@@ -36,6 +36,10 @@ fn post_build_hook_scopes_publish_to_manifest_roots() -> TestResult {
             r#"{{"roots":[{{"name":"pkg","installable":".#pkg","drv_path":"{PROJECT_DRV}","out_paths":["/nix/store/project-out"]}}]}}"#
         ),
     )?;
+    fs::write(
+        workspace.join("publish-roots.json"),
+        format!(r#"{{"roots":[{{"drv_path":"{OTHER_DRV}"}}]}}"#),
+    )?;
     let workspace_script = workspace.join("publish-from-workspace");
     fs::write(
         &workspace_script,
@@ -82,10 +86,47 @@ fn post_build_hook_scopes_publish_to_manifest_roots() -> TestResult {
     );
     let record = String::from_utf8(matched.stdout)?;
     assert!(record.contains(&format!("uid={publish_uid}")));
+    assert!(record.contains(&format!("gid={}", publish_owner_gid()?)));
+    assert!(record.contains(&format!("--workspace-hash {WORKSPACE_HASH}")));
+    assert!(record.contains(&format!("--state-root {}", state_root.display())));
+    assert!(record.contains(&format!("--cache-root {}", cache_root.display())));
+    assert!(record.contains(&format!("--manifest {}", manifest.display())));
     assert!(record.contains(&format!("--drv-path {PROJECT_DRV}")));
     assert!(record.contains("--out-paths /nix/store/project-out"));
     assert!(!matched_marker.exists());
 
+    Ok(())
+}
+
+#[test]
+fn post_build_hook_never_publishes_when_owner_switch_fails() -> TestResult {
+    let fixture = tempfile::Builder::new()
+        .prefix("hook-owner-error")
+        .tempdir()?;
+    let manifest = fixture.path().join("manifest.json");
+    fs::write(
+        &manifest,
+        format!(r#"{{"roots":[{{"drv_path":"{PROJECT_DRV}"}}]}}"#),
+    )?;
+    let publisher = publisher_helper(fixture.path())?;
+    let output = run_hook(HookInvocation {
+        state_root: fixture.path(),
+        cache_root: fixture.path(),
+        manifest: &manifest,
+        publisher: &publisher,
+        uid: u32::MAX,
+        gid: u32::MAX,
+        drv_path: PROJECT_DRV,
+        out_paths: "/nix/store/out",
+        workspace_marker: &fixture.path().join("workspace-script"),
+    })?;
+    assert!(!output.status.success());
+    assert!(
+        output.stdout.is_empty(),
+        "publisher ran: {:?}",
+        output.stdout
+    );
+    assert!(!output.stderr.is_empty());
     Ok(())
 }
 
@@ -135,6 +176,7 @@ fn publisher_helper(fixture: &Path) -> io::Result<PathBuf> {
 set -euo pipefail
 
 printf 'uid=%s\n' "$(id -u)"
+printf 'gid=%s\n' "$(id -g)"
 printf 'args='
 printf '%s ' "$@"
 printf '\n'
@@ -173,7 +215,11 @@ fn publish_owner_uid() -> io::Result<u32> {
 }
 
 fn publish_owner_gid() -> io::Result<u32> {
-    current_gid()
+    if current_uid()? == 0 {
+        Ok(65_534)
+    } else {
+        current_gid()
+    }
 }
 
 #[cfg(unix)]

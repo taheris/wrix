@@ -6,8 +6,7 @@
 #   when `read_only: true`. A missing or empty `mounts` list produces no
 #   additional `-v` flags.
 #
-# The parser + renderer live in the launcher script body in
-# `lib/sandbox/linux/default.nix`. We build the launcher via `nix build`
+# The parser and renderer belong to the Rust launcher, built via `nix build`
 # and exercise it under `WRIX_DRY_RUN=1`, which runs the SpawnConfig
 # parse + mount rendering but skips the profile-mount staging loop and
 # the `podman run` invocation. The dry-run dump prints one `MOUNT=-v …`

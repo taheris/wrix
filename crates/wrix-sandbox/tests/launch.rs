@@ -737,6 +737,55 @@ fn linux_default_boundary_sets_is_sandbox_without_fakeuid() -> TestResult {
 }
 
 #[test]
+fn profile_mounts_expand_only_home_and_user_variables() -> TestResult {
+    let (root, profile_config, workspace) = podman_socket_fixture("mount-expansion")?;
+    let home = root.path().join("home");
+    let repeated_home = PathBuf::from(format!("{}/{}", home.display(), home.display()));
+    for path in [&home, &home.join("test-user/config"), &repeated_home] {
+        fs::create_dir_all(path)?;
+    }
+    let mounts = [
+        "~",
+        "~/test-user/config",
+        "$HOME/$USER/config",
+        "$HOME/$HOME",
+    ];
+    common::write_profile_config(
+        &profile_config,
+        &ProfileFixture {
+            mounts: mounts
+                .iter()
+                .enumerate()
+                .map(|(index, source)| {
+                    json!({
+                        "source": source, "dest": format!("/mnt/test{index}"), "mode": "rw"
+                    })
+                })
+                .collect(),
+            ..ProfileFixture::default()
+        },
+    )?;
+    let run = run_launch(
+        root.path(),
+        "expanded",
+        &profile_config,
+        &workspace,
+        vec![(String::from("USER"), OsString::from("test-user"))],
+    )?;
+    assert!(run.success, "{}", run.stderr);
+    for index in 0..mounts.len() {
+        assert!(
+            run.stdout.contains(&format!("/mnt/test{index}")),
+            "{}",
+            run.stdout
+        );
+    }
+    assert!(!run.stdout.contains("$HOME"));
+    assert!(!run.stdout.contains("$USER"));
+    Ok(())
+}
+
+#[test]
 #[ignore = "child process receives per-test environment"]
 fn launch_child() -> TestResult {
     common::run_command_child()

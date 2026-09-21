@@ -298,13 +298,19 @@ upstream, not by this spec.
   `container` runtime is unavailable and podman is present
   [system](verify:beads.shellhook-darwin-runtime-fallback)
 
-- Sandboxed clients receive staged beads config/metadata but not `.beads/issues.jsonl`, so a missing Dolt endpoint fails loudly instead of triggering JSONL auto-import or embedded Dolt recovery
-  [system](verify:beads.no-jsonl-staged)
+- The Linux launcher stages beads config/metadata but not `.beads/issues.jsonl` or other workspace beads files for sandboxed clients
+  [test](../crates/wrix-cli/tests/sandbox_launch.rs::launcher_stages_only_beads_config_and_metadata)
+
+- A missing Dolt endpoint fails loudly instead of triggering JSONL auto-import or embedded Dolt recovery
+  [system](verify:beads.no-embedded-fallback)
 
 - `wrix beads push` attempts `bd dolt push` before `bd dolt pull`, so a
   session-close run against an up-to-date remote never enters the Dolt
   merge path
   [test](../crates/wrix-cli/tests/beads_push.rs::push_precedes_pull)
+
+- Authentication and permission failures during Dolt push propagate without pulling
+  [test](../crates/wrix-cli/tests/beads_push.rs::authentication_and_permission_failures_never_pull)
 
 - On the pull-fallback path, `wrix beads push` snapshots local `status` and
   `labels` intent before pulling and exits non-zero with the affected

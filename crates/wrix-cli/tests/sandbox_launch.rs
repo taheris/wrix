@@ -80,6 +80,75 @@ impl Fixture {
     }
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn launcher_stages_only_beads_config_and_metadata() -> TestResult {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new(None)?;
+    let beads = fixture.workspace.join(".beads");
+    fs::remove_dir(beads.join("dolt"))?;
+    fs::write(beads.join("config.yaml"), "issue-prefix: wx\n")?;
+    fs::write(beads.join("metadata.json"), "{\"backend\":\"dolt\"}\n")?;
+    fs::write(beads.join("issues.jsonl"), "private issue\n")?;
+    fs::write(beads.join("credentials"), "not client metadata\n")?;
+    let bin = fixture.root.path().join("bin");
+    fs::create_dir(&bin)?;
+    let podman = bin.join("podman");
+    fs::write(
+        &podman,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+case "$1 $2" in
+  'image inspect') printf '%s\n' "$WRIX_TEST_DIGEST" ;;
+  run*)
+    for arg in "$@"; do
+      case "$arg" in
+        *:/workspace/.beads)
+          source="${arg%:/workspace/.beads}"
+          cp -R "$source" "$WRIX_TEST_CAPTURE"
+          printf '%s\n' "$source" > "$WRIX_TEST_CAPTURE.source"
+          exit 0
+          ;;
+      esac
+    done
+    exit 91
+    ;;
+esac
+"#,
+    )?;
+    fs::set_permissions(&podman, fs::Permissions::from_mode(0o755))?;
+    let path = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    )))?;
+    let capture = fixture.root.path().join("captured-beads");
+    let output = fixture
+        .command()
+        .env("PATH", path)
+        .env("WRIX_TEST_DIGEST", format!("sha256:{}", "a".repeat(64)))
+        .env("WRIX_TEST_CAPTURE", &capture)
+        .env("WRIX_IMAGE_KEEP_FILE", fixture.root.path().join("mru.json"))
+        .env("WRIX_GIT_SIGN", "0")
+        .env_remove("WRIX_MICROVM")
+        .env_remove("WRIX_UNSAFE_PODMAN_SOCKET")
+        .env_remove("WRIX_DEPLOY_KEY")
+        .env_remove("WRIX_SIGNING_KEY")
+        .env_remove("TMUX")
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for name in ["config.yaml", "metadata.json"] {
+        assert_eq!(fs::read(capture.join(name))?, fs::read(beads.join(name))?);
+    }
+    assert_eq!(fs::read_dir(&capture)?.count(), 2);
+    let source = fs::read_to_string(capture.with_extension("source"))?;
+    assert!(!std::path::Path::new(source.trim()).exists());
+    assert!(beads.join("issues.jsonl").is_file());
+    Ok(())
+}
+
 #[test]
 fn invalid_network_mode_fails_before_service_or_container_start() -> TestResult {
     let fixture = Fixture::new(None)?;

@@ -20,7 +20,7 @@
 # the DB would dead-end on it with `No such file or directory`.
 #
 # The container is launched the way the Linux launcher launches the default
-# boundary (lib/sandbox/linux/default.nix): no `--userns=keep-id`, so the
+# boundary: no `--userns=keep-id`, so the
 # process is rootless container-root (the store owner), and `--passwd-entry`
 # names it `wrix`. The default entrypoint is bypassed (`--entrypoint /bin/bash`) so
 # the probe is the focused store-verify path, not the agent bootstrap. No

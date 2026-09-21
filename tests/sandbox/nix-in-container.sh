@@ -17,7 +17,7 @@
 # owned by image-builder.md § In-Container Nix Store Consistency).
 #
 # The container is launched the way the Linux launcher launches the default
-# boundary (lib/sandbox/linux/default.nix): no `--userns=keep-id`, so the
+# boundary: no `--userns=keep-id`, so the
 # process is rootless container-root (the store owner); `--passwd-entry` names
 # it `wrix`, and a `U=true` tmpfs at /home/wrix gives Nix a writable HOME.
 # The default entrypoint is bypassed (`--entrypoint /bin/bash`) so the probe

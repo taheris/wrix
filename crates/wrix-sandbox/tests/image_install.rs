@@ -111,6 +111,36 @@ fn linux_descriptor_sources_use_archiveless_install_path() -> TestResult {
 }
 
 #[test]
+fn descriptor_digest_preflight_works_without_profile_digest() -> TestResult {
+    let root = tempfile::Builder::new()
+        .prefix("descriptor-digest")
+        .tempdir()?;
+    let desired = digest('d');
+    let descriptor = write_descriptor(
+        root.path(),
+        "image.json",
+        &root.path().join("missing-layout"),
+        &desired,
+        &[],
+    )?;
+    let mut store = FakeStore::default();
+    store.present_digests.insert(desired);
+    image::install(
+        &mut store,
+        &InstallRequest {
+            runtime: Runtime::Podman,
+            image_ref: "localhost/wrix-descriptor:test",
+            image_source: &descriptor.display().to_string(),
+            source_kind: SourceKind::NixDescriptor,
+            digest: None,
+        },
+    )?;
+    assert!(store.copy_calls().is_empty());
+    assert!(!store.loaded_archive());
+    Ok(())
+}
+
+#[test]
 fn already_loaded_image_performs_no_store_writes() -> TestResult {
     let root = tempfile::Builder::new().prefix("image-loaded").tempdir()?;
     let digest = digest('c');

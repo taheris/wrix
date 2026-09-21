@@ -226,6 +226,8 @@ Direct remote-builder access to the local project cache is out of scope for v1. 
   [system](test-ci:test-services-limit-mode-cache-endpoint)
 - The post-build hook drops privileges before publishing, never executes workspace files, and publishes only when `DRV_PATH` matches a configured publish-root derivation in `<state-root>/publish-roots.json`
   [test](../crates/wrix-cache/tests/hook.rs::post_build_hook_scopes_publish_to_manifest_roots)
+- A failed publisher ownership switch prevents any publisher execution
+  [test](../crates/wrix-cache/tests/hook.rs::post_build_hook_never_publishes_when_owner_switch_fails)
 - `wrix service cache publish` refreshes the publish manifest, publishes only already-realized configured roots, drains matching pending records, updates GC markers, and does not build missing roots
   [test](../crates/wrix-cache/tests/publisher.rs::publish_realized_roots_drains_pending_and_updates_gc_markers)
 - `wrix service cache warm` builds default warm roots (packages plus selected devShell), excludes checks by default, includes checks with `--checks`, then publishes and prunes
@@ -250,6 +252,8 @@ Direct remote-builder access to the local project cache is out of scope for v1. 
   [test](../crates/wrix-cache/tests/publisher.rs::rotate_key_invalidates_cache_and_replaces_trust_root)
 - `wrix service cache status` reports cache size and warns above the default 50 GiB soft threshold without deleting reachable entries solely to satisfy that threshold
   [test](../crates/wrix-cache/tests/publisher.rs::status_warns_above_soft_size_without_pruning)
+- Cache status reports pending work, previous publish/prune results, errors, and endpoints without changing those records
+  [test](../crates/wrix-cache/tests/publisher.rs::status_reports_pending_work_and_previous_results_without_mutation)
 - The container-facing cache transport is HTTP only; wrix does not configure Unix-socket cache substituters, host Nix daemon sockets, shared mutable `/nix/store`, or host-store-serving tools for sandbox cache reads
   [check](verify:services.cache-transport-http-only)
 

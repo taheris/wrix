@@ -22,8 +22,6 @@ let
     ;
   discardContext = value: builtins.unsafeDiscardStringContext (toString value);
 
-  shellLib = import ../../lib/util/shell.nix { };
-
   isLinux = elem system [
     "x86_64-linux"
     "aarch64-linux"
@@ -277,259 +275,6 @@ let
   prekRunner = import ../../lib/prek/runner.nix { pkgs = linuxPkgs; };
   prekWrappers = import ../../lib/prek/wrappers.nix { pkgs = linuxPkgs; };
 
-  # Linux-only shim verifier for the shared `imageLoadStep` snippet (the same
-  # one `wrix spawn` runs). Asserts the skopeo-based install transport on
-  # first call (per specs/sandbox.md § Image install path) and idempotence on
-  # the second.
-  wrixSpawnLoadTest = pkgs.writeShellApplication {
-    name = "test-wrix-spawn-load";
-    runtimeInputs = optionals isLinux [
-      pkgs.coreutils
-      pkgs.gnugrep
-      pkgs.jq
-    ];
-    text =
-      if isLinux then
-        ''
-          tmp=$(mktemp -d)
-          trap 'rm -rf "$tmp"' EXIT
-
-          shim_dir="$tmp/bin"
-          state="$tmp/state"
-          mkdir -p "$shim_dir" "$state"
-          podman_log="$state/podman.log"
-          skopeo_log="$state/skopeo.log"
-          : >"$podman_log"
-          : >"$skopeo_log"
-
-          IMAGE_REF="localhost/wrix-loadtest:abc123"
-          IMAGE_SOURCE="$tmp/image-descriptor.json"
-          IMAGE_SOURCE_KIND="nix-descriptor"
-          OCI_LAYOUT="$tmp/oci-layout"
-          DESIRED_DIGEST="sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-          # The install transport pins skopeo's containers-storage destination
-          # to podman's store via `podman info`; the shim reports this spec so
-          # the assertion below can verify the [driver@graphroot+runroot] ref.
-          STORE_SPEC="overlay@$tmp/graphroot+$tmp/runroot"
-
-          mkdir -p "$OCI_LAYOUT"
-          jq -n \
-            --arg digest "$DESIRED_DIGEST" \
-            --arg layout "$OCI_LAYOUT" \
-            '{schema:1,source_kind:"nix-descriptor",digest:$digest,oci_layout:$layout,oci_ref:"latest"}' \
-            >"$IMAGE_SOURCE"
-
-          cat >"$shim_dir/podman" <<PODMAN_SHIM
-          #!/usr/bin/env bash
-          set -euo pipefail
-          printf '%s\n' "\$*" >>'$podman_log'
-          case "\$1" in
-              image)
-                  case "\$2" in
-                      inspect)
-                          if [[ -f '$state/loaded' ]]; then printf '%s\n' "\$5"; exit 0; else exit 1; fi
-                          ;;
-                      exists)
-                          if [[ -f '$state/loaded' ]]; then exit 0; else exit 1; fi
-                          ;;
-                      *) exit 0 ;;
-                  esac
-                  ;;
-              info)
-                  printf '%s\n' '$STORE_SPEC'
-                  exit 0
-                  ;;
-              tag)
-                  : >'$state/loaded'
-                  exit 0
-                  ;;
-              *) exit 0 ;;
-          esac
-          PODMAN_SHIM
-          chmod +x "$shim_dir/podman"
-
-          cat >"$shim_dir/skopeo" <<SKOPEO_SHIM
-          #!/usr/bin/env bash
-          set -euo pipefail
-          printf '%s\n' "\$*" >>'$skopeo_log'
-          for arg in "\$@"; do
-              case "\$arg" in
-                  oci:$OCI_LAYOUT:latest) ;;
-                  containers-storage:*) : >'$state/loaded' ;;
-                  nix:*|docker-archive:*|oci-archive:*)
-                      echo 'archive or stock nix transport is not part of descriptor install' >&2
-                      exit 2
-                      ;;
-              esac
-          done
-          exit 0
-          SKOPEO_SHIM
-          chmod +x "$shim_dir/skopeo"
-
-          verbose() { :; }
-
-          PATH="$shim_dir:$PATH"
-          export PATH IMAGE_REF IMAGE_SOURCE IMAGE_SOURCE_KIND
-
-          ${shellLib.imageLoadStep}
-
-          EXPECTED_DEST="containers-storage:[$STORE_SPEC]$IMAGE_REF"
-          if ! grep -qF -- "oci:$OCI_LAYOUT:latest $EXPECTED_DEST" "$skopeo_log"; then
-              echo "first invocation did not copy descriptor OCI layout -> $EXPECTED_DEST:" >&2
-              cat "$skopeo_log" >&2
-              exit 1
-          fi
-          if grep -qE '(^| )(nix:|(docker|oci)-archive:|load($| ))' "$skopeo_log" "$podman_log"; then
-              echo "first invocation used a stock nix/archive/load transport:" >&2
-              cat "$skopeo_log" >&2
-              cat "$podman_log" >&2
-              exit 1
-          fi
-          if ! grep -q "^tag $IMAGE_REF .*:latest$" "$podman_log"; then
-              echo "first invocation did not tag $IMAGE_REF as :latest:" >&2
-              cat "$podman_log" >&2
-              exit 1
-          fi
-
-          : >"$podman_log"
-          : >"$skopeo_log"
-          ${shellLib.imageLoadStep}
-
-          if [[ -s "$skopeo_log" ]]; then
-              echo "second invocation re-invoked skopeo (install is not idempotent):" >&2
-              cat "$skopeo_log" >&2
-              exit 1
-          fi
-          if ! grep -qFx -- "image inspect --format {{.Id}} $DESIRED_DIGEST" "$podman_log"; then
-              echo "second invocation did not preflight the descriptor digest $DESIRED_DIGEST:" >&2
-              cat "$podman_log" >&2
-              exit 1
-          fi
-
-          echo "test-wrix-spawn-load: PASS"
-        ''
-      else
-        ''
-          echo "test-wrix-spawn-load: not available on Darwin (no podman dependency on macOS)" >&2
-          exit 0
-        '';
-  };
-
-  imageInstallArchivelessTest = pkgs.writeShellApplication {
-    name = "test-image-install-archiveless";
-    runtimeInputs = optionals isLinux [
-      pkgs.coreutils
-      pkgs.gnugrep
-      pkgs.jq
-    ];
-    text =
-      if isLinux then
-        ''
-          tmp=$(mktemp -d)
-          trap 'rm -rf "$tmp"' EXIT
-
-          shim_dir="$tmp/bin"
-          state="$tmp/state"
-          mkdir -p "$shim_dir" "$state"
-          podman_log="$state/podman.log"
-          skopeo_log="$state/skopeo.log"
-          : >"$podman_log"
-          : >"$skopeo_log"
-
-          IMAGE_REF="localhost/wrix-archiveless:abc123"
-          IMAGE_SOURCE="$tmp/image-descriptor.json"
-          IMAGE_SOURCE_KIND="nix-descriptor"
-          OCI_LAYOUT="$tmp/oci-layout"
-          DESIRED_DIGEST="sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-          STORE_SPEC="overlay@$tmp/graphroot+$tmp/runroot"
-          EXPECTED_DEST="containers-storage:[$STORE_SPEC]$IMAGE_REF"
-
-          mkdir -p "$OCI_LAYOUT"
-          jq -n \
-            --arg digest "$DESIRED_DIGEST" \
-            --arg layout "$OCI_LAYOUT" \
-            '{schema:1,source_kind:"nix-descriptor",digest:$digest,oci_layout:$layout,oci_ref:"latest"}' \
-            >"$IMAGE_SOURCE"
-
-          cat >"$shim_dir/podman" <<PODMAN_SHIM
-          #!/usr/bin/env bash
-          set -euo pipefail
-          printf '%s\n' "\$*" >>'$podman_log'
-          case "\$1" in
-              image)
-                  case "\$2" in
-                      inspect) exit 1 ;;
-                      exists) exit 1 ;;
-                      *) exit 0 ;;
-                  esac
-                  ;;
-              info)
-                  printf '%s\n' '$STORE_SPEC'
-                  exit 0
-                  ;;
-              tag) exit 0 ;;
-              load)
-                  echo 'podman load is not part of the archiveless descriptor path' >&2
-                  exit 2
-                  ;;
-              *) exit 0 ;;
-          esac
-          PODMAN_SHIM
-          chmod +x "$shim_dir/podman"
-
-          cat >"$shim_dir/skopeo" <<SKOPEO_SHIM
-          #!/usr/bin/env bash
-          set -euo pipefail
-          printf '%s\n' "\$*" >>'$skopeo_log'
-          for arg in "\$@"; do
-              case "\$arg" in
-                  nix:*|docker-archive:*|oci-archive:*)
-                      echo 'stock nix/archive transport is not part of the descriptor path' >&2
-                      exit 2
-                      ;;
-                  containers-storage:*) : >'$state/installed' ;;
-              esac
-          done
-          exit 0
-          SKOPEO_SHIM
-          chmod +x "$shim_dir/skopeo"
-
-          verbose() { :; }
-
-          PATH="$shim_dir:$PATH"
-          export PATH IMAGE_REF IMAGE_SOURCE IMAGE_SOURCE_KIND
-
-          ${shellLib.imageLoadStep}
-
-          if [[ ! -f "$state/installed" ]]; then
-              echo "descriptor install did not reach containers-storage" >&2
-              cat "$skopeo_log" >&2
-              exit 1
-          fi
-          if ! grep -qF -- "oci:$OCI_LAYOUT:latest $EXPECTED_DEST" "$skopeo_log"; then
-              echo "descriptor install did not copy OCI layout -> $EXPECTED_DEST:" >&2
-              cat "$skopeo_log" >&2
-              exit 1
-          fi
-          if grep -qE '(^| )(nix:|(docker|oci)-archive:|load($| ))' "$skopeo_log" "$podman_log"; then
-              echo "descriptor install used a stock nix/archive/load transport:" >&2
-              cat "$skopeo_log" >&2
-              cat "$podman_log" >&2
-              exit 1
-          fi
-
-          echo "test-image-install-archiveless: PASS"
-        ''
-      else
-        ''
-          echo "test-image-install-archiveless: skipped on non-Linux host" >&2
-          exit 0
-        '';
-  };
-
-  # Linux-only integration verifier for the real packaged `skopeo` OCI layout
-  # reader. The fast shim tests above prove command shape and idempotence; this
-  # one catches invalid descriptor layouts without falling back to archives.
   imageInstallRealSkopeoTest = pkgs.writeShellApplication {
     name = "test-image-install-real-skopeo";
     runtimeInputs = optionals isLinux [
@@ -553,7 +298,6 @@ let
 
           IMAGE_REF="localhost/wrix-real-skopeo:abc123"
           IMAGE_SOURCE="$tmp/image-descriptor.json"
-          IMAGE_SOURCE_KIND="nix-descriptor"
           OCI_LAYOUT="$tmp/oci-layout"
           STORE_SPEC="vfs@$tmp/graphroot+$tmp/runroot"
 
@@ -598,8 +342,11 @@ let
           case "\$1" in
               image)
                   case "\$2" in
-                      inspect) exit 1 ;;
-                      exists) exit 1 ;;
+                      inspect)
+                          [[ -f '$state/installed' ]] || exit 1
+                          printf '%s\n' '$DESIRED_DIGEST'
+                          ;;
+                      exists) [[ -f '$state/installed' ]] ;;
                       *) exit 0 ;;
                   esac
                   ;;
@@ -639,20 +386,26 @@ let
           SKOPEO_SHIM
           chmod +x "$shim_dir/skopeo"
 
-          verbose() { :; }
-
-          PATH="$shim_dir:$PATH"
-          export PATH IMAGE_REF IMAGE_SOURCE IMAGE_SOURCE_KIND
-
-          ${shellLib.imageLoadStep}
+          mkdir -p "$tmp/home" "$tmp/workspace"
+          jq -n --arg source "$IMAGE_SOURCE" --arg ref "$IMAGE_REF" --arg digest "$DESIRED_DIGEST" \
+            '{schema:1, system:"test", profile:{name:"base"},
+              image:{ref:$ref, source:$source, source_kind:"nix-descriptor", digest:$digest},
+              agent:{kind:"direct"}, services:{nix_cache:{enable:false}}}' >"$tmp/profile.json"
+          launch() {
+              env -u WRIX_DRY_RUN -u WRIX_MICROVM -u WRIX_DEPLOY_KEY -u WRIX_SIGNING_KEY -u TMUX \
+                HOME="$tmp/home" WRIX_GIT_SIGN=0 WRIX_NETWORK=open WRIX_IMAGE_KEEP_FILE="$state/mru.json" \
+                PATH="$shim_dir:$PATH" \
+                ${serviceCli}/bin/wrix --profile-config "$tmp/profile.json" run "$tmp/workspace" true
+          }
+          launch
 
           if [[ ! -f "$state/installed" ]]; then
               echo "real-skopeo integration did not validate the OCI descriptor layout" >&2
               cat "$skopeo_log" >&2
               exit 1
           fi
-          if ! grep -qF -- "oci:$OCI_LAYOUT:latest" "$skopeo_log"; then
-              echo "real-skopeo integration did not use the descriptor OCI layout:" >&2
+          if ! grep -qF -- "oci:$OCI_LAYOUT:latest containers-storage:[$STORE_SPEC]$IMAGE_REF" "$skopeo_log"; then
+              echo "real-skopeo integration did not use the descriptor OCI layout and Podman store:" >&2
               cat "$skopeo_log" >&2
               exit 1
           fi
@@ -667,6 +420,12 @@ let
               exit 1
           fi
 
+          : >"$podman_log"
+          : >"$skopeo_log"
+          rm "$IMAGE_SOURCE"
+          launch
+          [[ ! -s "$skopeo_log" ]]
+          grep -Fx "image inspect --format {{.Id}} $DESIRED_DIGEST" "$podman_log"
           echo "test-image-install-real-skopeo: PASS"
         ''
       else
@@ -696,28 +455,8 @@ let
           trap 'rm -rf "$tmp"' EXIT
 
           shim_dir="$tmp/bin"
-          state="$tmp/state"
-          mkdir -p "$shim_dir" "$state"
-          podman_log="$state/podman.log"
-          skopeo_log="$state/skopeo.log"
-          image_source_log="$state/image-source.log"
-          : >"$podman_log"
-          : >"$skopeo_log"
-          : >"$image_source_log"
-
-          IMAGE_REF="localhost/wrix-digestskip:abc123"
-          IMAGE_SOURCE="$tmp/image-descriptor.json"
-          IMAGE_SOURCE_KIND="nix-descriptor"
-          IMAGE_DIGEST_PATH="$tmp/image-digest"
-          OCI_LAYOUT="$tmp/oci-layout"
+          mkdir -p "$shim_dir"
           DESIRED_DIGEST="sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-          printf '%s' "$DESIRED_DIGEST" >"$IMAGE_DIGEST_PATH"
-          mkdir -p "$OCI_LAYOUT"
-          jq -n \
-            --arg digest "$DESIRED_DIGEST" \
-            --arg layout "$OCI_LAYOUT" \
-            '{schema:1,source_kind:"nix-descriptor",digest:$digest,oci_layout:$layout,oci_ref:"latest"}' \
-            >"$IMAGE_SOURCE"
 
           run_live_launcher_digest_hit() {
               local mode="$1"
@@ -798,9 +537,7 @@ let
                   exit 1
               fi
           }
-          # Runtime shims are shared by the Rust launcher live path above and
-          # the shellLib imageLoadStep checks below. Each invocation selects
-          # its state directory with WRIX_DIGEST_SKIP_STATE.
+          # Each real launcher invocation selects an isolated runtime-shim state.
           cat >"$shim_dir/podman" <<'PODMAN_SHIM'
           #!/usr/bin/env bash
           set -euo pipefail
@@ -883,96 +620,11 @@ let
           SKOPEO_SHIM
           chmod +x "$shim_dir/skopeo"
 
-          verbose() { :; }
-
           PATH="$shim_dir:$PATH"
-          WRIX_DIGEST_SKIP_STATE="$state"
-          export PATH WRIX_DIGEST_SKIP_STATE IMAGE_REF IMAGE_SOURCE IMAGE_SOURCE_KIND IMAGE_DIGEST_PATH
+          export PATH
 
           run_live_launcher_digest_hit run
           run_live_launcher_digest_hit spawn
-
-          # First invocation: digest preflight miss → install transport runs.
-          ${shellLib.imageLoadStep}
-
-          if [[ ! -f "$state/installed" ]]; then
-              echo "first invocation did not reach the install transport" >&2
-              cat "$skopeo_log" >&2
-              exit 1
-          fi
-          if ! grep -qF -- "oci:$OCI_LAYOUT:latest" "$skopeo_log" || ! grep -qF -- "$IMAGE_REF" "$skopeo_log"; then
-              echo "first invocation did not copy descriptor OCI layout into the selected image ref:" >&2
-              cat "$skopeo_log" >&2
-              exit 1
-          fi
-          if ! grep -qFx -- "image inspect --format {{.Id}} $DESIRED_DIGEST" "$podman_log"; then
-              echo "first invocation did not perform a digest-preflight inspect of $DESIRED_DIGEST:" >&2
-              cat "$podman_log" >&2
-              exit 1
-          fi
-          first_source_lines=$(wc -l <"$image_source_log")
-          if [[ "$first_source_lines" -ne 0 ]]; then
-              echo "first invocation executed the descriptor source (got $first_source_lines calls):" >&2
-              cat "$image_source_log" >&2
-              exit 1
-          fi
-
-          : >"$podman_log"
-          : >"$skopeo_log"
-
-          # Second invocation: digest preflight hit → short-circuit.
-          ${shellLib.imageLoadStep}
-
-          if [[ -s "$skopeo_log" ]]; then
-              echo "second invocation re-invoked skopeo (digest preflight did not short-circuit):" >&2
-              cat "$skopeo_log" >&2
-              exit 1
-          fi
-          if [[ -e "$state/load-invoked" ]]; then
-              echo "second invocation issued a *-load CLI call (expected none):" >&2
-              exit 1
-          fi
-          second_source_lines=$(wc -l <"$image_source_log")
-          if [[ "$second_source_lines" -ne 0 ]]; then
-              echo "second invocation executed the descriptor source (lines now=$second_source_lines, expected 0):" >&2
-              cat "$image_source_log" >&2
-              exit 1
-          fi
-          if ! grep -qFx -- "image inspect --format {{.Id}} $DESIRED_DIGEST" "$podman_log"; then
-              echo "second invocation did not perform a digest-preflight inspect of $DESIRED_DIGEST:" >&2
-              cat "$podman_log" >&2
-              exit 1
-          fi
-          if grep -qE '^load($| )' "$podman_log"; then
-              echo "second invocation logged a podman load command (expected none):" >&2
-              cat "$podman_log" >&2
-              exit 1
-          fi
-
-          : >"$podman_log"
-          : >"$skopeo_log"
-          : >"$state/force-ref-miss"
-          IMAGE_DIGEST_PATH=""
-
-          ${shellLib.imageLoadStep}
-
-          rm -f "$state/force-ref-miss"
-          if [[ -s "$skopeo_log" ]]; then
-              echo "descriptor-derived digest preflight re-invoked skopeo:" >&2
-              cat "$skopeo_log" >&2
-              exit 1
-          fi
-          if ! grep -qFx -- "image inspect --format {{.Id}} $DESIRED_DIGEST" "$podman_log"; then
-              echo "descriptor-derived digest preflight did not inspect $DESIRED_DIGEST:" >&2
-              cat "$podman_log" >&2
-              exit 1
-          fi
-          descriptor_source_lines=$(wc -l <"$image_source_log")
-          if [[ "$descriptor_source_lines" -ne 0 ]]; then
-              echo "descriptor-derived digest preflight executed the descriptor source (lines=$descriptor_source_lines):" >&2
-              cat "$image_source_log" >&2
-              exit 1
-          fi
 
           echo "test-image-install-digest-skip: PASS"
         ''
@@ -3220,8 +2872,6 @@ let
 in
 {
   inherit
-    wrixSpawnLoadTest
-    imageInstallArchivelessTest
     imageInstallRealSkopeoTest
     imageInstallDigestSkipTest
     digestMatchesStoredIdTest

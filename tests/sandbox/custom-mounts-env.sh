@@ -7,7 +7,7 @@
 # The merge contract lives in `extendProfile` (lib/sandbox/default.nix):
 # extra mounts are appended to `profile.mounts`, extra env is right-merged
 # into `profile.env` (consumer wins on key collision). The launcher
-# consumes `profile.mounts` via `mkMountSpecs` (`-v src:dest:mode` for
+# parses `profile.mounts` from ProfileConfig (`-v src:dest:mode` for
 # podman / VirtioFS args for Apple `container`); the image bakes
 # `profile.env` into the container's `Env` directive
 # (lib/sandbox/image.nix). Both touch the same resolved profile that
@@ -110,7 +110,7 @@ test_mounts_appended_to_profile() {
 
 # ============================================================================
 # Mount payload (source, dest, mode) round-trips intact through the merge.
-# The launcher reads these fields verbatim via mkMountSpecs; a lossy merge
+# The Rust launcher reads these fields from ProfileConfig; a lossy merge
 # would silently drop the mode or rewrite the source path.
 # ============================================================================
 test_mount_payload_preserved() {

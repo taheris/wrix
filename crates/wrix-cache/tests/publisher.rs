@@ -505,6 +505,35 @@ fn rotate_key_invalidates_cache_and_replaces_trust_root() -> TestResult {
 }
 
 #[test]
+fn status_reports_pending_work_and_previous_results_without_mutation() -> TestResult {
+    let fixture = Fixture::new("status-history")?;
+    fixture.write_pending("waiting", PROJECT_DRV, &[PROJECT_OUT])?;
+    let status_path = fixture.state_root.join("cache-status.json");
+    let original = serde_json::to_vec(&serde_json::json!({
+        "dirty": true, "last_publish": "ok", "last_prune": "ok", "last_error": "previous warning"
+    }))?;
+    fs::write(&status_path, &original)?;
+    fs::write(
+        fixture.state_root.join("services.json"),
+        r#"{"cache_http":{"host":"127.0.0.1","port":8080}}"#,
+    )?;
+    let report = fixture.run("status")?;
+    for expected in [
+        "pending records: 1",
+        "dirty: true",
+        "last_publish: ok",
+        "last_prune: ok",
+        "last_error: previous warning",
+        "cache_http",
+    ] {
+        assert!(report.contains(expected), "{report}");
+    }
+    assert_eq!(fixture.pending_count()?, 1);
+    assert_eq!(fs::read(status_path)?, original);
+    Ok(())
+}
+
+#[test]
 fn status_warns_above_soft_size_without_pruning() -> TestResult {
     let fixture = Fixture::new("status-soft-limit")?;
     fs::create_dir_all(fixture.cache_root.join("nar"))?;

@@ -2663,6 +2663,24 @@ mod test {
     use crate::command::config::{MountMode, Platform, ProfileMount, SpawnMount};
 
     #[test]
+    fn path_expansion_keeps_shell_syntax_literal() {
+        for input in [
+            "",
+            "/foo/~/bar",
+            "/absolute/path",
+            "$PATH/bin",
+            "$MALICIOUS",
+            "$(whoami)",
+            "`id`",
+            "/tmp/$(rm -rf /)/file",
+            "$((1+1))",
+            "{a,b,c}",
+        ] {
+            assert_eq!(super::expand_path(input).unwrap(), PathBuf::from(input));
+        }
+    }
+
+    #[test]
     fn spawn_mount_renders_ro_only_when_requested() {
         let rw = RenderedMount::from_spawn(&SpawnMount {
             host_path: String::from("/host/rw"),

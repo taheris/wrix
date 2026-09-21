@@ -11,7 +11,8 @@ let
   '';
 in
 {
-  "beads.no-jsonl-staged" = serviceScript "dolt-cli" "test_no_jsonl_staged";
+  "beads.no-embedded-fallback" =
+    serviceScript "dolt-cli" "test_entrypoints_reject_embedded_dolt_and_jsonl_fallback";
 
   "beads.darwin-remote-remap" = sandboxScript "entrypoint-contract" "test_darwin_bd_remote_remap";
 

@@ -1303,7 +1303,11 @@ fn deploy_key_matches(key: &RemoteKey, title: &str, public_key: &str) -> bool {
 }
 
 fn signing_key_matches(key: &RemoteKey, title: &str, public_key: &str) -> bool {
-    key.title == title && same_public_key(&key.key, public_key)
+    let legacy_title = title
+        .strip_suffix("-signing")
+        .map(|name| format!("signing-{name}"));
+    (key.title == title || legacy_title.as_deref() == Some(key.title.as_str()))
+        && same_public_key(&key.key, public_key)
 }
 
 fn remote_key_conflicts(key: &RemoteKey, title: &str, public_key: &str) -> bool {

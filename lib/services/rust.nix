@@ -26,6 +26,7 @@ let
     set -euo pipefail
 
     printf 'uid=%s\n' "$UID"
+    printf 'gid=%s\n' "$(${pkgs.coreutils}/bin/id -g)"
     printf 'args='
     printf '%s ' "$@"
     printf '\n'
@@ -71,6 +72,7 @@ in
   nextest = workspace.nextest.overrideAttrs (
     {
       nativeBuildInputs ? [ ],
+      preCheck ? "",
       ...
     }:
     {
@@ -82,6 +84,10 @@ in
         pkgs.openssh
         pkgs.tmux
       ];
+      preCheck = preCheck + ''
+        HOME="$(mktemp -d)"
+        export HOME
+      '';
       WRIX_TEST_PUBLISHER_HELPER = "${cacheHookTestPublisher}/bin/wrix-cache-test-publisher";
     }
   );

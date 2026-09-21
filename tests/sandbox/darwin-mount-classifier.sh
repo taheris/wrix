@@ -9,10 +9,8 @@
 #   socket operations, so a silently-mounted socket would dead-end at
 #   the first `connect()`.)
 #
-# The classifier lives in the launcher script body in
-# `lib/sandbox/darwin/default.nix`. We build the launcher via
-# `nix build` (Darwin-only — the Darwin launcher imports
-# `darwinSandbox` which is platform-gated) and exercise it under
+# The classifier belongs to the Rust launcher. We build it via
+# `nix build` on Darwin and exercise it under
 # `WRIX_DRY_RUN=1`, which runs parsing + classification but skips
 # the macOS container CLI, image load, and the `container run`
 # invocation. The dry-run dump exposes the classifier's resolved

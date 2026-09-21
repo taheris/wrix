@@ -162,6 +162,8 @@ reported separately from host-key failure.
   [test](../crates/wrix-cli/tests/init_deploy.rs::github_deploy_and_signing_keys)
 - Deploy provisioning reuses matching local and remote keys without remote mutation.
   [test](../crates/wrix-cli/tests/init_deploy.rs::matching_deploy_keys_are_reused)
+- Matching signing registrations with the legacy `signing-<key-name>` title are reused without rotating keys or changing remote registration.
+  [test](../crates/wrix-cli/tests/init_deploy.rs::legacy_setup_signing_registration_is_reused_without_rotation)
 - Conflicting local key material fails unless `--force` replaces it and its remote registration.
   [test](../crates/wrix-cli/tests/init_deploy.rs::local_key_conflict_requires_force)
 - Conflicting remote key registration fails unless `--force` replaces it.

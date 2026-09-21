@@ -95,8 +95,8 @@ let
     };
   };
 
-  # Shell utility tests run on all platforms
-  shellTests = import ./sandbox/shell.nix { inherit pkgs; };
+  utilityTests = import ./util/checks.nix { inherit pkgs; };
+  builderRouteTest = import ./builder/vmnet-route.nix { inherit pkgs; };
 
   # Darwin mount tests run on all platforms (test logic, not VM)
   darwinMountTests = import ./darwin/mounts.nix { inherit pkgs treefmt; };
@@ -128,9 +128,6 @@ let
       ;
     serviceCli = wrix.rustPackage.wrix;
   };
-
-  # TOML utility tests
-  tomlTests = import ./toml.nix { inherit pkgs; };
 
   # Profile-image runtime checks share a craneLib + linux-package set with
   # the standalone tests below. They verify the per-profile sandbox images
@@ -211,11 +208,11 @@ let
     // darwinNetworkTests
     // darwinUidTests
     // readmeTest
-    // shellTests
+    // utilityTests
     // prePushSmokeTests
     // tmuxMcpTests
-    // tomlTests
     // {
+      builder-vmnet-route = builderRouteTest;
       image-assembly-native = sandboxImageChecks.imageAssemblyNativeCheck;
       pi-auth-storage = import ./security/pi-auth.nix { inherit pkgs; };
     };
@@ -243,8 +240,6 @@ let
     '';
 
   ciApps = [
-    (mkCiApp sandboxImageChecks.wrixSpawnLoadTest "test-wrix-spawn-load")
-    (mkCiApp sandboxImageChecks.imageInstallArchivelessTest "test-image-install-archiveless")
     (mkCiApp sandboxImageChecks.imageInstallRealSkopeoTest "test-image-install-real-skopeo")
     (mkCiApp sandboxImageChecks.imageInstallDigestSkipTest "test-image-install-digest-skip")
     (mkCiApp sandboxImageChecks.digestMatchesStoredIdTest "test-image-digest-matches-stored-id")
@@ -646,16 +641,6 @@ in
 
   # Individual test apps for selective running
   apps = {
-    # Linux-only verifier for the wrix-spawn image install transport
-    # (specs/sandbox.md § Image install path). Drives the shared
-    # `imageLoadStep` snippet (the same one `wrix spawn` runs) through
-    # shim podman + skopeo binaries; on Darwin prints a skip.
-    wrix-spawn-load = {
-      meta.description = "Verify wrix-spawn skopeo install idempotence (Linux only)";
-      type = "app";
-      program = "${sandboxImageChecks.wrixSpawnLoadTest}/bin/test-wrix-spawn-load";
-    };
-
     claude-runtime-noop = {
       meta.description = "Verify bundled Claude sandbox image closure contains claude-code";
       type = "app";
@@ -673,12 +658,6 @@ in
       meta.description = "Verify launcher image install against real packaged skopeo (Linux only)";
       type = "app";
       program = "${sandboxImageChecks.imageInstallRealSkopeoTest}/bin/test-image-install-real-skopeo";
-    };
-
-    image-install-archiveless = {
-      meta.description = "Verify Linux descriptor image install avoids archive transports.";
-      type = "app";
-      program = "${sandboxImageChecks.imageInstallArchivelessTest}/bin/test-image-install-archiveless";
     };
 
     image-digest-matches-stored-id = {
@@ -892,13 +871,12 @@ in
     ciChecks
     linuxBuilderChecks
     rustChecks
-    shellTests
+    utilityTests
     smokeTests
     systemTests
     testCi
     testImages
     tmuxMcpTests
-    tomlTests
     verify
     ;
 }
