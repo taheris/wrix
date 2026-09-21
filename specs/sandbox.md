@@ -238,6 +238,10 @@ Plus consumer-defined fields the entrypoint reads from the original config mount
   [test](command::launch::test::network_mode_parse_accepts_only_open_and_limit)
 - Any other `WRIX_NETWORK` value errors through the production CLI before workspace services or a container start
   [test](../crates/wrix-cli/tests/sandbox_launch.rs::invalid_network_mode_fails_before_service_or_container_start)
+- The configured network default is applied when `WRIX_NETWORK` is absent; explicit `open`/`limit` overrides take precedence
+  [test](../crates/wrix-cli/tests/sandbox_launch.rs::profile_network_defaults_and_explicit_environment_precedence)
+- Malformed network defaults and unsupported IPv6 policy fail before subprocess side effects, even with a valid environment override
+  [test](../crates/wrix-cli/tests/sandbox_launch.rs::malformed_network_policy_fails_before_subprocesses_even_with_override)
 - In `WRIX_NETWORK=open`, sandbox outbound to public internet succeeds, but outbound to LAN/private/host-local/VPN/special IPv4 ranges fails except for exact DNS and wrix-owned endpoint exceptions
   [system](verify:sandbox.network-open-blocks-lan)
 - In `WRIX_NETWORK=limit`, outbound succeeds only to the merged allowlist plus exact DNS and wrix-owned endpoint exceptions; allowlist domains are resolved once at startup, unresolvable domains fail launch, and non-allowlisted public internet plus LAN/private/host-local/VPN/special ranges fail

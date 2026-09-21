@@ -26,8 +26,8 @@ use crate::image::{
 };
 
 use super::config::{
-    AgentKind, EnvName, MountMode, Platform, ProfileConfig, ProfileMount, RuntimeSecretPolicy,
-    Security, SpawnConfig, SpawnMount, is_known_credential_env,
+    AgentKind, EnvName, MountMode, NetworkMode, Platform, ProfileConfig, ProfileMount,
+    RuntimeSecretPolicy, Security, SpawnConfig, SpawnMount, is_known_credential_env,
 };
 
 pub struct Request {
@@ -182,7 +182,7 @@ fn complete_with_cleanup<T>(
 }
 
 pub fn execute(request: &Request, stdout: &mut impl Write) -> Result<ExitCode, LaunchError> {
-    let network_mode = NetworkMode::from_env()?;
+    let network_mode = NetworkMode::from_env(request.profile_config.network.default_mode)?;
     let dry_run = env_flag("WRIX_DRY_RUN");
     let services = if !dry_run || env_flag("WRIX_DRY_RUN_SERVICES") {
         ServicesState::load(request)?
@@ -215,12 +215,6 @@ struct Plan<'a> {
     network_mode: NetworkMode,
     git_identity: GitIdentity,
     session_id: Option<SessionId>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum NetworkMode {
-    Open,
-    Limit,
 }
 
 const DARWIN_NOTIFY_TCP_ENDPOINT: &str = "192.168.64.1:5959";
@@ -611,28 +605,13 @@ impl KrunPlan {
 }
 
 impl NetworkMode {
-    fn from_env() -> Result<Self, LaunchError> {
+    fn from_env(default: Self) -> Result<Self, LaunchError> {
         match env::var("WRIX_NETWORK") {
             Ok(value) => Self::parse(&value).ok_or(LaunchError::InvalidNetworkMode { value }),
-            Err(env::VarError::NotPresent) => Ok(Self::Open),
+            Err(env::VarError::NotPresent) => Ok(default),
             Err(env::VarError::NotUnicode(value)) => Err(LaunchError::InvalidNetworkMode {
                 value: value.to_string_lossy().into_owned(),
             }),
-        }
-    }
-
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Open => "open",
-            Self::Limit => "limit",
-        }
-    }
-
-    const fn parse(value: &str) -> Option<Self> {
-        match value.as_bytes() {
-            b"open" => Some(Self::Open),
-            b"limit" => Some(Self::Limit),
-            _ => None,
         }
     }
 }

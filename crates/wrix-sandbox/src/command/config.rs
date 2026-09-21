@@ -62,6 +62,46 @@ pub struct ProfileConfig {
     pub resources: Resources,
     pub security: Security,
     pub services: Services,
+    pub network: Network,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct Network {
+    pub default_mode: NetworkMode,
+    pub ipv6: Ipv6Policy,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum Ipv6Policy {
+    #[default]
+    Disabled,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum NetworkMode {
+    #[default]
+    Open,
+    Limit,
+}
+
+impl NetworkMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Limit => "limit",
+        }
+    }
+
+    pub const fn parse(value: &str) -> Option<Self> {
+        match value.as_bytes() {
+            b"open" => Some(Self::Open),
+            b"limit" => Some(Self::Limit),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -425,6 +465,7 @@ fn parse_profile_value(value: Value, platform: Platform) -> Result<ProfileConfig
         resources,
         security,
         services,
+        network,
     } = raw;
     let RawSecurity {
         deploy_key,
@@ -458,6 +499,7 @@ fn parse_profile_value(value: Value, platform: Platform) -> Result<ProfileConfig
     }
     Ok(ProfileConfig {
         profile,
+        network,
         image: Image {
             reference,
             source,
@@ -551,6 +593,8 @@ fn first_present_field(value: &Value, fields: &[&str]) -> Option<String> {
 
 #[derive(Debug, Deserialize)]
 struct RawProfileConfig {
+    #[serde(default)]
+    network: Network,
     profile: Profile,
     image: RawImage,
     #[serde(default)]
