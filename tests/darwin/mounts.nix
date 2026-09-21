@@ -41,7 +41,6 @@ let
     agent = "claude";
     agentPkg = linuxPkgs.claude-code;
     entrypointSh = ../../lib/sandbox/darwin/entrypoint.sh;
-    networkBootstrapSh = ../../lib/sandbox/darwin/network-bootstrap.sh;
     claudeConfig = { };
     claudeSettings = { };
   };

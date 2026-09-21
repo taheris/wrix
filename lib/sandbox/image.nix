@@ -22,7 +22,7 @@
   hostPkgs ? pkgs,
   profile,
   entrypointSh,
-  networkBootstrapSh ? null,
+  networkBootstrapSh ? ./network-bootstrap.sh,
   krunSupport ? false,
   claudeConfig,
   claudeSettings,
@@ -46,6 +46,7 @@ let
   inherit (pkgs.lib)
     concatStringsSep
     mapAttrsToList
+    optional
     optionalString
     ;
   sshConfig = import ../util/ssh.nix;
@@ -78,12 +79,7 @@ let
   prekRunner = import ../prek/runner.nix { inherit pkgs; };
   prekWrappers = import ../prek/wrappers.nix { inherit pkgs; };
 
-  # libfakeuid: LD_PRELOAD UID-spoofing lib used on BOTH Linux boundaries — the
-  # default container path (rootless container-root spoofed to uid 1000 so the
-  # store owner can mutate /nix/store while tools still refuse to run "as root")
-  # and the krun microVM (host user mapped to root). krun-relay (PTY relay) is
-  # microVM-only. Both ride the krunSupport gate, which is set per Linux image.
-  # See lib/sandbox/linux/ for source files
+  # UID spoofing and the PTY relay are used only inside the krun microVM.
   libfakeuid = pkgs.stdenv.mkDerivation {
     name = "libfakeuid";
     src = ./linux/fakeuid.c;
@@ -183,12 +179,35 @@ let
 
   materializedRoots = leafContents ++ agentImage.lowerTiersContents;
 
+  # Pin privileged tools independently of profile packages and the runtime PATH.
+  networkTools = pkgs.linkFarm "wrix-network-tools" (
+    mapAttrsToList
+      (name: path: {
+        name = "usr/local/libexec/wrix-network/${name}";
+        inherit path;
+      })
+      {
+        nft = "${pkgs.nftables}/bin/nft";
+        iptables = "${pkgs.iptables}/bin/iptables";
+        ip6tables = "${pkgs.iptables}/bin/ip6tables";
+        capsh = "${pkgs.libcap}/bin/capsh";
+        bash = "${pkgs.bash}/bin/bash";
+        getent = "${pkgs.getent.provider}/bin/getent";
+        awk = "${pkgs.gawk}/bin/awk";
+        sort = "${pkgs.coreutils}/bin/sort";
+        grep = "${pkgs.gnugrep}/bin/grep";
+        nc = "${pkgs.netcat}/bin/nc";
+        sleep = "${pkgs.coreutils}/bin/sleep";
+      }
+  );
+
   leafContents = [
     pkgs.dockerTools.usrBinEnv
     pkgs.dockerTools.binSh
     pkgs.dockerTools.caCertificates
     profileEnv
-  ];
+  ]
+  ++ optional (networkBootstrapSh != null) networkTools;
 
   # The image's MATERIALIZED on-disk store, registered in the baked Nix DB so the
   # registered-valid set equals the on-disk /nix/store in BOTH directions — no
@@ -294,6 +313,7 @@ let
 
       cp ${entrypointSh} entrypoint.sh
       chmod +x entrypoint.sh
+      cp ${./network-ready.sh} network-ready.sh
       cp ${../beads/sandbox.sh} beads-sandbox.sh
       cp ${./mcp-manifest.sh} mcp-manifest.sh
       chmod +x mcp-manifest.sh
@@ -301,10 +321,6 @@ let
       ${optionalString (networkBootstrapSh != null) ''
         cp ${networkBootstrapSh} network-bootstrap.sh
         chmod +x network-bootstrap.sh
-        mkdir -p usr/local/libexec/wrix-network
-        for tool in nft iptables ip6tables capsh getent awk sort grep nc sleep; do
-          ln -s "${profileEnv}/bin/$tool" "usr/local/libexec/wrix-network/$tool"
-        done
       ''}
 
       cp ${sshConfig.gitSshSetup} git-ssh-setup.sh

@@ -58,49 +58,6 @@ exit 0
 EOF
   chmod +x "$bin_dir/git"
 
-  cat >"$bin_dir/iptables" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-args=" $* "
-if [[ "$args" == *" -S INPUT "* ]]; then
-  printf '%s\n' '-P INPUT DROP'
-  exit 0
-fi
-if [[ "$args" == *" -S OUTPUT "* ]]; then
-  printf '%s\n' '-P OUTPUT DROP'
-  exit 0
-fi
-exit 0
-EOF
-  chmod +x "$bin_dir/iptables"
-
-  cat >"$bin_dir/ip6tables" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-args=" $* "
-if [[ "$args" == *" -S OUTPUT "* ]]; then
-  printf '%s\n' '-P OUTPUT DROP'
-fi
-exit 0
-EOF
-  chmod +x "$bin_dir/ip6tables"
-
-  cat >"$bin_dir/capsh" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-if [[ "${1:-}" != "--drop=cap_net_admin" || "${2:-}" != "--" || "${3:-}" != "-c" ]]; then
-  printf 'unexpected capsh invocation: %s\n' "$*" >&2
-  exit 64
-fi
-script="$4"
-shift 4
-if [[ "$script" == *'-A OUTPUT -j ACCEPT'* || "$script" == *'add rule inet wrix output accept'* ]]; then
-  exit 1
-fi
-exec bash -c "$script" "$@"
-EOF
-  chmod +x "$bin_dir/capsh"
-
   cat >"$bin_dir/getent" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -176,7 +133,7 @@ rewrite_entrypoint() {
   local etc_wrix="$3"
   local dest_path="$4"
   local home_dir="$5"
-  local source_path setup_path mcp_helper capability_status ready_file capability_hex
+  local source_path setup_path mcp_helper capability_status ready_file capability_hex ready_helper field
   source_path="$(entrypoint_source "$platform")"
   setup_path="$workspace/git-ssh-setup.sh"
   mcp_helper="$workspace/mcp-manifest.sh"
@@ -184,10 +141,21 @@ rewrite_entrypoint() {
   ready_file="$workspace/network-ready"
   capability_hex="${WRIX_TEST_CAP_STATUS_HEX:-0000000000000000}"
   printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' >"$setup_path"
-  printf 'CapInh:\t%s\nCapPrm:\t%s\nCapEff:\t%s\nCapBnd:\t%s\nCapAmb:\t%s\n' \
-    "$capability_hex" "$capability_hex" "$capability_hex" "$capability_hex" "$capability_hex" \
-    >"$capability_status"
-  : >"$ready_file"
+  for field in CapInh CapPrm CapEff CapBnd CapAmb; do
+    if [[ "$field" == "${WRIX_TEST_CAP_FIELD:-CapEff}" ]]; then
+      printf '%s:\t%s\n' "$field" "$capability_hex"
+    else
+      printf '%s:\t0000000000000000\n' "$field"
+    fi
+  done >"$capability_status"
+  if [[ "${WRIX_TEST_NETWORK_READY:-1}" == 1 ]]; then
+    : >"$ready_file"
+  fi
+  ready_helper="$workspace/network-ready.sh"
+  sed \
+    -e "s|/proc/self/status|$capability_status|g" \
+    -e "s|/run/wrix-network-ready|$ready_file|g" \
+    "$REPO_ROOT/lib/sandbox/network-ready.sh" >"$ready_helper"
   chmod +x "$setup_path"
   sed -e "s|/etc/wrix/|$etc_wrix/|g" "$REPO_ROOT/lib/sandbox/mcp-manifest.sh" >"$mcp_helper"
   sed \
@@ -198,8 +166,7 @@ rewrite_entrypoint() {
     -e "s|\. /git-ssh-setup\.sh|. $setup_path|g" \
     -e "s|\. /mcp-manifest\.sh|. $mcp_helper|g" \
     -e "s|\. /beads-sandbox\.sh|. $REPO_ROOT/lib/beads/sandbox.sh|g" \
-    -e "s|/proc/self/status|$capability_status|g" \
-    -e "s|/run/wrix-network-ready|$ready_file|g" \
+    -e "s|\. /network-ready\.sh|. $ready_helper|g" \
     "$source_path" >"$dest_path"
   chmod +x "$dest_path"
 }
@@ -714,35 +681,41 @@ test_stale_beads_endpoint_blocks_agent_both() {
   unset BEADS_DOLT_SERVER_HOST BEADS_DOLT_SERVER_PORT WRIX_FAKE_BD_UNREACHABLE WRIX_FAKE_BD_LOG WRIX_FAKE_BD_STATE
 }
 
-test_darwin_entrypoint_rejects_net_admin() {
-  local workspace="$TEST_TMP/net-admin-darwin/workspace"
-  local stdout_path="$TEST_TMP/net-admin-darwin.out"
-  local stderr_path="$TEST_TMP/net-admin-darwin.err"
-  mkdir -p "$workspace/bin"
-  cat >"$workspace/bin/loom-direct-runner" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-: >"${WRIX_TEST_AGENT_RAN:?}"
-EOF
-  chmod +x "$workspace/bin/loom-direct-runner"
-
-  export WRIX_TEST_CAP_STATUS_HEX=0000000000001000
-  export WRIX_TEST_AGENT_RAN="$TEST_TMP/net-admin-darwin.agent-ran"
-  if run_entrypoint darwin direct "$stdout_path" "$stderr_path" "$workspace"; then
-    unset WRIX_TEST_CAP_STATUS_HEX WRIX_TEST_AGENT_RAN
-    fail "Darwin entrypoint accepted NET_ADMIN after the bootstrap"
-    return 1
-  fi
-  unset WRIX_TEST_CAP_STATUS_HEX WRIX_TEST_AGENT_RAN
-  if [[ -e "$TEST_TMP/net-admin-darwin.agent-ran" ]]; then
-    fail "Darwin entrypoint ran workspace code before rejecting NET_ADMIN"
-    return 1
-  fi
-  grep -qF 'NET_ADMIN survived the Darwin network bootstrap' "$stderr_path" || {
-    fail "Darwin entrypoint did not report the capability boundary failure: $(<"$stderr_path")"
-    return 1
-  }
-  printf 'PASS: Darwin entrypoint rejects NET_ADMIN before workspace code runs\n' >&2
+test_entrypoints_require_network_bootstrap() {
+  local platform failure workspace stdout_path stderr_path diagnostic ready caps field
+  for platform in linux darwin; do
+    for failure in CapInh CapPrm CapEff CapBnd CapAmb malformed marker; do
+      workspace="$TEST_TMP/bootstrap-$platform-$failure/workspace"
+      stdout_path="$TEST_TMP/bootstrap-$platform-$failure.out"
+      stderr_path="$TEST_TMP/bootstrap-$platform-$failure.err"
+      ready=1
+      field="$failure"
+      caps=0000000000001000
+      diagnostic='NET_ADMIN survived the network bootstrap'
+      if [[ "$failure" == marker ]]; then
+        ready=0
+        caps=0000000000000000
+        diagnostic='network bootstrap did not complete'
+      elif [[ "$failure" == malformed ]]; then
+        caps=invalid
+        diagnostic='invalid Linux capability state'
+        field=CapEff
+      fi
+      if WRIX_TEST_NETWORK_READY="$ready" WRIX_TEST_CAP_STATUS_HEX="$caps" WRIX_TEST_CAP_FIELD="$field" \
+        run_entrypoint "$platform" direct "$stdout_path" "$stderr_path" "$workspace" \
+        touch "$workspace/agent-ran"; then
+        fail "$platform accepted an unsafe bootstrap: $failure"
+        return 1
+      fi
+      [[ ! -e "$workspace/agent-ran" ]] || { fail "$platform ran the agent"; return 1; }
+      [[ -z "$(find "$workspace/.wrix/log" -type f -print)" ]] || {
+        fail "$platform ran exit logging after a bootstrap rejection"
+        return 1
+      }
+      assert_output_contains "$platform bootstrap rejection" "$(<"$stderr_path")" "$diagnostic" || return 1
+    done
+  done
+  printf 'PASS: both entrypoints reject unsafe startup before setup or exit logging\n' >&2
 }
 
 ALL_TESTS=(
@@ -757,7 +730,7 @@ ALL_TESTS=(
   test_darwin_bd_remote_remap
   test_stale_beads_endpoint_blocks_agent_both
   test_darwin_file_mount_modes_sync_only_writable_files
-  test_darwin_entrypoint_rejects_net_admin
+  test_entrypoints_require_network_bootstrap
 )
 
 run_all() {

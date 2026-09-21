@@ -18,7 +18,6 @@ let
     elem
     filterAttrs
     mapAttrsToList
-    optionalString
     optionals
     ;
   discardContext = value: builtins.unsafeDiscardStringContext (toString value);
@@ -1373,7 +1372,7 @@ let
       trap 'rm -rf "$tmp"' EXIT
 
       prepare_image_artifact "selected leaf" "${defaultImage.source_kind}" "${toString defaultImage.source}" "$tmp/leaf" "$tmp/leaf.layers"
-      expected_command="${if isLinux then "/entrypoint.sh" else "/network-bootstrap.sh"}"
+      expected_command="/network-bootstrap.sh"
 
       if ! jq -e --arg expected "$expected_command" '.config.Entrypoint == [$expected]' "$tmp/leaf/config.json" >/dev/null; then
           echo "FAIL: image config Entrypoint is not $expected_command" >&2
@@ -1397,19 +1396,25 @@ let
           exit 1
       fi
 
-      ${optionalString (!isLinux) ''
-        if ! extract_layer_member "$tmp/leaf" "$tmp/leaf.layers" "network-bootstrap.sh" "$tmp/network-bootstrap.sh"; then
-            echo "FAIL: /network-bootstrap.sh is absent from Darwin image layers" >&2
+      for helper in network-bootstrap.sh network-ready.sh; do
+        if ! extract_layer_member "$tmp/leaf" "$tmp/leaf.layers" "$helper" "$tmp/$helper"; then
+            echo "FAIL: /$helper is absent from image layers" >&2
             exit 1
         fi
-        expected_bootstrap='${../../lib/sandbox/darwin/network-bootstrap.sh}'
-        actual_bootstrap_hash=$(sha256sum "$tmp/network-bootstrap.sh" | cut -d ' ' -f 1)
-        expected_bootstrap_hash=$(sha256sum "$expected_bootstrap" | cut -d ' ' -f 1)
-        if [[ "$actual_bootstrap_hash" != "$expected_bootstrap_hash" ]]; then
-            echo "FAIL: /network-bootstrap.sh does not match the immutable Darwin bootstrap" >&2
+        expected_helper="${../../lib/sandbox}/$helper"
+        actual_helper_hash=$(sha256sum "$tmp/$helper" | cut -d ' ' -f 1)
+        expected_helper_hash=$(sha256sum "$expected_helper" | cut -d ' ' -f 1)
+        if [[ "$actual_helper_hash" != "$expected_helper_hash" ]]; then
+            echo "FAIL: /$helper does not match the immutable bootstrap source" >&2
             exit 1
         fi
-      ''}
+      done
+      for tool in nft iptables ip6tables capsh bash getent awk sort grep nc sleep; do
+        if ! member_exists_in_layers "$tmp/leaf" "$tmp/leaf.layers" "usr/local/libexec/wrix-network/$tool"; then
+            echo "FAIL: trusted network tool $tool is absent from image layers" >&2
+            exit 1
+        fi
+      done
 
       echo "test-image-entrypoint-command: PASS"
     '';

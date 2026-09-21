@@ -268,7 +268,7 @@ let
     {
       profile,
       entrypointSh,
-      networkBootstrapSh ? null,
+      networkBootstrapSh ? ./network-bootstrap.sh,
       krunSupport ? false,
       claudeConfig ? baseClaudeConfig,
       claudeSettings ? baseClaudeSettings,
@@ -442,7 +442,6 @@ let
             ./darwin/entrypoint.sh
           else
             null;
-        networkBootstrapSh = if isDarwin then ./darwin/network-bootstrap.sh else null;
         krunSupport = isLinux;
         asTarball = isDarwin;
         claudeConfig = finalClaudeConfig;

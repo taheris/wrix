@@ -1,7 +1,7 @@
 { pkgs, ... }:
 
 let
-  inherit (pkgs.lib) escapeShellArg;
+  inherit (pkgs.lib) escapeShellArg makeBinPath optionalString;
 
   sandboxScript = script: function: ''
     run_repo_script ${escapeShellArg "tests/sandbox/${script}.sh"} ${escapeShellArg function}
@@ -54,6 +54,8 @@ in
 
   "sandbox.entrypoint-agent-dispatch" = entrypoint "test_agent_dispatch_both_entrypoints";
 
+  "sandbox.entrypoint-requires-bootstrap" = entrypoint "test_entrypoints_require_network_bootstrap";
+
   "sandbox.entrypoint-deploy-key-public" =
     entrypoint "test_deploy_key_public_derivation_both_entrypoints";
 
@@ -68,6 +70,24 @@ in
   );
 
   "sandbox.linux-microvm-runtime" = linuxOnly (sandboxScriptAll "microvm-runtime");
+
+  "sandbox.linux-network-bootstrap" = ''
+    ${optionalString pkgs.stdenv.hostPlatform.isLinux ''
+      export PATH="${
+        makeBinPath [
+          pkgs.diffutils
+          pkgs.getent.provider
+          pkgs.iptables
+          pkgs.libcap
+          pkgs.netcat
+          pkgs.nftables
+          pkgs.stdenv.cc
+          pkgs.util-linux
+        ]
+      }:$PATH"
+    ''}
+    ${sandboxScriptAll "network-bootstrap"}
+  '';
 
   "sandbox.mksandbox-api" = sandboxScriptAll "mksandbox-api";
 

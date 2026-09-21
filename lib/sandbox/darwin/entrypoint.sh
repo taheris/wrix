@@ -2,6 +2,9 @@
 set -euo pipefail
 
 # shellcheck source=/dev/null
+. /network-ready.sh
+
+# shellcheck source=/dev/null
 . /beads-sandbox.sh
 
 SESSION_START_EPOCH=$(date +%s)
@@ -98,42 +101,6 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 trap wrix_on_exit EXIT
-
-# The immutable network bootstrap installs the firewall, writes this root-owned
-# marker, and then replaces itself through capsh. Refuse direct invocation or a
-# stage that still carries NET_ADMIN in any capability set.
-WRIX_NETWORK_READY_FILE="/run/wrix-network-ready"
-if [[ ! -f "$WRIX_NETWORK_READY_FILE" ]]; then
-  echo "Error: Darwin network bootstrap did not complete" >&2
-  exit 1
-fi
-
-wrix_assert_net_admin_absent() {
-  local field value low seen=0
-  while read -r field value _rest; do
-    case "$field" in
-      CapInh:|CapPrm:|CapEff:|CapBnd:|CapAmb:)
-        [[ "$value" =~ ^[0-9A-Fa-f]+$ ]] || {
-          echo "Error: invalid Linux capability state for $field" >&2
-          exit 1
-        }
-        low="${value: -8}"
-        if (( (16#$low & 16#1000) != 0 )); then
-          echo "Error: NET_ADMIN survived the Darwin network bootstrap ($field)" >&2
-          exit 1
-        fi
-        seen=$((seen + 1))
-        ;;
-    esac
-  done < /proc/self/status
-  if [[ "$seen" -ne 5 ]]; then
-    echo "Error: Linux capability state could not be verified" >&2
-    exit 1
-  fi
-}
-
-wrix_assert_net_admin_absent
-unset WRIX_NETWORK_READY_FILE
 
 # UID mapping strategy for Darwin VirtioFS:
 #

@@ -53,7 +53,6 @@ let
     agentPkg = linuxPkgs.claude-code;
     entrypointSh =
       if isDarwin then ../../lib/sandbox/darwin/entrypoint.sh else ../../lib/sandbox/linux/entrypoint.sh;
-    networkBootstrapSh = if isDarwin then ../../lib/sandbox/darwin/network-bootstrap.sh else null;
     claudeConfig = { };
     claudeSettings = { };
     asTarball = isDarwin;
@@ -267,7 +266,8 @@ in
     runCommandLocal "smoke-darwin-entrypoint" { nativeBuildInputs = [ bash ]; }
       ''
         bash -n ${../../lib/sandbox/darwin/entrypoint.sh}
-        bash -n ${../../lib/sandbox/darwin/network-bootstrap.sh}
+        bash -n ${../../lib/sandbox/network-bootstrap.sh}
+        bash -n ${../../lib/sandbox/network-ready.sh}
         mkdir "$out"
       '';
 
@@ -275,6 +275,9 @@ in
     runCommandLocal "smoke-linux-entrypoint" { nativeBuildInputs = [ bash ]; }
       ''
         bash -n ${../../lib/sandbox/linux/entrypoint.sh}
+        bash -n ${../../lib/sandbox/linux/krun-init.sh}
+        bash -n ${../../lib/sandbox/network-bootstrap.sh}
+        bash -n ${../../lib/sandbox/network-ready.sh}
         mkdir "$out"
       '';
 

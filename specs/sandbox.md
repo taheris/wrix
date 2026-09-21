@@ -44,14 +44,14 @@ The host Podman API is outside the normal sandbox boundary. Linux exposes it onl
 
 Threat-model rationale for these choices lives in `specs/security.md`.
 
-**Network posture** — `WRIX_NETWORK` selects public egress posture at launch time. The launcher passes the mode, merged allowlist, DNS exceptions, and wrix-owned local endpoint exceptions into the container via env/config; the Linux entrypoint installs an in-sandbox firewall ruleset before the agent starts, while Darwin uses an immutable first-stage bootstrap before any workspace setup or agent code runs. Linux Podman uses `nftables` by default. Darwin does not use host `pf`; it uses the firewall backend available inside the Linux guest/container (`nftables` when supported, otherwise a verified equivalent such as iptables).
+**Network posture** — `WRIX_NETWORK` selects public egress posture at launch time. The launcher passes the mode, merged allowlist, DNS exceptions, and wrix-owned local endpoint exceptions into the container via env/config; both platforms use an immutable first-stage bootstrap to install an in-sandbox firewall ruleset before any workspace setup or agent code runs. Linux Podman uses `nftables` by default. Darwin does not use host `pf`; it uses the firewall backend available inside the Linux guest/container (`nftables` when supported, otherwise a verified equivalent such as iptables).
 
 Baseline network isolation is always enforced in both modes: no inbound ports, IPv6 disabled/blocked for v1, and outbound traffic to LAN/private/host-local/VPN/special ranges is blocked. Exact exceptions are allowed only for wrix-owned endpoints (for example the project cache host-gateway IP/port, Darwin Dolt TCP endpoint) and configured DNS resolvers on TCP/UDP port 53.
 
 - `open` (default) — public-internet outbound is allowed, but LAN/private/host-local/VPN/special ranges remain blocked.
 - `limit` — outbound is restricted to the profile's merged `networkAllowlist` plus exact wrix-owned local endpoint and DNS exceptions; LAN/private/host-local/VPN/special ranges remain blocked. Any other value errors at the launcher before the container starts.
 
-Filtering is fail-closed. Linux rootless Podman grants temporary in-container `NET_ADMIN` so the entrypoint can install namespace-local firewall rules atomically, then uses `capsh` to drop `NET_ADMIN` before execing the agent. `WRIX_MICROVM=1` remains an optional stronger boundary, not a requirement. macOS runs in a microVM unconditionally; its immutable bootstrap alone receives `NET_ADMIN`, uses only image-pinned tools, verifies the policy, and replaces itself through `capsh` with a stage that rejects `NET_ADMIN` in every Linux capability set before touching `/workspace`. The Darwin host firewall is never mutated. `WRIX_NETWORK=limit` domains are resolved once at startup; any unresolvable allowlist domain fails launch instead of being silently omitted. If firewall setup, IPv6 disablement, or capability drop cannot be verified, launch fails; wrix never falls back to LAN-open networking.
+Filtering is fail-closed. Both platforms grant temporary in-container `NET_ADMIN` only for trusted startup. The immutable bootstrap uses only image-pinned tools, verifies the namespace-local firewall policy, and replaces itself through `capsh` with a stage that rejects `NET_ADMIN` in every Linux capability set before workspace setup or exit logging is installed. Linux rootless Podman uses this sequence for both the default container boundary and optional `WRIX_MICROVM=1` boundary; macOS runs in a microVM unconditionally. The Darwin host firewall is never mutated. `WRIX_NETWORK=limit` domains are resolved once at startup; any unresolvable allowlist domain fails launch instead of being silently omitted. If firewall setup, IPv6 disablement, or capability drop cannot be verified, launch fails; wrix never falls back to LAN-open networking.
 
 **Agent runtime axis** — the `agent` parameter selects, **at build time**, the single agent binary the image bakes and the entrypoint launches. The binary must be in the image, so this is not a runtime knob.
 
@@ -187,8 +187,8 @@ Plus consumer-defined fields the entrypoint reads from the original config mount
 ### Linux (Podman)
 
 - Rootless Podman is the default Linux runtime; krun is optional.
-- The launcher grants temporary in-container `NET_ADMIN` for firewall setup on every launch, including `WRIX_NETWORK=open`, because baseline LAN/private/host-local/VPN blocking is always required. The entrypoint installs the in-sandbox firewall ruleset (`nftables` by default on Linux Podman), disables/blocks IPv6 for v1, verifies policy, uses `capsh` to drop `NET_ADMIN`, and only then execs the agent.
-- Default boundary runs as rootless **container-root** (no `--userns=keep-id`), which maps to the invoking host user — the owner of the baked `/nix/store` — so store-mutating Nix ops succeed and `/workspace` files carry host UID/GID. The launcher sets `IS_SANDBOX=1` so claude permits `--dangerously-skip-permissions` while the process remains root, and does not preload `libfakeuid`. The microVM path keeps `--userns=keep-id` (krun maps host user→root inside the VM) and uses libfakeuid via `krun-init.sh`.
+- The launcher grants temporary in-container `NET_ADMIN` for firewall setup on every launch, including `WRIX_NETWORK=open`, because baseline LAN/private/host-local/VPN blocking is always required. The immutable bootstrap installs the in-sandbox firewall ruleset (`nftables` by default on Linux Podman), disables/blocks IPv6 for v1, verifies policy, and replaces itself through `capsh` before workspace-controlled setup, the agent, or exit logging can execute.
+- Default boundary runs as rootless **container-root** (no `--userns=keep-id`), which maps to the invoking host user — the owner of the baked `/nix/store` — so store-mutating Nix ops succeed and `/workspace` files carry host UID/GID. The launcher sets `IS_SANDBOX=1` so claude permits `--dangerously-skip-permissions` while the process remains root, and does not preload `libfakeuid`. The microVM path keeps `--userns=keep-id` (krun maps host user→root inside the VM) and enters the same trusted bootstrap through `krun-init.sh`; argv decoding and libfakeuid activation occur only after the capability drop.
 - `--pids-limit 4096` fork-bomb guard
 - `WRIX_MICROVM=1` switches to `podman --runtime krun` when `/dev/kvm` exists
 
@@ -216,6 +216,10 @@ Plus consumer-defined fields the entrypoint reads from the original config mount
   [system](verify:sandbox.darwin-container-starts)
 - The Darwin network bootstrap cannot resolve tools from `/workspace`, verifies the firewall before invoking `capsh`, preserves the agent argv, and enters stage two only after requesting an irreversible `NET_ADMIN` drop
   [system](verify:sandbox.darwin-network-bootstrap)
+- Linux container and krun initialization install the same open/limit policy and exact endpoint exceptions with image-pinned tools, preserve argv, and drop `NET_ADMIN` before workspace shims run during setup, agent execution, or exit logging
+  [system](verify:sandbox.linux-network-bootstrap)
+- Both agent entrypoints reject a missing bootstrap marker or retained `NET_ADMIN` before setup or exit logging can run
+  [system](verify:sandbox.entrypoint-requires-bootstrap)
 - Files created inside `/workspace` carry the host UID/GID, not a container-internal UID
   [system](verify:sandbox.uid-mapping)
 - Host filesystem outside `/workspace` and declared mounts is not visible inside the container
@@ -346,7 +350,7 @@ Plus consumer-defined fields the entrypoint reads from the original config mount
 
 1. **Rootless / no elevated privileges** — Linux runs rootless Podman; macOS runs the Apple `container` CLI as the calling user. No host capabilities are granted by default; `WRIX_UNSAFE_PODMAN_SOCKET` is an explicit unsafe opt-in outside the normal sandbox boundary.
 2. **Boundary class** — macOS is always microVM; Linux defaults to rootless container, opts into microVM with `WRIX_MICROVM=1` (see `specs/security.md`).
-3. **Network posture** — no inbound ports on either platform. In both `WRIX_NETWORK=open` and `WRIX_NETWORK=limit`, LAN/private/host-local/VPN/special outbound is blocked with exact DNS and wrix-owned endpoint exceptions only. `open` allows public-internet outbound; `limit` restricts public egress to the merged allowlist. Filtering is fail-closed and drops `NET_ADMIN` before the agent starts.
+3. **Network posture** — no inbound ports on either platform. In both `WRIX_NETWORK=open` and `WRIX_NETWORK=limit`, LAN/private/host-local/VPN/special outbound is blocked with exact DNS and wrix-owned endpoint exceptions only. `open` allows public-internet outbound; `limit` restricts public egress to the merged allowlist. Filtering is fail-closed and drops `NET_ADMIN` before workspace-controlled setup, agent execution, or exit logging.
 4. **Near-native performance** — minimal overhead beyond the container/microVM boundary cost; krun adds ~100MB per microVM.
 
 ## Out of Scope

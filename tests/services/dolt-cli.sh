@@ -179,9 +179,17 @@ cap_status.write_text(
 )
 network_ready = workspace / 'wrix-network-ready'
 network_ready.touch()
+ready_helper = workspace / 'network-ready.sh'
+ready_helper.write_text(
+    (source.parent.parent / 'network-ready.sh').read_text(encoding='utf-8')
+    .replace('/proc/self/status', str(cap_status))
+    .replace('/run/wrix-network-ready', str(network_ready)),
+    encoding='utf-8',
+)
 text = source.read_text(encoding='utf-8').replace('/workspace', str(workspace))
-text = text.replace('/proc/self/status', str(cap_status))
-text = text.replace('/run/wrix-network-ready', str(network_ready))
+text = text.replace('. /network-ready.sh', f'. {shlex.quote(str(ready_helper))}')
+beads_helper = source.parent.parent.parent / 'beads/sandbox.sh'
+text = text.replace('. /beads-sandbox.sh', f'. {shlex.quote(str(beads_helper))}')
 text = text.replace('. /git-ssh-setup.sh', f'. {shlex.quote(str(setup))}')
 text = text.replace('. /mcp-manifest.sh', f'. {shlex.quote(str(mcp_setup))}')
 dest.write_text(text, encoding='utf-8')
@@ -284,7 +292,7 @@ assert_dolt_endpoint_failure() {
   if run_entrypoint "$entrypoint" "$workspace" "$stdout_path" "$stderr_path"; then
     fail "$platform entrypoint succeeded without a Dolt endpoint"
   fi
-  assert_contains "$platform missing endpoint" "$(<"$stderr_path")" "dolt backend configured but no connection available"
+  assert_contains "$platform missing endpoint" "$(<"$stderr_path")" "configured Dolt socket is unavailable"
   assert_path_absent "$bd_log"
 }
 
@@ -367,21 +375,12 @@ ALL_TESTS=(
 )
 
 run_all() {
-  local failed=0
   local fn
   for fn in "${ALL_TESTS[@]}"; do
     printf '=== %s ===\n' "$fn"
-    if "$fn"; then
-      printf 'PASS: %s\n' "$fn"
-    else
-      printf 'FAIL: %s\n' "$fn" >&2
-      failed=$((failed + 1))
-    fi
+    "$fn"
+    printf 'PASS: %s\n' "$fn"
   done
-  if [[ "$failed" -ne 0 ]]; then
-    printf '%s test(s) failed\n' "$failed" >&2
-    return 1
-  fi
 }
 
 if [[ "$#" -eq 0 ]]; then

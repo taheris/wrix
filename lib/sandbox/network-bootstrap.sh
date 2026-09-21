@@ -1,11 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
-# This is the only Darwin stage that receives CAP_NET_ADMIN. It uses binaries
-# pinned into the image at build time, installs and verifies the network policy,
-# then replaces itself with the agent entrypoint after dropping NET_ADMIN from
-# every capability set. No workspace path or workspace-controlled executable is
-# consulted in this stage.
+# Privileged firewall setup uses image-pinned tools on both platforms.
+# No workspace code may run before this process is replaced through capsh.
 readonly WRIX_NETWORK_TOOL_DIR="/usr/local/libexec/wrix-network"
 readonly WRIX_AGENT_ENTRYPOINT="/entrypoint.sh"
 readonly WRIX_NETWORK_READY_FILE="/run/wrix-network-ready"
@@ -16,15 +13,17 @@ wrix_die() {
   exit 1
 }
 
-[[ -x "$WRIX_AGENT_ENTRYPOINT" ]] || wrix_die "Darwin agent entrypoint is unavailable"
+[[ -x "$WRIX_AGENT_ENTRYPOINT" ]] || wrix_die "agent entrypoint is unavailable"
 [[ -d "$WRIX_NETWORK_READY_DIR" && ! -L "$WRIX_NETWORK_READY_DIR" ]] \
-  || wrix_die "trusted Darwin runtime directory is unavailable: $WRIX_NETWORK_READY_DIR"
-[[ ! -e "$WRIX_NETWORK_READY_FILE" ]] || wrix_die "Darwin network bootstrap marker already exists"
+  || wrix_die "trusted runtime directory is unavailable: $WRIX_NETWORK_READY_DIR"
+[[ ! -e "$WRIX_NETWORK_READY_FILE" && ! -L "$WRIX_NETWORK_READY_FILE" ]] \
+  || wrix_die "network bootstrap marker already exists"
 
 WRIX_NFT_BIN="$WRIX_NETWORK_TOOL_DIR/nft"
 WRIX_IPTABLES_BIN="$WRIX_NETWORK_TOOL_DIR/iptables"
 WRIX_IP6TABLES_BIN="$WRIX_NETWORK_TOOL_DIR/ip6tables"
 WRIX_CAPSH_BIN="$WRIX_NETWORK_TOOL_DIR/capsh"
+WRIX_BASH_BIN="$WRIX_NETWORK_TOOL_DIR/bash"
 WRIX_GETENT_BIN="$WRIX_NETWORK_TOOL_DIR/getent"
 WRIX_AWK_BIN="$WRIX_NETWORK_TOOL_DIR/awk"
 WRIX_SORT_BIN="$WRIX_NETWORK_TOOL_DIR/sort"
@@ -34,11 +33,12 @@ WRIX_SLEEP_BIN="$WRIX_NETWORK_TOOL_DIR/sleep"
 
 for tool in \
   "$WRIX_CAPSH_BIN" \
+  "$WRIX_BASH_BIN" \
   "$WRIX_GETENT_BIN" \
   "$WRIX_AWK_BIN" \
   "$WRIX_SORT_BIN" \
   "$WRIX_GREP_BIN"; do
-  [[ -x "$tool" ]] || wrix_die "trusted Darwin network tool is unavailable: $tool"
+  [[ -x "$tool" ]] || wrix_die "trusted network tool is unavailable: $tool"
 done
 
 WRIX_FIREWALL_BACKEND="${WRIX_FIREWALL_BACKEND:-}"
@@ -380,5 +380,5 @@ umask 077
 # The command string is constant; the stage-2 path and original argv are passed
 # positionally. capsh drops NET_ADMIN from the bounding set before exec, and the
 # stage-2 entrypoint independently rejects the capability in every Linux set.
-exec "$WRIX_CAPSH_BIN" --drop=cap_net_admin -- -c 'exec "$@"' wrix-network-bootstrap \
+exec "$WRIX_CAPSH_BIN" --drop=cap_net_admin --shell="$WRIX_BASH_BIN" -- -c 'exec "$@"' wrix-network-bootstrap \
   "$WRIX_AGENT_ENTRYPOINT" "$@"
