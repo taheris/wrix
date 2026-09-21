@@ -126,6 +126,8 @@ reported separately from host-key failure.
   [check](verify:cli.verify-runner-batching)
 - `wrix init --help` exits zero without mutating Git config or creating `wrix.toml`.
   [test](../crates/wrix-cli/tests/cli_surface.rs::init_help_is_non_mutating)
+- Unsupported flags and surplus arguments on beads, Dolt, and service operations fail before any subprocess is invoked; agent command passthrough remains owned by the sandbox parser.
+  [test](../crates/wrix-cli/tests/arguments.rs::unsupported_arguments_fail_before_any_subprocess)
 - Unknown root commands exit non-zero, name the unknown token, and print root usage.
   [test](../crates/wrix-cli/tests/cli_surface.rs::unknown_root_command_reports_usage)
 - A `wrix init` flag missing its required value exits non-zero with usage and does not mutate Git config.

@@ -169,6 +169,9 @@ fn run_dolt(
         return Ok(ExitCode::SUCCESS);
     }
     if let Some(command) = wrix_service::command::Dolt::parse(&args[0]) {
+        if let Err(error) = parse_no_arguments("wrix service dolt", &args[1..]) {
+            return render_clap_error(&error, stdout, stderr);
+        }
         return wrix_service::command::run_dolt(command, stdout);
     }
     writeln!(stderr, "unknown dolt command: {}", args[0])?;
@@ -203,11 +206,21 @@ fn run_beads(
         return Ok(ExitCode::SUCCESS);
     }
     if let Some(command) = wrix_beads::command::Command::parse(&args[0]) {
+        if let Err(error) = parse_no_arguments("wrix beads push", &args[1..]) {
+            return render_clap_error(&error, stdout, stderr);
+        }
         return wrix_beads::command::run(command, stdout, stderr).map_err(io::Error::other);
     }
     writeln!(stderr, "unknown beads command: {}", args[0])?;
     wrix_beads::command::write_help(stderr).map_err(io::Error::other)?;
     Ok(ExitCode::FAILURE)
+}
+
+fn parse_no_arguments(name: &'static str, args: &[String]) -> Result<(), clap::Error> {
+    ClapCommand::new(name)
+        .disable_help_flag(true)
+        .try_get_matches_from(std::iter::once(name).chain(args.iter().map(String::as_str)))
+        .map(|_matches| ())
 }
 
 fn write_delegated_help(
