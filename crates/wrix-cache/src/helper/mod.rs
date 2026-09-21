@@ -207,7 +207,7 @@ fn run_hook(args: &[String], stdout: &mut impl Write) -> Result<ExitCode> {
 fn run_publish(args: &[String], stdout: &mut impl Write) -> Result<ExitCode> {
     let config = PublishConfig::parse(args)?;
     let report = crate::publisher::run_hook_record(
-        config.workspace_hash.as_str(),
+        &config.workspace_hash,
         &config.state_root,
         &config.cache_root,
         &config.manifest,

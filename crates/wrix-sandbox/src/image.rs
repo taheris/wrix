@@ -27,6 +27,34 @@ impl SourceKind {
     }
 }
 
+/// A source path paired with its wire format; availability is checked when read.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Source {
+    path: PathBuf,
+    kind: SourceKind,
+}
+
+impl Source {
+    pub fn parse(path: impl Into<PathBuf>, kind: SourceKind) -> Result<Self, SourceParseError> {
+        let path = path.into();
+        if path.as_os_str().is_empty() || path.as_os_str().as_encoded_bytes().contains(&0) {
+            return Err(SourceParseError);
+        }
+        Ok(Self { path, kind })
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+    pub const fn kind(&self) -> SourceKind {
+        self.kind
+    }
+}
+
+#[derive(Clone, Debug, Display, Error)]
+/// image source must be a nonempty path without NUL bytes
+pub struct SourceParseError;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Runtime {
     Podman,
@@ -84,7 +112,14 @@ impl ImageId {
                 value: value.to_owned(),
             });
         };
-        if value.chars().any(char::is_whitespace) {
+        if !value
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric())
+            || !value.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b':' | b'-' | b'_' | b'.')
+            })
+        {
             return Err(ImageIdParseError { value });
         }
         Ok(Self(value))
@@ -130,6 +165,18 @@ impl ImageRef {
 
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl ImageRef {
+    fn latest_tag(&self) -> Option<Self> {
+        let name = self.0.split('@').next()?;
+        let colon = name.rfind(':')?;
+        if name.rfind('/').is_some_and(|slash| colon < slash) {
+            return None;
+        }
+        // Parsing already proved the repository; replacing its tag preserves that proof.
+        Some(Self(format!("{}:latest", &name[..colon])))
     }
 }
 
@@ -215,21 +262,90 @@ pub struct ImageRefParseError {
     value: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Target {
+    Reference(ImageRef),
+    Id(ImageId),
+    Digest(Digest),
+}
+
+impl Target {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Reference(value) => value.as_str(),
+            Self::Id(value) => value.as_str(),
+            Self::Digest(value) => value.as_str(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ImageRow {
+    pub target: Target,
+    pub id: Option<ImageId>,
+}
+
+#[derive(Clone, Debug)]
+enum InstallSource<'a> {
+    PodmanDescriptor(&'a Source),
+    PodmanArchive(&'a Source),
+    ContainerArchive(&'a Source),
+}
+
 #[derive(Clone, Debug)]
 pub struct InstallRequest<'a> {
-    pub runtime: Runtime,
-    pub image_ref: &'a str,
-    pub image_source: &'a str,
-    pub source_kind: SourceKind,
-    pub digest: Option<&'a Digest>,
+    image_ref: &'a ImageRef,
+    source: InstallSource<'a>,
+    digest: Option<&'a Digest>,
+}
+
+impl<'a> InstallRequest<'a> {
+    pub const fn new(
+        runtime: Runtime,
+        image_ref: &'a ImageRef,
+        source: &'a Source,
+        digest: Option<&'a Digest>,
+    ) -> Result<Self, Error> {
+        let source = match (runtime, source.kind()) {
+            (Runtime::Podman, SourceKind::NixDescriptor) => InstallSource::PodmanDescriptor(source),
+            (Runtime::Podman, SourceKind::DockerArchive) => InstallSource::PodmanArchive(source),
+            (Runtime::Container, SourceKind::DockerArchive) => {
+                InstallSource::ContainerArchive(source)
+            }
+            (Runtime::Container, SourceKind::NixDescriptor) => {
+                return Err(Error::UnsupportedSourceKind {
+                    kind: source.kind().as_str(),
+                });
+            }
+        };
+        Ok(Self {
+            image_ref,
+            source,
+            digest,
+        })
+    }
+
+    const fn runtime(&self) -> Runtime {
+        match self.source {
+            InstallSource::PodmanDescriptor(_) | InstallSource::PodmanArchive(_) => Runtime::Podman,
+            InstallSource::ContainerArchive(_) => Runtime::Container,
+        }
+    }
+
+    const fn image_source(&self) -> &Source {
+        match self.source {
+            InstallSource::PodmanDescriptor(source)
+            | InstallSource::PodmanArchive(source)
+            | InstallSource::ContainerArchive(source) => source,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
 pub struct RetentionRequest<'a> {
     pub runtime: Runtime,
-    pub image_ref: &'a str,
-    pub image_source: &'a str,
-    pub source_kind: SourceKind,
+    pub image_ref: &'a ImageRef,
+    pub source: Option<&'a Source>,
     pub digest: Option<&'a Digest>,
     pub mru_path: &'a Path,
 }
@@ -302,6 +418,8 @@ pub enum Error {
     Digest { source: DigestParseError },
     /// {source}
     ImageId { source: ImageIdParseError },
+    /// image ID is unavailable for store target: {target}
+    MissingImageId { target: String },
     /// {source}
     ImageRef { source: ImageRefParseError },
     /// {source}
@@ -333,83 +451,60 @@ impl From<io::Error> for Error {
 }
 
 pub trait Store {
-    fn image_for_digest(&mut self, runtime: Runtime, digest: &str)
-    -> Result<Option<String>, Error>;
-
-    fn tag(&mut self, runtime: Runtime, source: &str, target: &str) -> Result<(), Error>;
-
-    fn linux_store_ref(&mut self, image_ref: &str) -> Result<String, Error>;
-
-    fn copy_oci_layout(&mut self, source: &OciSource, destination: &str) -> Result<(), Error>;
-
-    fn copy_docker_archive(&mut self, archive: &str, destination: &str) -> Result<(), Error>;
-
-    fn load_docker_archive(&mut self, archive: &str) -> Result<Option<String>, Error>;
-
-    fn docker_archive_config_digest(&mut self, archive: &str) -> Result<Option<String>, Error>;
-
-    fn image_rows(&mut self, runtime: Runtime) -> Result<Vec<String>, Error>;
-
-    fn image_id(&mut self, runtime: Runtime, target: &str) -> Result<Option<String>, Error>;
-
-    fn image_digest(&mut self, runtime: Runtime, target: &str) -> Result<Option<String>, Error>;
-
-    fn image_managed(&mut self, runtime: Runtime, target: &str) -> Result<bool, Error>;
-
-    fn image_in_use(&mut self, runtime: Runtime, target: &str) -> Result<bool, Error>;
-
-    fn delete_image(&mut self, runtime: Runtime, target: &str) -> Result<(), Error>;
+    fn image_for_digest(
+        &mut self,
+        runtime: Runtime,
+        digest: &Digest,
+    ) -> Result<Option<Target>, Error>;
+    fn tag(&mut self, runtime: Runtime, source: &Target, target: &ImageRef) -> Result<(), Error>;
+    fn copy_oci_layout(&mut self, source: &OciSource, destination: &ImageRef) -> Result<(), Error>;
+    fn copy_docker_archive(&mut self, archive: &Path, destination: &ImageRef) -> Result<(), Error>;
+    fn load_docker_archive(&mut self, archive: &Path) -> Result<Option<ImageRef>, Error>;
+    fn docker_archive_config_digest(&mut self, archive: &Path) -> Result<Option<Digest>, Error>;
+    fn image_rows(&mut self, runtime: Runtime) -> Result<Vec<ImageRow>, Error>;
+    fn image_id(&mut self, runtime: Runtime, target: &Target) -> Result<Option<ImageId>, Error>;
+    fn image_digest(&mut self, runtime: Runtime, target: &Target) -> Result<Option<Digest>, Error>;
+    fn image_managed(&mut self, runtime: Runtime, target: &Target) -> Result<bool, Error>;
+    fn image_in_use(&mut self, runtime: Runtime, target: &Target) -> Result<bool, Error>;
+    fn delete_image(&mut self, runtime: Runtime, target: &Target) -> Result<(), Error>;
 }
 
 #[derive(Default)]
 pub struct CommandStore;
 
 pub fn install(store: &mut impl Store, request: &InstallRequest<'_>) -> Result<(), Error> {
-    if request.image_source.is_empty() {
-        return Ok(());
-    }
-    let desired = desired_digest(
-        store,
-        request.image_source,
-        request.source_kind,
-        request.digest,
-    )?;
-    if let Some(source) = store.image_for_digest(request.runtime, desired.as_str())? {
-        if source != request.image_ref {
-            store.tag(request.runtime, &source, request.image_ref)?;
+    let desired = desired_digest(store, request.image_source(), request.digest)?;
+    let runtime = request.runtime();
+    let selected = Target::Reference(request.image_ref.clone());
+    if let Some(source) = store.image_for_digest(runtime, &desired)? {
+        if source != selected {
+            store.tag(runtime, &source, request.image_ref)?;
         }
         return Ok(());
     }
 
-    match (request.runtime, request.source_kind) {
-        (Runtime::Podman, SourceKind::NixDescriptor) => {
-            let descriptor = read_descriptor(request.image_source)?;
-            let source = descriptor.oci_source(request.image_source)?;
-            let store_ref = store.linux_store_ref(request.image_ref)?;
-            store.copy_oci_layout(&source, &store_ref)?;
+    match request.source {
+        InstallSource::PodmanDescriptor(source) => {
+            let descriptor = read_descriptor(source.path())?;
+            let source = descriptor.oci_source(source.path())?;
+            store.copy_oci_layout(&source, request.image_ref)?;
         }
-        (Runtime::Podman, SourceKind::DockerArchive) => {
-            let store_ref = store.linux_store_ref(request.image_ref)?;
-            store.copy_docker_archive(request.image_source, &store_ref)?;
+        InstallSource::PodmanArchive(source) => {
+            store.copy_docker_archive(source.path(), request.image_ref)?;
         }
-        (Runtime::Container, SourceKind::DockerArchive) => {
-            if let Some(untagged) = store.load_docker_archive(request.image_source)? {
-                store.tag(request.runtime, &untagged, request.image_ref)?;
-                store.delete_image(request.runtime, &untagged)?;
+        InstallSource::ContainerArchive(source) => {
+            if let Some(untagged) = store.load_docker_archive(source.path())? {
+                let untagged = Target::Reference(untagged);
+                store.tag(runtime, &untagged, request.image_ref)?;
+                store.delete_image(runtime, &untagged)?;
             }
         }
-        (Runtime::Container, kind) => {
-            return Err(Error::UnsupportedSourceKind {
-                kind: kind.as_str(),
-            });
-        }
     }
 
-    if request.runtime == Runtime::Podman
-        && let Some(repo) = request.image_ref.rsplit_once(':').map(|(repo, _tag)| repo)
+    if runtime == Runtime::Podman
+        && let Some(latest) = request.image_ref.latest_tag()
     {
-        let latest = format!("{repo}:latest");
-        store.tag(request.runtime, request.image_ref, &latest)?;
+        store.tag(runtime, &selected, &latest)?;
     }
     Ok(())
 }
@@ -418,16 +513,11 @@ pub fn remember_and_prune(
     store: &mut impl Store,
     request: &RetentionRequest<'_>,
 ) -> Result<(), Error> {
-    let digest = if request.image_source.is_empty() {
-        None
-    } else {
-        Some(desired_digest(
-            store,
-            request.image_source,
-            request.source_kind,
-            request.digest,
-        )?)
-    };
+    let digest = request
+        .source
+        .map(|source| desired_digest(store, source, request.digest))
+        .transpose()?
+        .or_else(|| request.digest.cloned());
     with_mru_lock(request.mru_path, || {
         remember(
             store,
@@ -457,27 +547,24 @@ pub fn default_mru_path() -> PathBuf {
 
 fn desired_digest(
     store: &mut impl Store,
-    image_source: &str,
-    kind: SourceKind,
+    source: &Source,
     digest: Option<&Digest>,
 ) -> Result<Digest, Error> {
     if let Some(digest) = digest {
         return Ok(digest.clone());
     }
-    match kind {
+    match source.kind() {
         SourceKind::NixDescriptor => {
-            read_descriptor(image_source)?
+            read_descriptor(source.path())?
                 .digest
                 .ok_or_else(|| Error::MissingDescriptorDigest {
-                    path: image_source.to_owned(),
+                    path: source.path().display().to_string(),
                 })
         }
         SourceKind::DockerArchive => store
-            .docker_archive_config_digest(image_source)?
-            .map(|value| Digest::parse(&value))
-            .transpose()?
+            .docker_archive_config_digest(source.path())?
             .ok_or_else(|| Error::MissingDockerArchiveDigest {
-                path: image_source.to_owned(),
+                path: source.path().display().to_string(),
             }),
     }
 }
@@ -486,22 +573,18 @@ fn remember(
     store: &mut impl Store,
     runtime: Runtime,
     path: &Path,
-    image_ref: &str,
+    image_ref: &ImageRef,
     digest: Option<&Digest>,
 ) -> Result<(), Error> {
-    let ref_name = ImageRef::parse(image_ref)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let id = store
-        .image_id(runtime, image_ref)?
-        .map(|value| ImageId::parse(&value))
-        .transpose()?;
+    let id = store.image_id(runtime, &Target::Reference(image_ref.clone()))?;
     let mut records = read_records(path)?;
     records.insert(
         0,
         Record {
-            ref_name: Some(ref_name),
+            ref_name: Some(image_ref.clone()),
             digest: digest.cloned(),
             id,
         },
@@ -524,21 +607,22 @@ fn prune(
     store: &mut impl Store,
     runtime: Runtime,
     mru_path: &Path,
-    image_ref: &str,
+    image_ref: &ImageRef,
     digest: Option<&Digest>,
 ) -> Result<(), Error> {
     let mut keep_refs = BTreeSet::new();
     let mut keep_ids = BTreeSet::new();
     let mut keep_digests = BTreeSet::new();
-    keep_refs.insert(ImageRef::parse(image_ref)?);
+    keep_refs.insert(image_ref.clone());
+    let target = Target::Reference(image_ref.clone());
     if let Some(digest) = digest {
         keep_digests.insert(digest.clone());
     }
-    if let Some(id) = store.image_id(runtime, image_ref)? {
-        keep_ids.insert(ImageId::parse(&id)?);
+    if let Some(id) = store.image_id(runtime, &target)? {
+        keep_ids.insert(id);
     }
-    if let Some(actual_digest) = store.image_digest(runtime, image_ref)? {
-        keep_digests.insert(Digest::parse(&actual_digest)?);
+    if let Some(actual_digest) = store.image_digest(runtime, &target)? {
+        keep_digests.insert(actual_digest);
     }
     for record in read_records(mru_path)? {
         if let Some(ref_name) = record.ref_name {
@@ -573,7 +657,7 @@ fn prune(
         if let Err(error) = store.delete_image(runtime, &image.target) {
             tracing::warn!(
                 ?runtime,
-                image_target = %image.target,
+                image_target = image.target.as_str(),
                 error = %error,
                 "could not prune stale image"
             );
@@ -610,14 +694,14 @@ struct Descriptor {
 }
 
 impl Descriptor {
-    fn oci_source(self, path: &str) -> Result<OciSource, Error> {
+    fn oci_source(self, path: &Path) -> Result<OciSource, Error> {
         if self.oci_layout.is_empty() {
             return Err(Error::MissingDescriptorLayout {
-                path: path.to_owned(),
+                path: path.display().to_string(),
             });
         }
         let digest = self.digest.ok_or_else(|| Error::MissingDescriptorDigest {
-            path: path.to_owned(),
+            path: path.display().to_string(),
         })?;
         Ok(OciSource {
             digest,
@@ -630,14 +714,14 @@ impl Descriptor {
 
 struct ListedImage {
     ref_name: Option<ImageRef>,
-    target: String,
+    target: Target,
     id: ImageId,
     digest: Option<Digest>,
     managed: bool,
     legacy: bool,
 }
 
-fn read_descriptor(path: &str) -> Result<Descriptor, Error> {
+fn read_descriptor(path: &Path) -> Result<Descriptor, Error> {
     let content = fs::read_to_string(path)?;
     serde_json::from_str(&content).map_err(|source| Error::DescriptorJson { source })
 }
@@ -662,19 +746,40 @@ fn read_records(path: &Path) -> Result<Vec<Record>, Error> {
 
 fn list_images(store: &mut impl Store, runtime: Runtime) -> Result<Vec<ListedImage>, Error> {
     let mut images = Vec::new();
-    for row in store.image_rows(runtime)? {
-        if let Some(image) = listed_image_from_line(store, runtime, &row)? {
-            images.push(image);
-        }
+    for ImageRow {
+        target,
+        id: listed_id,
+    } in store.image_rows(runtime)?
+    {
+        let ref_name = match &target {
+            Target::Reference(value) => Some(value.clone()),
+            _ => None,
+        };
+        let id = store
+            .image_id(runtime, &target)?
+            .or(listed_id)
+            .ok_or_else(|| Error::MissingImageId {
+                target: target.as_str().to_owned(),
+            })?;
+        let digest = store.image_digest(runtime, &target)?;
+        let managed = store.image_managed(runtime, &target)?;
+        let legacy = runtime == Runtime::Podman
+            && ref_name
+                .as_ref()
+                .is_some_and(|name| name.as_str().starts_with("localhost/wrix-"));
+        images.push(ListedImage {
+            ref_name,
+            target,
+            id,
+            digest,
+            managed,
+            legacy,
+        });
     }
     Ok(images)
 }
 
-fn listed_image_from_line(
-    store: &mut impl Store,
-    runtime: Runtime,
-    line: &str,
-) -> Result<Option<ListedImage>, Error> {
+fn image_row_from_line(runtime: Runtime, line: &str) -> Result<Option<ImageRow>, Error> {
     let mut fields = line.split_whitespace();
     let Some(repo) = fields.next() else {
         return Ok(None);
@@ -683,54 +788,24 @@ fn listed_image_from_line(
         return Ok(None);
     }
     let tag = fields.next().unwrap_or("<none>");
-    let listed_id = fields.next().unwrap_or("");
-    let (ref_name, target) = listed_image_identity(runtime, repo, tag, listed_id)?;
-    let Some(target) = target else {
-        return Ok(None);
-    };
-    let id = store
-        .image_id(runtime, &target)?
-        .unwrap_or_else(|| listed_id.to_owned());
-    let id = ImageId::parse(&id)?;
-    let digest = store
-        .image_digest(runtime, &target)?
-        .map(|value| Digest::parse(&value))
+    let id = fields
+        .next()
+        .and_then(normalized_value)
+        .map(|id| ImageId::parse(&id))
         .transpose()?;
-    let managed = store.image_managed(runtime, &target)?;
-    let legacy = runtime == Runtime::Podman
-        && ref_name
-            .as_ref()
-            .is_some_and(|name| name.as_str().starts_with("localhost/wrix-"));
-    Ok(Some(ListedImage {
-        ref_name,
-        target,
-        id,
-        digest,
-        managed,
-        legacy,
-    }))
-}
-
-fn listed_image_identity(
-    runtime: Runtime,
-    repo: &str,
-    tag: &str,
-    listed_id: &str,
-) -> Result<(Option<ImageRef>, Option<String>), Error> {
-    let untagged_container_ref =
-        runtime == Runtime::Container && tag == "<none>" && repo.starts_with("untagged@sha256:");
-    let ref_name = (repo != "<none>" && tag != "<none>")
-        .then(|| ImageRef::parse(&format!("{repo}:{tag}")))
-        .transpose()?;
-    let target = if untagged_container_ref {
-        Some(repo.to_owned())
-    } else {
-        ref_name
-            .as_ref()
-            .map(|reference| reference.as_str().to_owned())
-            .or_else(|| normalized_value(listed_id))
-    };
-    Ok((ref_name, target))
+    let reference =
+        if runtime == Runtime::Container && tag == "<none>" && repo.starts_with("untagged@sha256:")
+        {
+            Some(ImageRef::parse(repo)?)
+        } else if repo != "<none>" && tag != "<none>" {
+            Some(ImageRef::parse(&format!("{repo}:{tag}"))?)
+        } else {
+            None
+        };
+    Ok(reference
+        .map(Target::Reference)
+        .or_else(|| id.clone().map(Target::Id))
+        .map(|target| ImageRow { target, id }))
 }
 
 fn deserialize_optional_image_ref<'de, D>(deserializer: D) -> Result<Option<ImageRef>, D::Error>
@@ -777,21 +852,26 @@ impl Store for CommandStore {
     fn image_for_digest(
         &mut self,
         runtime: Runtime,
-        digest: &str,
-    ) -> Result<Option<String>, Error> {
+        digest: &Digest,
+    ) -> Result<Option<Target>, Error> {
         match runtime {
             Runtime::Podman => {
                 let output = run_output(
                     "podman",
-                    &["image", "inspect", "--format", "{{.Id}}", digest],
+                    &["image", "inspect", "--format", "{{.Id}}", digest.as_str()],
                 )?;
-                Ok(output.status.success().then(|| digest.to_owned()))
+                Ok(output
+                    .status
+                    .success()
+                    .then(|| Target::Digest(digest.clone())))
             }
             Runtime::Container => darwin_image_for_digest(digest),
         }
     }
 
-    fn tag(&mut self, runtime: Runtime, source: &str, target: &str) -> Result<(), Error> {
+    fn tag(&mut self, runtime: Runtime, source: &Target, target: &ImageRef) -> Result<(), Error> {
+        let source = source.as_str();
+        let target = target.as_str();
         let (program, output) = match runtime {
             Runtime::Podman => ("podman", run_output("podman", &["tag", source, target])?),
             Runtime::Container => (
@@ -816,26 +896,8 @@ impl Store for CommandStore {
         })
     }
 
-    fn linux_store_ref(&mut self, image_ref: &str) -> Result<String, Error> {
-        let mut store_ref = format!("containers-storage:{image_ref}");
-        if let Ok(output) = run_output(
-            "podman",
-            &[
-                "info",
-                "--format",
-                "{{.Store.GraphDriverName}}@{{.Store.GraphRoot}}+{{.Store.RunRoot}}",
-            ],
-        ) && output.status.success()
-        {
-            let spec = trim_stdout(&output.stdout);
-            if spec.contains('@') && spec.contains('+') {
-                store_ref = format!("containers-storage:[{spec}]{image_ref}");
-            }
-        }
-        Ok(store_ref)
-    }
-
-    fn copy_oci_layout(&mut self, source: &OciSource, destination: &str) -> Result<(), Error> {
+    fn copy_oci_layout(&mut self, source: &OciSource, destination: &ImageRef) -> Result<(), Error> {
+        let destination = linux_store_ref(destination);
         run_required(
             "skopeo",
             &[
@@ -843,25 +905,26 @@ impl Store for CommandStore {
                 "copy",
                 "--quiet",
                 &format!("oci:{}:{}", source.layout, source.reference),
-                destination,
+                &destination,
             ],
         )
     }
 
-    fn copy_docker_archive(&mut self, archive: &str, destination: &str) -> Result<(), Error> {
+    fn copy_docker_archive(&mut self, archive: &Path, destination: &ImageRef) -> Result<(), Error> {
+        let destination = linux_store_ref(destination);
         run_required(
             "skopeo",
             &[
                 "--insecure-policy",
                 "copy",
                 "--quiet",
-                &format!("docker-archive:{archive}"),
-                destination,
+                &format!("docker-archive:{}", archive.display()),
+                &destination,
             ],
         )
     }
 
-    fn load_docker_archive(&mut self, archive: &str) -> Result<Option<String>, Error> {
+    fn load_docker_archive(&mut self, archive: &Path) -> Result<Option<ImageRef>, Error> {
         let temp_dir = create_temp_dir("wrix-image")?;
         let result = load_container_archive(archive, &temp_dir);
         match (result, fs::remove_dir_all(&temp_dir)) {
@@ -876,30 +939,36 @@ impl Store for CommandStore {
         }
     }
 
-    fn docker_archive_config_digest(&mut self, archive: &str) -> Result<Option<String>, Error> {
+    fn docker_archive_config_digest(&mut self, archive: &Path) -> Result<Option<Digest>, Error> {
         let output = run_required_output(
             "skopeo",
-            &["inspect", "--raw", &format!("docker-archive:{archive}")],
+            &[
+                "inspect",
+                "--raw",
+                &format!("docker-archive:{}", archive.display()),
+            ],
         )?;
         let value = serde_json::from_slice::<Value>(&output.stdout)
             .map_err(|source| Error::DescriptorJson { source })?;
-        Ok(value
+        value
             .pointer("/config/digest")
             .and_then(Value::as_str)
-            .and_then(normalized_value))
+            .and_then(normalized_value)
+            .map(|value| Digest::parse(&value).map_err(Error::from))
+            .transpose()
     }
 
-    fn image_rows(&mut self, runtime: Runtime) -> Result<Vec<String>, Error> {
+    fn image_rows(&mut self, runtime: Runtime) -> Result<Vec<ImageRow>, Error> {
         match runtime {
             Runtime::Podman => {
                 let output = run_required_output(
                     "podman",
                     &["images", "--format", "{{.Repository}} {{.Tag}} {{.ID}}"],
                 )?;
-                Ok(String::from_utf8_lossy(&output.stdout)
+                String::from_utf8_lossy(&output.stdout)
                     .lines()
-                    .map(ToOwned::to_owned)
-                    .collect())
+                    .filter_map(|line| image_row_from_line(runtime, line).transpose())
+                    .collect()
             }
             Runtime::Container => {
                 let output =
@@ -909,22 +978,26 @@ impl Store for CommandStore {
         }
     }
 
-    fn image_id(&mut self, runtime: Runtime, target: &str) -> Result<Option<String>, Error> {
-        inspect_value(runtime, target, InspectField::Id)
+    fn image_id(&mut self, runtime: Runtime, target: &Target) -> Result<Option<ImageId>, Error> {
+        inspect_value(runtime, target, InspectField::Id)?
+            .map(|value| ImageId::parse(&value).map_err(Error::from))
+            .transpose()
     }
 
-    fn image_digest(&mut self, runtime: Runtime, target: &str) -> Result<Option<String>, Error> {
-        inspect_value(runtime, target, InspectField::Digest)
+    fn image_digest(&mut self, runtime: Runtime, target: &Target) -> Result<Option<Digest>, Error> {
+        inspect_value(runtime, target, InspectField::Digest)?
+            .map(|value| Digest::parse(&value).map_err(Error::from))
+            .transpose()
     }
 
-    fn image_managed(&mut self, runtime: Runtime, target: &str) -> Result<bool, Error> {
+    fn image_managed(&mut self, runtime: Runtime, target: &Target) -> Result<bool, Error> {
         Ok(inspect_value(runtime, target, InspectField::Managed)?.as_deref() == Some("true"))
     }
 
-    fn image_in_use(&mut self, runtime: Runtime, target: &str) -> Result<bool, Error> {
+    fn image_in_use(&mut self, runtime: Runtime, target: &Target) -> Result<bool, Error> {
         match runtime {
             Runtime::Podman => {
-                let filter = format!("ancestor={target}");
+                let filter = format!("ancestor={}", target.as_str());
                 let output = run_required_output(
                     "podman",
                     &["ps", "-a", "--filter", &filter, "--format", "{{.Names}}"],
@@ -932,15 +1005,16 @@ impl Store for CommandStore {
                 Ok(!trim_stdout(&output.stdout).is_empty())
             }
             Runtime::Container => {
-                let id = inspect_value(runtime, target, InspectField::Id)?;
+                let id = self.image_id(runtime, target)?;
                 let output =
                     run_required_output("container", &["list", "--all", "--format", "json"])?;
-                container_image_in_use(&output.stdout, target, id.as_deref())
+                container_image_in_use(&output.stdout, target, id.as_ref())
             }
         }
     }
 
-    fn delete_image(&mut self, runtime: Runtime, target: &str) -> Result<(), Error> {
+    fn delete_image(&mut self, runtime: Runtime, target: &Target) -> Result<(), Error> {
+        let target = target.as_str();
         let (program, output) = match runtime {
             Runtime::Podman => ("podman", run_output("podman", &["rmi", target])?),
             Runtime::Container => (
@@ -958,6 +1032,28 @@ impl Store for CommandStore {
     }
 }
 
+fn linux_store_ref(image_ref: &ImageRef) -> String {
+    // Store discovery is optional: containers-storage resolves its configured default
+    // when Podman cannot supply explicit graph/run roots.
+    let image_ref = image_ref.as_str();
+    let mut store_ref = format!("containers-storage:{image_ref}");
+    if let Ok(output) = run_output(
+        "podman",
+        &[
+            "info",
+            "--format",
+            "{{.Store.GraphDriverName}}@{{.Store.GraphRoot}}+{{.Store.RunRoot}}",
+        ],
+    ) && output.status.success()
+    {
+        let spec = trim_stdout(&output.stdout);
+        if spec.contains('@') && spec.contains('+') {
+            store_ref = format!("containers-storage:[{spec}]{image_ref}");
+        }
+    }
+    store_ref
+}
+
 #[derive(Clone, Copy)]
 enum InspectField {
     Id,
@@ -967,12 +1063,10 @@ enum InspectField {
 
 fn inspect_value(
     runtime: Runtime,
-    target: &str,
+    target: &Target,
     field: InspectField,
 ) -> Result<Option<String>, Error> {
-    if target.is_empty() {
-        return Ok(None);
-    }
+    let target = target.as_str();
     let output = match runtime {
         Runtime::Podman => {
             let format = match field {
@@ -1023,33 +1117,46 @@ fn container_variant_label<'a>(image: &'a Value, label: &str) -> Option<&'a Valu
         })
 }
 
-fn container_image_rows(stdout: &[u8]) -> Result<Vec<String>, Error> {
+fn container_image_rows(stdout: &[u8]) -> Result<Vec<ImageRow>, Error> {
     let value = serde_json::from_slice::<Value>(stdout)
         .map_err(|source| Error::DescriptorJson { source })?;
-    Ok(value
+    value
         .as_array()
         .into_iter()
         .flatten()
-        .filter_map(container_image_row)
-        .collect())
+        .filter_map(|image| container_image_row(image).transpose())
+        .collect()
 }
 
-fn container_image_row(image: &Value) -> Option<String> {
-    let name = image.pointer("/configuration/name")?.as_str()?;
+fn container_image_row(image: &Value) -> Result<Option<ImageRow>, Error> {
+    let Some(name) = image.pointer("/configuration/name").and_then(Value::as_str) else {
+        return Ok(None);
+    };
     let name = name.strip_prefix("docker.io/library/").unwrap_or(name);
-    let id = image.pointer("/id")?.as_str()?;
-    if name.starts_with("untagged@sha256:") {
-        return Some(format!("{name} <none> {id}"));
-    }
-    let (repository, tag) = name.rsplit_once(':').unwrap_or((name, "latest"));
-    Some(format!("{repository} {tag} {id}"))
+    let Some(id) = image.pointer("/id").and_then(Value::as_str) else {
+        return Ok(None);
+    };
+    let reference = if name.starts_with("untagged@sha256:") || name.contains(':') {
+        ImageRef::parse(name)?
+    } else {
+        ImageRef::parse(&format!("{name}:latest"))?
+    };
+    Ok(Some(ImageRow {
+        target: Target::Reference(reference),
+        id: Some(ImageId::parse(id)?),
+    }))
 }
 
-fn container_image_in_use(stdout: &[u8], target: &str, id: Option<&str>) -> Result<bool, Error> {
+fn container_image_in_use(
+    stdout: &[u8],
+    target: &Target,
+    id: Option<&ImageId>,
+) -> Result<bool, Error> {
     let value = serde_json::from_slice::<Value>(stdout)
         .map_err(|source| Error::DescriptorJson { source })?;
+    let target = target.as_str();
     let target = target.strip_prefix("docker.io/library/").unwrap_or(target);
-    let id = id.map(|value| value.trim_start_matches("sha256:"));
+    let id = id.map(|value| value.as_str().trim_start_matches("sha256:"));
     Ok(value.as_array().into_iter().flatten().any(|container| {
         let reference = container
             .pointer("/configuration/image/reference")
@@ -1067,44 +1174,67 @@ fn container_image_in_use(stdout: &[u8], target: &str, id: Option<&str>) -> Resu
     }))
 }
 
-fn darwin_image_for_digest(digest: &str) -> Result<Option<String>, Error> {
+fn darwin_image_for_digest(digest: &Digest) -> Result<Option<Target>, Error> {
     let output = run_output("container", &["image", "list"])?;
     if !output.status.success() {
         return Ok(None);
     }
     let text = String::from_utf8_lossy(&output.stdout);
     for line in text.lines().skip(1) {
-        let Some(reference) = container_reference_from_line(line) else {
+        let Some(reference) = container_reference_from_line(line)? else {
             continue;
         };
-        let inspect = run_output("container", &["image", "inspect", &reference])?;
+        let inspect = run_output("container", &["image", "inspect", reference.as_str()])?;
         if !inspect.status.success() {
             continue;
         }
         let value = serde_json::from_slice::<Value>(&inspect.stdout)
             .map_err(|source| Error::DescriptorJson { source })?;
-        let Some(actual) = value
-            .pointer("/0/digest")
-            .or_else(|| value.pointer("/0/id"))
-            .and_then(Value::as_str)
-        else {
-            continue;
-        };
-        if actual.trim_start_matches("sha256:") == digest.trim_start_matches("sha256:") {
-            return Ok(Some(reference));
+        if container_content_digest(&value)?.as_ref() == Some(digest) {
+            return Ok(Some(Target::Reference(reference)));
         }
     }
     Ok(None)
 }
 
-fn container_reference_from_line(line: &str) -> Option<String> {
-    let mut fields = line.split_whitespace();
-    let repo = fields.next()?;
-    if repo.eq_ignore_ascii_case("repository") {
-        return None;
+fn container_content_digest(value: &Value) -> Result<Option<Digest>, Error> {
+    if let Some(actual) = value.pointer("/0/digest").and_then(Value::as_str) {
+        let normalized = format!(
+            "sha256:{}",
+            actual.strip_prefix("sha256:").unwrap_or(actual)
+        );
+        return Ok(Some(Digest::parse(&normalized)?));
     }
-    let tag = fields.next()?;
-    Some(format!("{repo}:{tag}"))
+    let Some(id) = value.pointer("/0/id").and_then(Value::as_str) else {
+        return Ok(None);
+    };
+    let id = ImageId::parse(id)?;
+    let value = id.as_str();
+    if value.starts_with("sha256:") {
+        Ok(Some(Digest::parse(value)?))
+    } else if value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Ok(Some(Digest::parse(&format!("sha256:{value}"))?))
+    } else {
+        // Opaque runtime IDs are valid, but are not content-digest evidence.
+        Ok(None)
+    }
+}
+
+fn container_reference_from_line(line: &str) -> Result<Option<ImageRef>, Error> {
+    let mut fields = line.split_whitespace();
+    let Some(repo) = fields.next() else {
+        return Ok(None);
+    };
+    if repo.eq_ignore_ascii_case("repository") {
+        return Ok(None);
+    }
+    let Some(tag) = fields.next() else {
+        return Ok(None);
+    };
+    if tag == "<none>" && repo.starts_with("untagged@sha256:") {
+        return Ok(Some(ImageRef::parse(repo)?));
+    }
+    Ok(Some(ImageRef::parse(&format!("{repo}:{tag}"))?))
 }
 
 fn create_temp_dir(prefix: &str) -> Result<PathBuf, Error> {
@@ -1123,9 +1253,9 @@ fn create_temp_dir(prefix: &str) -> Result<PathBuf, Error> {
     .into())
 }
 
-fn load_container_archive(archive: &str, temp_dir: &Path) -> Result<Option<String>, Error> {
+fn load_container_archive(archive: &Path, temp_dir: &Path) -> Result<Option<ImageRef>, Error> {
     let oci_archive = temp_dir.join("image.oci");
-    let source = format!("docker-archive:{archive}");
+    let source = format!("docker-archive:{}", archive.display());
     let destination = format!("oci-archive:{}", oci_archive.display());
     run_required(
         "skopeo",
@@ -1146,10 +1276,10 @@ fn load_container_archive(archive: &str, temp_dir: &Path) -> Result<Option<Strin
             &oci_archive.display().to_string(),
         ],
     )?;
-    Ok(loaded_container_ref(&output.stdout, &output.stderr))
+    loaded_container_ref(&output.stdout, &output.stderr)
 }
 
-fn loaded_container_ref(stdout: &[u8], stderr: &[u8]) -> Option<String> {
+fn loaded_container_ref(stdout: &[u8], stderr: &[u8]) -> Result<Option<ImageRef>, Error> {
     let text = format!(
         "{}\n{}",
         String::from_utf8_lossy(stdout),
@@ -1157,18 +1287,11 @@ fn loaded_container_ref(stdout: &[u8], stderr: &[u8]) -> Option<String> {
     );
     for token in text.split_whitespace() {
         let token = token.trim_matches(|ch| matches!(ch, '"' | '\'' | ',' | ';'));
-        let Some(rest) = token.strip_prefix("untagged@sha256:") else {
-            continue;
-        };
-        let digest = rest
-            .chars()
-            .take_while(char::is_ascii_hexdigit)
-            .collect::<String>();
-        if !digest.is_empty() {
-            return Some(format!("untagged@sha256:{digest}"));
+        if token.starts_with("untagged@sha256:") {
+            return Ok(Some(ImageRef::parse(token)?));
         }
     }
-    None
+    Ok(None)
 }
 
 fn run_required(program: &str, args: &[&str]) -> Result<(), Error> {
@@ -1216,8 +1339,8 @@ mod test {
     use serde_json::json;
 
     use super::{
-        InspectField, Runtime, container_image_in_use, container_image_rows,
-        inspect_container_value, listed_image_identity, loaded_container_ref,
+        ImageId, ImageRef, InspectField, Runtime, Target, container_image_in_use,
+        container_image_rows, image_row_from_line, inspect_container_value, loaded_container_ref,
     };
 
     #[test]
@@ -1256,17 +1379,122 @@ mod test {
     }
 
     #[test]
-    fn apple_load_output_parser_extracts_untagged_ref() {
-        let output = b"loading\nLoaded: untagged@sha256:abcdef0123456789, done\n";
+    fn apple_content_digest_accepts_prefixed_bare_and_id_fallback_variants() {
+        let hex = "a".repeat(64);
+        let expected = super::Digest::parse(&format!("sha256:{hex}")).unwrap();
+        for value in [
+            json!([{"digest":expected}]),
+            json!([{"digest":hex}]),
+            json!([{"id":expected}]),
+            json!([{"digest":null,"id":hex}]),
+        ] {
+            assert_eq!(
+                super::container_content_digest(&value).unwrap().as_ref(),
+                Some(&expected)
+            );
+        }
+        assert!(
+            super::container_content_digest(&json!([{"id":"opaque-image-id"}]))
+                .unwrap()
+                .is_none()
+        );
+        assert!(super::container_content_digest(&json!([{"digest":"sha256:short"}])).is_err());
+    }
 
+    #[test]
+    fn podman_rows_parse_typed_references_ids_and_absent_fields() {
+        let row = image_row_from_line(Runtime::Podman, "localhost/wrix-test old image-id")
+            .unwrap()
+            .unwrap();
         assert_eq!(
-            loaded_container_ref(output, b""),
-            Some(String::from("untagged@sha256:abcdef0123456789"))
+            row.target,
+            Target::Reference(ImageRef::parse("localhost/wrix-test:old").unwrap())
+        );
+        assert_eq!(row.id, Some(ImageId::parse("image-id").unwrap()));
+        let named_repository = image_row_from_line(Runtime::Podman, "repository latest image-id")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            named_repository.target,
+            Target::Reference(ImageRef::parse("repository:latest").unwrap())
+        );
+        let dangling = image_row_from_line(Runtime::Podman, "<none> <none> dangling-id")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            dangling.target,
+            Target::Id(ImageId::parse("dangling-id").unwrap())
+        );
+        assert!(
+            image_row_from_line(Runtime::Podman, "<none> <none> <none>")
+                .unwrap()
+                .is_none()
+        );
+        for value in ["--all", "<none>", "id\0suffix", "id with space", "id/path"] {
+            assert!(ImageId::parse(value).is_err(), "accepted {value:?}");
+        }
+        assert!(image_row_from_line(Runtime::Podman, "<none> <none> --all").is_err());
+        assert!(image_row_from_line(Runtime::Podman, "--all latest image-id").is_err());
+    }
+
+    #[test]
+    fn installation_constructor_rejects_contradictory_sources() {
+        use super::{InstallRequest, Source, SourceKind};
+        assert!(Source::parse("", SourceKind::NixDescriptor).is_err());
+        assert!(Source::parse("/image\0", SourceKind::DockerArchive).is_err());
+        let reference = ImageRef::parse("wrix-test:latest").unwrap();
+        let descriptor = Source::parse("/not-yet-realized", SourceKind::NixDescriptor).unwrap();
+        assert!(InstallRequest::new(Runtime::Container, &reference, &descriptor, None).is_err());
+        assert!(InstallRequest::new(Runtime::Podman, &reference, &descriptor, None).is_ok());
+        let archive = Source::parse("/not-yet-realized", SourceKind::DockerArchive).unwrap();
+        for runtime in [Runtime::Podman, Runtime::Container] {
+            assert!(InstallRequest::new(runtime, &reference, &archive, None).is_ok());
+        }
+    }
+
+    #[test]
+    fn mru_round_trips_typed_identifiers_and_accepts_legacy_empty_fields() {
+        let value = json!({"ref":"localhost/wrix-test:old", "id":"sha256:image-id", "digest": format!("sha256:{}", "c".repeat(64))});
+        let record: super::Record = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(record).unwrap(), value);
+        let record: super::Record =
+            serde_json::from_value(json!({"ref":"", "id":"<none>", "digest":"null"})).unwrap();
+        assert!(record.ref_name.is_none() && record.id.is_none() && record.digest.is_none());
+    }
+
+    #[test]
+    fn latest_tag_preserves_repository_without_corrupting_digest_references() {
+        let reference = ImageRef::parse(&format!(
+            "localhost:5000/wrix-test:old@sha256:{}",
+            "f".repeat(64)
+        ))
+        .unwrap();
+        assert_eq!(
+            reference.latest_tag(),
+            Some(ImageRef::parse("localhost:5000/wrix-test:latest").unwrap())
+        );
+        assert!(
+            ImageRef::parse("localhost:5000/wrix-test")
+                .unwrap()
+                .latest_tag()
+                .is_none()
         );
     }
 
     #[test]
+    fn apple_load_output_parser_extracts_untagged_ref() {
+        let reference = format!("untagged@sha256:{}", "a".repeat(64));
+        let output = format!("loading\nLoaded: {reference}, done\n");
+        assert_eq!(
+            loaded_container_ref(output.as_bytes(), b"").expect("parse load output"),
+            Some(ImageRef::parse(&reference).expect("valid reference"))
+        );
+        assert!(loaded_container_ref(b"Loaded: untagged@sha256:short", b"").is_err());
+    }
+
+    #[test]
     fn apple_image_list_parser_preserves_full_untagged_reference() {
+        let reference = format!("untagged@sha256:{}", "a".repeat(64));
         let output = serde_json::to_vec(&json!([
             {
                 "configuration": {
@@ -1276,19 +1504,30 @@ mod test {
             },
             {
                 "configuration": {
-                    "name": "untagged@sha256:full-manifest-digest"
+                    "name": reference
                 },
                 "id": "untagged-index-digest"
             }
         ]))
         .expect("serialize image list fixture");
 
+        let rows = container_image_rows(&output).expect("parse image list");
+        assert_eq!(rows.len(), 2);
         assert_eq!(
-            container_image_rows(&output).expect("parse image list"),
-            vec![
-                String::from("wrix-rust abc123 named-index-digest"),
-                String::from("untagged@sha256:full-manifest-digest <none> untagged-index-digest"),
-            ]
+            rows[0].target,
+            Target::Reference(ImageRef::parse("wrix-rust:abc123").expect("valid reference"))
+        );
+        assert_eq!(
+            rows[0].id,
+            Some(ImageId::parse("named-index-digest").expect("valid ID"))
+        );
+        assert_eq!(
+            rows[1].target,
+            Target::Reference(ImageRef::parse(&reference).expect("valid reference"))
+        );
+        assert_eq!(
+            rows[1].id,
+            Some(ImageId::parse("untagged-index-digest").expect("valid ID"))
         );
     }
 
@@ -1315,18 +1554,20 @@ mod test {
 
     #[test]
     fn apple_untagged_row_uses_full_reference_as_cleanup_target() {
-        let (ref_name, target) = listed_image_identity(
+        let reference = format!("untagged@sha256:{}", "b".repeat(64));
+        let row = image_row_from_line(
             Runtime::Container,
-            "untagged@sha256:full-manifest-digest",
-            "<none>",
-            "untagged-index-digest",
+            &format!("{reference} <none> untagged-index-digest"),
         )
-        .expect("parse listed image identity");
-
-        assert!(ref_name.is_none());
+        .expect("parse listed image identity")
+        .expect("image row");
         assert_eq!(
-            target.as_deref(),
-            Some("untagged@sha256:full-manifest-digest")
+            row.target,
+            Target::Reference(ImageRef::parse(&reference).expect("valid reference"))
+        );
+        assert_eq!(
+            row.id,
+            Some(ImageId::parse("untagged-index-digest").expect("valid ID"))
         );
     }
 
@@ -1347,18 +1588,31 @@ mod test {
         assert!(
             container_image_in_use(
                 &output,
-                "untagged@sha256:manifest-digest",
-                Some("index-digest")
+                &Target::Reference(
+                    ImageRef::parse(&format!("untagged@sha256:{}", "a".repeat(64)))
+                        .expect("valid reference")
+                ),
+                Some(&ImageId::parse("index-digest").expect("valid ID"))
             )
             .expect("parse container list")
         );
         assert!(
-            container_image_in_use(&output, "wrix-service:abc123", None)
-                .expect("parse container list")
+            container_image_in_use(
+                &output,
+                &Target::Reference(
+                    ImageRef::parse("wrix-service:abc123").expect("valid reference")
+                ),
+                None
+            )
+            .expect("parse container list")
         );
         assert!(
-            !container_image_in_use(&output, "wrix-service:stale", Some("stale-index"))
-                .expect("parse container list")
+            !container_image_in_use(
+                &output,
+                &Target::Reference(ImageRef::parse("wrix-service:stale").expect("valid reference")),
+                Some(&ImageId::parse("stale-index").expect("valid ID"))
+            )
+            .expect("parse container list")
         );
     }
 }

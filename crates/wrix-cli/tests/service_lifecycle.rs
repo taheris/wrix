@@ -31,6 +31,29 @@ esac
 cat "${WRIX_TEST_RUNTIME_JSON:?}"
 "#;
 
+#[test]
+fn malformed_sync_branch_fails_before_service_runtime_or_layout() -> TestResult {
+    let fixture = Fixture::new()?;
+    let state_root = fixture.state_root()?;
+    let before = fs::read(state_root.join("services.json"))?;
+    fs::write(
+        fixture.workspace.join(".beads/config.yaml"),
+        "sync-branch: [\n",
+    )?;
+    let output = fixture.run("start")?;
+    assert!(!output.status.success());
+    assert!(
+        output.stderr.contains("invalid beads configuration"),
+        "{}",
+        output.stderr
+    );
+    assert!(!fixture.root.path().join("runtime.log").exists());
+    assert!(!state_root.join("service.lock").exists());
+    assert!(!state_root.join("gcroots").exists());
+    assert_eq!(fs::read(state_root.join("services.json"))?, before);
+    Ok(())
+}
+
 struct Fixture {
     root: tempfile::TempDir,
     workspace: PathBuf,

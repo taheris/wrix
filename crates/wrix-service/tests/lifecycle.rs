@@ -173,7 +173,10 @@ fn default_dolt_transport_matches_current_platform() -> TestResult {
     if cfg!(target_os = "macos") {
         assert_eq!(endpoint.transport(), DoltTransport::Tcp);
         assert_eq!(endpoint.tcp_host(), Some("127.0.0.1"));
-        assert!(matches!(endpoint.tcp_port(), Some(23_000..=24_999)));
+        assert!(matches!(
+            endpoint.tcp_port().map(std::num::NonZeroU16::get),
+            Some(23_000..=24_999)
+        ));
         assert!(services.contains("\"transport\": \"tcp\""));
         assert!(services.contains("BEADS_DOLT_SERVER_HOST"));
         assert!(services.contains("BEADS_DOLT_SERVER_PORT"));

@@ -17,12 +17,13 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 use wrix_core::{
+    cache_key::{CachePublicKey, ParseError as CachePublicKeyParseError},
     deploy_key::{Name as KeyName, ParseError as KeyNameParseError},
     path::Workspace,
 };
 
 use crate::image::{
-    self, CommandStore, Digest, ImageRef, InstallRequest, RetentionRequest, Runtime, SourceKind,
+    self, CommandStore, Digest, ImageRef, InstallRequest, RetentionRequest, Runtime, Source,
 };
 
 use super::config::{
@@ -64,8 +65,11 @@ pub enum LaunchError {
     InvalidCacheHost { host: String },
     /// project cache public key not found: {path}
     MissingCachePublicKey { path: String },
-    /// project cache public key is invalid: {path}
-    InvalidCachePublicKey { path: String },
+    /// project cache public key is invalid: {path}: {source}
+    InvalidCachePublicKey {
+        path: String,
+        source: CachePublicKeyParseError,
+    },
     /// project cache state root must be absolute: {path}
     InvalidCacheStateRoot { path: String },
     /// Dolt endpoint host must be a numeric IPv4 address: {host}
@@ -201,8 +205,7 @@ struct Plan<'a> {
     request: &'a Request,
     workspace: PathBuf,
     image_ref: ImageRef,
-    image_source: String,
-    image_source_kind: SourceKind,
+    image_source: Source,
     image_digest: Option<Digest>,
     stdio: bool,
     agent_args: Vec<String>,
@@ -291,27 +294,18 @@ struct CacheHttpEndpoint {
     port: NonZeroU16,
 }
 
-struct CachePublicKey(String);
-
-impl CachePublicKey {
-    fn read(path: &Path) -> Result<Self, LaunchError> {
-        if !path.is_file() {
-            return Err(LaunchError::MissingCachePublicKey {
-                path: path.display().to_string(),
-            });
-        }
-        let value = fs::read_to_string(path)?;
-        let value = value.trim();
-        let valid_name = value
-            .split_once(':')
-            .is_some_and(|(name, encoded)| !name.is_empty() && encoded.len() == 44);
-        if !valid_name || !value.ends_with('=') {
-            return Err(LaunchError::InvalidCachePublicKey {
-                path: path.display().to_string(),
-            });
-        }
-        Ok(Self(value.to_owned()))
+fn read_cache_public_key(path: &Path) -> Result<CachePublicKey, LaunchError> {
+    if !path.is_file() {
+        return Err(LaunchError::MissingCachePublicKey {
+            path: path.display().to_string(),
+        });
     }
+    CachePublicKey::parse(&fs::read_to_string(path)?).map_err(|source| {
+        LaunchError::InvalidCachePublicKey {
+            path: path.display().to_string(),
+            source,
+        }
+    })
 }
 
 struct BeadsSocket {
@@ -332,8 +326,7 @@ struct HostPodmanSocket {
 
 struct ImageSource {
     ref_name: ImageRef,
-    source: String,
-    kind: SourceKind,
+    source: Source,
     digest: Option<Digest>,
 }
 
@@ -634,7 +627,6 @@ impl<'a> Plan<'a> {
             Kind::Run(_run) => ImageSource {
                 ref_name: profile.image.reference.clone(),
                 source: profile.image.source.clone(),
-                kind: profile.image.source_kind,
                 digest: profile.image.digest.clone(),
             },
             Kind::Spawn(spawn) => {
@@ -643,24 +635,20 @@ impl<'a> Plan<'a> {
                     .image_ref
                     .clone()
                     .unwrap_or_else(|| profile.image.reference.clone());
-                let source = non_empty_override(config.image_source.as_deref())
-                    .unwrap_or(profile.image.source.as_str())
-                    .to_owned();
-                let kind = config
-                    .image_source_kind
-                    .unwrap_or(profile.image.source_kind);
-                let digest = if ref_name == profile.image.reference
-                    && source == profile.image.source
-                    && kind == profile.image.source_kind
-                {
-                    profile.image.digest.clone()
-                } else {
-                    None
-                };
+                let source = config
+                    .image_source
+                    .as_ref()
+                    .unwrap_or(&profile.image.source)
+                    .clone();
+                let digest =
+                    if ref_name == profile.image.reference && source == profile.image.source {
+                        profile.image.digest.clone()
+                    } else {
+                        None
+                    };
                 ImageSource {
                     ref_name,
                     source,
-                    kind,
                     digest,
                 }
             }
@@ -709,7 +697,6 @@ impl<'a> Plan<'a> {
             workspace,
             image_ref: source.ref_name,
             image_source: source.source,
-            image_source_kind: source.kind,
             image_digest: source.digest,
             stdio,
             agent_args,
@@ -1118,13 +1105,12 @@ impl<'a> Plan<'a> {
         let mut store = CommandStore;
         image::install(
             &mut store,
-            &InstallRequest {
+            &InstallRequest::new(
                 runtime,
-                image_ref: self.image_ref.as_str(),
-                image_source: &self.image_source,
-                source_kind: self.image_source_kind,
-                digest: self.image_digest.as_ref(),
-            },
+                &self.image_ref,
+                &self.image_source,
+                self.image_digest.as_ref(),
+            )?,
         )?;
         Ok(())
     }
@@ -1136,9 +1122,8 @@ impl<'a> Plan<'a> {
             &mut store,
             &RetentionRequest {
                 runtime,
-                image_ref: self.image_ref.as_str(),
-                image_source: &self.image_source,
-                source_kind: self.image_source_kind,
+                image_ref: &self.image_ref,
+                source: Some(&self.image_source),
                 digest: self.image_digest.as_ref(),
                 mru_path: &mru_path,
             },
@@ -1377,10 +1362,14 @@ impl<'a> Plan<'a> {
         }
     }
 
-    fn override_source_for_dry_run(&self) -> &str {
+    fn override_source_for_dry_run(&self) -> std::borrow::Cow<'_, str> {
         match &self.request.kind {
-            Kind::Spawn(spawn) => spawn.config.image_source.as_deref().unwrap_or(""),
-            Kind::Run(_) => "",
+            Kind::Spawn(spawn) => spawn
+                .config
+                .image_source
+                .as_ref()
+                .map_or_else(|| "".into(), |source| source.path().to_string_lossy()),
+            Kind::Run(_) => "".into(),
         }
     }
 
@@ -1388,8 +1377,9 @@ impl<'a> Plan<'a> {
         match &self.request.kind {
             Kind::Spawn(spawn) => spawn
                 .config
-                .image_source_kind
-                .map_or("", SourceKind::as_str),
+                .image_source
+                .as_ref()
+                .map_or("", |source| source.kind().as_str()),
             Kind::Run(_) => "",
         }
     }
@@ -1694,12 +1684,12 @@ impl ServicesState {
             });
         }
         let public_key_path = metadata.state_root.join("keys/cache.pub");
-        let public_key = CachePublicKey::read(&public_key_path)?;
+        let public_key = read_cache_public_key(&public_key_path)?;
         let sandbox_host = sandbox_cache_host(endpoint.host)?;
         let url = format!("http://{sandbox_host}:{}", endpoint.port);
         let nix_config = format!(
             "extra-substituters = {url}\nextra-trusted-public-keys = {}\nbuilders-use-substitutes = true",
-            public_key.0
+            public_key.as_str()
         );
         self.project_cache = Some(ProjectCache {
             url,
@@ -2172,10 +2162,6 @@ fn current_uid() -> Result<String, LaunchError> {
 
 fn trim_stdout(stdout: &[u8]) -> String {
     String::from_utf8_lossy(stdout).trim().to_owned()
-}
-
-fn non_empty_override(value: Option<&str>) -> Option<&str> {
-    value.filter(|value| !value.is_empty())
 }
 
 fn mapping_env(
@@ -2661,6 +2647,38 @@ mod test {
         vmnet_interface,
     };
     use crate::command::config::{MountMode, Platform, ProfileMount, SpawnMount};
+
+    #[test]
+    fn launcher_cache_key_reader_rejects_malformed_encoding_and_config_injection() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("cache.pub");
+        assert!(matches!(
+            super::read_cache_public_key(&path),
+            Err(LaunchError::MissingCachePublicKey { .. })
+        ));
+        for key in [
+            "cache:!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!=",
+            "cache:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB=",
+            "cache:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\ntrusted-users = root",
+            "cache\ntrusted-users=root:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        ] {
+            std::fs::write(&path, key).unwrap();
+            assert!(
+                matches!(
+                    super::read_cache_public_key(&path),
+                    Err(LaunchError::InvalidCachePublicKey { .. })
+                ),
+                "accepted {key:?}"
+            );
+        }
+        for key in [
+            "cache:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            "cache:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        ] {
+            std::fs::write(&path, format!("{key}\n")).unwrap();
+            assert_eq!(super::read_cache_public_key(&path).unwrap().as_str(), key);
+        }
+    }
 
     #[test]
     fn path_expansion_keeps_shell_syntax_literal() {

@@ -1,10 +1,70 @@
 use std::{
-    fs, io,
+    fmt, fs, io,
     path::Path,
     process::{Command, Stdio},
 };
 
+use base64::{
+    Engine, alphabet,
+    engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig},
+};
+use displaydoc::Display;
+use thiserror::Error;
+
 const ED25519_PUBLIC_KEY_BYTES: usize = 32;
+const KEY_ENCODING: GeneralPurpose = GeneralPurpose::new(
+    &alphabet::STANDARD,
+    GeneralPurposeConfig::new().with_decode_padding_mode(DecodePaddingMode::Indifferent),
+);
+
+/// A Nix trust-key name and a base64-encoded 32-byte Ed25519 public key.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CachePublicKey(String);
+
+#[derive(Debug, Display, Error)]
+pub enum ParseError {
+    /// cache public key must have a name followed by a colon and an Ed25519 key
+    MissingSeparator,
+    /// cache public key name must contain only ASCII letters, digits, dots, underscores, or hyphens
+    InvalidName,
+    /// invalid cache public key encoding: {source}
+    Encoding { source: base64::DecodeError },
+    /// cache public key must decode to 32 bytes, got {actual}
+    Length { actual: usize },
+}
+
+impl CachePublicKey {
+    pub fn parse(input: &str) -> Result<Self, ParseError> {
+        let text = input.trim();
+        let (name, encoded) = text.split_once(':').ok_or(ParseError::MissingSeparator)?;
+        if name.is_empty()
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        {
+            return Err(ParseError::InvalidName);
+        }
+        let decoded = KEY_ENCODING
+            .decode(encoded)
+            .map_err(|source| ParseError::Encoding { source })?;
+        if decoded.len() != ED25519_PUBLIC_KEY_BYTES {
+            return Err(ParseError::Length {
+                actual: decoded.len(),
+            });
+        }
+        Ok(Self(text.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for CachePublicKey {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
 
 pub fn ensure_keypair(
     key_name: &str,
@@ -12,7 +72,7 @@ pub fn ensure_keypair(
     public_path: &Path,
     nix_store: &str,
 ) -> io::Result<()> {
-    if secret_path.exists() && public_key_file_is_valid(public_path)? {
+    if secret_path.exists() && read_existing_public_key(public_path)?.is_some() {
         return Ok(());
     }
     generate_keypair(key_name, secret_path, public_path, nix_store)
@@ -46,11 +106,11 @@ pub fn generate_keypair(
         )));
     }
     let public = fs::read_to_string(&public_tmp)?;
-    if !public_key_is_valid(&public) {
+    if let Err(error) = CachePublicKey::parse(&public) {
         remove_if_exists(&secret_tmp)?;
         remove_if_exists(&public_tmp)?;
         return Err(io::Error::other(format!(
-            "generated project cache public key is invalid: {}",
+            "generated project cache public key is invalid: {}: {error}",
             public_path.display()
         )));
     }
@@ -58,51 +118,18 @@ pub fn generate_keypair(
     fs::rename(public_tmp, public_path)
 }
 
-pub fn public_key_is_valid(input: &str) -> bool {
-    let trimmed = input.trim();
-    let Some((name, encoded)) = trimmed.split_once(':') else {
-        return false;
-    };
-    !name.is_empty()
-        && !encoded.is_empty()
-        && !encoded.contains(':')
-        && base64_decoded_len(encoded) == Some(ED25519_PUBLIC_KEY_BYTES)
-}
-
-fn public_key_file_is_valid(path: &Path) -> io::Result<bool> {
+fn read_existing_public_key(path: &Path) -> io::Result<Option<CachePublicKey>> {
     match fs::read_to_string(path) {
-        Ok(content) => Ok(public_key_is_valid(&content)),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Ok(content) => match CachePublicKey::parse(&content) {
+            Ok(key) => Ok(Some(key)),
+            Err(error) => {
+                tracing::warn!(path = %path.display(), %error, "regenerating invalid project cache key");
+                Ok(None)
+            }
+        },
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error),
     }
-}
-
-fn base64_decoded_len(input: &str) -> Option<usize> {
-    if input.is_empty() {
-        return None;
-    }
-    let bytes = input.as_bytes();
-    let mut padding = 0_usize;
-    for (index, byte) in bytes.iter().enumerate() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'+' | b'/' if padding == 0 => {}
-            b'=' if index >= bytes.len().saturating_sub(2) => padding += 1,
-            _ => return None,
-        }
-        if padding > 2 {
-            return None;
-        }
-    }
-    let remainder = bytes.len() % 4;
-    if remainder == 1 || (remainder != 0 && padding != 0) {
-        return None;
-    }
-    let inferred_padding = if remainder == 0 {
-        padding
-    } else {
-        4 - remainder
-    };
-    Some(((bytes.len() + (4 - remainder) % 4) / 4) * 3 - inferred_padding)
 }
 
 fn remove_if_exists(path: &Path) -> io::Result<()> {
@@ -114,25 +141,38 @@ fn remove_if_exists(path: &Path) -> io::Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::public_key_is_valid;
+mod test {
+    use super::CachePublicKey;
 
     #[test]
-    fn accepts_nix_public_key_shape() {
-        assert!(public_key_is_valid(
-            "wrix-cache:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
-        ));
+    fn parses_padded_and_unpadded_nix_public_keys() {
+        for value in [
+            "wrix-cache:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            "cache.nixos.org-1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        ] {
+            let key = CachePublicKey::parse(&format!(" {value}\n")).unwrap();
+            assert_eq!(key.as_str(), value);
+            assert_eq!(key.to_string(), value);
+        }
     }
 
     #[test]
-    fn rejects_short_hash_placeholder() {
-        assert!(!public_key_is_valid("wrix-cache:be619e8138e924f7"));
-    }
-
-    #[test]
-    fn rejects_legacy_missing_placeholder() {
-        assert!(!public_key_is_valid(
-            "wrix-cache-990e10b3394addcf:missing-nix-store-public"
-        ));
+    fn rejects_placeholders_malformed_encoding_and_config_injection() {
+        for value in [
+            "wrix-cache:be619e8138e924f7",
+            "wrix-cache-990e10b3394addcf:missing-nix-store-public",
+            ":AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            "cache key:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            "cache\ntrusted-users=root:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            "#cache:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            "cache:!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!=",
+            "cache:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB=",
+            "cache:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+            "cache:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+            "cache:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "cache:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=:extra",
+        ] {
+            assert!(CachePublicKey::parse(value).is_err(), "accepted {value:?}");
+        }
     }
 }

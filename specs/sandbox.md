@@ -262,6 +262,15 @@ Plus consumer-defined fields the entrypoint reads from the original config mount
   [check](test-ci:test-profile-config-wrapper)
 - `ProfileConfig.image` includes `ref`, `source`, explicit `source_kind`, and `digest`; the launcher/runtime installer rejects configs where `source_kind` is missing or incompatible with the selected platform install path
   [check](test-ci:test-profile-config-image-source-kind)
+- Complete `ProfileConfig` parsing rejects malformed fields and duplicate JSON
+  fields before subprocesses, while retaining intentional wire extensibility and
+  platform-specific source semantics
+  [test](../crates/wrix-cli/tests/sandbox_launch.rs::malformed_profile_config_fails_before_subprocesses)
+  [test](../crates/wrix-cli/tests/sandbox_launch.rs::duplicate_profile_config_fields_fail_at_the_json_boundary)
+  [test](../crates/wrix-sandbox/src/command/config.rs::profile_boundary_preserves_extension_fields_and_typed_source_semantics)
+- Image installer construction rejects empty source paths and contradictory
+  runtime/source combinations before store operations
+  [test](../crates/wrix-sandbox/src/image.rs::installation_constructor_rejects_contradictory_sources)
 - The selected agent runtime comes from `ProfileConfig` and cannot be changed by caller env independently of the selected image/profile
   [test](../crates/wrix-sandbox/tests/command.rs::profile_config_agent_cannot_be_overridden_by_env)
 - `wrix spawn --spawn-config <file>` parses the documented `SpawnConfig` fields (`image_ref`, `image_source`, `image_source_kind`, `workspace`, `env`, `agent_args`, `mounts`) into the launch plan
@@ -318,10 +327,17 @@ Plus consumer-defined fields the entrypoint reads from the original config mount
   [test](../crates/wrix-sandbox/tests/image_install.rs::already_loaded_image_performs_no_store_writes)
 - The runtime image cleanup path records a bounded cross-workspace MRU of eight typed wrix image refs/digests/image IDs, preserves images used by Podman containers, prunes wrix-managed images outside the keep set, and does not automatically remove unlabelled `<none>:<none>` images
   [test](../crates/wrix-sandbox/tests/image_retention.rs::cleanup_prunes_only_wrix_managed_images_outside_bounded_keep_set)
+- Image MRU serialization preserves typed refs, digests, and IDs while accepting
+  documented legacy empty fields; runtime listings parse into typed store targets
+  [test](../crates/wrix-sandbox/src/image.rs::mru_round_trips_typed_identifiers_and_accepts_legacy_empty_fields)
+  [test](../crates/wrix-sandbox/src/image.rs::podman_rows_parse_typed_references_ids_and_absent_fields)
 - Concurrent launches update the shared MRU without losing either workspace's record or exposing partially-written JSON
   [test](../crates/wrix-sandbox/tests/image_retention.rs::concurrent_mru_updates_preserve_each_workspace_record)
 - Apple `container list` records are parsed for image references and descriptor IDs so cleanup preserves images used by existing Apple containers
   [test](image::test::apple_container_list_preserves_images_used_by_existing_containers)
+- Apple image digest inspection accepts prefixed digests, bare digests, and
+  content-digest IDs, without treating opaque runtime IDs as digest evidence
+  [test](../crates/wrix-sandbox/src/image.rs::apple_content_digest_accepts_prefixed_bare_and_id_fallback_variants)
 - Runtime MCP selection and tmux audit overrides from the host reach the container launch environment through `WRIX_MCP` and `WRIX_MCP_TMUX_*`
   [test](../crates/wrix-sandbox/tests/launch.rs::runtime_mcp_host_configuration_reaches_entrypoint)
 - Explicit and runtime MCP selection produce the same schema-v1 `WRIX_MCP_MANIFEST` (`name`, `command`, `args`, `env`) for direct, Claude, and Pi images; Claude translates it into `mcpServers`, Pi's Wrix-owned extension discovers and forwards tools over stdio, and direct runners receive the manifest path as their adapter handoff

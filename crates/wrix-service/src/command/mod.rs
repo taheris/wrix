@@ -162,17 +162,16 @@ pub fn run_dolt(command: Dolt, stdout: &mut impl Write) -> io::Result<ExitCode> 
 }
 
 fn attach_command(endpoint: &lifecycle::DoltEndpoint) -> String {
-    match endpoint.transport() {
-        DoltTransport::UnixSocket => format!(
-            "dolt sql-client --socket {}",
-            endpoint.socket_path().display()
-        ),
-        DoltTransport::Tcp => format!(
-            "dolt sql-client --host 127.0.0.1 --port {}",
-            endpoint
-                .tcp_port()
-                .map_or_else(|| String::from("<unavailable>"), |port| port.to_string())
-        ),
+    match endpoint {
+        lifecycle::DoltEndpoint::UnixSocket { socket_path } => {
+            format!(
+                "dolt sql-client --socket {}",
+                socket_path.as_path().display()
+            )
+        }
+        lifecycle::DoltEndpoint::Tcp { port, .. } => {
+            format!("dolt sql-client --host 127.0.0.1 --port {port}")
+        }
     }
 }
 

@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeSet,
     fs,
+    path::Path,
     sync::{
         Arc, Barrier,
         atomic::{AtomicUsize, Ordering},
@@ -9,7 +10,10 @@ use std::{
 };
 
 use serde_json::json;
-use wrix_sandbox::image::{self, Digest, OciSource, RetentionRequest, Runtime, SourceKind, Store};
+use wrix_sandbox::image::{
+    self, Digest, ImageId, ImageRef, ImageRow, OciSource, RetentionRequest, Runtime, Source,
+    SourceKind, Store, Target,
+};
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
@@ -54,9 +58,11 @@ fn cleanup_prunes_only_wrix_managed_images_outside_bounded_keep_set() -> TestRes
         &mut store,
         &RetentionRequest {
             runtime: Runtime::Podman,
-            image_ref: "localhost/wrix-current:live",
-            image_source: "digest-from-profile-config",
-            source_kind: SourceKind::NixDescriptor,
+            image_ref: &ImageRef::parse("localhost/wrix-current:live")?,
+            source: Some(&Source::parse(
+                "digest-from-profile-config",
+                SourceKind::NixDescriptor,
+            )?),
             digest: Some(&digest('c')),
             mru_path: &mru_path,
         },
@@ -124,9 +130,8 @@ fn concurrent_mru_updates_preserve_each_workspace_record() -> TestResult {
                 &mut store,
                 &RetentionRequest {
                     runtime: Runtime::Podman,
-                    image_ref: &image_ref,
-                    image_source: "",
-                    source_kind: SourceKind::NixDescriptor,
+                    image_ref: &ImageRef::parse(&image_ref)?,
+                    source: None,
                     digest: None,
                     mru_path: &path,
                 },
@@ -181,9 +186,8 @@ fn container_cleanup_preserves_images_used_by_apple_containers() -> TestResult {
         &mut store,
         &RetentionRequest {
             runtime: Runtime::Container,
-            image_ref: "wrix-current:live",
-            image_source: "",
-            source_kind: SourceKind::DockerArchive,
+            image_ref: &ImageRef::parse("wrix-current:live")?,
+            source: None,
             digest: None,
             mru_path: &mru_path,
         },
@@ -213,9 +217,8 @@ fn container_cleanup_preserves_unlabelled_wrix_refs() -> TestResult {
         &mut store,
         &RetentionRequest {
             runtime: Runtime::Container,
-            image_ref: "wrix-current:live",
-            image_source: "",
-            source_kind: SourceKind::DockerArchive,
+            image_ref: &ImageRef::parse("wrix-current:live")?,
+            source: None,
             digest: None,
             mru_path: &mru_path,
         },
@@ -240,17 +243,26 @@ fn fake_store_matches_podman_listing_contract() -> TestResult {
     assert_eq!(
         store.image_rows(Runtime::Podman)?,
         vec![
-            String::from("localhost/wrix-test old image-id"),
-            String::from("<none> <none> dangling-id"),
+            ImageRow {
+                target: Target::Reference(ImageRef::parse("localhost/wrix-test:old")?),
+                id: Some(ImageId::parse("image-id")?)
+            },
+            ImageRow {
+                target: Target::Id(ImageId::parse("dangling-id")?),
+                id: Some(ImageId::parse("dangling-id")?)
+            },
         ]
     );
     assert_eq!(
-        store.image_id(Runtime::Podman, "localhost/wrix-test:old")?,
-        Some(String::from("image-id"))
+        store.image_id(
+            Runtime::Podman,
+            &Target::Reference(ImageRef::parse("localhost/wrix-test:old")?)
+        )?,
+        Some(ImageId::parse("image-id")?)
     );
     assert_eq!(
-        store.image_digest(Runtime::Podman, "image-id")?,
-        Some(digest('a').as_str().to_owned())
+        store.image_digest(Runtime::Podman, &Target::Id(ImageId::parse("image-id")?))?,
+        Some(digest('a'))
     );
     Ok(())
 }
@@ -290,16 +302,13 @@ impl FakeImage {
         self
     }
 
-    fn row(&self) -> String {
-        self.ref_name.as_ref().map_or_else(
-            || format!("<none> <none> {}", self.id),
-            |ref_name| {
-                let (repo, tag) = ref_name
-                    .rsplit_once(':')
-                    .map_or((ref_name.as_str(), "latest"), |(repo, tag)| (repo, tag));
-                format!("{repo} {tag} {}", self.id)
-            },
-        )
+    fn row(&self) -> Result<ImageRow, image::Error> {
+        let id = ImageId::parse(&self.id)?;
+        let reference = self.ref_name.as_deref().map(ImageRef::parse).transpose()?;
+        Ok(ImageRow {
+            target: reference.map_or_else(|| Target::Id(id.clone()), Target::Reference),
+            id: Some(id),
+        })
     }
 
     fn matches_target(&self, target: &str) -> bool {
@@ -310,7 +319,7 @@ impl FakeImage {
 #[derive(Default)]
 struct FakeStore {
     images: Vec<FakeImage>,
-    present_digests: BTreeSet<String>,
+    present_digests: BTreeSet<Digest>,
     deleted: Vec<String>,
 }
 
@@ -323,10 +332,10 @@ impl FakeStore {
         }
     }
 
-    fn by_target(&self, target: &str) -> Option<&FakeImage> {
+    fn by_target(&self, target: &Target) -> Option<&FakeImage> {
         self.images
             .iter()
-            .find(|image| image.matches_target(target))
+            .find(|image| image.matches_target(target.as_str()))
     }
 }
 
@@ -334,83 +343,84 @@ impl Store for FakeStore {
     fn image_for_digest(
         &mut self,
         _runtime: Runtime,
-        digest: &str,
-    ) -> Result<Option<String>, image::Error> {
+        digest: &Digest,
+    ) -> Result<Option<Target>, image::Error> {
         Ok(self
             .present_digests
             .contains(digest)
-            .then(|| digest.to_owned()))
+            .then(|| Target::Digest(digest.clone())))
     }
 
-    fn tag(&mut self, _runtime: Runtime, _source: &str, _target: &str) -> Result<(), image::Error> {
+    fn tag(
+        &mut self,
+        _runtime: Runtime,
+        _source: &Target,
+        _target: &ImageRef,
+    ) -> Result<(), image::Error> {
         Ok(())
-    }
-
-    fn linux_store_ref(&mut self, image_ref: &str) -> Result<String, image::Error> {
-        Ok(format!("containers-storage:{image_ref}"))
     }
 
     fn copy_oci_layout(
         &mut self,
         source: &OciSource,
-        _destination: &str,
+        _destination: &ImageRef,
     ) -> Result<(), image::Error> {
-        self.present_digests
-            .insert(source.digest.as_str().to_owned());
+        self.present_digests.insert(source.digest.clone());
         Ok(())
     }
 
     fn copy_docker_archive(
         &mut self,
-        _archive: &str,
-        _destination: &str,
+        _archive: &Path,
+        _destination: &ImageRef,
     ) -> Result<(), image::Error> {
         Ok(())
     }
-
-    fn load_docker_archive(&mut self, _archive: &str) -> Result<Option<String>, image::Error> {
+    fn load_docker_archive(&mut self, _archive: &Path) -> Result<Option<ImageRef>, image::Error> {
         Ok(None)
     }
-
     fn docker_archive_config_digest(
         &mut self,
-        _archive: &str,
-    ) -> Result<Option<String>, image::Error> {
+        _archive: &Path,
+    ) -> Result<Option<Digest>, image::Error> {
         Ok(None)
     }
 
-    fn image_rows(&mut self, _runtime: Runtime) -> Result<Vec<String>, image::Error> {
-        Ok(self.images.iter().map(FakeImage::row).collect())
+    fn image_rows(&mut self, _runtime: Runtime) -> Result<Vec<ImageRow>, image::Error> {
+        self.images.iter().map(FakeImage::row).collect()
     }
 
     fn image_id(
         &mut self,
         _runtime: Runtime,
-        target: &str,
-    ) -> Result<Option<String>, image::Error> {
-        Ok(self.by_target(target).map(|image| image.id.clone()))
+        target: &Target,
+    ) -> Result<Option<ImageId>, image::Error> {
+        self.by_target(target)
+            .map(|image| ImageId::parse(&image.id).map_err(image::Error::from))
+            .transpose()
     }
 
     fn image_digest(
         &mut self,
         _runtime: Runtime,
-        target: &str,
-    ) -> Result<Option<String>, image::Error> {
-        Ok(self
-            .by_target(target)
-            .and_then(|image| image.digest.clone()))
+        target: &Target,
+    ) -> Result<Option<Digest>, image::Error> {
+        self.by_target(target)
+            .and_then(|image| image.digest.as_deref())
+            .map(|digest| Digest::parse(digest).map_err(image::Error::from))
+            .transpose()
     }
 
-    fn image_managed(&mut self, _runtime: Runtime, target: &str) -> Result<bool, image::Error> {
+    fn image_managed(&mut self, _runtime: Runtime, target: &Target) -> Result<bool, image::Error> {
         Ok(self.by_target(target).is_some_and(|image| image.managed))
     }
 
-    fn image_in_use(&mut self, _runtime: Runtime, target: &str) -> Result<bool, image::Error> {
+    fn image_in_use(&mut self, _runtime: Runtime, target: &Target) -> Result<bool, image::Error> {
         Ok(self.by_target(target).is_some_and(|image| image.in_use))
     }
 
-    fn delete_image(&mut self, _runtime: Runtime, target: &str) -> Result<(), image::Error> {
-        self.deleted.push(target.to_owned());
+    fn delete_image(&mut self, _runtime: Runtime, target: &Target) -> Result<(), image::Error> {
+        self.deleted.push(target.as_str().to_owned());
         Ok(())
     }
 }

@@ -6,6 +6,7 @@ mod supervisor;
 use std::{
     env, fs, io,
     net::{SocketAddr, TcpListener, TcpStream},
+    num::NonZeroU16,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
@@ -20,13 +21,14 @@ use fs2::FileExt;
 use serde::{Deserialize, Deserializer, de};
 use thiserror::Error as ThisError;
 use wrix_core::{
+    beads_config::{ReadError, read_sync_branch},
     cache_key,
-    git::{Branch, ParseError as BranchParseError},
+    git::Branch,
     path::{ContainerName, Workspace, WorkspaceHash},
 };
 use wrix_sandbox::image::{
-    self as runtime_image, CommandStore, Digest, InstallRequest, RetentionRequest,
-    Runtime as ImageRuntime, SourceKind,
+    self as runtime_image, CommandStore, Digest, ImageRef, InstallRequest, RetentionRequest,
+    Runtime as ImageRuntime, Source, SourceKind,
 };
 
 const SCHEMA_VERSION: u8 = 1;
@@ -72,6 +74,8 @@ pub enum Error {
     InvalidUnicodeEnvironment { name: &'static str },
     /// unknown Dolt transport: {value}
     UnknownDoltTransport { value: String },
+    /// Dolt TCP port must be nonzero
+    ZeroDoltPort,
     /// failed to remove stale Dolt socket {path}: {source}
     StaleDoltSocketRemoval { path: String, source: io::Error },
     /// Dolt endpoint {endpoint} did not become ready within {timeout} seconds: {source}
@@ -82,6 +86,10 @@ pub enum Error {
     },
     /// unknown service image source kind: {value}
     UnknownImageSourceKind { value: String },
+    /// invalid service image source: {source}
+    ImageSource {
+        source: runtime_image::SourceParseError,
+    },
     /// invalid service image digest: {value}
     InvalidImageDigest { value: String },
     /// `WRIX_SERVICE_IMAGE_SOURCE_KIND` is required when `WRIX_SERVICE_IMAGE_SOURCE` is set
@@ -105,10 +113,10 @@ pub enum Error {
     AppleJson { source: serde_json::Error },
     /// invalid persisted workspace hash: {value}
     InvalidPersistedWorkspaceHash { value: String },
-    /// invalid beads sync branch: {source}
-    InvalidBeadsSyncBranch {
+    /// {source}
+    BeadsConfig {
         #[from]
-        source: BranchParseError,
+        source: ReadError,
     },
 }
 
@@ -121,6 +129,7 @@ pub enum CacheMode {
 #[derive(Clone, Debug)]
 pub struct Plan {
     workspace: Workspace,
+    beads_sync_branch: Branch,
     paths: Paths,
     container_name: ContainerName,
     cache_port: Option<u16>,
@@ -128,10 +137,28 @@ pub struct Plan {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DoltEndpoint {
-    transport: DoltTransport,
-    socket_path: PathBuf,
-    tcp_port: Option<u16>,
+pub enum DoltEndpoint {
+    UnixSocket {
+        socket_path: DoltSocketPath,
+    },
+    Tcp {
+        socket_path: DoltSocketPath,
+        port: NonZeroU16,
+    },
+}
+
+/// The planned workspace socket, also retained for TCP status diagnostics.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DoltSocketPath(PathBuf);
+
+impl DoltSocketPath {
+    pub fn for_workspace(workspace: &Workspace) -> Self {
+        Self(workspace.canonical_path().join(".wrix/dolt.sock"))
+    }
+
+    pub fn as_path(&self) -> &Path {
+        &self.0
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -175,6 +202,16 @@ impl Plan {
         cache_mode: CacheMode,
         paths: Paths,
     ) -> Result<Self> {
+        let beads_sync_branch = read_sync_branch(workspace.canonical_path())?;
+        Self::from_parsed(workspace, cache_mode, paths, beads_sync_branch)
+    }
+
+    fn from_parsed(
+        workspace: Workspace,
+        cache_mode: CacheMode,
+        paths: Paths,
+        beads_sync_branch: Branch,
+    ) -> Result<Self> {
         let container_name = select_container_name(&workspace, &paths)?;
         let prior_ports = PortLease::read(&paths.services_path())?;
         let cache_port = match cache_mode {
@@ -190,25 +227,25 @@ impl Plan {
         };
         let dolt = if workspace.canonical_path().join(".beads/dolt").is_dir() {
             let transport = DoltTransport::from_env()?;
-            let tcp_port = match transport {
-                DoltTransport::UnixSocket => None,
-                DoltTransport::Tcp => Some(select_port(
-                    prior_ports.dolt_tcp_port,
-                    DOLT_PORT_START,
-                    DOLT_PORT_WIDTH,
-                    workspace.hash(),
-                )?),
-            };
-            Some(DoltEndpoint {
-                transport,
-                socket_path: workspace.canonical_path().join(".wrix/dolt.sock"),
-                tcp_port,
+            let socket_path = DoltSocketPath::for_workspace(&workspace);
+            Some(match transport {
+                DoltTransport::UnixSocket => DoltEndpoint::UnixSocket { socket_path },
+                DoltTransport::Tcp => DoltEndpoint::Tcp {
+                    socket_path,
+                    port: parse_dolt_port(select_port(
+                        prior_ports.dolt_tcp_port,
+                        DOLT_PORT_START,
+                        DOLT_PORT_WIDTH,
+                        workspace.hash(),
+                    )?)?,
+                },
             })
         } else {
             None
         };
         Ok(Self {
             workspace,
+            beads_sync_branch,
             paths,
             container_name,
             cache_port,
@@ -236,7 +273,7 @@ impl Plan {
         self.dolt.as_ref()
     }
 
-    pub fn dolt_port(&self) -> Option<u16> {
+    pub fn dolt_port(&self) -> Option<NonZeroU16> {
         self.dolt.as_ref().and_then(DoltEndpoint::tcp_port)
     }
 
@@ -254,7 +291,7 @@ impl Plan {
             ports.push(port);
         }
         if let Some(port) = self.dolt_port() {
-            ports.push(port);
+            ports.push(port.get());
         }
         ports
     }
@@ -290,15 +327,15 @@ impl Plan {
         self.write_services()
     }
 
-    fn beads_worktree_remote(&self) -> Result<Option<(Branch, PathBuf)>> {
-        let branch = read_beads_sync_branch(self.workspace.canonical_path())?;
+    fn beads_worktree_remote(&self) -> Option<(&Branch, PathBuf)> {
+        let branch = &self.beads_sync_branch;
         let path = self
             .workspace
             .canonical_path()
             .join(".git/beads-worktrees")
             .join(branch.as_str())
             .join(".beads/dolt-remote");
-        Ok(path.is_dir().then_some((branch, path)))
+        path.is_dir().then_some((branch, path))
     }
 
     fn write_services(&self) -> Result<()> {
@@ -356,23 +393,37 @@ impl Plan {
 
 impl DoltEndpoint {
     pub const fn transport(&self) -> DoltTransport {
-        self.transport
+        match self {
+            Self::UnixSocket { .. } => DoltTransport::UnixSocket,
+            Self::Tcp { .. } => DoltTransport::Tcp,
+        }
     }
 
     pub fn socket_path(&self) -> &Path {
-        self.socket_path.as_path()
+        match self {
+            Self::UnixSocket { socket_path } | Self::Tcp { socket_path, .. } => {
+                socket_path.as_path()
+            }
+        }
     }
 
-    pub const fn tcp_port(&self) -> Option<u16> {
-        self.tcp_port
+    pub const fn tcp_port(&self) -> Option<NonZeroU16> {
+        match self {
+            Self::UnixSocket { .. } => None,
+            Self::Tcp { port, .. } => Some(*port),
+        }
     }
 
     pub const fn tcp_host(&self) -> Option<&'static str> {
-        match self.transport {
-            DoltTransport::UnixSocket => None,
-            DoltTransport::Tcp => Some("127.0.0.1"),
+        match self {
+            Self::UnixSocket { .. } => None,
+            Self::Tcp { .. } => Some("127.0.0.1"),
         }
     }
+}
+
+fn parse_dolt_port(port: u16) -> Result<NonZeroU16> {
+    NonZeroU16::new(port).ok_or(Error::ZeroDoltPort)
 }
 
 impl DoltTransport {
@@ -521,7 +572,7 @@ impl Status {
             option_port(self.plan.cache_port()),
             option_transport(self.plan.dolt()),
             option_socket(self.plan.dolt()),
-            option_port(self.plan.dolt_port()),
+            option_port(self.plan.dolt_port().map(NonZeroU16::get)),
             self.runtime
         )
     }
@@ -547,6 +598,7 @@ pub fn start(cache_mode: CacheMode) -> Result<Status> {
 fn locked_plan(cache_mode: CacheMode) -> Result<(Plan, fs::File)> {
     let workspace = Workspace::from_service_current_dir()?;
     let paths = Paths::for_workspace(workspace.hash())?;
+    let branch = read_sync_branch(workspace.canonical_path())?;
     fs::create_dir_all(paths.state_root())?;
     let lock = fs::OpenOptions::new()
         .create(true)
@@ -556,7 +608,7 @@ fn locked_plan(cache_mode: CacheMode) -> Result<(Plan, fs::File)> {
         .open(paths.state_root().join("service.lock"))?;
     lock.lock_exclusive()?;
     Ok((
-        Plan::for_workspace_with_paths(workspace, cache_mode, paths)?,
+        Plan::from_parsed(workspace, cache_mode, paths, branch)?,
         lock,
     ))
 }
@@ -604,7 +656,7 @@ pub fn sandbox_dolt_endpoint(cache_mode: CacheMode) -> Result<String> {
             (snapshot.ipv4_address().ok_or_else(unavailable)?, 3306)
         }
         RuntimeKind::Podman if cfg!(target_os = "linux") => {
-            (std::net::Ipv4Addr::new(169, 254, 1, 2), port)
+            (std::net::Ipv4Addr::new(169, 254, 1, 2), port.get())
         }
         RuntimeKind::Podman => return Err(unavailable()),
     };
@@ -810,8 +862,7 @@ enum RuntimeKind {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ImageSource {
-    path: PathBuf,
-    kind: SourceKind,
+    source: Source,
     digest: Option<Digest>,
 }
 
@@ -827,7 +878,7 @@ struct ContainerInfo {
 struct Runtime {
     binary: String,
     kind: RuntimeKind,
-    image: String,
+    image: ImageRef,
     image_source: Option<ImageSource>,
 }
 
@@ -891,7 +942,10 @@ impl ImageSource {
                 });
             }
         };
-        Ok(Self { path, kind, digest })
+        Ok(Self {
+            source: Source::parse(path, kind).map_err(|source| Error::ImageSource { source })?,
+            digest,
+        })
     }
 }
 
@@ -939,8 +993,13 @@ impl Runtime {
         Ok(Self {
             kind: RuntimeKind::for_binary(&binary),
             binary,
-            image: env::var("WRIX_SERVICE_IMAGE")
-                .unwrap_or_else(|_| String::from("localhost/wrix-service:latest")),
+            image: ImageRef::parse(
+                &env::var("WRIX_SERVICE_IMAGE")
+                    .unwrap_or_else(|_| String::from("localhost/wrix-service:latest")),
+            )
+            .map_err(|source| Error::Image {
+                source: source.into(),
+            })?,
             image_source,
         })
     }
@@ -1016,7 +1075,7 @@ impl Runtime {
                     .join(".beads/dolt")
                     .display()
             ));
-            if let Some((branch, remote)) = plan.beads_worktree_remote()? {
+            if let Some((branch, remote)) = plan.beads_worktree_remote() {
                 command
                     .arg("-v")
                     .arg(format!("{}:{}:rw", remote.display(), remote.display()))
@@ -1027,8 +1086,8 @@ impl Runtime {
                         branch.as_str()
                     ));
             }
-            match dolt.transport() {
-                DoltTransport::UnixSocket => {
+            match dolt {
+                DoltEndpoint::UnixSocket { .. } => {
                     remove_stale_socket(dolt.socket_path())?;
                     if self.kind == RuntimeKind::Container {
                         command.arg("--publish-socket").arg(format!(
@@ -1042,15 +1101,13 @@ impl Runtime {
                         ));
                     }
                 }
-                DoltTransport::Tcp => {
-                    if let Some(port) = dolt.tcp_port() {
-                        command.arg("-p").arg(format!("127.0.0.1:{port}:3306"));
-                    }
+                DoltEndpoint::Tcp { port, .. } => {
+                    command.arg("-p").arg(format!("127.0.0.1:{port}:3306"));
                 }
             }
         }
         command
-            .arg(&self.image)
+            .arg(self.image.as_str())
             .arg("sh")
             .arg("-c")
             .arg(container_command(plan))
@@ -1142,15 +1199,15 @@ impl Runtime {
             plan.cache_port =
                 Some(self.select_available_port(plan, CACHE_PORT_START, CACHE_PORT_WIDTH)?);
         }
-        let dolt_port = plan.dolt.as_ref().and_then(|endpoint| endpoint.tcp_port);
+        let dolt_port = plan.dolt_port();
         let replace_dolt_port = match dolt_port {
-            Some(port) => !self.port_available_for_plan(port, plan)?,
+            Some(port) => !self.port_available_for_plan(port.get(), plan)?,
             None => false,
         };
         if replace_dolt_port {
             let port = self.select_available_port(plan, DOLT_PORT_START, DOLT_PORT_WIDTH)?;
-            if let Some(endpoint) = plan.dolt.as_mut() {
-                endpoint.tcp_port = Some(port);
+            if let Some(DoltEndpoint::Tcp { port: selected, .. }) = plan.dolt.as_mut() {
+                *selected = parse_dolt_port(port)?;
             }
         }
         Ok(())
@@ -1372,17 +1429,11 @@ impl Runtime {
             RuntimeKind::Podman => ImageRuntime::Podman,
             RuntimeKind::Container => ImageRuntime::Container,
         };
-        let source_path = source.path.display().to_string();
+        let source_path = source.source.path().display().to_string();
         let mut store = CommandStore;
         runtime_image::install(
             &mut store,
-            &InstallRequest {
-                runtime,
-                image_ref: &self.image,
-                image_source: &source_path,
-                source_kind: source.kind,
-                digest: source.digest.as_ref(),
-            },
+            &InstallRequest::new(runtime, &self.image, &source.source, source.digest.as_ref())?,
         )?;
         let mru_path = runtime_image::default_mru_path();
         runtime_image::remember_and_prune(
@@ -1390,8 +1441,7 @@ impl Runtime {
             &RetentionRequest {
                 runtime,
                 image_ref: &self.image,
-                image_source: &source_path,
-                source_kind: source.kind,
+                source: Some(&source.source),
                 digest: source.digest.as_ref(),
                 mru_path: &mru_path,
             },
@@ -1401,7 +1451,7 @@ impl Runtime {
         } else {
             Err(Error::InstalledImageUnavailable {
                 path: source_path,
-                image: self.image.clone(),
+                image: self.image.as_str().to_owned(),
             })
         }
     }
@@ -1418,7 +1468,7 @@ impl Runtime {
             }
         }
         let status = command
-            .arg(&self.image)
+            .arg(self.image.as_str())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -1712,18 +1762,15 @@ fn wait_for_dolt_plan(plan: &Plan) -> Result<()> {
 }
 
 fn probe_dolt_endpoint(dolt: &DoltEndpoint, deadline: Instant) -> io::Result<()> {
-    match dolt.transport() {
-        DoltTransport::UnixSocket => connect_unix_socket(dolt.socket_path()),
-        DoltTransport::Tcp => {
-            let Some(port) = dolt.tcp_port() else {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "Dolt TCP endpoint has no port",
-                ));
-            };
-            let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    match dolt {
+        DoltEndpoint::UnixSocket { socket_path } => connect_unix_socket(socket_path.as_path()),
+        DoltEndpoint::Tcp { port, .. } => {
+            let addr = SocketAddr::from(([127, 0, 0, 1], port.get()));
             TcpStream::connect_timeout(&addr, DOLT_READY_INTERVAL)?;
-            dolt::probe_tcp(port, deadline.saturating_duration_since(Instant::now()))
+            dolt::probe_tcp(
+                port.get(),
+                deadline.saturating_duration_since(Instant::now()),
+            )
         }
     }
 }
@@ -1742,9 +1789,9 @@ fn connect_unix_socket(_path: &Path) -> io::Result<()> {
 }
 
 fn dolt_endpoint_description(dolt: &DoltEndpoint) -> String {
-    match dolt.transport() {
-        DoltTransport::UnixSocket => dolt.socket_path().display().to_string(),
-        DoltTransport::Tcp => format!("127.0.0.1:{}", option_port_value(dolt.tcp_port())),
+    match dolt {
+        DoltEndpoint::UnixSocket { socket_path } => socket_path.as_path().display().to_string(),
+        DoltEndpoint::Tcp { port, .. } => format!("127.0.0.1:{port}"),
     }
 }
 
@@ -1758,16 +1805,14 @@ fn json_port(port: Option<u16>) -> String {
 fn json_dolt_endpoint(dolt: Option<&DoltEndpoint>) -> String {
     dolt.map_or_else(
         || String::from("null"),
-        |endpoint| match endpoint.transport() {
-            DoltTransport::UnixSocket => format!(
+        |endpoint| match endpoint {
+            DoltEndpoint::UnixSocket { .. } => format!(
                 "{{ \"transport\": \"unix\", \"socket\": \"{}\", \"env\": {{ \"BEADS_DOLT_SERVER_SOCKET\": \"{}\" }} }}",
                 escape_json(&endpoint.socket_path().display().to_string()),
                 escape_json(&endpoint.socket_path().display().to_string())
             ),
-            DoltTransport::Tcp => format!(
-                "{{ \"transport\": \"tcp\", \"host\": \"127.0.0.1\", \"port\": {}, \"env\": {{ \"BEADS_DOLT_SERVER_HOST\": \"127.0.0.1\", \"BEADS_DOLT_SERVER_PORT\": \"{}\" }} }}",
-                option_port_value(endpoint.tcp_port()),
-                option_port_value(endpoint.tcp_port())
+            DoltEndpoint::Tcp { port, .. } => format!(
+                "{{ \"transport\": \"tcp\", \"host\": \"127.0.0.1\", \"port\": {port}, \"env\": {{ \"BEADS_DOLT_SERVER_HOST\": \"127.0.0.1\", \"BEADS_DOLT_SERVER_PORT\": \"{port}\" }} }}"
             ),
         },
     )
@@ -1785,19 +1830,13 @@ fn json_dolt_unix(dolt: Option<&DoltEndpoint>) -> String {
 
 fn json_dolt_tcp(dolt: Option<&DoltEndpoint>) -> String {
     match dolt {
-        Some(endpoint) if endpoint.transport() == DoltTransport::Tcp => {
-            json_port(endpoint.tcp_port())
-        }
+        Some(DoltEndpoint::Tcp { port, .. }) => json_port(Some(port.get())),
         _ => String::from("null"),
     }
 }
 
 fn option_port(port: Option<u16>) -> String {
     port.map_or_else(|| String::from("disabled"), |value| value.to_string())
-}
-
-fn option_port_value(port: Option<u16>) -> String {
-    port.map_or_else(|| String::from("null"), |value| value.to_string())
 }
 
 fn option_transport(dolt: Option<&DoltEndpoint>) -> String {
@@ -1830,21 +1869,6 @@ fn home_dir() -> Result<PathBuf> {
         .ok_or_else(|| Error::Operation {
             message: String::from("HOME is required to resolve wrix service state roots"),
         })
-}
-
-fn read_beads_sync_branch(workspace: &Path) -> Result<Branch> {
-    let config_path = workspace.join(".beads/config.yaml");
-    if !config_path.is_file() {
-        return Ok(Branch::default());
-    }
-    let content = fs::read_to_string(config_path)?;
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("sync-branch:") {
-            return Ok(Branch::parse(rest.trim().trim_matches('"'))?);
-        }
-    }
-    Ok(Branch::default())
 }
 
 fn write_if_missing(path: &Path, content: impl AsRef<[u8]>) -> Result<()> {
@@ -1889,6 +1913,81 @@ mod test {
     };
     use wrix_core::path::Workspace;
     use wrix_sandbox::image::SourceKind;
+
+    #[test]
+    fn service_plan_retains_the_shared_yaml_branch() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join(".beads")).unwrap();
+        let config = root.path().join(".beads/config.yaml");
+        std::fs::write(&config, "sync-branch: \"team\\u002fbeads\" # comment\n").unwrap();
+        let workspace = Workspace::from_path(root.path()).unwrap();
+        let paths = super::Paths::new(root.path().join("state"), root.path().join("cache"));
+        let plan =
+            Plan::for_workspace_with_paths(workspace, super::CacheMode::Disabled, paths).unwrap();
+        assert_eq!(plan.beads_sync_branch.as_str(), "team/beads");
+        let remote = root
+            .path()
+            .join(".git/beads-worktrees/team/beads/.beads/dolt-remote");
+        std::fs::create_dir_all(&remote).unwrap();
+        std::fs::write(config, "sync-branch: [").unwrap();
+        let (branch, path) = plan.beads_worktree_remote().unwrap();
+        assert_eq!(branch.as_str(), "team/beads");
+        assert_eq!(path, remote);
+    }
+
+    #[test]
+    fn service_plan_rejects_invalid_yaml_before_layout_changes() {
+        for content in [
+            "sync-branch: [",
+            "sync-branch: false",
+            "sync-branch: /outside",
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            std::fs::create_dir(root.path().join(".beads")).unwrap();
+            std::fs::write(root.path().join(".beads/config.yaml"), content).unwrap();
+            let paths = super::Paths::new(root.path().join("state"), root.path().join("cache"));
+            let result = Plan::for_workspace_with_paths(
+                Workspace::from_path(root.path()).unwrap(),
+                super::CacheMode::Disabled,
+                paths,
+            );
+            assert!(matches!(result, Err(super::Error::BeadsConfig { .. })));
+            assert!(!root.path().join("state").exists());
+            assert!(!root.path().join("cache").exists());
+        }
+    }
+
+    #[test]
+    fn endpoint_payloads_serialize_without_missing_or_zero_tcp_ports() {
+        use super::{DoltEndpoint, json_dolt_endpoint, parse_dolt_port};
+        assert!(matches!(
+            parse_dolt_port(0),
+            Err(super::Error::ZeroDoltPort)
+        ));
+        let root = tempfile::tempdir().unwrap();
+        let workspace = Workspace::from_path(root.path()).unwrap();
+        let socket_path = super::DoltSocketPath::for_workspace(&workspace);
+        assert!(socket_path.as_path().is_absolute());
+        for port in [1, 3306, u16::MAX] {
+            let endpoint = DoltEndpoint::Tcp {
+                socket_path: socket_path.clone(),
+                port: parse_dolt_port(port).unwrap(),
+            };
+            let value: serde_json::Value =
+                serde_json::from_str(&json_dolt_endpoint(Some(&endpoint))).unwrap();
+            assert_eq!(value["transport"], "tcp");
+            assert_eq!(value["host"], "127.0.0.1");
+            assert_eq!(value["port"], port);
+            assert_eq!(value["env"]["BEADS_DOLT_SERVER_PORT"], port.to_string());
+            assert!(value.get("socket").is_none());
+        }
+        let endpoint = DoltEndpoint::UnixSocket { socket_path };
+        let value: serde_json::Value =
+            serde_json::from_str(&json_dolt_endpoint(Some(&endpoint))).unwrap();
+        assert_eq!(value["transport"], "unix");
+        assert!(value.get("port").is_none());
+        assert_eq!(endpoint.tcp_port(), None);
+    }
 
     #[test]
     fn published_port_parser_extracts_loopback_bindings() {

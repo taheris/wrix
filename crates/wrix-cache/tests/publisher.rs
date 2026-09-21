@@ -581,7 +581,7 @@ fn publisher_child() -> TestResult {
         }
         "status" => publisher::status_at(&state_root, &cache_root)?,
         "auto" => publisher::run_hook_record(
-            workspace.hash().as_str(),
+            workspace.hash(),
             &state_root,
             &cache_root,
             Path::new(&env::var("WRIX_CACHE_TEST_ROOTS_FILE")?),
@@ -907,7 +907,7 @@ case "$1" in
     printf '%s\n' "$count" >"$counter_file"
     encoded='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
     if [[ "$count" != "1" ]]; then
-      encoded='BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB='
+      encoded='BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA='
     fi
     printf '%s-secret-%s\n' "$key_name" "$count" >"$secret_path"
     printf '%s:%s\n' "$key_name" "$encoded" >"$public_path"

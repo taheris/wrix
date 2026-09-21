@@ -662,6 +662,32 @@ fn missing_repo_fails_before_git_sync() -> TestResult {
 }
 
 #[test]
+fn malformed_yaml_sync_branch_is_rejected_before_mutation() -> TestResult {
+    for config in [
+        "sync-branch: [\n",
+        "sync-branch: 123\n",
+        "sync-branch: one\nsync-branch: two\n",
+    ] {
+        let fixture = Fixture::new("invalid-yaml-branch")?;
+        setup_minimal_repo(fixture.repo())?;
+        let path = fixture.repo().join(".beads/config.yaml");
+        fs::write(&path, config)?;
+        let output = invoke_push(fixture.repo(), &[fixture.fake_bin()], |command| {
+            configure_bd(command, &fixture, "success");
+        })?;
+        assert_ne!(output.code, 0, "accepted {config:?}");
+        assert!(
+            output.stderr.contains("invalid beads configuration"),
+            "{}",
+            output.stderr
+        );
+        assert_eq!(fixture.bd_lines()?, Vec::<String>::new());
+        assert_eq!(fs::read_to_string(path)?, config);
+    }
+    Ok(())
+}
+
+#[test]
 fn absolute_sync_branch_is_rejected_before_mutation() -> TestResult {
     let fixture = Fixture::new("absolute-sync-branch")?;
     setup_minimal_repo(fixture.repo())?;
@@ -961,7 +987,7 @@ fn recovers_hierarchical_sync_branch_without_losing_dolt_remote() -> TestResult 
     run_git(fixture.repo(), &["branch", "-m", "beads", "team/beads"])?;
     fs::write(
         fixture.repo().join(".beads/config.yaml"),
-        "sync-branch: \"team/beads\"\n",
+        "sync-branch: \"team\\u002fbeads\" # YAML escapes and inline comments\n",
     )?;
     let worktree = fixture.repo().join(".git/beads-worktrees/team/beads");
     let remote = worktree.join(".beads/dolt-remote");

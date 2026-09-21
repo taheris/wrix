@@ -78,6 +78,22 @@ docs/
 | Notifications | Desktop alerts when the agent waits | `wrix-notify`, `wrix-notifyd` |
 | Linux Builder | Remote Nix builds on macOS | `wrix-builder` |
 
+## Rust Boundary Types
+
+Inputs are parsed by their owning component before orchestration. `wrix-core`
+owns workspace hashes, cache public keys (including decoded Ed25519 key length),
+and the shared YAML reader that produces a relative Git `Branch` for beads and
+service planning. Service plans retain that branch and represent Dolt endpoints
+as Unix/TCP payload variants, with nonzero TCP ports.
+
+The sandbox converts complete raw JSON DTOs into launch configuration, keeping
+intentional extension fields compatible. Image sources pair a nonempty path
+with its format; installer construction selects only supported runtime/source
+combinations. Image-store APIs carry `Digest`, `ImageRef`, `ImageId`, and typed
+lookup targets through preflight, retagging, and retention. Text rendering stays
+at subprocess, logging, and serialization boundaries. Filesystem availability,
+container state, and network readiness remain runtime checks.
+
 ## Sandbox Launcher
 
 The launcher and the OCI image source are separate Nix outputs, composed at the consumer's discretion:

@@ -6,9 +6,8 @@ case "${1:-}" in
   image)
     [[ "${2:-}" == "inspect" ]]
     format="${4:-}"
-    target="${!#}"
     case "$format" in
-      '{{.Id}}') printf '%s\n' "$target" ;;
+      '{{.Id}}') printf 'sha256:%064d\n' 0 ;;
       '{{.Digest}}') printf 'sha256:%064d\n' 0 ;;
       *) printf 'true\n' ;;
     esac

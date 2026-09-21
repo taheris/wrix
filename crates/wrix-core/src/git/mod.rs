@@ -1,6 +1,7 @@
 use std::fmt;
 
 use displaydoc::Display;
+use serde::{Deserialize, Deserializer, de};
 use thiserror::Error as ThisError;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -25,6 +26,24 @@ impl Branch {
 
     pub const fn as_str(&self) -> &str {
         self.0.as_str()
+    }
+}
+
+impl<'de> Deserialize<'de> for Branch {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visitor;
+        impl de::Visitor<'_> for Visitor {
+            type Value = Branch;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a Git branch string")
+            }
+
+            fn visit_str<E: de::Error>(self, value: &str) -> Result<Branch, E> {
+                Branch::parse(value).map_err(E::custom)
+            }
+        }
+        deserializer.deserialize_any(Visitor)
     }
 }
 

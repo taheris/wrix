@@ -239,6 +239,17 @@ upstream, not by this spec.
 
 ## Success Criteria
 
+- Beads and service planning share YAML sync-branch parsing, including quoted
+  strings, escapes, comments, flow mappings, and aliases; an absent branch
+  defaults to `beads`, without treating nested unrelated fields as configuration
+  [test](../crates/wrix-core/src/beads_config/mod.rs::sync_branch_parses_yaml_quotes_comments_flow_and_aliases)
+  [test](../crates/wrix-core/src/beads_config/mod.rs::absent_branch_defaults_without_reading_nested_fields)
+  [test](../crates/wrix-service/src/lifecycle/mod.rs::service_plan_retains_the_shared_yaml_branch)
+- Malformed YAML, non-string branches, and duplicate branch fields fail before
+  beads synchronization or service layout changes
+  [test](../crates/wrix-cli/tests/beads_push.rs::malformed_yaml_sync_branch_is_rejected_before_mutation)
+  [test](../crates/wrix-service/src/lifecycle/mod.rs::service_plan_rejects_invalid_yaml_before_layout_changes)
+
 - Service startup persists a local server-only policy with automatic startup,
   JSONL import, and JSONL export disabled. Host checkout hooks honor that policy
   outside a development shell while still running unrelated chained hooks

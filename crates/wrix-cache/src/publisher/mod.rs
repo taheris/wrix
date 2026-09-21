@@ -182,14 +182,14 @@ pub fn prune_stale_dirty(state_root: &Path, cache_root: &Path) -> Result<bool> {
 }
 
 pub fn run_hook_record(
-    workspace_hash: &str,
+    workspace_hash: &WorkspaceHash,
     state_root: &Path,
     cache_root: &Path,
     manifest: &Path,
     drv_path: &str,
     out_paths: &str,
 ) -> Result<Report> {
-    validate_workspace_hash(workspace_hash)?;
+    tracing::debug!(%workspace_hash, "processing automatic cache publish");
     let paths = Paths {
         state_root: state_root.to_path_buf(),
         cache_root: cache_root.to_path_buf(),
@@ -1478,11 +1478,6 @@ fn read_endpoints_text(paths: &Paths) -> Result<String> {
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(String::from("unavailable")),
         Err(error) => Err(error.into()),
     }
-}
-
-fn validate_workspace_hash(hash: &str) -> Result<()> {
-    WorkspaceHash::parse(hash)?;
-    Ok(())
 }
 
 #[cfg(test)]

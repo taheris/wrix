@@ -64,6 +64,25 @@ fn documented_spawn_config_fields_render_into_launch_plan() -> TestResult {
 }
 
 #[test]
+fn runtime_shim_image_inspection_returns_identifiers_not_references() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let runtime = write_runtime_shims(root.path())?;
+    let reference = "localhost/wrix-test:latest";
+    for field in ["{{.Id}}", "{{.Digest}}"] {
+        let output = std::process::Command::new(root.path().join("runtime-bin/podman"))
+            .args(["image", "inspect", "--format", field, reference])
+            .env("WRIX_TEST_RUNTIME_STATE", &runtime.state)
+            .output()?;
+        assert!(output.status.success());
+        let value = String::from_utf8(output.stdout)?;
+        assert_ne!(value.trim(), reference);
+        assert!(wrix_sandbox::image::ImageId::parse(value.trim()).is_ok());
+        assert!(wrix_sandbox::image::Digest::parse(value.trim()).is_ok());
+    }
+    Ok(())
+}
+
+#[test]
 fn consumer_spawn_config_fields_are_mounted_for_entrypoint() -> TestResult {
     let fixture = SpawnFixture::new("spawn-consumer-fields")?;
     let config = fixture.write(

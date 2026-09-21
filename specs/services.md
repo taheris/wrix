@@ -157,6 +157,20 @@ Direct remote-builder access to the local project cache is out of scope for v1. 
 
 ## Success Criteria
 
+- Dolt endpoint payloads preserve Unix/TCP metadata shapes, and TCP endpoints
+  carry a nonzero port rather than optional or sentinel port state
+  [test](../crates/wrix-service/src/lifecycle/mod.rs::endpoint_payloads_serialize_without_missing_or_zero_tcp_ports)
+- Project cache public keys parse as a safe name and a base64-encoded 32-byte
+  Ed25519 key; padded and unpadded keys remain supported, while malformed
+  encodings and configuration injection fail before launcher trust rendering
+  [test](../crates/wrix-core/src/cache_key.rs::parses_padded_and_unpadded_nix_public_keys)
+  [test](../crates/wrix-sandbox/src/command/launch.rs::launcher_cache_key_reader_rejects_malformed_encoding_and_config_injection)
+- Existing valid cache keys are reused; invalid old keys are regenerated, and
+  invalid generator output leaves the old pair intact and removes temporary files
+  [test](../crates/wrix-core/tests/cache_key.rs::generated_keys_are_reused_including_unpadded_public_keys)
+  [test](../crates/wrix-core/tests/cache_key.rs::invalid_existing_keys_are_regenerated_through_the_shared_parser)
+  [test](../crates/wrix-core/tests/cache_key.rs::invalid_generator_output_preserves_old_keys_and_cleans_temporary_files)
+
 - Concurrent service starts for the same workspace are serialized and create
   at most one replacement service container
   [test](../crates/wrix-cli/tests/service_lifecycle.rs::concurrent_service_starts_share_one_lifecycle_owner)

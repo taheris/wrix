@@ -7,7 +7,10 @@ use std::{
 
 use displaydoc::Display;
 use thiserror::Error as ThisError;
-use wrix_core::git::{Branch, ParseError as BranchParseError};
+use wrix_core::{
+    beads_config::{ReadError, read_sync_branch},
+    git::Branch,
+};
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -62,9 +65,9 @@ pub enum Error {
         source: io::Error,
     },
     /// invalid beads sync branch: {source}
-    InvalidSyncBranch {
+    BeadsConfig {
         #[from]
-        source: BranchParseError,
+        source: ReadError,
     },
     /// invalid issue identifier returned by beads: {source}
     InvalidIssueId {
@@ -236,21 +239,6 @@ fn peel_beads_worktree(root: &Path) -> Option<PathBuf> {
     let text = root.to_string_lossy();
     text.find("/.git/beads-worktrees/")
         .map(|index| PathBuf::from(&text[..index]))
-}
-
-fn read_sync_branch(root: &Path) -> Result<Branch> {
-    let config_path = root.join(".beads/config.yaml");
-    if !config_path.exists() {
-        return Ok(Branch::default());
-    }
-    let content = fs::read_to_string(config_path)?;
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("sync-branch:") {
-            return Ok(Branch::parse(rest.trim().trim_matches('"'))?);
-        }
-    }
-    Ok(Branch::default())
 }
 
 fn prepare_dolt_origin_remote(

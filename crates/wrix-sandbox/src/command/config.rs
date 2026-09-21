@@ -6,7 +6,7 @@ use serde_json::Value;
 use thiserror::Error;
 use wrix_core::deploy_key::{Name as KeyName, ParseError as KeyNameParseError};
 
-use crate::image::{Digest, ImageRef, ImageRefParseError, SourceKind};
+use crate::image::{Digest, ImageRef, ImageRefParseError, Source, SourceKind, SourceParseError};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Platform {
@@ -173,8 +173,7 @@ pub enum MountMode {
 #[derive(Clone, Debug)]
 pub struct Image {
     pub reference: ImageRef,
-    pub source: String,
-    pub source_kind: SourceKind,
+    pub source: Source,
     pub digest: Option<Digest>,
 }
 
@@ -257,19 +256,28 @@ pub struct NixCacheService {
     pub enabled: bool,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct SpawnConfig {
-    #[serde(default)]
     pub image_ref: Option<ImageRef>,
-    #[serde(default)]
-    pub image_source: Option<String>,
-    #[serde(default)]
-    pub image_source_kind: Option<SourceKind>,
+    pub image_source: Option<Source>,
     pub workspace: String,
     pub env: Vec<(EnvName, String)>,
     pub agent_args: Vec<String>,
-    #[serde(default)]
     pub mounts: Vec<SpawnMount>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawSpawnConfig {
+    image_ref: Option<ImageRef>,
+    image_source: Option<String>,
+    image_source_kind: Option<SourceKind>,
+    workspace: String,
+    env: Vec<(EnvName, String)>,
+    agent_args: Vec<String>,
+    #[serde(default)]
+    mounts: Vec<SpawnMount>,
+    #[serde(flatten)]
+    extensions: BTreeMap<String, Value>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -306,6 +314,8 @@ pub enum ConfigError {
     InvalidImageRef { source: ImageRefParseError },
     /// ProfileConfig image.source must be a non-empty string
     MissingImageSource,
+    /// invalid image source path: {source}
+    InvalidImageSource { source: SourceParseError },
     /// ProfileConfig image.source_kind must be {expected} on {platform}
     MissingImageSourceKind {
         expected: &'static str,
@@ -367,13 +377,17 @@ pub fn load_profile_config(path: &Path, platform: Platform) -> Result<ProfileCon
         });
     }
     let content = fs::read_to_string(path)?;
-    let value = serde_json::from_str::<Value>(&content).map_err(|source| {
-        ConfigError::InvalidProfileConfigJson {
-            path: path.display().to_string(),
-            source,
+    let raw = serde_json::from_str::<RawProfileConfig>(&content).map_err(|source| {
+        if source.is_data() {
+            ConfigError::InvalidProfileConfigSchemaShape { source }
+        } else {
+            ConfigError::InvalidProfileConfigJson {
+                path: path.display().to_string(),
+                source,
+            }
         }
     })?;
-    parse_profile_value(value, platform)
+    raw.into_config(platform)
 }
 
 pub fn load_spawn_config(path: &Path, platform: Platform) -> Result<SpawnConfig, ConfigError> {
@@ -392,143 +406,121 @@ pub fn load_spawn_config(path: &Path, platform: Platform) -> Result<SpawnConfig,
     parse_spawn_value(value, platform)
 }
 
+#[cfg(test)]
 fn parse_profile_value(value: Value, platform: Platform) -> Result<ProfileConfig, ConfigError> {
-    let schema = value
-        .get("schema")
-        .and_then(Value::as_i64)
-        .ok_or(ConfigError::MissingProfileConfigSchema)?;
-    if schema != 1 {
-        return Err(ConfigError::UnsupportedProfileConfigSchema { schema });
-    }
+    serde_json::from_value::<RawProfileConfig>(value)
+        .map_err(|source| ConfigError::InvalidProfileConfigSchemaShape { source })?
+        .into_config(platform)
+}
 
-    let profile_name = value
-        .get("profile")
-        .and_then(Value::as_object)
-        .and_then(|fields| fields.get("name"))
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .ok_or(ConfigError::MissingProfileName)
-        .and_then(|value| {
-            ProfileName::parse(value).map_err(|source| ConfigError::InvalidProfileName { source })
-        })?;
-
-    let expected = platform.expected_source_kind();
-    let image = value.get("image").and_then(Value::as_object);
-    let reference = image
-        .and_then(|fields| fields.get("ref"))
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .ok_or(ConfigError::MissingImageRef)
-        .and_then(|value| {
-            ImageRef::parse(value).map_err(|source| ConfigError::InvalidImageRef { source })
-        })?;
-    let source = image
-        .and_then(|fields| fields.get("source"))
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .ok_or(ConfigError::MissingImageSource)?
-        .to_owned();
-    let source_kind = image
-        .and_then(|fields| fields.get("source_kind"))
-        .cloned()
-        .ok_or_else(|| ConfigError::MissingImageSourceKind {
-            expected: expected.as_str(),
-            platform: platform.label(),
-        })?;
-    let source_kind = serde_json::from_value::<SourceKind>(source_kind).map_err(|_source| {
-        ConfigError::IncompatibleImageSourceKind {
-            expected: expected.as_str(),
-            platform: platform.label(),
+impl RawProfileConfig {
+    fn into_config(self, platform: Platform) -> Result<ProfileConfig, ConfigError> {
+        let schema = self.schema.ok_or(ConfigError::MissingProfileConfigSchema)?;
+        if schema != 1 {
+            return Err(ConfigError::UnsupportedProfileConfigSchema { schema });
         }
-    })?;
-    if source_kind != expected {
-        return Err(ConfigError::IncompatibleImageSourceKind {
-            expected: expected.as_str(),
-            platform: platform.label(),
-        });
-    }
-
-    let agent_kind = value
-        .get("agent")
-        .and_then(Value::as_object)
-        .and_then(|fields| fields.get("kind"))
-        .cloned()
-        .ok_or(ConfigError::MissingAgentKind)?;
-    let kind = serde_json::from_value::<AgentKind>(agent_kind)
-        .map_err(|_source| ConfigError::MissingAgentKind)?;
-
-    let raw = serde_json::from_value::<RawProfileConfig>(value)
-        .map_err(|source| ConfigError::InvalidProfileConfigSchemaShape { source })?;
-    let RawProfileConfig {
-        mut profile,
-        image,
-        resources,
-        security,
-        services,
-        network,
-    } = raw;
-    let RawSecurity {
-        deploy_key,
-        runtime_secrets,
-    } = security.unwrap_or_default();
-    profile.name = profile_name;
-    let deploy_key = deploy_key
-        .map(|value| {
-            KeyName::parse(&value).map_err(|source| ConfigError::InvalidDeployKeyName { source })
-        })
-        .transpose()?;
-    if let Some(name) = profile
-        .env
-        .keys()
-        .find(|name| is_known_credential_env(name.as_str()) || runtime_secrets.contains_key(*name))
-    {
-        return Err(ConfigError::StaticCredentialInProfileEnv { name: name.clone() });
-    }
-    if let Some(name) = profile
-        .env
-        .keys()
-        .find(|name| is_bootstrap_sensitive_env(name.as_str()))
-    {
-        return Err(ConfigError::BootstrapEnvironmentInProfileEnv { name: name.clone() });
-    }
-    if let Some(name) = runtime_secrets
-        .keys()
-        .find(|name| is_bootstrap_sensitive_env(name.as_str()))
-    {
-        return Err(ConfigError::BootstrapEnvironmentInRuntimeSecrets { name: name.clone() });
-    }
-    Ok(ProfileConfig {
-        profile,
-        network,
-        image: Image {
-            reference,
-            source,
-            source_kind,
-            digest: image.digest,
-        },
-        agent: Agent { kind },
-        resources: resources.unwrap_or_default(),
-        security: Security {
+        let raw_profile = self.profile.ok_or(ConfigError::MissingProfileName)?;
+        let name = raw_profile
+            .name
+            .filter(|name| !name.is_empty())
+            .ok_or(ConfigError::MissingProfileName)?;
+        let profile = Profile {
+            name: ProfileName::parse(&name)
+                .map_err(|source| ConfigError::InvalidProfileName { source })?,
+            env: raw_profile.env,
+            mounts: raw_profile.mounts,
+            writable_dirs: raw_profile.writable_dirs,
+            network_allowlist: raw_profile.network_allowlist,
+        };
+        let image = self.image.unwrap_or_default();
+        let reference = image
+            .reference
+            .filter(|value| !value.is_empty())
+            .ok_or(ConfigError::MissingImageRef)?;
+        let reference = ImageRef::parse(&reference)
+            .map_err(|source| ConfigError::InvalidImageRef { source })?;
+        let source = image
+            .source
+            .filter(|value| !value.is_empty())
+            .ok_or(ConfigError::MissingImageSource)?;
+        let expected = platform.expected_source_kind();
+        let source_kind = image
+            .source_kind
+            .ok_or_else(|| ConfigError::MissingImageSourceKind {
+                expected: expected.as_str(),
+                platform: platform.label(),
+            })?;
+        if source_kind != expected {
+            return Err(ConfigError::IncompatibleImageSourceKind {
+                expected: expected.as_str(),
+                platform: platform.label(),
+            });
+        }
+        let kind = self
+            .agent
+            .and_then(|agent| agent.kind)
+            .ok_or(ConfigError::MissingAgentKind)?;
+        let RawSecurity {
             deploy_key,
             runtime_secrets,
-        },
-        services: Services {
-            nix_cache: NixCacheService {
-                enabled: services
-                    .and_then(|services| services.nix_cache)
-                    .and_then(|service| service.enable)
-                    .unwrap_or(true),
+        } = self.security.unwrap_or_default();
+        let deploy_key = deploy_key
+            .map(|value| {
+                KeyName::parse(&value)
+                    .map_err(|source| ConfigError::InvalidDeployKeyName { source })
+            })
+            .transpose()?;
+        if let Some(name) = profile.env.keys().find(|name| {
+            is_known_credential_env(name.as_str()) || runtime_secrets.contains_key(*name)
+        }) {
+            return Err(ConfigError::StaticCredentialInProfileEnv { name: name.clone() });
+        }
+        if let Some(name) = profile
+            .env
+            .keys()
+            .find(|name| is_bootstrap_sensitive_env(name.as_str()))
+        {
+            return Err(ConfigError::BootstrapEnvironmentInProfileEnv { name: name.clone() });
+        }
+        if let Some(name) = runtime_secrets
+            .keys()
+            .find(|name| is_bootstrap_sensitive_env(name.as_str()))
+        {
+            return Err(ConfigError::BootstrapEnvironmentInRuntimeSecrets { name: name.clone() });
+        }
+        Ok(ProfileConfig {
+            profile,
+            network: self.network,
+            image: Image {
+                reference,
+                source: Source::parse(source, source_kind)
+                    .map_err(|source| ConfigError::InvalidImageSource { source })?,
+                digest: image.digest,
             },
-        },
-    })
+            agent: Agent { kind },
+            resources: self.resources.unwrap_or_default(),
+            security: Security {
+                deploy_key,
+                runtime_secrets,
+            },
+            services: Services {
+                nix_cache: NixCacheService {
+                    enabled: self
+                        .services
+                        .and_then(|services| services.nix_cache)
+                        .and_then(|service| service.enable)
+                        .unwrap_or(true),
+                },
+            },
+        })
+    }
 }
 
 fn parse_spawn_value(value: Value, platform: Platform) -> Result<SpawnConfig, ConfigError> {
-    if !value.is_object() {
-        return Err(ConfigError::InvalidSpawnConfigSchema);
-    }
+    let spawn = serde_json::from_value::<RawSpawnConfig>(value)
+        .map_err(|_source| ConfigError::InvalidSpawnConfigSchema)?;
     if let Some(field) = first_present_field(
-        &value,
+        &spawn.extensions,
         &[
             "agent",
             "agent_kind",
@@ -543,12 +535,12 @@ fn parse_spawn_value(value: Value, platform: Platform) -> Result<SpawnConfig, Co
     ) {
         return Err(ConfigError::SpawnConfigProfileOverride { field });
     }
-    if let Some(field) = first_present_field(&value, &["image_digest", "image_digest_path"]) {
+    if let Some(field) =
+        first_present_field(&spawn.extensions, &["image_digest", "image_digest_path"])
+    {
         return Err(ConfigError::SpawnConfigDigestOverride { field });
     }
 
-    let spawn = serde_json::from_value::<SpawnConfig>(value)
-        .map_err(|_source| ConfigError::InvalidSpawnConfigSchema)?;
     if let Some((name, _value)) = spawn
         .env
         .iter()
@@ -564,14 +556,6 @@ fn parse_spawn_value(value: Value, platform: Platform) -> Result<SpawnConfig, Co
     {
         return Err(ConfigError::InvalidSpawnConfigSchema);
     }
-    if spawn
-        .image_source
-        .as_deref()
-        .is_some_and(|source| !source.is_empty())
-        && spawn.image_source_kind.is_none()
-    {
-        return Err(ConfigError::SpawnConfigSourceKindRequired);
-    }
     if let Some(kind) = spawn.image_source_kind {
         let expected = platform.expected_source_kind();
         if kind != expected {
@@ -581,10 +565,27 @@ fn parse_spawn_value(value: Value, platform: Platform) -> Result<SpawnConfig, Co
             });
         }
     }
-    Ok(spawn)
+    let image_source = spawn
+        .image_source
+        .filter(|source| !source.is_empty())
+        .map(|source| {
+            let kind = spawn
+                .image_source_kind
+                .ok_or(ConfigError::SpawnConfigSourceKindRequired)?;
+            Source::parse(source, kind).map_err(|source| ConfigError::InvalidImageSource { source })
+        })
+        .transpose()?;
+    Ok(SpawnConfig {
+        image_ref: spawn.image_ref,
+        image_source,
+        workspace: spawn.workspace,
+        env: spawn.env,
+        agent_args: spawn.agent_args,
+        mounts: spawn.mounts,
+    })
 }
 
-fn first_present_field(value: &Value, fields: &[&str]) -> Option<String> {
+fn first_present_field(value: &BTreeMap<String, Value>, fields: &[&str]) -> Option<String> {
     fields
         .iter()
         .find(|field| value.get(**field).is_some())
@@ -593,10 +594,12 @@ fn first_present_field(value: &Value, fields: &[&str]) -> Option<String> {
 
 #[derive(Debug, Deserialize)]
 struct RawProfileConfig {
+    schema: Option<i64>,
     #[serde(default)]
     network: Network,
-    profile: Profile,
-    image: RawImage,
+    profile: Option<RawProfile>,
+    image: Option<RawImage>,
+    agent: Option<RawAgent>,
     #[serde(default)]
     resources: Option<Resources>,
     #[serde(default)]
@@ -606,9 +609,30 @@ struct RawProfileConfig {
 }
 
 #[derive(Debug, Deserialize)]
-struct RawImage {
+struct RawProfile {
+    name: Option<String>,
     #[serde(default)]
+    env: BTreeMap<EnvName, String>,
+    #[serde(default)]
+    mounts: Vec<ProfileMount>,
+    #[serde(default)]
+    writable_dirs: Vec<String>,
+    #[serde(default)]
+    network_allowlist: Vec<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct RawImage {
+    #[serde(rename = "ref")]
+    reference: Option<String>,
+    source: Option<String>,
+    source_kind: Option<SourceKind>,
     digest: Option<Digest>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawAgent {
+    kind: Option<AgentKind>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -739,6 +763,57 @@ mod test {
             error,
             ConfigError::SpawnConfigProfileOverride { .. }
         ));
+    }
+
+    #[test]
+    fn profile_boundary_preserves_extension_fields_and_typed_source_semantics() {
+        for (platform, kind) in [
+            (Platform::Linux, "nix-descriptor"),
+            (Platform::Darwin, "docker-archive"),
+        ] {
+            let value = json!({
+                "schema":1, "system":"future-system", "future_extension":{"enabled":true},
+                "profile":{"name":"base", "future_profile_field":[1,2]},
+                "image":{"ref":"wrix:test", "source":"/not-yet-realized", "source_kind":kind, "future_image_field":true},
+                "agent":{"kind":"pi", "future_agent_field":true},
+                "services":{"beads":{"enable":"auto"}, "future_service":{}},
+                "features":{"mcp_runtime":true},
+                "network":{"default_mode":"limit", "future_network_field":true}
+            });
+            let config = parse_profile_value(value, platform).unwrap();
+            assert_eq!(config.image.source.kind(), platform.expected_source_kind());
+            assert_eq!(
+                config.image.source.path(),
+                std::path::Path::new("/not-yet-realized")
+            );
+            assert_eq!(config.agent.kind, AgentKind::Pi);
+            assert_eq!(config.network.default_mode, super::NetworkMode::Limit);
+            assert!(config.services.nix_cache.enabled);
+        }
+    }
+
+    #[test]
+    fn spawn_source_override_is_absent_or_a_complete_typed_source() {
+        for value in [
+            json!({}),
+            json!({"image_source":""}),
+            json!({"image_source_kind":"nix-descriptor"}),
+        ] {
+            let mut base = json!({"workspace":"/workspace", "env":[], "agent_args":[]});
+            base.as_object_mut()
+                .unwrap()
+                .extend(value.as_object().unwrap().clone());
+            assert!(
+                parse_spawn_value(base, Platform::Linux)
+                    .unwrap()
+                    .image_source
+                    .is_none()
+            );
+        }
+        let spawn = parse_spawn_value(json!({"workspace":"/workspace", "env":[], "agent_args":[], "image_source":"/image", "image_source_kind":"nix-descriptor"}), Platform::Linux).unwrap();
+        let source = spawn.image_source.unwrap();
+        assert_eq!(source.path(), std::path::Path::new("/image"));
+        assert_eq!(source.kind(), SourceKind::NixDescriptor);
     }
 
     #[test]

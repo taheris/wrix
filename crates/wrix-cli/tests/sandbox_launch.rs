@@ -195,6 +195,57 @@ fn profile_network_defaults_and_explicit_environment_precedence() -> TestResult 
 }
 
 #[test]
+fn malformed_profile_config_fails_before_subprocesses() -> TestResult {
+    for (pointer, value) in [
+        ("/schema", json!(2)),
+        ("/schema", json!(true)),
+        ("/profile/name", json!("bad profile")),
+        ("/image/ref", json!("--all")),
+        ("/image/source", json!("")),
+        ("/image/source", json!("/path\0suffix")),
+        ("/image/source_kind", json!(null)),
+        ("/image/source_kind", json!("tarball")),
+        ("/image/digest", json!("sha256:short")),
+        ("/agent/kind", json!("unknown-agent")),
+        ("/services/nix_cache/enable", json!("true")),
+    ] {
+        let fixture = Fixture::new(None)?;
+        let mut config: Value = serde_json::from_slice(&fs::read(&fixture.profile)?)?;
+        *config
+            .pointer_mut(pointer)
+            .ok_or("fixture pointer missing")? = value;
+        fs::write(&fixture.profile, serde_json::to_vec(&config)?)?;
+        let mut command = fixture.command();
+        fixture.forbid_subprocesses(&mut command)?;
+        let output = command.output()?;
+        assert!(!output.status.success(), "accepted {pointer}: {config}");
+        assert!(
+            !fixture.root.path().join("calls").exists(),
+            "{pointer}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn duplicate_profile_config_fields_fail_at_the_json_boundary() -> TestResult {
+    let fixture = Fixture::new(None)?;
+    let content = fs::read_to_string(&fixture.profile)?;
+    fs::write(
+        &fixture.profile,
+        format!("{{\"schema\":1,{}", &content[1..]),
+    )?;
+    let mut command = fixture.command();
+    fixture.forbid_subprocesses(&mut command)?;
+    let output = command.output()?;
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("duplicate field"));
+    assert!(!fixture.root.path().join("calls").exists());
+    Ok(())
+}
+
+#[test]
 fn malformed_network_policy_fails_before_subprocesses_even_with_override() -> TestResult {
     for network in [
         json!(null),
