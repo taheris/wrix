@@ -11,6 +11,8 @@ use wrix_core::git::{Branch, ParseError as BranchParseError};
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+const MAX_GITHUB_BLOB_BYTES: u64 = 100 * 1024 * 1024;
+
 #[derive(Debug, Display, ThisError)]
 pub enum IssueIdParseError {
     /// invalid beads issue identifier: {value}
@@ -74,6 +76,10 @@ pub enum Error {
         program: &'static str,
         stderr: String,
     },
+    /// Dolt remote file {path} is {bytes} bytes, exceeding GitHub's 100 MiB limit; no sync commit was created. Back up and losslessly repack the file remote before retrying; do not delete database history
+    OversizedRemoteFile { path: String, bytes: u64 },
+    /// unpublished beads history contains a Git blob exceeding GitHub's 100 MiB limit. Back up the local branch, losslessly repack the file remote, and replace only unpublished sync commits; do not force-push published history
+    OversizedSyncHistory,
     /// staged Dolt remote already exists at {path}
     StagedRemoteExists { path: String },
     /// worktree recovery failed: {recovery}; restoring the staged Dolt remote also failed: {restore}
@@ -546,7 +552,58 @@ fn repair_worktree_pointers(context: &Context) -> Result<()> {
     Ok(())
 }
 
+fn reject_oversized_remote_files(directory: &Path) -> Result<()> {
+    let entries = match fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    for entry in entries {
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            reject_oversized_remote_files(&entry.path())?;
+        } else if kind.is_file() {
+            let bytes = entry.metadata()?.len();
+            if bytes > MAX_GITHUB_BLOB_BYTES {
+                return Err(Error::OversizedRemoteFile {
+                    path: entry.path().display().to_string(),
+                    bytes,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn reject_oversized_sync_history(worktree: &Path) -> Result<()> {
+    let filter = format!("--filter=blob:limit={}", MAX_GITHUB_BLOB_BYTES + 1);
+    let output = run_git_required_output_in(
+        worktree,
+        &[
+            "rev-list",
+            "--objects",
+            &filter,
+            "--filter-print-omitted",
+            "--no-object-names",
+            "HEAD",
+            "--not",
+            "--remotes=origin",
+        ],
+    )?;
+    if output
+        .stdout
+        .split(|byte| *byte == b'\n')
+        .any(|line| line.starts_with(b"~"))
+    {
+        return Err(Error::OversizedSyncHistory);
+    }
+    Ok(())
+}
+
 fn commit_dirty_worktree(worktree: &Path) -> Result<()> {
+    reject_oversized_remote_files(&worktree.join(".beads/dolt-remote"))?;
+    reject_oversized_sync_history(worktree)?;
     let refresh = run_git_output_in(worktree, &["update-index", "--refresh"])?;
     if !refresh.stderr.is_empty() {
         io::stderr().write_all(&refresh.stderr)?;
@@ -657,8 +714,9 @@ mod test {
     use std::fs;
 
     use super::{
-        Command, IssueId, is_fast_forward_rejection, origin_remote_url, parse_affected_ids,
-        read_sync_branch, snapshot_query_for_ids,
+        Command, Error, IssueId, MAX_GITHUB_BLOB_BYTES, is_fast_forward_rejection,
+        origin_remote_url, parse_affected_ids, read_sync_branch, reject_oversized_remote_files,
+        snapshot_query_for_ids,
     };
 
     #[test]
@@ -728,6 +786,42 @@ mod test {
         .unwrap();
 
         assert!(read_sync_branch(root.path()).is_err());
+    }
+
+    #[test]
+    fn remote_file_size_check_accepts_the_exact_github_limit() {
+        let root = tempfile::tempdir().unwrap();
+        let archive = root.path().join("boundary.darc");
+        fs::File::create(archive)
+            .unwrap()
+            .set_len(MAX_GITHUB_BLOB_BYTES)
+            .unwrap();
+        reject_oversized_remote_files(root.path()).unwrap();
+    }
+
+    #[test]
+    fn remote_file_size_check_rejects_oversized_nested_files() {
+        let root = tempfile::tempdir().unwrap();
+        let nested = root.path().join("oldgen");
+        fs::create_dir(&nested).unwrap();
+        let archive = nested.join("oversized.darc");
+        fs::File::create(&archive)
+            .unwrap()
+            .set_len(MAX_GITHUB_BLOB_BYTES + 1)
+            .unwrap();
+        let error = reject_oversized_remote_files(root.path()).unwrap_err();
+        assert!(matches!(error, Error::OversizedRemoteFile { .. }));
+        assert!(error.to_string().contains("oldgen/oversized.darc"));
+        assert_eq!(
+            fs::metadata(archive).unwrap().len(),
+            MAX_GITHUB_BLOB_BYTES + 1
+        );
+    }
+
+    #[test]
+    fn remote_file_size_check_allows_an_absent_remote() {
+        let root = tempfile::tempdir().unwrap();
+        reject_oversized_remote_files(&root.path().join("absent")).unwrap();
     }
 
     #[test]

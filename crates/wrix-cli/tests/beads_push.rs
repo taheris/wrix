@@ -675,6 +675,81 @@ fn pre_pull_cleanup_uses_canonical_dirty_detection() -> TestResult {
 }
 
 #[test]
+fn oversized_remote_file_fails_before_creating_a_sync_commit() -> TestResult {
+    let fixture = Fixture::new("oversized-remote")?;
+    setup_repo_with_beads_branch(&fixture)?;
+    fs::create_dir_all(fixture.worktree_remote_dir())?;
+    let archive = fixture.worktree_remote_dir().join("large.darc");
+    fs::File::create(&archive)?.set_len(100 * 1024 * 1024 + 1)?;
+    let before = git_stdout(&fixture.beads_worktree(), &["rev-parse", "HEAD"])?;
+
+    let output = invoke_push(fixture.repo(), &[fixture.fake_bin()], |command| {
+        configure_bd(command, &fixture, "success");
+    })?;
+
+    assert_ne!(output.code, 0);
+    assert!(output.stderr.contains("large.darc"), "{}", output.stderr);
+    assert!(output.stderr.contains("104857601 bytes"));
+    assert!(output.stderr.contains("no sync commit was created"));
+    assert_eq!(
+        git_stdout(&fixture.beads_worktree(), &["rev-parse", "HEAD"])?,
+        before
+    );
+    assert_eq!(
+        git_stdout(fixture.repo(), &["rev-parse", "origin/beads"])?,
+        before
+    );
+    assert_eq!(fs::metadata(archive)?.len(), 100 * 1024 * 1024 + 1);
+    Ok(())
+}
+
+#[test]
+fn oversized_deleted_blob_in_unpublished_history_blocks_sync() -> TestResult {
+    let fixture = Fixture::new("oversized-history")?;
+    setup_repo_with_beads_branch(&fixture)?;
+    let worktree = fixture.beads_worktree();
+    fs::create_dir_all(fixture.worktree_remote_dir())?;
+    let archive = fixture.worktree_remote_dir().join("large.darc");
+    fs::File::create(&archive)?.set_len(100 * 1024 * 1024 + 1)?;
+    let published = git_stdout(fixture.repo(), &["rev-parse", "origin/beads"])?;
+    run_git(&worktree, &["add", "-A"])?;
+    run_git(
+        &worktree,
+        &["commit", "-qm", "Unpublished oversized archive"],
+    )?;
+    fs::remove_file(&archive)?;
+    run_git(&worktree, &["add", "-A"])?;
+    run_git(
+        &worktree,
+        &["commit", "-qm", "Remove archive from tip only"],
+    )?;
+    let before = git_stdout(&worktree, &["rev-parse", "HEAD"])?;
+
+    let output = invoke_push(fixture.repo(), &[fixture.fake_bin()], |command| {
+        configure_bd(command, &fixture, "success");
+    })?;
+
+    assert_ne!(output.code, 0);
+    assert!(
+        output.stderr.contains("unpublished beads history"),
+        "{}",
+        output.stderr
+    );
+    assert!(
+        output
+            .stderr
+            .contains("do not force-push published history")
+    );
+    assert_eq!(git_stdout(&worktree, &["rev-parse", "HEAD"])?, before);
+    assert_eq!(
+        git_stdout(fixture.repo(), &["rev-parse", "origin/beads"])?,
+        published
+    );
+    assert!(!archive.exists());
+    Ok(())
+}
+
+#[test]
 fn recovers_orphaned_worktree_relative_to_root() -> TestResult {
     let fixture = Fixture::new("orphaned-worktree")?;
     setup_repo_with_beads_branch(&fixture)?;
