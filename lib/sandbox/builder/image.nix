@@ -12,7 +12,8 @@
 }:
 
 let
-  inherit (builtins) toJSON;
+  inherit (builtins) genList toJSON toString;
+  inherit (pkgs.lib) concatMapStrings concatMapStringsSep;
   inherit (pkgs)
     buildEnv
     dockerTools
@@ -46,21 +47,34 @@ let
     procps # for pgrep, ps, etc.
   ];
 
-  # passwd: root, builder (UID 1000), sshd (for privilege separation), nobody
-  passwdFile = writeTextDir "etc/passwd" ''
-    root:x:0:0:root:/root:/bin/bash
-    builder:x:1000:1000:Nix Builder:/home/builder:/bin/bash
-    sshd:x:74:74:Privilege-separated SSH:/var/empty:/bin/false
-    nobody:x:65534:65534:Unprivileged account:/var/empty:/bin/false
-  '';
+  buildGroupId = 30000;
+  buildUsers = genList (index: {
+    name = "nixbld${toString (index + 1)}";
+    uid = buildGroupId + index + 1;
+  }) 32;
 
-  # group: root, users (with builder), sshd, nogroup
-  groupFile = writeTextDir "etc/group" ''
-    root:x:0:
-    users:x:100:builder
-    sshd:x:74:
-    nogroup:x:65534:
-  '';
+  passwdFile = writeTextDir "etc/passwd" (
+    ''
+      root:x:0:0:root:/root:/bin/bash
+      builder:x:1000:1000:Nix Builder:/home/builder:/bin/bash
+      sshd:x:74:74:Privilege-separated SSH:/var/empty:/bin/false
+      nobody:x:65534:65534:Unprivileged account:/var/empty:/bin/false
+    ''
+    + concatMapStrings (
+      user:
+      "${user.name}:x:${toString user.uid}:${toString buildGroupId}:Nix build user:/var/empty:/bin/false\n"
+    ) buildUsers
+  );
+
+  groupFile = writeTextDir "etc/group" (
+    ''
+      root:x:0:
+      users:x:100:builder
+      sshd:x:74:
+      nogroup:x:65534:
+    ''
+    + "nixbld:x:${toString buildGroupId}:${concatMapStringsSep "," (user: user.name) buildUsers}\n"
+  );
 
   # sshd configuration: key-only auth, allow builder user
   # Note: entrypoint.sh regenerates this at runtime to handle persistent store mounts

@@ -244,6 +244,23 @@ else
   FAILED=1
 fi
 
+echo ""
+echo "Test 9b: Remote builds use unprivileged build users"
+BUILD_USER_OUTPUT="$TMP_DIR/build-user.log"
+if [[ -n "$CONFIG_JSON" ]] && nix-build \
+  --builders "$BUILDER_SPEC" \
+  --max-jobs 0 \
+  --no-out-link \
+  --argstr system "$(expected_linux_system)" \
+  --argstr nonce "$(basename "$TMP_DIR")" \
+  "$REPO_ROOT/tests/builder/build-user.nix" >"$BUILD_USER_OUTPUT" 2>&1; then
+  echo "  PASS: Remote build user respects read-only file and directory permissions"
+else
+  echo "  FAIL: Remote build did not run with the expected unprivileged permissions"
+  print_output "$BUILD_USER_OUTPUT"
+  FAILED=1
+fi
+
 # Test 10: Store persistence across restart
 echo ""
 echo "Test 10: Store persistence"

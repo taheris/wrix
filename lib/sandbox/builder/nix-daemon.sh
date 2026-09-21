@@ -8,7 +8,7 @@ wrix_builder_write_nix_config() {
   cat >"$output_path" <<EOF
 experimental-features = nix-command flakes
 sandbox = false
-build-users-group =
+build-users-group = nixbld
 trusted-users = root $builder_user
 max-jobs = auto
 cores = 0

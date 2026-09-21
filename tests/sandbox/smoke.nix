@@ -336,6 +336,8 @@ in
         mkdir $out
       '';
 
+  builder-build-users = import ../builder/build-users.nix { inherit pkgs; };
+
   builder-store-gc-recovery = import ../builder/store.nix { inherit pkgs; };
 
   builder-store-lifecycle =

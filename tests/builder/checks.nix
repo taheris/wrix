@@ -155,8 +155,8 @@ in
       wrix_builder_write_nix_config builder "$nix_config"
       grep -Fxq 'sandbox = false' "$nix_config" \
         || fail "builder nix.conf does not disable unsupported nested sandboxing"
-      grep -Fxq 'build-users-group =' "$nix_config" \
-        || fail "builder nix.conf requires a missing nixbld group"
+      grep -Fxq 'build-users-group = nixbld' "$nix_config" \
+        || fail "builder nix.conf does not select unprivileged build users"
       grep -Fxq 'trusted-users = root builder' "$nix_config" \
         || fail "builder nix.conf does not trust the authenticated builder user"
 
