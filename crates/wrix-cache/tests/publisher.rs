@@ -342,6 +342,143 @@ fn prune_keeps_only_paths_reachable_from_current_markers() -> TestResult {
 }
 
 #[test]
+fn publishing_reconciles_removed_renamed_excluded_and_empty_root_sets() -> TestResult {
+    for change in ["removed", "renamed", "excluded"] {
+        let fixture = Fixture::new(change)?;
+        fixture.write_roots(&[RootSpec::new(
+            "packages.old",
+            ".#old",
+            PROJECT_DRV,
+            &[PROJECT_OUT],
+        )])?;
+        fixture.run("publish")?;
+        fixture.write_pending("foreign", "/nix/store/foreign.drv", &[ARBITRARY_OUT])?;
+        match change {
+            "removed" => {
+                fixture.write_roots(&[])?;
+                fixture.run("publish")?;
+            }
+            "renamed" => {
+                fixture.write_roots(&[RootSpec::new(
+                    "packages.new",
+                    ".#new",
+                    PROJECT_DRV,
+                    &[PROJECT_OUT],
+                )])?;
+                fixture.run("publish")?;
+                assert!(fixture.state_root.join("gcroots/packages.new").exists());
+            }
+            "excluded" => {
+                fixture.run_with_env("publish", &[("WRIX_CACHE_PUBLISH_EXCLUDE", ".#old")])?;
+            }
+            _ => panic!("unknown fixture change"),
+        }
+        assert!(
+            !fixture.state_root.join("gcroots/packages.old").exists(),
+            "{change}"
+        );
+        assert_eq!(
+            fixture.cache_root.join("project-root.narinfo").exists(),
+            change == "renamed"
+        );
+        assert_eq!(
+            fixture.cache_root.join("nar/project-root.nar").exists(),
+            change == "renamed"
+        );
+        assert_eq!(fixture.pending_count()?, 1);
+    }
+    Ok(())
+}
+
+#[test]
+fn reconciliation_preserves_unrealized_roots_and_shared_payloads() -> TestResult {
+    let fixture = Fixture::new("retention-shared")?;
+    fixture.write_roots(&[
+        RootSpec::new(
+            "packages.live",
+            ".#live",
+            "/nix/store/live.drv",
+            &["/nix/store/aaaa-live"],
+        ),
+        RootSpec::new(
+            "packages.stale",
+            ".#stale",
+            "/nix/store/stale.drv",
+            &["/nix/store/bbbb-stale", "/nix/store/cccc-stale"],
+        ),
+    ])?;
+    fixture.run("publish")?;
+    for (hash, payload) in [("aaaa", "shared"), ("bbbb", "shared"), ("cccc", "stale")] {
+        fs::write(
+            fixture.cache_root.join(format!("{hash}.narinfo")),
+            format!("URL: nar/{payload}\n"),
+        )?;
+        fs::write(fixture.cache_root.join(format!("nar/{payload}")), "payload")?;
+    }
+    fixture.write_roots(&[RootSpec::new(
+        "packages.live",
+        ".#live",
+        "/nix/store/live.drv",
+        &[],
+    )])?;
+    fixture.run("publish")?;
+    assert!(fixture.state_root.join("gcroots/packages.live").exists());
+    assert!(!fixture.state_root.join("gcroots/packages.stale").exists());
+    assert!(fixture.cache_root.join("aaaa.narinfo").exists());
+    assert!(!fixture.cache_root.join("bbbb.narinfo").exists());
+    assert!(!fixture.cache_root.join("cccc.narinfo").exists());
+    assert!(fixture.cache_root.join("nar/shared").exists());
+    assert!(!fixture.cache_root.join("nar/stale").exists());
+    Ok(())
+}
+
+#[test]
+fn warm_subsets_preserve_full_publish_manifest_and_check_retention() -> TestResult {
+    let fixture = Fixture::new("warm-retention")?;
+    fixture.write_roots(&[
+        RootSpec::new("packages.demo", ".#demo", PROJECT_DRV, &[PROJECT_OUT]),
+        RootSpec::new(
+            "checks.demo",
+            ".#checks.demo",
+            "/nix/store/check.drv",
+            &["/nix/store/aaaa-check"],
+        ),
+    ])?;
+    fixture.run("publish")?;
+    fs::write(fixture.cache_root.join("aaaa.narinfo"), "URL: nar/check\n")?;
+    fs::write(fixture.cache_root.join("nar/check"), "payload")?;
+    fixture.run_warm(false)?;
+    assert!(fixture.state_root.join("gcroots/checks.demo").exists());
+    assert!(fixture.cache_root.join("nar/check").exists());
+    let manifest = fs::read_to_string(fixture.state_root.join("publish-roots.json"))?;
+    assert!(manifest.contains("checks.demo"));
+    fixture.run("prune")?;
+    assert!(fixture.cache_root.join("nar/check").exists());
+    fixture.run_with_env("warm", &[("WRIX_CACHE_PUBLISH_EXCLUDE", ".#demo")])?;
+    assert!(!fixture.state_root.join("gcroots/packages.demo").exists());
+    assert!(fixture.cache_root.join("nar/check").exists());
+    Ok(())
+}
+
+#[test]
+fn automatic_publish_does_not_reconcile_other_root_markers() -> TestResult {
+    let fixture = Fixture::new("automatic-retention")?;
+    fixture.write_roots(&[
+        RootSpec::new("packages.demo", ".#demo", PROJECT_DRV, &[PROJECT_OUT]),
+        RootSpec::new(
+            "checks.demo",
+            ".#checks.demo",
+            "/nix/store/check.drv",
+            &["/nix/store/aaaa-check"],
+        ),
+    ])?;
+    fixture.run("publish")?;
+    fixture.run_auto(PROJECT_DRV, PROJECT_OUT, &[])?;
+    assert!(fixture.state_root.join("gcroots/checks.demo").exists());
+    Ok(())
+}
+
+#[test]
 fn rotate_key_invalidates_cache_and_replaces_trust_root() -> TestResult {
     let fixture = Fixture::new("rotate-key")?;
     fs::create_dir_all(fixture.state_root.join("keys"))?;

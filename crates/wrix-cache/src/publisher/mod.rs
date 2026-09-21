@@ -216,25 +216,30 @@ fn run(workspace: &Workspace, paths: &Paths, mode: Mode) -> Result<Report> {
         Mode::Publish => with_explicit_lock(paths, || {
             let roots = discover_roots(RootSet::Publish)?;
             write_manifest(&paths.publish_roots_path(), workspace.hash(), &roots)?;
-            let realized = realized_roots(roots)?;
+            let realized = realized_roots(roots.clone())?;
             let pending = read_pending(paths)?;
-            publish_roots(paths, &realized.roots, pending, true).map(|mut report| {
+            publish_roots(paths, &realized.roots, pending, Some(&roots)).map(|mut report| {
                 report.lines.extend(realized.unrealized);
                 report
             })
         }),
         Mode::Warm { checks } => with_explicit_lock(paths, || {
-            let root_set = RootSet::Warm { checks };
-            let roots = discover_roots(root_set)?;
-            build_roots(&roots)?;
+            let configured = discover_roots(RootSet::Publish)?;
+            let warm = discover_roots(RootSet::Warm { checks })?;
+            write_manifest(&paths.publish_roots_path(), workspace.hash(), &configured)?;
+            build_roots(&warm)?;
+            let selected = warm
+                .iter()
+                .map(|root| root.installable.as_str())
+                .collect::<HashSet<_>>();
+            let roots = configured
+                .iter()
+                .filter(|root| selected.contains(root.installable.as_str()))
+                .cloned()
+                .collect();
             let realized = realized_roots(roots)?;
-            write_manifest(
-                &paths.publish_roots_path(),
-                workspace.hash(),
-                &realized.roots,
-            )?;
             let pending = read_pending(paths)?;
-            publish_roots(paths, &realized.roots, pending, true)
+            publish_roots(paths, &realized.roots, pending, Some(&configured))
         }),
         Mode::Prune => with_explicit_lock(paths, || {
             prune(paths)?;
@@ -256,7 +261,7 @@ fn run_automatic_publish(paths: &Paths, root: Root) -> Result<Report> {
         ));
         return Ok(Report { lines });
     };
-    let result = publish_roots(paths, &[root], Vec::new(), false);
+    let result = publish_roots(paths, &[root], Vec::new(), None);
     let release = lock.release();
     match (result, release) {
         (Ok(mut report), Ok(())) => {
@@ -653,7 +658,7 @@ fn publish_roots(
     paths: &Paths,
     roots: &[Root],
     pending: Vec<Pending>,
-    prune_after: bool,
+    configured: Option<&[Root]>,
 ) -> Result<Report> {
     let root_drvs = roots
         .iter()
@@ -679,7 +684,8 @@ fn publish_roots(
     let filtered = subtract_upstream(paths, publishable)?;
     copy_to_cache(paths, &filtered)?;
     write_cache_status(paths, true, Some("ok"), None, None)?;
-    if prune_after {
+    if let Some(configured) = configured {
+        reconcile_gc_markers(paths, configured)?;
         prune(paths)?;
     }
     if filtered.is_empty() {
@@ -931,6 +937,24 @@ fn remove_cache_payload(path: &Path) -> Result<()> {
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error.into()),
     }
+}
+
+fn reconcile_gc_markers(paths: &Paths, configured: &[Root]) -> Result<()> {
+    let configured = configured
+        .iter()
+        .map(|root| safe_marker_name(&root.name))
+        .collect::<HashSet<_>>();
+    for entry in fs::read_dir(paths.gcroots_dir())? {
+        let entry = entry?;
+        if !entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| configured.contains(name))
+        {
+            fs::remove_file(entry.path())?;
+        }
+    }
+    Ok(())
 }
 
 fn marker_store_basenames(paths: &Paths) -> Result<Vec<String>> {

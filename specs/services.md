@@ -145,7 +145,7 @@ Nix supports one `post-build-hook` per invocation. If a non-wrix hook is already
 
 All publish/prune/rotate operations take `<state-root>/cache.lock`. The post-build publisher waits for the lock and prints a waiting message on contention. If the wait times out, it records the hook's `DRV_PATH`/`OUT_PATHS` as a durable JSON file under `pending/`, prints a warning, and exits 0 so the completed Nix build is not failed solely by lock contention. Automatic publish failures after lock acquisition record status and warn; explicit cache commands remain strict. Pending records have a default retention of seven days and are reported by `wrix service cache status`.
 
-GC markers under `gcroots/` govern retention. Updating a root replaces that root's marker with current outputs. Full prune runs after explicit `publish` / `warm` / `prune`, and on service startup only when the cache is dirty and the last prune is older than the configured interval (default 24h). The hook does not run a full prune in the hot path.
+GC markers under `gcroots/` govern retention. Updating a root replaces that root's marker with current outputs. Successful explicit publish/warm reconciles marker ownership against the full configured publishable-root set before pruning: removed or excluded roots lose their markers, while configured but unrealized roots retain theirs. Warm refreshes the full publish manifest, not just its build subset, and publishes only roots in the publishable set. Automatic publishing does not reconcile unrelated markers. Full prune runs after explicit `publish` / `warm` / `prune`, and on service startup only when the cache is dirty and the last prune is older than the configured interval (default 24h). The hook does not run a full prune in the hot path.
 
 `wrix service cache rotate-key` takes the cache lock, invalidates/wipes the local project cache, generates a new keypair, updates metadata, and leaves repopulation to post-build publishing or explicit warm. V1 does not support old+new keyrings or in-place re-signing.
 
@@ -236,6 +236,14 @@ Direct remote-builder access to the local project cache is out of scope for v1. 
   [test](../crates/wrix-cache/tests/publisher.rs::publish_uses_flat_signed_cache_with_nonrecursive_copies)
 - Lock contention in the automatic publisher prints a waiting message; lock timeout writes a pending JSON record and warning, and a later explicit publish drains matching pending records
   [test](../crates/wrix-cache/tests/publisher.rs::lock_timeout_records_pending_and_explicit_publish_drains)
+- Explicit publishing removes markers and unreachable payloads for removed, renamed, excluded, or empty root sets without removing unrelated pending records
+  [test](../crates/wrix-cache/tests/publisher.rs::publishing_reconciles_removed_renamed_excluded_and_empty_root_sets)
+- Marker reconciliation preserves temporarily unrealized current roots and payloads shared with retained roots
+  [test](../crates/wrix-cache/tests/publisher.rs::reconciliation_preserves_unrealized_roots_and_shared_payloads)
+- Warming a subset keeps the full publish manifest and retains configured check roots, while respecting publish exclusions
+  [test](../crates/wrix-cache/tests/publisher.rs::warm_subsets_preserve_full_publish_manifest_and_check_retention)
+- Automatic publishing does not remove unrelated root markers
+  [test](../crates/wrix-cache/tests/publisher.rs::automatic_publish_does_not_reconcile_other_root_markers)
 - Updating a root to a new output replaces that root's GC marker and prunes cache entries no longer reachable from any marker on explicit prune/publish/warm, so repeated publishes do not grow the cache indefinitely
   [test](../crates/wrix-cache/tests/publisher.rs::prune_keeps_only_paths_reachable_from_current_markers)
 - `wrix service cache rotate-key` invalidates the local cache, generates a new keypair, updates metadata, and requires republishing rather than trusting old and new keys simultaneously
