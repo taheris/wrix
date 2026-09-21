@@ -1,7 +1,7 @@
 use std::{
     env, fs,
-    io::{self, BufRead, BufReader, Write},
-    net::{TcpListener, TcpStream},
+    io::{self, Write},
+    net::TcpListener,
     path::{Path, PathBuf},
     process::{Command, ExitCode, Stdio},
 };
@@ -13,6 +13,8 @@ use displaydoc::Display;
 use serde::Deserialize;
 use thiserror::Error as ThisError;
 use wrix_core::path::{WorkspaceHash, WorkspaceHashParseError};
+
+mod server;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -122,7 +124,19 @@ impl Helper {
 pub fn main(helper: Helper) -> ExitCode {
     let args = env::args().skip(1).collect::<Vec<_>>();
     let mut stdout = io::stdout().lock();
-    let mut stderr = io::stderr().lock();
+    let mut stderr = io::stderr();
+    if let Err(error) = tracing_subscriber::fmt().with_writer(io::stderr).try_init() {
+        if writeln!(
+            stderr,
+            "{}: logging initialization failed: {error}",
+            helper.binary_name()
+        )
+        .is_err()
+        {
+            return ExitCode::FAILURE;
+        }
+        return ExitCode::FAILURE;
+    }
     match run(helper, &args, &mut stdout, &mut stderr) {
         Ok(code) => code,
         Err(error) => {
@@ -170,105 +184,8 @@ fn run_serve(args: &[String], stderr: &mut impl Write) -> Result<ExitCode> {
     let root = PathBuf::from(root);
     require_absolute_dir("cache root", &root)?;
     let listener = TcpListener::bind(listen)?;
-    for stream in listener.incoming() {
-        match stream {
-            Ok(stream) => handle_cache_request(stream, &root)?,
-            Err(error) => writeln!(stderr, "wrix-cache-serve: accept failed: {error}")?,
-        }
-    }
+    server::serve(&listener, &root)?;
     Ok(ExitCode::SUCCESS)
-}
-
-fn handle_cache_request(stream: TcpStream, root: &Path) -> Result<()> {
-    let mut reader = BufReader::new(stream.try_clone()?);
-    let mut first_line = String::new();
-    reader.read_line(&mut first_line)?;
-    let mut parts = first_line.split_whitespace();
-    let request = parts.next().zip(parts.next());
-    let mut stream = stream;
-    match request {
-        Some(("GET", target)) => serve_cache_path(&mut stream, root, target, true),
-        Some(("HEAD", target)) => serve_cache_path(&mut stream, root, target, false),
-        Some((_, _)) | None => write_response(
-            &mut stream,
-            "405 Method Not Allowed",
-            b"method not allowed\n",
-            true,
-        ),
-    }
-}
-
-fn serve_cache_path(
-    stream: &mut TcpStream,
-    root: &Path,
-    target: &str,
-    include_body: bool,
-) -> Result<()> {
-    let Some(relative) = parse_cache_target(target) else {
-        return write_response(stream, "404 Not Found", b"not found\n", include_body);
-    };
-    let Some(path) = resolve_cache_file(root, relative)? else {
-        return write_response(stream, "404 Not Found", b"not found\n", include_body);
-    };
-    let body = fs::read(path)?;
-    write_response(stream, "200 OK", &body, include_body)
-}
-
-fn resolve_cache_file(root: &Path, relative: &str) -> Result<Option<PathBuf>> {
-    let root = root.canonicalize()?;
-    let path = root.join(relative);
-    let path = match path.canonicalize() {
-        Ok(path) => path,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.into()),
-    };
-    if path.starts_with(&root) && path.is_file() {
-        Ok(Some(path))
-    } else {
-        Ok(None)
-    }
-}
-
-fn parse_cache_target(target: &str) -> Option<&str> {
-    let path = target.split('?').next()?.trim_start_matches('/');
-    if path.is_empty() || path.contains('\\') || has_forbidden_segment(path) {
-        return None;
-    }
-    if path == "nix-cache-info"
-        || is_root_narinfo(path)
-        || path.starts_with("nar/")
-        || path.starts_with("log/")
-    {
-        Some(path)
-    } else {
-        None
-    }
-}
-
-fn has_forbidden_segment(path: &str) -> bool {
-    path.split('/')
-        .any(|segment| segment.is_empty() || matches!(segment, "." | ".."))
-}
-
-fn is_root_narinfo(path: &str) -> bool {
-    path.ends_with(".narinfo") && !path.contains('/')
-}
-
-fn write_response(
-    stream: &mut TcpStream,
-    status: &str,
-    body: &[u8],
-    include_body: bool,
-) -> Result<()> {
-    write!(
-        stream,
-        "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        body.len()
-    )?;
-    if include_body {
-        stream.write_all(body)?;
-    }
-    Ok(())
 }
 
 fn run_hook(args: &[String], stdout: &mut impl Write) -> Result<ExitCode> {
@@ -549,7 +466,10 @@ mod test {
         thread,
     };
 
-    use super::{handle_cache_request, manifest_allows_drv, parse_cache_target};
+    use super::{
+        manifest_allows_drv,
+        server::{handle_cache_request, parse_cache_target},
+    };
 
     #[test]
     fn manifest_scope_accepts_matching_drv_path() {

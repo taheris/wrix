@@ -1,6 +1,7 @@
 mod apple;
 mod dolt;
 mod managed;
+mod supervisor;
 
 use std::{
     env, fs, io,
@@ -34,6 +35,8 @@ const CACHE_PORT_WIDTH: u16 = 2_000;
 const DOLT_PORT_START: u16 = 23_000;
 const DOLT_PORT_WIDTH: u16 = 2_000;
 const CACHE_ENABLED_LABEL: &str = "wrix.cache.enabled";
+const SUPERVISION_LABEL: &str = "wrix.service.supervision";
+const SUPERVISION_VERSION: &str = "1";
 const DOLT_TRANSPORT_LABEL: &str = "wrix.dolt.transport";
 const DOLT_AUTH_LABEL: &str = "wrix.dolt.auth";
 const DOLT_AUTH_VERSION: &str = "tcp-root-v1";
@@ -978,6 +981,8 @@ impl Runtime {
             .arg("--label")
             .arg("wrix.kind=service")
             .arg("--label")
+            .arg(format!("{SUPERVISION_LABEL}={SUPERVISION_VERSION}"))
+            .arg("--label")
             .arg(format!(
                 "{CACHE_ENABLED_LABEL}={}",
                 if plan.cache_enabled() {
@@ -1070,6 +1075,15 @@ impl Runtime {
                 .inspect_label(name.as_str(), CACHE_ENABLED_LABEL)?
                 .as_deref()
                 != Some("true")
+        {
+            return Ok(false);
+        }
+        if plan.cache_enabled()
+            && plan.dolt().is_some()
+            && self
+                .inspect_label(name.as_str(), SUPERVISION_LABEL)?
+                .as_deref()
+                != Some(SUPERVISION_VERSION)
         {
             return Ok(false);
         }
@@ -1625,7 +1639,9 @@ fn is_loopback_port_available(port: u16) -> bool {
 
 fn container_command(plan: &Plan) -> String {
     match (plan.cache_enabled(), plan.dolt()) {
-        (true, Some(dolt)) => format!("wrix-cache-serve /cache & {}", dolt_server_command(dolt)),
+        (true, Some(dolt)) => {
+            supervisor::command("exec wrix-cache-serve /cache", &dolt_server_command(dolt))
+        }
         (false, Some(dolt)) => dolt_server_command(dolt),
         (true, None) => String::from("exec wrix-cache-serve /cache"),
         (false, None) => String::from("sleep infinity"),

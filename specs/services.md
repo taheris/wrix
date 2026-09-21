@@ -112,6 +112,8 @@ The project cache uses the Nix binary-cache protocol with different host and san
 
 The service container serves `<cache-root>` with a Rust static HTTP helper mounted read-only. The server accepts GET/HEAD only, disables directory listing, rejects path traversal, and serves only Nix binary-cache paths (`nix-cache-info`, `*.narinfo`, `nar/...`, optional `log/...`). Wrix does not rely on container DNS. The service publishes a host-loopback port (`127.0.0.1:<cache-port> -> service-container:8080`), persists the selected endpoint in `services.json`, and launchers inject the resolved sandbox-visible URL. Preferred host ports are deterministic from the workspace hash: cache HTTP uses `21000–22999`, and Darwin/fallback Dolt TCP uses `23000–24999`. If a preferred port is busy, wrix probes within the matching range, persists the chosen port, and reuses it while available. Service startup fails if the runtime cannot bind required service ports to loopback only.
 
+HTTP clients are isolated from each other and from the accept loop. The helper admits at most 32 concurrent requests, bounds headers to 8 KiB and 32 fields within five seconds, and bounds writes to 30 seconds of inactivity and five minutes total. GET streams files with bounded memory; HEAD reads only metadata. When cache and Dolt share the service container, either process exiting terminates the other and fails the container rather than hiding a failed service.
+
 HTTP is the only container-facing cache transport. Unix-socket cache substituters, host Nix daemon sockets, shared mutable `/nix/store` volumes, Harmonia, nix-serve, and other host-store-serving caches are excluded.
 
 ### Project scope and root sets
@@ -202,6 +204,22 @@ Direct remote-builder access to the local project cache is out of scope for v1. 
   [system](verify:services.container-pull-config)
 - The service cache HTTP endpoint is a Rust static read-only server for `<cache-root>`, uses an explicit persisted loopback host port in the `21000–22999` range, serves only Nix binary-cache paths, and does not require container DNS for sandbox substitution
   [system](verify:services.cache-http-endpoint)
+- An idle cache client does not block independent requests
+  [test](../crates/wrix-cache/tests/helper_server.rs::idle_clients_do_not_block_other_requests)
+- Disconnected or reset cache clients cannot terminate the HTTP helper
+  [test](../crates/wrix-cache/tests/helper_server.rs::disconnected_clients_do_not_terminate_service)
+- Cache request headers are bounded and parsed completely before serving
+  [test](../crates/wrix-cache/tests/helper_server.rs::request_headers_are_bounded_and_complete)
+- Trickle-fed request headers cannot extend the request deadline
+  [test](../crates/wrix-cache/tests/helper_server.rs::partial_request_deadline_is_not_extended_by_trickling)
+- Stalled response writes obey a bounded deadline
+  [test](helper::server::test::stalled_body_writes_obey_the_response_deadline)
+- HEAD uses metadata only and large GET responses stream within bounded memory
+  [test](../crates/wrix-cache/tests/helper_server.rs::head_reads_only_metadata_and_get_streams_large_files)
+- Legacy combined cache/Dolt containers are recreated once with child supervision on service start
+  [test](../crates/wrix-cli/tests/service_lifecycle.rs::legacy_combined_services_are_recreated_with_child_supervision)
+- A combined cache/Dolt service fails and stops its sibling when either child exits
+  [test](lifecycle::supervisor::test::either_service_exit_stops_its_sibling_and_fails_the_container)
 - Sandboxes receive no cache signing key, no durable state root mount, no host `/nix/store` mount, and no host Nix daemon socket as part of project-cache integration
   [system](verify:services.sandbox-cache-boundary)
 - With `WRIX_NETWORK=limit`, sandbox Nix can reach exactly the project cache endpoint while unrelated host-local services remain outside the generated allowlist

@@ -65,6 +65,7 @@ impl Fixture {
                     "wrix.workspace": fixture.metadata["workspace_path"],
                     "wrix.workspace.hash": fixture.metadata["workspace_hash"],
                     "wrix.cache.enabled": "true",
+                    "wrix.service.supervision": "1",
                     "wrix.dolt.transport": "tcp",
                     "wrix.dolt.auth": "tcp-root-v1"
                 },
@@ -235,6 +236,30 @@ fn apple_start_recreates_legacy_tcp_services_for_authentication_bootstrap() -> T
         "{args}"
     );
     assert_eq!(fs::read_to_string(marker)?, "persistent database");
+    Ok(())
+}
+
+#[test]
+fn legacy_combined_services_are_recreated_with_child_supervision() -> TestResult {
+    let mut fixture = Fixture::new()?;
+    fixture.snapshot[0]["configuration"]["labels"]
+        .as_object_mut()
+        .unwrap()
+        .remove("wrix.service.supervision");
+    fixture.write_snapshot()?;
+    for _ in 0..2 {
+        let output = fixture.run("start")?;
+        assert!(output.status.success(), "{}", output.stderr);
+    }
+    let log = fs::read_to_string(fixture.root.path().join("runtime.log"))?;
+    assert_eq!(
+        log.lines().filter(|line| line.starts_with("run ")).count(),
+        1,
+        "{log}"
+    );
+    let args = fs::read_to_string(fixture.root.path().join("run.argv"))?;
+    assert!(args.contains("wrix.service.supervision=1"));
+    assert!(args.contains("wait -n"));
     Ok(())
 }
 
