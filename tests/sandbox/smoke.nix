@@ -336,6 +336,34 @@ in
         mkdir $out
       '';
 
+  builder-store-gc-recovery = import ../builder/store.nix { inherit pkgs; };
+
+  builder-store-lifecycle =
+    runCommandLocal "smoke-builder-store-lifecycle"
+      {
+        nativeBuildInputs = [
+          bash
+          pkgs.coreutils
+          pkgs.gnugrep
+          pkgs.gnused
+          jq
+          pkgs.openssh
+        ];
+      }
+      ''
+        set -euo pipefail
+        for test_name in \
+          test_start_restores_unrooted_volume_without_deleting_builds \
+          test_image_update_preserves_existing_store \
+          test_failed_runtime_restore_preserves_volume_and_verification_state \
+          test_fake_seed_failure_removes_only_temporary_container; do
+          WRIX_BUILDER_BIN="${wrixBuilder}/bin/wrix-builder" \
+            REPO_ROOT="${../..}" \
+            bash "${../../tests/builder/key-material.sh}" "$test_name"
+        done
+        touch "$out"
+      '';
+
   builder-startup-diagnostics =
     runCommandLocal "smoke-builder-startup-diagnostics"
       {

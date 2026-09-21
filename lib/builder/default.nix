@@ -25,9 +25,13 @@ let
   shellLib = import ../util/shell.nix { inherit pkgs; };
   builderSystem = linuxPkgs.stdenv.hostPlatform.system;
   builderSeedRoots = builderImage.darwin_seed_roots or [ ];
-  builderStoreExport = import ./darwin-store-export.nix {
+  builderRuntimeRoot = import ./runtime-root.nix {
     inherit pkgs;
     seedRoots = builderSeedRoots;
+  };
+  builderStoreExport = import ./darwin-store-export.nix {
+    inherit pkgs;
+    seedRoots = [ builderRuntimeRoot ];
   };
 
   script = pkgs.writeShellScriptBin "wrix-builder" ''
@@ -41,6 +45,8 @@ let
       WRIX_BUILDER_SKOPEO="''${WRIX_BUILDER_SKOPEO:-${pkgs.skopeo}/bin/skopeo}"
       WRIX_BUILDER_JQ="''${WRIX_BUILDER_JQ:-${pkgs.jq}/bin/jq}"
       WRIX_BUILDER_STORE_EXPORT="''${WRIX_BUILDER_STORE_EXPORT:-${builderStoreExport}}"
+      WRIX_BUILDER_STORE_IMPORT="${./import-store.sh}"
+      BUILDER_RUNTIME_ROOT="${builderRuntimeRoot}"
 
       resolve_user_home() {
         local user="$1"
@@ -75,6 +81,7 @@ let
       NIX_VOLUME="wrix-builder-nix"
       NIX_VOLUME_SIZE="40G"
       NIX_VOLUME_VERSION_FILE="$WRIX_DATA/builder-volume-image-version"
+      NIX_VOLUME_RUNTIME_ROOT_FILE="$WRIX_DATA/builder-volume-runtime-root"
       CONTAINER_NAME="wrix-builder"
       BUILDER_IMAGE="${builderImage.ref}"
       BUILDER_IMAGE_SOURCE="${builderImage.source}"
@@ -390,13 +397,17 @@ let
           exit 1
         elif [[ ! -f "$NIX_VOLUME_VERSION_FILE" || "$(cat "$NIX_VOLUME_VERSION_FILE")" != "$current_image" ]]; then
           needs_init=true
-          echo "Builder image changed, re-initializing persistent Nix store..."
+          echo "Updating builder runtime in existing Nix store (builds preserved)..."
+        elif [[ ! -f "$NIX_VOLUME_RUNTIME_ROOT_FILE" || "$(cat "$NIX_VOLUME_RUNTIME_ROOT_FILE")" != "$BUILDER_RUNTIME_ROOT" ]]; then
+          needs_init=true
+          echo "Restoring and protecting builder runtime in existing Nix store (builds preserved)..."
         fi
 
         if [[ "$needs_init" == true ]]; then
           echo "This may take a few minutes..."
-          wrix_builder_remove_nix_volume
-          wrix_builder_create_nix_volume
+          if ! wrix_builder_nix_volume_exists; then
+            wrix_builder_create_nix_volume
+          fi
 
           seed_container="wrix-builder-seed-$$"
           if ! wrix_builder_seed_nix_volume "$seed_container"; then
@@ -405,7 +416,8 @@ let
 
           mkdir -p "$WRIX_DATA"
           echo "$current_image" > "$NIX_VOLUME_VERSION_FILE"
-          echo "Nix store initialized and verified"
+          echo "$BUILDER_RUNTIME_ROOT" > "$NIX_VOLUME_RUNTIME_ROOT_FILE"
+          echo "Nix store initialized and verified; builder runtime protected from garbage collection"
         fi
 
         if [[ -d "$LEGACY_NIX_STORE" ]]; then

@@ -405,6 +405,17 @@ JSON
     for arg in "$@"; do
       if [[ "$arg" == "-i" || "$arg" == "--interactive" ]]; then
         cat >/dev/null
+        if [[ "${WRIX_BUILDER_FAKE_SEED_FAIL:-false}" == true ]]; then
+          remove_status "$name"
+          printf 'fixture: seed import failed\n' >&2
+          exit 1
+        fi
+        break
+      fi
+    done
+    for arg in "$@"; do
+      if [[ "$arg" == "--rm" ]]; then
+        remove_status "$name"
         break
       fi
     done
@@ -874,12 +885,8 @@ test_start_uses_verified_case_sensitive_volume() {
     "wrix-builder start did not mount the seed volume under a chroot store root"
   assert_file_contains \
     "$test_root/container.log" \
-    "nix-store --store /persistent-root --import" \
-    "wrix-builder start did not import the canonical Nix export"
-  assert_file_contains \
-    "$test_root/container.log" \
-    "nix-store --store /persistent-root --verify --check-contents" \
-    "wrix-builder start did not verify the imported Nix store"
+    "wrix-builder-import /persistent-root /nix/store/" \
+    "wrix-builder start did not invoke the store importer with its runtime root"
   assert_file_contains \
     "$test_root/container.log" \
     "-v wrix-builder-nix:/nix" \
@@ -894,6 +901,83 @@ test_start_uses_verified_case_sensitive_volume() {
     || fail "wrix-builder start did not record the verified volume image version"
   [[ "$output" == *"Legacy Nix store preserved at $legacy_store (not used)"* ]] \
     || fail "wrix-builder start did not report the preserved legacy store"
+}
+
+test_start_restores_unrooted_volume_without_deleting_builds() {
+  local test_root="$TEST_TMP/runtime-migration"
+  local metadata="$test_root/home/.local/share/wrix/builder-volume-runtime-root"
+  local volume="$test_root/state/volumes/wrix-builder-nix"
+
+  prepare_builder_fixture "$test_root"
+  run_builder "$test_root" start >/dev/null
+  run_builder "$test_root" stop >/dev/null
+  rm "$metadata"
+  printf 'preserved-project-build\n' >>"$volume"
+  : >"$test_root/container.log"
+
+  run_builder "$test_root" start >/dev/null
+
+  assert_file_contains "$volume" "preserved-project-build" "runtime migration erased existing builds"
+  assert_file_contains "$test_root/container.log" "store-export|canonical-nar" "unrooted volume was not restored"
+  assert_file_lacks "$test_root/container.log" "container|volume delete" "runtime migration deleted the volume"
+  assert_file_lacks "$test_root/container.log" "container|volume create" "runtime migration recreated the volume"
+  [[ -s "$metadata" ]] || fail "restored runtime was not recorded"
+}
+
+test_image_update_preserves_existing_store() {
+  local test_root="$TEST_TMP/image-update-preserves-store"
+  local version="$test_root/home/.local/share/wrix/builder-volume-image-version"
+  local volume="$test_root/state/volumes/wrix-builder-nix"
+
+  prepare_builder_fixture "$test_root"
+  run_builder "$test_root" start >/dev/null
+  run_builder "$test_root" stop >/dev/null
+  printf 'older-image\n' >"$version"
+  printf 'preserved-project-build\n' >>"$volume"
+  : >"$test_root/container.log"
+
+  run_builder "$test_root" start >/dev/null
+
+  assert_file_contains "$volume" "preserved-project-build" "image update erased existing builds"
+  assert_file_contains "$test_root/container.log" "store-export|canonical-nar" "image update did not refresh the runtime"
+  assert_file_lacks "$test_root/container.log" "container|volume delete" "image update deleted the volume"
+  assert_file_lacks "$version" "older-image" "image update did not record the verified version"
+}
+
+test_failed_runtime_restore_preserves_volume_and_verification_state() {
+  local output
+  local test_root="$TEST_TMP/runtime-restore-failure"
+  local metadata="$test_root/home/.local/share/wrix/builder-volume-runtime-root"
+  local volume="$test_root/state/volumes/wrix-builder-nix"
+
+  prepare_builder_fixture "$test_root"
+  run_builder "$test_root" start >/dev/null
+  run_builder "$test_root" stop >/dev/null
+  rm "$metadata"
+  printf 'preserved-project-build\n' >>"$volume"
+  : >"$test_root/container.log"
+
+  if output="$(WRIX_BUILDER_FAKE_SEED_FAIL=true run_builder "$test_root" start 2>&1)"; then
+    fail "failed runtime import was accepted"
+  fi
+  [[ "$output" == *"fixture: seed import failed"* ]] || fail "import error was suppressed"
+  [[ ! -e "$metadata" ]] || fail "failed import was marked verified"
+  assert_file_contains "$volume" "preserved-project-build" "failed import erased existing builds"
+  assert_file_lacks "$test_root/container.log" "container|volume delete" "failed import deleted the volume"
+  assert_file_lacks "$test_root/container.log" "container|run --name wrix-builder -d" "builder started with an unverified import"
+}
+
+test_fake_seed_failure_removes_only_temporary_container() {
+  local test_root="$TEST_TMP/seed-failure-contract"
+
+  prepare_builder_fixture "$test_root"
+  run_fake_container "$test_root" volume create wrix-builder-nix
+  if WRIX_BUILDER_FAKE_SEED_FAIL=true run_fake_container "$test_root" run \
+    --rm -i --name wrix-builder-seed fixture-image </dev/null; then
+    fail "fake seed ignored its import failure"
+  fi
+  [[ ! -e "$test_root/state/containers/wrix-builder-seed" ]] || fail "fake foreground --rm retained its container"
+  [[ -f "$test_root/state/volumes/wrix-builder-nix" ]] || fail "fake --rm removed a named volume"
 }
 
 test_start_repairs_routes_before_ssh_readiness() {
@@ -1304,6 +1388,10 @@ main() {
   run_one test_fake_ssh_models_service_readiness
   run_one test_start_publishes_ssh_only_on_host_loopback
   run_one test_start_uses_verified_case_sensitive_volume
+  run_one test_start_restores_unrooted_volume_without_deleting_builds
+  run_one test_image_update_preserves_existing_store
+  run_one test_failed_runtime_restore_preserves_volume_and_verification_state
+  run_one test_fake_seed_failure_removes_only_temporary_container
   run_one test_start_repairs_routes_before_ssh_readiness
   run_one test_start_refuses_unmanaged_named_volume
   run_one test_generates_per_user_ed25519_material

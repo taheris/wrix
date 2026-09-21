@@ -247,7 +247,7 @@ rawImage
 // {
   digest = digestFile;
   inherit labels;
-  darwin_seed_roots = if hostPkgs.stdenv.hostPlatform.isDarwin then contents else [ ];
+  darwin_seed_roots = contents;
   ref = "${refPrefix}${imageName}:${imageTag}";
   source = imageSource;
   source_kind = sourceKind;
