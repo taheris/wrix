@@ -189,6 +189,14 @@ commits. An invalid worktree is not treated as an alternate source of bead
 state, and successful recovery leaves the branch ready for the same pull,
 commit, and push behavior as an existing valid worktree.
 
+The sync branch is parsed as a relative Git branch name before mutation.
+Recovery rejects symlinked directory components beneath the repository root,
+including `.git`, the worktree, and the staged-remote paths. It checks these
+paths before mutation and again after checkout, so a symlinked `.beads`
+directory in the sync branch cannot redirect restoration into unrelated data.
+When restoration is unsafe, the staged Dolt remote remains available for
+operator recovery.
+
 Every git invocation in the beads-branch sync — including the
 `git worktree add` that recreates the worktree — uniformly skips prek,
 because the sync branch legitimately carries no prek config and a
@@ -352,6 +360,22 @@ upstream, not by this spec.
   advancing `origin/<branch>` with no `fatal: not a git repository: (null)`
   error
   [test](../crates/wrix-cli/tests/beads_push.rs::recovers_orphaned_worktree_relative_to_root)
+
+- An absolute `sync-branch` is rejected before any `bd` operation or config
+  write, without deleting unrelated filesystem data
+  [test](../crates/wrix-cli/tests/beads_push.rs::absolute_sync_branch_is_rejected_before_mutation)
+
+- Symlinked worktree and recovery directory components are rejected before
+  mutation, preserving the external directory contents and original config
+  [test](../crates/wrix-cli/tests/beads_push.rs::symlinked_managed_directories_are_rejected_before_mutation)
+
+- Recovery refuses a symlinked `.beads` directory checked out from the sync
+  branch without deleting external data or losing the staged Dolt remote
+  [test](../crates/wrix-cli/tests/beads_push.rs::recovery_rejects_symlinked_remote_from_sync_branch)
+
+- A hierarchical sync branch such as `team/beads` can recover an invalid
+  worktree and complete sync while preserving its canonical Dolt remote
+  [test](../crates/wrix-cli/tests/beads_push.rs::recovers_hierarchical_sync_branch_without_losing_dolt_remote)
 
 - When the beads worktree and local sync branch are both absent but
   `origin/<branch>` exists, `wrix beads push` recreates an attached local

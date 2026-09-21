@@ -44,13 +44,14 @@ fn is_valid(value: &str) -> bool {
     !value.is_empty()
         && value != "@"
         && !value.starts_with('-')
-        && !value.ends_with(['.', '/'])
+        && !value.ends_with('.')
         && !value.contains("..")
         && !value.contains("@{")
-        && !value.contains("//")
         && !value.bytes().any(is_forbidden_byte)
         && value.split('/').all(|component| {
-            !component.starts_with('.') && !component.as_bytes().ends_with(b".lock")
+            !component.is_empty()
+                && !component.starts_with('.')
+                && !component.as_bytes().ends_with(b".lock")
         })
 }
 
@@ -75,6 +76,10 @@ mod test {
             "",
             "@",
             "-beads",
+            "/",
+            "/outside",
+            "../outside",
+            "team/",
             ".beads",
             "team/.beads",
             "team//beads",

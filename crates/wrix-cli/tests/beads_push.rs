@@ -3,7 +3,7 @@ use std::{
     error::Error,
     ffi::OsString,
     fs, io,
-    os::unix::fs::PermissionsExt,
+    os::unix::fs::{PermissionsExt, symlink},
     path::{Path, PathBuf},
     process::Command as ProcessCommand,
 };
@@ -636,6 +636,76 @@ fn missing_repo_fails_before_git_sync() -> TestResult {
 }
 
 #[test]
+fn absolute_sync_branch_is_rejected_before_mutation() -> TestResult {
+    let fixture = Fixture::new("absolute-sync-branch")?;
+    setup_minimal_repo(fixture.repo())?;
+    let unrelated = fixture.repo().with_file_name("unrelated");
+    fs::create_dir(&unrelated)?;
+    let sentinel = unrelated.join("keep.txt");
+    fs::write(&sentinel, "unrelated data\n")?;
+    let config = format!("sync-branch: \"{}\"\n", unrelated.display());
+    let config_path = fixture.repo().join(".beads/config.yaml");
+    fs::write(&config_path, &config)?;
+
+    let output = invoke_push(fixture.repo(), &[fixture.fake_bin()], |command| {
+        configure_bd(command, &fixture, "success");
+    })?;
+
+    assert_eq!(fs::read_to_string(&sentinel)?, "unrelated data\n");
+    assert_ne!(output.code, 0, "stderr:\n{}", output.stderr);
+    assert!(output.stderr.contains("invalid beads sync branch"));
+    assert_eq!(fixture.bd_lines()?, Vec::<String>::new());
+    assert_eq!(fs::read_to_string(config_path)?, config);
+    Ok(())
+}
+
+#[test]
+fn symlinked_managed_directories_are_rejected_before_mutation() -> TestResult {
+    for relative in [
+        ".git",
+        ".git/beads-worktrees",
+        ".git/beads-worktrees/team",
+        ".git/beads-worktrees/team/beads",
+        ".git/beads-worktrees/team/beads/.beads",
+        ".git/beads-worktrees/team/beads/.beads/dolt-remote",
+        ".git/wrix-beads-dolt-remote-recovery",
+    ] {
+        let fixture = Fixture::new("symlinked-beads-path")?;
+        setup_minimal_repo(fixture.repo())?;
+        let config_path = fixture.repo().join(".beads/config.yaml");
+        let config = "sync-branch: \"team/beads\"\n";
+        fs::write(&config_path, config)?;
+        let unrelated = fixture.repo().with_file_name("unrelated");
+        let link = fixture.repo().join(relative);
+        if relative == ".git" {
+            fs::rename(&link, &unrelated)?;
+        } else {
+            fs::create_dir_all(link.parent().unwrap())?;
+            fs::create_dir(&unrelated)?;
+        }
+        symlink(&unrelated, &link)?;
+        let sentinel = unrelated.join("keep.txt");
+        fs::write(&sentinel, "unrelated data\n")?;
+
+        let output = invoke_push(fixture.repo(), &[fixture.fake_bin()], |command| {
+            configure_bd(command, &fixture, "success");
+        })?;
+
+        assert_ne!(output.code, 0, "accepted {relative}: {}", output.stderr);
+        assert!(
+            output.stderr.contains("unsafe beads worktree path"),
+            "{}",
+            output.stderr
+        );
+        assert_eq!(fixture.bd_lines()?, Vec::<String>::new(), "{relative}");
+        assert_eq!(fs::read_to_string(config_path)?, config);
+        assert_eq!(fs::read_to_string(&sentinel)?, "unrelated data\n");
+        assert!(fs::symlink_metadata(link)?.is_symlink());
+    }
+    Ok(())
+}
+
+#[test]
 fn pre_pull_cleanup_uses_canonical_dirty_detection() -> TestResult {
     let fixture = Fixture::new("pre-pull-cleanup")?;
     setup_repo_with_beads_branch(&fixture)?;
@@ -800,6 +870,98 @@ fn recovers_orphaned_worktree_relative_to_root() -> TestResult {
     assert_ne!(
         before,
         git_stdout(fixture.repo(), &["rev-parse", "origin/beads"])?
+    );
+    Ok(())
+}
+
+#[test]
+fn recovery_rejects_symlinked_remote_from_sync_branch() -> TestResult {
+    let fixture = Fixture::new("symlinked-recovery-remote")?;
+    setup_repo_with_beads_branch(&fixture)?;
+    let worktree = fixture.beads_worktree();
+    let unrelated = fixture.repo().with_file_name("unrelated");
+    fs::create_dir_all(unrelated.join("dolt-remote"))?;
+    let sentinel = unrelated.join("dolt-remote/keep.txt");
+    fs::write(&sentinel, "unrelated data\n")?;
+    run_git(&worktree, &["rm", "-r", ".beads"])?;
+    symlink(&unrelated, worktree.join(".beads"))?;
+    run_git(&worktree, &["add", ".beads"])?;
+    run_git(&worktree, &["commit", "-qm", "Symlinked beads directory"])?;
+    fs::remove_file(worktree.join(".beads"))?;
+    fs::create_dir_all(fixture.worktree_remote_dir())?;
+    fs::write(
+        fixture.worktree_remote_dir().join("db.txt"),
+        "local Dolt state\n",
+    )?;
+    fs::remove_dir_all(fixture.repo().join(".git/worktrees/beads"))?;
+
+    let output = invoke_push(fixture.repo(), &[fixture.fake_bin()], |command| {
+        configure_bd(command, &fixture, "success");
+        // The recovery payload intentionally is not a valid Dolt database.
+        command.env("WRIX_BEADS_FAKE_CONFIG", "1");
+    })?;
+
+    assert_eq!(fs::read_to_string(&sentinel)?, "unrelated data\n");
+    assert_ne!(output.code, 0, "stderr:\n{}", output.stderr);
+    assert!(
+        output.stderr.contains("unsafe beads worktree path"),
+        "{}",
+        output.stderr
+    );
+    assert_eq!(
+        fs::read_to_string(
+            fixture
+                .repo()
+                .join(".git/wrix-beads-dolt-remote-recovery/db.txt")
+        )?,
+        "local Dolt state\n"
+    );
+    Ok(())
+}
+
+#[test]
+fn recovers_hierarchical_sync_branch_without_losing_dolt_remote() -> TestResult {
+    let fixture = Fixture::new("hierarchical-sync-branch")?;
+    setup_repo_with_beads_branch(&fixture)?;
+    run_git(
+        fixture.repo(),
+        &[
+            "worktree",
+            "remove",
+            fixture.beads_worktree().to_string_lossy().as_ref(),
+            "--force",
+        ],
+    )?;
+    run_git(fixture.repo(), &["branch", "-m", "beads", "team/beads"])?;
+    fs::write(
+        fixture.repo().join(".beads/config.yaml"),
+        "sync-branch: \"team/beads\"\n",
+    )?;
+    let worktree = fixture.repo().join(".git/beads-worktrees/team/beads");
+    let remote = worktree.join(".beads/dolt-remote");
+    fs::create_dir_all(&remote)?;
+    fs::write(remote.join("db.txt"), "local Dolt state\n")?;
+    fs::write(worktree.join(".git"), "gitdir: /missing/worktree\n")?;
+
+    let output = invoke_push(fixture.repo(), &[fixture.fake_bin()], |command| {
+        configure_bd(command, &fixture, "success");
+        // The recovery payload intentionally is not a valid Dolt database.
+        command.env("WRIX_BEADS_FAKE_CONFIG", "1");
+    })?;
+
+    assert_eq!(output.code, 0, "stderr:\n{}", output.stderr);
+    assert!(output.stdout.contains("wrix beads push: synced to GitHub"));
+    assert_eq!(
+        git_stdout(&worktree, &["symbolic-ref", "HEAD"])?,
+        "refs/heads/team/beads"
+    );
+    assert_eq!(
+        fs::read_to_string(remote.join("db.txt"))?,
+        "local Dolt state\n"
+    );
+    assert_eq!(
+        git_stdout(&worktree, &["rev-parse", "HEAD"])?,
+        git_stdout(fixture.repo(), &["rev-parse", "origin/team/beads"])?
     );
     Ok(())
 }

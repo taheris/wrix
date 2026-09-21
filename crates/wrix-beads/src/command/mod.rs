@@ -1,7 +1,7 @@
 use std::{
     env, fmt, fs, io,
     io::Write,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     process::{Command as ProcessCommand, ExitCode, Output, Stdio},
 };
 
@@ -80,6 +80,8 @@ pub enum Error {
     OversizedRemoteFile { path: String, bytes: u64 },
     /// unpublished beads history contains a Git blob exceeding GitHub's 100 MiB limit. Back up the local branch, losslessly repack the file remote, and replace only unpublished sync commits; do not force-push published history
     OversizedSyncHistory,
+    /// unsafe beads worktree path: {path}; recovery requires directories beneath the repository's .git without symlink components
+    UnsafeWorktreePath { path: String },
     /// staged Dolt remote already exists at {path}
     StagedRemoteExists { path: String },
     /// worktree recovery failed: {recovery}; restoring the staged Dolt remote also failed: {restore}
@@ -171,17 +173,62 @@ impl Context {
         if let Some(peel) = peel_beads_worktree(&root) {
             root = peel;
         }
+        let root = root.canonicalize()?;
         let branch = read_sync_branch(&root)?;
         let worktree = root.join(".git/beads-worktrees").join(branch.as_str());
         let worktree_remote_dir = worktree.join(".beads/dolt-remote");
         let recovery_remote_dir = root.join(".git/wrix-beads-dolt-remote-recovery");
-        Ok(Some(Self {
+        let context = Self {
             root,
             branch,
             worktree,
             worktree_remote_dir,
             recovery_remote_dir,
-        }))
+        };
+        context.check_worktree_paths()?;
+        Ok(Some(context))
+    }
+
+    fn check_worktree_paths(&self) -> Result<()> {
+        let git_dir = self.root.join(".git");
+        check_managed_directory(&git_dir, &self.worktree_remote_dir)?;
+        check_managed_directory(&git_dir, &self.recovery_remote_dir)
+    }
+}
+
+fn check_managed_directory(base: &Path, path: &Path) -> Result<()> {
+    let relative = path
+        .strip_prefix(base)
+        .map_err(|_source| Error::UnsafeWorktreePath {
+            path: path.display().to_string(),
+        })?;
+    if relative.as_os_str().is_empty() {
+        return Err(Error::UnsafeWorktreePath {
+            path: path.display().to_string(),
+        });
+    }
+    let mut current = base.to_path_buf();
+    check_directory_component(&current)?;
+    for component in relative.components() {
+        let Component::Normal(name) = component else {
+            return Err(Error::UnsafeWorktreePath {
+                path: path.display().to_string(),
+            });
+        };
+        current.push(name);
+        check_directory_component(&current)?;
+    }
+    Ok(())
+}
+
+fn check_directory_component(path: &Path) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() => Ok(()),
+        Ok(_) => Err(Error::UnsafeWorktreePath {
+            path: path.display().to_string(),
+        }),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
     }
 }
 
@@ -412,6 +459,7 @@ fn sync_beads_git_branch(
     if !ensure_beads_worktree(context, stderr)? {
         return Ok(ExitCode::SUCCESS);
     }
+    context.check_worktree_paths()?;
     repair_worktree_pointers(context)?;
     commit_dirty_worktree(&context.worktree)?;
     run_git_required_in(&context.worktree, &["pull", "--rebase", "--quiet"])?;
@@ -426,6 +474,7 @@ fn sync_beads_git_branch(
 }
 
 fn ensure_beads_worktree(context: &Context, stderr: &mut impl Write) -> Result<bool> {
+    context.check_worktree_paths()?;
     if context.worktree.is_dir()
         && run_git_output_in(&context.worktree, &["rev-parse", "--is-inside-work-tree"])?
             .status
@@ -454,6 +503,7 @@ fn ensure_beads_worktree(context: &Context, stderr: &mut impl Write) -> Result<b
 }
 
 fn stage_worktree_dolt_remote(context: &Context) -> Result<bool> {
+    context.check_worktree_paths()?;
     if !context.worktree_remote_dir.is_dir() {
         return Ok(false);
     }
@@ -467,6 +517,7 @@ fn stage_worktree_dolt_remote(context: &Context) -> Result<bool> {
 }
 
 fn restore_staged_dolt_remote(context: &Context) -> Result<()> {
+    context.check_worktree_paths()?;
     if !context.recovery_remote_dir.is_dir() {
         return Ok(());
     }
@@ -479,6 +530,7 @@ fn restore_staged_dolt_remote(context: &Context) -> Result<()> {
 }
 
 fn recreate_beads_worktree(context: &Context, stderr: &mut impl Write) -> Result<bool> {
+    context.check_worktree_paths()?;
     if context.worktree.is_dir() {
         fs::remove_dir_all(&context.worktree)?;
     }
@@ -714,9 +766,9 @@ mod test {
     use std::fs;
 
     use super::{
-        Command, Error, IssueId, MAX_GITHUB_BLOB_BYTES, is_fast_forward_rejection,
-        origin_remote_url, parse_affected_ids, read_sync_branch, reject_oversized_remote_files,
-        snapshot_query_for_ids,
+        Command, Error, IssueId, MAX_GITHUB_BLOB_BYTES, check_managed_directory,
+        is_fast_forward_rejection, origin_remote_url, parse_affected_ids, read_sync_branch,
+        reject_oversized_remote_files, snapshot_query_for_ids,
     };
 
     #[test]
@@ -786,6 +838,37 @@ mod test {
         .unwrap();
 
         assert!(read_sync_branch(root.path()).is_err());
+    }
+
+    #[test]
+    fn managed_directory_rejects_paths_outside_git_root() {
+        let root = tempfile::tempdir().unwrap();
+        let git_dir = root.path().join(".git");
+        fs::create_dir(&git_dir).unwrap();
+        for path in [
+            git_dir.clone(),
+            root.path().join("unrelated"),
+            git_dir.join("../unrelated"),
+        ] {
+            assert!(matches!(
+                check_managed_directory(&git_dir, &path),
+                Err(Error::UnsafeWorktreePath { .. })
+            ));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn managed_directory_rejects_dangling_symlink_ancestors() {
+        let root = tempfile::tempdir().unwrap();
+        let git_dir = root.path().join(".git");
+        fs::create_dir(&git_dir).unwrap();
+        std::os::unix::fs::symlink(root.path().join("absent"), git_dir.join("beads-worktrees"))
+            .unwrap();
+        assert!(matches!(
+            check_managed_directory(&git_dir, &git_dir.join("beads-worktrees/beads")),
+            Err(Error::UnsafeWorktreePath { .. })
+        ));
     }
 
     #[test]
