@@ -76,14 +76,20 @@ def test_file_selector_adapter(root):
         [
             str(adapter),
             "--print-filter",
-            "../crates/example/tests/sample.rs::file_test | module::unit_test",
+            "../crates/example/tests/sample.rs::file_test"
+            " | ../crates/example/src/config/mod.rs::nested_source_test"
+            " | ../crates/example/src/config.rs::flat_source_test"
+            " | crates/example/src/lib.rs::test::source_test"
+            " | module::unit_test",
         ],
         check=True,
         capture_output=True,
         text=True,
     )
     require(
-        completed.stdout.strip() == "test(file_test) + test(module::unit_test)",
+        completed.stdout.strip()
+        == "test(file_test) + test(nested_source_test) + test(flat_source_test)"
+        " + test(test::source_test) + test(module::unit_test)",
         f"file selector adapter emitted unexpected filter {completed.stdout.strip()!r}",
     )
 

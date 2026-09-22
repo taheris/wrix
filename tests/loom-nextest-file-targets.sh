@@ -38,8 +38,8 @@ nextest_filter() {
       continue
     fi
     name="$target"
-    if [[ "$target" =~ ^(\.\./)?crates/[^/]+/tests/[^/]+\.rs::(.+)$ ]]; then
-      name="${BASH_REMATCH[2]}"
+    if [[ "$target" =~ ^(\.\./)?crates/[^/]+/(tests|src)/.+\.rs::(.+)$ ]]; then
+      name="${BASH_REMATCH[3]}"
     fi
     if [[ -n "$filter" ]]; then
       filter+=" + "

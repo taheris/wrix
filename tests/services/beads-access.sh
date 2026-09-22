@@ -71,6 +71,20 @@ for transport in tcp unix; do
   [[ ! -f .beads/dolt-server.pid ]]
 done
 
+test_slow_sql_probe_uses_remaining_startup_budget() {
+  local delayed_bd="$TEST_TMP/delayed-bd"
+  cat >"$delayed_bd" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+sleep 2
+exec "$WRIX_DELAYED_BD_BIN" "$@"
+EOF
+  chmod +x "$delayed_bd"
+  WRIX_DELAYED_BD_BIN="$BD_BIN" WRIX_REAL_BD_BIN="$delayed_bd" wrix_wait_for_beads_endpoint
+}
+
+test_slow_sql_probe_uses_remaining_startup_budget
+
 export BEADS_DOLT_SERVER_HOST=127.0.0.1
 export BEADS_DOLT_SERVER_PORT
 BEADS_DOLT_SERVER_PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')

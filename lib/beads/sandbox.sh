@@ -44,8 +44,9 @@ wrix_wait_for_beads_endpoint() {
     echo 'Error: bd is required to validate the workspace Dolt endpoint' >&2
     return 1
   fi
-  while (( SECONDS < deadline )); do
-    if output=$(timeout --signal=KILL 1 "$bd_bin" --readonly sql 'SELECT 1' 2>&1); then
+  local remaining
+  while (( (remaining = deadline - SECONDS) > 0 )); do
+    if output=$(timeout --signal=KILL "$remaining" "$bd_bin" --readonly sql 'SELECT 1' 2>&1); then
       return 0
     fi
     sleep 0.2

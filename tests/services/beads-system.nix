@@ -5,7 +5,7 @@
 }:
 
 let
-  inherit (pkgs.lib) escapeShellArg makeBinPath;
+  inherit (pkgs.lib) escapeShellArg makeBinPath mkForce;
 
   syncBranch = "team-beads";
   serviceImage = import ../../lib/services/image.nix {
@@ -69,6 +69,7 @@ let
       podman
       skopeo
       systemd
+      yq-go
       wrix.rustPackage.wrix
     ]
   );
@@ -78,6 +79,7 @@ let
     export XDG_STATE_HOME="$HOME/.local/state"
     export XDG_CACHE_HOME="$HOME/.cache"
     export BD_NON_INTERACTIVE=1
+    export BD_DISABLE_METRICS=1
     export WRIX_CONTAINER_RUNTIME=podman
     export WRIX_SERVICE_IMAGE=${escapeShellArg serviceImage.ref}
     export WRIX_SERVICE_IMAGE_SOURCE=${escapeShellArg "${serviceImage.source}"}
@@ -98,26 +100,19 @@ let
     printf 'main\n' >"$repo/README.md"
     git -C "$repo" add README.md
     git -C "$repo" commit -qm "initial"
-    git -C "$repo" remote add origin "$origin"
-    git -C "$repo" push -u origin main --quiet
     git -C "$repo" switch -c "${syncBranch}" --quiet
     mkdir -p "$repo/.beads/dolt-remote"
     touch "$repo/.beads/dolt-remote/.keep"
     git -C "$repo" add .beads/dolt-remote/.keep
     git -C "$repo" commit -qm "beads initial"
-    git -C "$repo" push -u origin "${syncBranch}" --quiet
     git -C "$repo" switch main --quiet
     git -C "$repo" worktree add "$worktree" "${syncBranch}" --quiet
     mkdir -p \
-      "$repo/.beads/dolt" \
+      "$repo/.beads" \
       "$repo/.wrix" \
       "$XDG_STATE_HOME" \
       "$XDG_CACHE_HOME"
     chmod 700 "$repo/.beads"
-    (
-      cd "$repo/.beads/dolt"
-      dolt init --name "Wrix Test" --email "wrix@example.invalid" >/dev/null
-    )
   '';
   initializeBeads = pkgs.writeShellScript "wrix-beads-system-initialize" ''
     set -euo pipefail
@@ -126,8 +121,26 @@ let
     repo="$HOME/beads-repo"
     remote="$repo/.git/beads-worktrees/${syncBranch}/.beads/dolt-remote"
     cd "$repo"
-    wrix service start --no-cache >/dev/null
-    socket=$(wrix service dolt socket)
+    data="$HOME/beads-init-data"
+    socket="$repo/.wrix/dolt.sock"
+    mkdir -p "$data"
+    dolt sql-server --data-dir "$data" --host 127.0.0.1 --port 13307 \
+      --socket "$socket" >"$HOME/beads-init.log" 2>&1 &
+    server_pid=$!
+    stop_bootstrap() {
+      kill "$server_pid"
+      wait "$server_pid" || [[ "$?" -eq 143 ]]
+    }
+    trap stop_bootstrap EXIT
+    for _ in {1..200}; do
+      [[ ! -S "$socket" ]] || break
+      kill -0 "$server_pid"
+      sleep 0.1
+    done
+    if [[ ! -S "$socket" ]]; then
+      cat "$HOME/beads-init.log" >&2
+      exit 1
+    fi
     export BEADS_DOLT_SERVER_SOCKET="$socket"
     export BEADS_DOLT_AUTO_START=0
 
@@ -140,6 +153,10 @@ let
       --server-socket "$socket" \
       --database wx \
       >/dev/null
+    stop_bootstrap
+    trap - EXIT
+    rmdir .beads/dolt
+    mv "$data" .beads/dolt
     chmod 700 .beads
     if grep -q '^issue-prefix:' .beads/config.yaml; then
       sed -i 's/^issue-prefix:.*/issue-prefix: "wx"/' .beads/config.yaml
@@ -154,11 +171,15 @@ let
     if ! grep -q '^sync:' .beads/config.yaml; then
       printf 'sync:\n  mode: dolt-native\n' >>.beads/config.yaml
     fi
+    wrix service start --no-cache >/dev/null
+    wrix service dolt wait >/dev/null
     bd config set export.auto true >/dev/null
     bd dolt remote add origin "file://$remote" >/dev/null
     bd dolt commit >/dev/null
     bd dolt push >/dev/null
     rm -f .beads/issues.jsonl
+    git remote add origin "$HOME/beads-origin.git"
+    git push -u origin main "${syncBranch}" --quiet
   '';
   verifyCommandSurface = pkgs.writeShellScript "wrix-beads-system-command-surface" ''
     set -euo pipefail
@@ -181,7 +202,7 @@ let
     verify_config '^issue-prefix: "?wx"?$'
     verify_config '^sync-branch: "?${syncBranch}"?$'
     verify_config 'mode: dolt-native'
-    verify_config 'export.auto: false'
+    yq -e '.export.auto == false or .["export.auto"] == false' .beads/config.yaml >/dev/null
 
     task_id=$(bd create --title "command task" --type task --priority=P2 --silent)
     bd show "$task_id" --json | jq -e \
@@ -256,15 +277,17 @@ let
         printf 'auto-export warning remained enabled\n' >&2
         exit 1
       fi
+      if [[ "$attempt" -eq 1 ]]; then
+        sha256sum .beads/config.yaml >"$HOME/beads-config.sha256"
+      else
+        sha256sum --check "$HOME/beads-config.sha256"
+      fi
     done
     if [[ "$(bd config get export.auto)" != "false" ]]; then
       printf 'auto-export config was not disabled\n' >&2
       exit 1
     fi
-    if [[ "$(grep -c '^export.auto: false$' .beads/config.yaml)" != "1" ]]; then
-      printf 'auto-export config was not persisted exactly once\n' >&2
-      exit 1
-    fi
+    yq -e '.export.auto == false or .["export.auto"] == false' .beads/config.yaml >/dev/null
     if [[ -e .beads/issues.jsonl ]]; then
       printf 'auto-export created issues.jsonl\n' >&2
       exit 1
@@ -311,7 +334,7 @@ let
     jq -n \
       --arg workspace "$repo" \
       --arg command "$command" \
-      '{workspace:$workspace,env:[],agent_args:["bash","-euo","pipefail","-c",$command],mounts:[]}' \
+      '{workspace:$workspace,env:[["BD_DISABLE_METRICS","1"]],agent_args:["bash","-euo","pipefail","-c",$command],mounts:[]}' \
       > "$HOME/spawn.json"
 
     export WRIX_DEPLOY_KEY="$HOME/deploy-key"
@@ -412,6 +435,17 @@ pkgs.testers.runNixOSTest {
       uid = 1000;
     };
     virtualisation = {
+      # VM shares need ordinary file I/O, not file handles or device-node creation.
+      host.pkgs = mkForce (
+        pkgs
+        // {
+          virtiofsd = pkgs.writeShellScriptBin "virtiofsd" ''
+            set -euo pipefail
+            exec ${pkgs.virtiofsd}/bin/virtiofsd \
+              --inode-file-handles=never --modcaps=-mknod "$@"
+          '';
+        }
+      );
       cores = 2;
       diskSize = 8192;
       memorySize = 4096;
@@ -438,7 +472,7 @@ pkgs.testers.runNixOSTest {
     machine.succeed("chown -R alice:users /home/alice")
     machine.succeed(as_alice("${fixtureSetup}"))
 
-    machine.succeed(as_alice("${initializeBeads}"), timeout=120)
+    machine.succeed(as_alice("${initializeBeads}"), timeout=300)
 
     with subtest("wrix beads push disables real bd auto-export idempotently"):
         machine.succeed(as_alice("${verifyAutoExport}"), timeout=120)
