@@ -78,7 +78,7 @@ def main():
         cache_load,
         "extra-trusted-public-keys = {}",
     )
-    require_contains("project-cache launcher path", cache_load, "public_key.0")
+    require_contains("project-cache launcher path", cache_load, "public_key.as_str()")
     require_contains(
         "project-cache launcher path",
         cache_load,

@@ -47,6 +47,7 @@ in
   "services.cache-transport-http-only" = ''
     local root
     root="$(repo_root)"
+    python3 "$root/tests/verify/test_services_cache_transport.py"
     python3 "$root/tests/verify/services-cache-transport.py" "$root"
   '';
 }
