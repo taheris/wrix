@@ -87,7 +87,7 @@ if ! jq -e '
   .piConfigScoped == true and
   .claudeModel == "wrix-agent-settings-probe" and
   .claudeProbe == "1" and
-  .piDefaultModel == "gpt-6-astra" and
+  .piDefaultModel == "gpt-6.1-sol" and
   .piEditorPadding == 1 and
   .piInstallTelemetry == false and
   .piModel == "wrix-pi-settings-probe" and
