@@ -309,6 +309,8 @@ Plus consumer-defined fields the entrypoint reads from the original config mount
   [check](test-ci:test-sandbox-agent-settings)
 - Pi images seed `defaultModel = "gpt-6.1-sol"`, `editorPaddingX = 1`, and `enableInstallTelemetry = false`, so GPT-6.1 Sol is selected by default, the input editor has one cell of horizontal padding, and Pi's anonymous install/update ping plus optional provider attribution headers are disabled by default; update checking remains a separate Pi setting.
   [check](test-ci:test-sandbox-agent-settings)
+- A fresh Pi session with Codex credentials selects `gpt-6.1-sol` with xhigh reasoning using Pi's bundled model catalog, without a cached or network-refreshed catalog or a custom `models.json`.
+  [check](verify:sandbox.pi-default-model)
 - When `/workspace/bin` exists inside the container, it appears first on `PATH`, so a consumer-supplied shim at `/workspace/bin/<name>` resolves ahead of a same-named binary baked into the image
   [system](verify:sandbox.workspace-bin-path-present)
 - When `/workspace/bin` does not exist, the container's `PATH` does not contain `/workspace/bin`

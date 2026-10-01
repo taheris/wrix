@@ -215,6 +215,7 @@ let
       builder-vmnet-route = builderRouteTest;
       image-assembly-native = sandboxImageChecks.imageAssemblyNativeCheck;
       pi-auth-storage = import ./security/pi-auth.nix { inherit pkgs; };
+      pi-default-model = import ./sandbox/pi-default-model.nix { inherit pkgs wrix; };
     };
 
   # ============================================================================

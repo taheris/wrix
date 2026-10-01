@@ -1,4 +1,4 @@
-{ pkgs, ... }:
+{ pkgs, system, ... }:
 
 let
   inherit (pkgs.lib) escapeShellArg makeBinPath optionalString;
@@ -104,6 +104,10 @@ in
   "sandbox.nix-in-container" = sandboxScriptAll "nix-in-container";
 
   "sandbox.nix-store-verify-clean" = sandboxScriptAll "nix-store-verify-clean";
+
+  "sandbox.pi-default-model" = ''
+    nix build --no-link ".#checks.${system}.pi-default-model"
+  '';
 
   "sandbox.platform-dispatch" = platform "test_platform_dispatch_current_system";
 
