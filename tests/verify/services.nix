@@ -35,7 +35,10 @@ in
 
   "services.container-pull-config" = sandboxNix "test_container_pull_config";
 
-  "services.cache-http-endpoint" = sandboxNix "test_no_container_dns_dependency";
+  "services.cache-http-endpoint" = ''
+    ${sandboxNix "test_cache_server_policy_isolated_listeners"}
+    ${sandboxNix "test_no_container_dns_dependency"}
+  '';
 
   "services.sandbox-cache-boundary" = sandboxNix "test_no_host_store_or_cache_secret";
 

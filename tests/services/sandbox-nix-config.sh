@@ -64,8 +64,9 @@ build_wrix_package() {
 }
 
 build_cache_serve() {
-  cargo build --quiet -p wrix-cache --bin wrix-cache-serve
-  printf '%s\n' "$REPO_ROOT/target/debug/wrix-cache-serve"
+  local package
+  package="$(nix build --no-link --print-out-paths --no-warn-dirty "$REPO_ROOT#wrix-cache-serve")" || return
+  printf '%s/bin/wrix-cache-serve\n' "$package"
 }
 
 write_fake_runtime() {
@@ -364,40 +365,72 @@ assert_port_range() {
   fi
 }
 
-assert_cache_server_policy() {
-  if ! command -v curl >/dev/null 2>&1 || ! command -v timeout >/dev/null 2>&1; then
-    printf 'SKIP: curl and timeout are required for cache server assertions\n' >&2
+stop_cache_server() {
+  local pid="$1"
+  kill "$pid" 2>/dev/null || true # best-effort: the bounded helper may already have exited after a failed request.
+  wait "$pid" 2>/dev/null || true # best-effort: terminated helpers return nonzero during cleanup.
+}
+
+assert_cache_server_policy() (
+  set -euo pipefail
+  if ! command -v curl >/dev/null 2>&1 || ! command -v timeout >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
+    printf 'SKIP: curl, timeout, and python3 are required for cache server assertions\n' >&2
     exit 77
   fi
-  local serve_bin cache_root pid body status attempt
-  serve_bin="$(build_cache_serve)"
-  cache_root="$TEST_TMP/no-dns-cache-root"
-  mkdir -p "$cache_root/nar" "$cache_root/log"
-  printf 'StoreDir: /nix/store\nWantMassQuery: 1\nPriority: 40\n' >"$cache_root/nix-cache-info"
-  printf 'StorePath: /nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-demo\nSig: fake\n' >"$cache_root/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.narinfo"
-  printf 'nar payload\n' >"$cache_root/nar/demo.nar"
+  local serve_bin cache_root pid endpoint url body status attempt
+  serve_bin="$(build_cache_serve)" || return
+  cache_root="$(mktemp -d "$TEST_TMP/cache-policy.XXXXXX")" || return
+  mkdir -p "$cache_root/nar" "$cache_root/log" || return
+  printf 'StoreDir: /nix/store\nWantMassQuery: 1\nPriority: 40\n' >"$cache_root/nix-cache-info" || return
+  printf 'StorePath: /nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-demo\nSig: fake\n' >"$cache_root/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.narinfo" || return
+  printf '%s\n' "$cache_root" >"$cache_root/nar/demo.nar" || return
 
-  timeout 15s "$serve_bin" "$cache_root" >"$TEST_TMP/cache-serve.out" 2>"$TEST_TMP/cache-serve.err" &
+  endpoint="$(python3 - <<'PY'
+import socket
+with socket.socket() as listener:
+    listener.bind(("127.0.0.1", 0))
+    print(f"127.0.0.1:{listener.getsockname()[1]}")
+PY
+)" || return
+  url="http://$endpoint"
+  timeout 15s "$serve_bin" --listen "$endpoint" "$cache_root" >"$cache_root/serve.out" 2>"$cache_root/serve.err" &
   pid="$!"
+  trap 'stop_cache_server "$pid"' EXIT
   for ((attempt = 0; attempt < 50; attempt++)); do
-    if curl -fsS http://127.0.0.1:8080/nix-cache-info >/dev/null 2>&1; then
+    if ! kill -0 "$pid" 2>/dev/null; then
+      fail "cache server exited before readiness: $(<"$cache_root/serve.err")"
+      return 1
+    fi
+    if curl --noproxy '*' --max-time 1 -fsS "$url/nix-cache-info" >/dev/null 2>&1; then
       break
     fi
     sleep 0.1
   done
+  kill -0 "$pid" || return 1
 
-  body="$(curl -fsS http://127.0.0.1:8080/nix-cache-info)" || fail "cache server did not serve nix-cache-info: $(cat "$TEST_TMP/cache-serve.err")"
-  assert_contains "cache server nix-cache-info" "$body" "StoreDir: /nix/store"
-  status="$(curl -sS -o /dev/null -w '%{http_code}' -I http://127.0.0.1:8080/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.narinfo)"
-  [[ "$status" == "200" ]] || fail "cache server HEAD narinfo status was $status"
-  status="$(curl -sS -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8080/nar/demo.nar)"
-  [[ "$status" == "405" ]] || fail "cache server write method status was $status"
-  status="$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/)"
-  [[ "$status" == "404" ]] || fail "cache server directory listing status was $status"
-  status="$(curl --path-as-is -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/nar/../nix-cache-info)"
-  [[ "$status" == "404" ]] || fail "cache server traversal status was $status"
-  kill "$pid" 2>/dev/null || true # best-effort: timeout may already have stopped the helper.
-  wait "$pid" 2>/dev/null || true # best-effort: helper shutdown can race with wait.
+  body="$(curl --noproxy '*' --max-time 2 -fsS "$url/nix-cache-info")" || return
+  assert_contains "cache server nix-cache-info" "$body" "StoreDir: /nix/store" || return
+  body="$(curl --noproxy '*' --max-time 2 -fsS "$url/nar/demo.nar")" || return
+  assert_contains "cache server fixture ownership" "$body" "$cache_root" || return
+  status="$(curl --noproxy '*' --max-time 2 -sS -o /dev/null -w '%{http_code}' -I "$url/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.narinfo")" || return
+  [[ "$status" == "200" ]] || { fail "cache server HEAD narinfo status was $status"; return 1; }
+  status="$(curl --noproxy '*' --max-time 2 -sS -o /dev/null -w '%{http_code}' -X POST "$url/nar/demo.nar")" || return
+  [[ "$status" == "405" ]] || { fail "cache server write method status was $status"; return 1; }
+  status="$(curl --noproxy '*' --max-time 2 -sS -o /dev/null -w '%{http_code}' "$url/")" || return
+  [[ "$status" == "404" ]] || { fail "cache server directory listing status was $status"; return 1; }
+  status="$(curl --noproxy '*' --max-time 2 --path-as-is -sS -o /dev/null -w '%{http_code}' "$url/nar/../nix-cache-info")" || return
+  [[ "$status" == "404" ]] || { fail "cache server traversal status was $status"; return 1; }
+)
+
+test_cache_server_policy_isolated_listeners() {
+  local first_pid second_pid first_status=0 second_status=0
+  assert_cache_server_policy &
+  first_pid="$!"
+  assert_cache_server_policy &
+  second_pid="$!"
+  wait "$first_pid" || first_status="$?"
+  wait "$second_pid" || second_status="$?"
+  [[ "$first_status" -eq 0 && "$second_status" -eq 0 ]] || fail "concurrent cache policies failed: $first_status, $second_status"
 }
 
 sandbox_dry_run() {
@@ -546,6 +579,7 @@ test_no_host_store_or_cache_secret() {
 }
 
 ALL_TESTS=(
+  test_cache_server_policy_isolated_listeners
   test_container_pull_config
   test_loom_bead_spawn_uses_repo_service
   test_no_container_dns_dependency

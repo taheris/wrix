@@ -49,6 +49,13 @@ printf 'generated\n' >>"$0.calls"
 }
 
 #[test]
+fn keypair_reuse_and_regeneration_preserve_valid_state() -> TestResult {
+    generated_keys_are_reused_including_unpadded_public_keys()?;
+    invalid_existing_keys_are_regenerated_through_the_shared_parser()?;
+    invalid_generator_output_preserves_old_keys_and_cleans_temporary_files()
+}
+
+#[test]
 fn generated_keys_are_reused_including_unpadded_public_keys() -> TestResult {
     let fixture = Fixture::new(PUBLIC_KEY)?;
     fixture.ensure()?;
