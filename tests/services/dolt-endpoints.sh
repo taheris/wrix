@@ -7,11 +7,28 @@ REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 TEST_TMP="$(mktemp -d -t wrix-services-dolt.XXXXXX)"
 LISTENER_PIDS=()
 cleanup() {
-  local pid
+  local status="$?"
+  local pid child_status
   for pid in "${LISTENER_PIDS[@]}"; do
     kill "$pid" 2>/dev/null || true # best-effort: endpoint listener may already have exited.
   done
-  rm -rf "$TEST_TMP"
+  for pid in "${LISTENER_PIDS[@]}"; do
+    child_status=0
+    wait "$pid" || child_status="$?"
+    # SIGTERM is expected for listeners without a graceful shutdown handler.
+    if [[ "$child_status" -ne 0 && "$child_status" -ne 143 ]]; then
+      printf 'FAIL: endpoint listener %s exited with status %s\n' "$pid" "$child_status" >&2
+      if [[ "$status" -eq 0 ]]; then
+        status=1
+      fi
+    fi
+  done
+  if ! rm -rf "$TEST_TMP"; then
+    if [[ "$status" -eq 0 ]]; then
+      status=1
+    fi
+  fi
+  return "$status"
 }
 trap cleanup EXIT
 
@@ -518,7 +535,113 @@ test_explicit_tcp_dolt_uses_loopback_tcp() {
   assert_equals "dolt port command" "$port" "$port_output"
 }
 
+run_cleanup_fixture() {
+  local records="$1"
+  local test_status="$2"
+  local server_status="$3"
+  local name attempt
+  printf '%s\n' "$TEST_TMP" >"$records/fixture"
+  for name in first second; do
+    python3 - "$TEST_TMP" "$records/$name" "$server_status" <<'PY' &
+import os
+from pathlib import Path
+import signal
+import sys
+import time
+
+fixture = Path(sys.argv[1])
+record = sys.argv[2]
+status = int(sys.argv[3])
+
+
+def shutdown(_signal, _frame):
+    time.sleep(0.2)
+    try:
+        events = fixture / f"events-{os.getpid()}"
+        events.mkdir()
+        (events / "shutdown").write_text("shutdown event\n", encoding="utf-8")
+    except OSError as error:
+        Path(f"{record}.done").write_text(str(error), encoding="utf-8")
+        raise SystemExit(1) from error
+    Path(f"{record}.done").write_text("written", encoding="utf-8")
+    raise SystemExit(status)
+
+
+signal.signal(signal.SIGTERM, shutdown)
+Path(f"{record}.ready").write_text(str(os.getpid()), encoding="utf-8")
+while True:
+    signal.pause()
+PY
+    LISTENER_PIDS+=("$!")
+    for ((attempt = 0; attempt < 100; attempt++)); do
+      [[ -f "$records/$name.ready" ]] && break
+      sleep 0.05
+    done
+    if [[ ! -f "$records/$name.ready" ]]; then
+      fail "shutdown writer $name did not become ready"
+      return 1
+    fi
+  done
+  return "$test_status"
+}
+
+assert_cleanup_fixture() {
+  local test_status="$1"
+  local server_status="$2"
+  local expected_status="$3"
+  local records="$TEST_TMP/cleanup-$test_status-$server_status"
+  local actual_status name attempt
+  command -v python3 >/dev/null 2>&1 || { printf 'SKIP: python3 is required for shutdown writers\n' >&2; exit 77; }
+  mkdir -p "$records"
+  if bash "$SCRIPT_DIR/dolt-endpoints.sh" run_cleanup_fixture "$records" "$test_status" "$server_status" >"$records/output" 2>&1; then
+    actual_status=0
+  else
+    actual_status="$?"
+  fi
+  for name in first second; do
+    for ((attempt = 0; attempt < 100; attempt++)); do
+      [[ -f "$records/$name.done" ]] && break
+      sleep 0.05
+    done
+    if [[ ! -f "$records/$name.done" ]]; then
+      fail "shutdown writer $name did not finish"
+      return 1
+    fi
+    assert_equals "shutdown write for $name" "written" "$(<"$records/$name.done")" || return 1
+    if kill -0 "$(<"$records/$name.ready")" 2>/dev/null; then
+      fail "shutdown writer $name is still running after cleanup"
+      return 1
+    fi
+  done
+  assert_equals "exit status after cleanup" "$expected_status" "$actual_status" || return 1
+  if [[ -e "$(<"$records/fixture")" ]]; then
+    fail "cleanup left the fixture directory behind"
+    return 1
+  fi
+}
+
+test_cleanup_waits_for_shutdown_writes() {
+  assert_cleanup_fixture 0 0 0
+}
+
+test_cleanup_preserves_failure_status() {
+  assert_cleanup_fixture 42 23 42
+}
+
+test_cleanup_preserves_skip_status() {
+  assert_cleanup_fixture 77 23 77
+}
+
+test_cleanup_reports_server_failure() {
+  assert_cleanup_fixture 0 23 1 || return 1
+  assert_contains "server failure diagnostic" "$(<"$TEST_TMP/cleanup-0-23/output")" "exited with status 23"
+}
+
 ALL_TESTS=(
+  test_cleanup_waits_for_shutdown_writes
+  test_cleanup_preserves_failure_status
+  test_cleanup_preserves_skip_status
+  test_cleanup_reports_server_failure
   test_fake_runtime_contract
   test_linux_dolt_uses_workspace_socket
   test_container_dolt_uses_published_socket
@@ -553,5 +676,6 @@ else
     printf 'Unknown function: %s\n' "$fn" >&2
     exit 1
   fi
-  "$fn"
+  shift
+  "$fn" "$@"
 fi

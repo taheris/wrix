@@ -20,6 +20,10 @@ in
   "services.temp-cache-only" = lifecycle "test_temp_cache_only_workspace_does_not_start_service";
 
   "services.dolt-platform-transport" = ''
+    ${serviceScript "dolt-endpoints" "test_cleanup_waits_for_shutdown_writes"}
+    ${serviceScript "dolt-endpoints" "test_cleanup_preserves_failure_status"}
+    ${serviceScript "dolt-endpoints" "test_cleanup_preserves_skip_status"}
+    ${serviceScript "dolt-endpoints" "test_cleanup_reports_server_failure"}
     ${dolt "test_linux_dolt_uses_workspace_socket"}
     ${dolt "test_explicit_tcp_dolt_uses_loopback_tcp"}
   '';
