@@ -211,6 +211,7 @@ let
     // utilityTests
     // prePushSmokeTests
     // tmuxMcpTests
+    // (import ./sandbox/pi-settings.nix { inherit pkgs wrix; })
     // {
       builder-vmnet-route = builderRouteTest;
       image-assembly-native = sandboxImageChecks.imageAssemblyNativeCheck;

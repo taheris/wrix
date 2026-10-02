@@ -242,6 +242,7 @@ let
     defaultModel = "gpt-6.1-sol";
     defaultThinkingLevel = "xhigh";
     defaultProjectTrust = "always";
+    tuiMode = "regular";
     editorPaddingX = 1;
     enableInstallTelemetry = false;
     steeringMode = "all";

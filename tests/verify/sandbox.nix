@@ -109,6 +109,13 @@ in
     nix build --no-link ".#checks.${system}.pi-default-model"
   '';
 
+  "sandbox.pi-tui-mode" = ''
+    nix build --no-link \
+      ".#checks.${system}.pi-tui-mode-default" \
+      ".#checks.${system}.pi-tui-mode-inherited" \
+      ".#checks.${system}.pi-tui-mode-override"
+  '';
+
   "sandbox.platform-dispatch" = platform "test_platform_dispatch_current_system";
 
   "sandbox.uid-mapping" = sandboxScriptAll "uid-mapping";
