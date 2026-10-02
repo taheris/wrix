@@ -6,6 +6,6 @@ linuxPkgs.crun.overrideAttrs (old: {
   buildInputs = old.buildInputs ++ [ linuxPkgs.libkrun ];
   configureFlags = (old.configureFlags or [ ]) ++ [ "--with-libkrun" ];
   postFixup = (old.postFixup or "") + ''
-    patchelf --add-rpath ${linuxPkgs.lib.getLib linuxPkgs.libkrun}/lib $out/bin/crun
+    patchelf --add-rpath ${linuxPkgs.lib.getLib linuxPkgs.libkrun}/lib "$out/bin/crun"
   '';
 })
