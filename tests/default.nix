@@ -221,6 +221,7 @@ let
       image-assembly-native = sandboxImageChecks.imageAssemblyNativeCheck;
       pi-auth-storage = import ./security/pi-auth.nix { inherit pkgs; };
       pi-default-model = import ./sandbox/pi-default-model.nix { inherit pkgs wrix; };
+      profile-images-launcher = import ./profiles/manifest.nix { inherit pkgs wrix; };
     }
     // loomTests.checks;
 

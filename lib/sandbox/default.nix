@@ -41,7 +41,10 @@ let
     '';
   });
 
-  manifest = import ./manifest.nix { inherit pkgs; };
+  manifest = import ./manifest.nix {
+    inherit pkgs;
+    launcher = serviceCli;
+  };
   imageTagLib = import ../util/image-tag.nix { };
 
   # podman accepts `localhost/<name>:<tag>` refs; Apple's `container` CLI

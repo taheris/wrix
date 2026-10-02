@@ -6,7 +6,7 @@
 #
 # 1. test_manifest_shape — `mkProfileImages { rust = ...; }` produces JSON
 #    whose profile entry is keyed by the image's agent and whose variant carries
-#    `ref`, `source`, `source_kind`, and `profile_config` fields, with `source`
+#    `ref`, `source`, `source_kind`, `launcher`, and `profile_config` fields, with `source`
 #    and `source_kind` matching the corresponding `mkSandbox` image metadata.
 #
 # 2. test_flake_outputs_present — `packages.image-<name>[-<agent>]` resolves
@@ -14,7 +14,7 @@
 #    outputs evaluate, and `packages.default` resolves to `sandbox-rust-pi`.
 #
 # 3. test_runtime_manifest_retains_store_context — the Pi runtime manifest
-#    exported to Loom retains Nix context on `source` and `profile_config`.
+#    exported to Loom retains Nix context on `source`, `launcher`, and `profile_config`.
 #
 # 4. test_eval_manifest_access_is_lightweight — `passthru.manifest` remains
 #    available through evaluation-only inspection without building the runtime
@@ -31,6 +31,7 @@ REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 test_manifest_shape() {
     local flake_url="git+file://$REPO_ROOT"
     local system manifest_path expected
+    local launcher expected_launcher
     local source ref source_kind profile_config expected_source expected_source_kind expected_profile_config
     local pi_source pi_ref pi_source_kind pi_profile_config pi_expected_source pi_expected_source_kind pi_expected_profile_config
 
@@ -61,8 +62,8 @@ test_manifest_shape() {
       (keys | sort) == ["rust", "rustPi"] and
       (.rust | keys) == ["direct"] and
       (.rustPi | keys) == ["pi"] and
-      (.rust.direct | keys | sort) == ["profile_config", "ref", "source", "source_kind"] and
-      (.rustPi.pi | keys | sort) == ["profile_config", "ref", "source", "source_kind"]
+      (.rust.direct | keys | sort) == ["launcher", "profile_config", "ref", "source", "source_kind"] and
+      (.rustPi.pi | keys | sort) == ["launcher", "profile_config", "ref", "source", "source_kind"]
     ' "$manifest_path" >/dev/null; then
         echo "realized mkProfileImages JSON has the wrong profile or entry shape" >&2
         return 1
@@ -75,6 +76,7 @@ test_manifest_shape() {
         rustImage = (lib.mkSandbox { profile = lib.profiles.rust; }).image;
         rustPiImage = (lib.mkSandbox { profile = lib.profiles.rust; agent = \"pi\"; }).image;
       in {
+        launcher = \"\${flake.packages.${system}.wrix}/bin/wrix\";
         rustImageSource = rustImage.source;
         rustImageSourceKind = rustImage.source_kind;
         rustProfileConfig = rustImage.profileConfig;
@@ -86,6 +88,14 @@ test_manifest_shape() {
         echo "nix eval of matching mkSandbox image metadata failed" >&2
         return 1
     fi
+
+    expected_launcher=$(jq -r '.launcher' <<<"$expected")
+    while IFS= read -r launcher; do
+        if [[ "$launcher" != "$expected_launcher" || ! -x "$launcher" ]]; then
+            echo "manifest launcher ($launcher) != executable raw wrix ($expected_launcher)" >&2
+            return 1
+        fi
+    done < <(jq -r '.rust.direct.launcher, .rustPi.pi.launcher' "$manifest_path")
 
     source=$(jq -r '.rust.direct.source' "$manifest_path")
     ref=$(jq -r '.rust.direct.ref' "$manifest_path")
@@ -238,6 +248,7 @@ test_runtime_manifest_retains_store_context() {
         entryContext = entry: {
           source = builtins.hasContext entry.source;
           profile_config = builtins.hasContext entry.profile_config;
+          launcher = builtins.hasContext entry.launcher;
         };
       in {
         runtimeJson = builtins.hasContext (builtins.toJSON manifest);
@@ -252,7 +263,7 @@ test_runtime_manifest_retains_store_context() {
 
     if ! jq -e '
       .runtimeJson == true and
-      all([.base, .rust, .python][]; .source == true and .profile_config == true)
+      all([.base, .rust, .python][]; .source == true and .profile_config == true and .launcher == true)
     ' <<<"$result" >/dev/null; then
         echo "packages.profile-images-pi runtime manifest lost Nix store context: $result" >&2
         return 1

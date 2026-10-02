@@ -2,18 +2,18 @@
 #
 # Builds a `profile-images.json` derivation mapping each profile name to one
 # agent variant (`direct`, `claude`, or `pi`) with the image ref, image source,
-# source kind, and profile config needed to spawn that variant. Orchestrators (e.g. Loom via
+# source kind, raw launcher, and profile config needed to spawn that variant. Orchestrators (e.g. Loom via
 # `LOOM_PROFILES_MANIFEST`) read this at startup and use the selected variant to
 # populate `wrix spawn` inputs per bead.
 #
 # See specs/profiles.md § Profile-Image Manifest.
 {
   pkgs,
+  launcher,
 }:
 
 let
   inherit (builtins) elem mapAttrs toString;
-  inherit (pkgs.lib) optionalAttrs;
 
   imageTagLib = import ../util/image-tag.nix { };
 
@@ -33,9 +33,10 @@ let
       ref = "${refPrefix}${image.imageName}:${imageTagLib.mkImageTag image}";
       source = toString source;
       source_kind = sourceKind;
-    }
-    // optionalAttrs (image ? profileConfig) {
-      profile_config = toString image.profileConfig;
+      launcher = "${launcher}/bin/wrix";
+      profile_config = toString (
+        image.profileConfig or (throw "mkProfileImages: image.profileConfig is required")
+      );
     };
 
   mkAgentEntry =

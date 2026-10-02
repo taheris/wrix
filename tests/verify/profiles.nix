@@ -73,6 +73,7 @@ in
   "profiles.extra-packages-not-core" = corePackages "test_extra_not_in_core";
   "profiles.host-image-package-split" = profileComposition "test_host_packages_split";
   "profiles.image-flake-outputs" = profileImages "test_flake_outputs_present";
+  "profiles.manifest-launcher" = flakeCheck "profile-images-launcher";
   "profiles.loom-source-only" = flakeCheck "loom-source-only";
   "profiles.loom-package-wiring" = flakeCheck "loom-package-wiring";
   "profiles.nested-derive" = profileComposition "test_nested_derive_profile";
