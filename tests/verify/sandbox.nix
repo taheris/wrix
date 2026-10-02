@@ -91,7 +91,10 @@ in
 
   "sandbox.mksandbox-api" = sandboxScriptAll "mksandbox-api";
 
-  "sandbox.mcp-agent-adapters" = sandboxScriptAll "mcp-agent-adapters";
+  "sandbox.mcp-agent-adapters" = ''
+    export PATH="${import ../../lib/sandbox/pi.nix { inherit pkgs; }}/bin:$PATH"
+    ${sandboxScriptAll "mcp-agent-adapters"}
+  '';
 
   "sandbox.network-fail-closed" = network "test_fail_closed";
 

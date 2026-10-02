@@ -145,6 +145,26 @@ in
         mkdir $out
       '';
 
+  microvm-verifier-diagnostics =
+    runCommandLocal "smoke-microvm-verifier-diagnostics"
+      {
+        nativeBuildInputs = [ bash ] ++ pkgs.lib.optional isLinux pkgs.util-linux;
+      }
+      ''
+        set -euo pipefail
+        ${
+          if isLinux then
+            ''
+              REPO_ROOT=${../..} bash ${./microvm-runtime.sh} test_microvm_probe_reports_launch_failure
+            ''
+          else
+            ''
+              printf '%s\n' 'SKIP: Linux PTY exit-status verifier' >&2
+            ''
+        }
+        mkdir "$out"
+      '';
+
   script-syntax =
     runCommandLocal "smoke-rust-launcher-dry-run"
       {

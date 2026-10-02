@@ -333,8 +333,9 @@ Plus consumer-defined fields the entrypoint reads from the original config mount
 - The runtime image cleanup path records a bounded cross-workspace MRU of eight typed wrix image refs/digests/image IDs, preserves images used by Podman containers, prunes wrix-managed images outside the keep set, and does not automatically remove unlabelled `<none>:<none>` images
   [test](../crates/wrix-sandbox/tests/image_retention.rs::cleanup_prunes_only_wrix_managed_images_outside_bounded_keep_set)
 - Image MRU serialization preserves typed refs, digests, and IDs while accepting
-  documented legacy empty fields; runtime listings parse into typed store targets
+  documented legacy empty fields
   [test](../crates/wrix-sandbox/src/image.rs::mru_round_trips_typed_identifiers_and_accepts_legacy_empty_fields)
+- Runtime listings parse into typed store targets
   [test](../crates/wrix-sandbox/src/image.rs::podman_rows_parse_typed_references_ids_and_absent_fields)
 - Concurrent launches update the shared MRU without losing either workspace's record or exposing partially-written JSON
   [test](../crates/wrix-sandbox/tests/image_retention.rs::concurrent_mru_updates_preserve_each_workspace_record)

@@ -20,22 +20,18 @@ cd "$REPO_ROOT"
 
 TEST_TMP=$(mktemp -d -t wrix-network-baseline.XXXXXX)
 IMAGE_REF=""
-LAN_SERVER_PID=""
+SERVICE_WORKSPACE=""
 cleanup() {
   local status="$?"
-  local wait_status=0
   trap - EXIT
-  if [[ -n "$LAN_SERVER_PID" ]] && kill -0 "$LAN_SERVER_PID" 2>/dev/null; then
-    if kill "$LAN_SERVER_PID"; then
-      set +e
-      wait "$LAN_SERVER_PID"
-      wait_status=$?
-      set -e
-      if [[ "$wait_status" -ne 0 && "$wait_status" -ne 143 ]]; then
-        printf 'WARN: LAN test server exited with status %s\n' "$wait_status" >&2
-      fi
-    else
-      printf 'WARN: could not stop LAN test server %s\n' "$LAN_SERVER_PID" >&2
+  if [[ -n "$SERVICE_WORKSPACE" ]]; then
+    if ! (
+      cd "$SERVICE_WORKSPACE"
+      HOME="$HOME_DIR" XDG_STATE_HOME="$XDG_STATE_HOME" XDG_CACHE_HOME="$XDG_CACHE_HOME" \
+        WRIX_SERVICE_ALLOW_TEMP_CACHE=1 "$LAUNCHER/bin/wrix" service stop
+    ); then
+      printf 'WARN: could not stop the network baseline service container\n' >&2
+      status=1
     fi
   fi
   if [[ -n "$IMAGE_REF" ]] && ! wrix_remove_image_ref "$IMAGE_REF"; then
@@ -68,96 +64,39 @@ IMAGE_REF=$(wrix_live_image_ref "network-baseline-$$")
 DEPLOY_KEY="$TEST_TMP/deploy-key"
 HOME_DIR="$TEST_TMP/home"
 XDG_CACHE_HOME="$TEST_TMP/cache"
-mkdir -p "$HOME_DIR" "$XDG_CACHE_HOME"
+XDG_STATE_HOME="$TEST_TMP/state"
+mkdir -p "$HOME_DIR" "$XDG_CACHE_HOME" "$XDG_STATE_HOME"
 wrix_make_ed25519_key "$DEPLOY_KEY" "network-baseline-test"
 
-darwin_vmnet_gateway() {
-  local network_json
-  network_json=$(container network inspect default)
-  printf '%s\n' "$network_json" | jq -er '
-    (if type == "array" then .[0] else . end)
-    | .status.ipv4Gateway
-    | strings
-    | select(test("^[0-9]+(\\.[0-9]+){3}$"))
-  '
-}
+configure_cache_service_image() {
+  local digest_path
 
-start_controlled_lan_server() {
-  local pid_output="$1"
-  local target_output="$2"
-  local port_output="$3"
-  local target bind_host host_probe port_file server_script server_log server_pid port attempt
+  export WRIX_SERVICE_IMAGE_SOURCE WRIX_SERVICE_IMAGE WRIX_SERVICE_IMAGE_SOURCE_KIND WRIX_SERVICE_IMAGE_DIGEST
+  WRIX_SERVICE_IMAGE_SOURCE=$(nix build --no-link --print-out-paths --no-warn-dirty \
+    .#wrix-service-image.source) || return
+  WRIX_SERVICE_IMAGE=$(nix eval --raw --no-warn-dirty .#wrix-service-image.ref) || return
+  WRIX_SERVICE_IMAGE_SOURCE_KIND=$(nix eval --raw --no-warn-dirty \
+    .#wrix-service-image.source_kind) || return
+  digest_path=$(nix eval --raw --no-warn-dirty .#wrix-service-image.digest) || return
+  [[ -f "$digest_path" ]] || {
+    fail "service image digest was not realized: $digest_path"
+    return 1
+  }
+  WRIX_SERVICE_IMAGE_DIGEST=$(<"$digest_path")
 
+  export WRIX_PROJECT_CACHE_SANDBOX_HOST
   case "$(uname -s)" in
+    Linux) WRIX_PROJECT_CACHE_SANDBOX_HOST="169.254.1.2" ;;
     Darwin)
-      target=$(darwin_vmnet_gateway)
-      bind_host="$target"
-      host_probe="$target"
+      WRIX_PROJECT_CACHE_SANDBOX_HOST=$(container network inspect default | jq -er '
+        (if type == "array" then .[0] else . end)
+        | .status.ipv4Gateway
+        | strings
+        | select(test("^[0-9]+(\\.[0-9]+){3}$"))
+      ') || return
       ;;
-    Linux)
-      target="169.254.1.2"
-      bind_host="127.0.0.1"
-      host_probe="$bind_host"
-      ;;
-    *)
-      fail "unsupported LAN test host: $(uname -s)"
-      return 1
-      ;;
+    *) fail "unsupported cache-network host: $(uname -s)"; return 1 ;;
   esac
-
-  port_file="$TEST_TMP/lan-server.port"
-  server_script="$TEST_TMP/lan-server.py"
-  server_log="$TEST_TMP/lan-server.log"
-  cat >"$server_script" <<'PYTHON'
-import pathlib
-import socket
-import sys
-
-host = sys.argv[1]
-port_file = pathlib.Path(sys.argv[2])
-with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
-    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server.bind((host, 0))
-    server.listen()
-    port_file.write_text(f"{server.getsockname()[1]}\n", encoding="utf-8")
-    while True:
-        connection, _address = server.accept()
-        with connection:
-            connection.recv(4096)
-            connection.sendall(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
-PYTHON
-  python3 "$server_script" "$bind_host" "$port_file" >"$server_log" 2>&1 &
-  server_pid=$!
-  printf -v "$pid_output" '%s' "$server_pid"
-  printf -v "$target_output" '%s' "$target"
-
-  for ((attempt = 1; attempt <= 50; attempt++)); do
-    if [[ -s "$port_file" ]]; then
-      break
-    fi
-    if ! kill -0 "$server_pid" 2>/dev/null; then
-      cat "$server_log" >&2
-      fail "LAN test server exited before accepting connections"
-      return 1
-    fi
-    sleep 0.1
-  done
-  [[ -s "$port_file" ]] || {
-    fail "LAN test server did not publish its port"
-    return 1
-  }
-  port=$(<"$port_file")
-  [[ "$port" =~ ^[0-9]+$ ]] || {
-    fail "LAN test server published an invalid port: $port"
-    return 1
-  }
-  printf -v "$port_output" '%s' "$port"
-  if ! curl --noproxy '*' --fail --silent --show-error --connect-timeout 2 --max-time 5 \
-    "http://$host_probe:$port/" >/dev/null; then
-    cat "$server_log" >&2
-    fail "host could not reach the controlled LAN test server"
-    return 1
-  fi
 }
 
 run_sandbox_probe() {
@@ -165,28 +104,23 @@ run_sandbox_probe() {
   local mode="$2"
   local allowlist_csv="$3"
   local probe="$4"
-  local local_endpoint_host="${5:-}"
-  local local_endpoint_port="${6:-}"
-  local workspace="$TEST_TMP/workspace-$label"
+  local workspace="${5:-$TEST_TMP/workspace-$label}"
+  local cache_enabled="${6:-false}"
   local profile_config="$TEST_TMP/profile-$label.json"
+  local profile_config_tmp="$TEST_TMP/profile-$label.tmp.json"
   local spawn_config="$TEST_TMP/spawn-$label.json"
-  local spawn_config_tmp="$TEST_TMP/spawn-$label.tmp.json"
   local out="$TEST_TMP/$label.out"
   local err="$TEST_TMP/$label.err"
 
-  mkdir -p "$workspace"
-  wrix_write_profile_config "$profile_config" "$IMAGE_REF" "$IMAGE_SOURCE" claude "$allowlist_csv"
-  wrix_write_spawn_config "$spawn_config" "$workspace" bash -lc "$probe"
-  if [[ -n "$local_endpoint_host" && -n "$local_endpoint_port" ]]; then
-    jq --arg host "$local_endpoint_host" --arg port "$local_endpoint_port" \
-      '.env = [
-        ["WRIX_PROJECT_CACHE_HOST", $host],
-        ["WRIX_PROJECT_CACHE_PORT", $port]
-      ]' "$spawn_config" >"$spawn_config_tmp"
-    mv "$spawn_config_tmp" "$spawn_config"
-  fi
+  mkdir -p "$workspace" || return
+  wrix_write_profile_config "$profile_config" "$IMAGE_REF" "$IMAGE_SOURCE" claude "$allowlist_csv" || return
+  jq --argjson enabled "$cache_enabled" '.services.nix_cache.enable = $enabled' \
+    "$profile_config" >"$profile_config_tmp" || return
+  mv "$profile_config_tmp" "$profile_config" || return
+  wrix_write_spawn_config "$spawn_config" "$workspace" bash -lc "$probe" || return
 
-  HOME="$HOME_DIR" XDG_CACHE_HOME="$XDG_CACHE_HOME" \
+  HOME="$HOME_DIR" XDG_STATE_HOME="$XDG_STATE_HOME" XDG_CACHE_HOME="$XDG_CACHE_HOME" \
+    WRIX_SERVICE_ALLOW_TEMP_CACHE=1 \
     WRIX_DEPLOY_KEY="$DEPLOY_KEY" WRIX_GIT_SIGN=0 WRIX_NETWORK="$mode" \
     wrix_run_spawn "$LAUNCHER" "$profile_config" "$spawn_config" >"$out" 2>"$err"
 }
@@ -204,38 +138,55 @@ test_open_blocks_lan() {
   local rc=0
   local control_probe probe lan_target lan_port
 
-  start_controlled_lan_server LAN_SERVER_PID lan_target lan_port || return 1
-  control_probe=$(cat <<PROBE
+  configure_cache_service_image || return 1
+  SERVICE_WORKSPACE="$TEST_TMP/workspace-$control_label"
+  mkdir -p "$SERVICE_WORKSPACE" || return 1
+  git -C "$SERVICE_WORKSPACE" init -q -b main || return 1
+  control_probe=$(cat <<'PROBE'
 set -euo pipefail
-curl --noproxy '*' --fail --silent --show-error --connect-timeout 2 --max-time 5 http://$lan_target:$lan_port/ >/tmp/wrix-lan-control
+host="${WRIX_PROJECT_CACHE_HOST:?}"
+port="${WRIX_PROJECT_CACHE_PORT:?}"
+curl --noproxy '*' --fail --silent --show-error --connect-timeout 5 --max-time 10 \
+  "http://$host:$port/nix-cache-info" | grep -F 'WantMassQuery: 1' >/dev/null
+printf '%s %s\n' "$host" "$port" >/workspace/cache-endpoint
 PROBE
 )
   run_sandbox_probe "$control_label" open "" "$control_probe" \
-    "$lan_target" "$lan_port" || rc=$?
+    "$SERVICE_WORKSPACE" true || rc=$?
   if [[ "$rc" -ne 0 ]]; then
-    fail "sandbox could not reach the controlled LAN listener through an exact endpoint exception"
+    fail "sandbox could not reach its live project cache through the Wrix-owned endpoint exception"
     dump_probe_error "$control_label"
+    return 1
+  fi
+  read -r lan_target lan_port <"$SERVICE_WORKSPACE/cache-endpoint" || return 1
+  if [[ ! "$lan_target" =~ ^[0-9]+(\.[0-9]+){3}$ || ! "$lan_port" =~ ^[0-9]+$ ]]; then
+    fail "live project cache published an invalid endpoint: $lan_target:$lan_port"
     return 1
   fi
 
   probe=$(cat <<PROBE
 set -euo pipefail
 curl -4 --fail --silent --show-error --connect-timeout 10 --max-time 30 https://cache.nixos.org/nix-cache-info >/tmp/wrix-public-egress
-if curl --noproxy '*' --fail --silent --show-error --connect-timeout 2 --max-time 5 http://$lan_target:$lan_port/ >/tmp/wrix-private-probe 2>&1; then
-  echo 'controlled LAN listener reachable despite baseline block' >&2
+if curl --noproxy '*' --fail --silent --show-error --connect-timeout 2 --max-time 5 http://$lan_target:$lan_port/nix-cache-info >/tmp/wrix-private-probe 2>&1; then
+  echo 'project cache reachable without its endpoint exception despite baseline block' >&2
   exit 1
 fi
 PROBE
 )
 
   rc=0
-  run_sandbox_probe "$label" open "" "$probe" || rc=$?
+  run_sandbox_probe "$label" open "" "$probe" "$SERVICE_WORKSPACE" || rc=$?
   if [[ "$rc" -ne 0 ]]; then
-    fail "open mode did not allow public egress while blocking the controlled LAN listener"
+    fail "open mode did not allow public egress while blocking the cache endpoint without an exception"
     dump_probe_error "$label"
     return 1
   fi
-  pass "open mode permits public egress and blocks a proven-reachable LAN listener"
+  if ! curl --noproxy '*' --fail --silent --show-error --connect-timeout 5 --max-time 10 \
+    "http://127.0.0.1:$lan_port/nix-cache-info" | grep -F 'WantMassQuery: 1' >/dev/null; then
+    fail "project cache stopped before the blocked-endpoint probe completed"
+    return 1
+  fi
+  pass "open mode permits public egress and blocks a live cache endpoint when its exception is absent"
 }
 
 test_limit_allowlist() {
