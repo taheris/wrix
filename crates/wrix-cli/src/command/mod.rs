@@ -352,7 +352,7 @@ mod test {
         let mut stderr = Vec::new();
         let code = run(&args, &mut stdout, &mut stderr);
         assert!(matches!(code, Ok(value) if value == ExitCode::SUCCESS));
-        assert!(stderr.is_empty());
+        assert_eq!(stderr, Vec::<u8>::new());
         let output = String::from_utf8(stdout).unwrap();
         assert!(output.contains("dolt <status|socket|port|host|sandbox-endpoint|attach|gc|wait>"));
         assert!(output.contains("cache <status|publish|warm|prune|rotate-key>"));
@@ -365,7 +365,7 @@ mod test {
         let mut stderr = Vec::new();
         let code = run(&args, &mut stdout, &mut stderr);
         assert!(matches!(code, Ok(value) if value == ExitCode::SUCCESS));
-        assert!(stderr.is_empty());
+        assert_eq!(stderr, Vec::<u8>::new());
         let output = String::from_utf8(stdout).unwrap();
         assert!(output.contains("push"));
     }

@@ -23,25 +23,16 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug, Display, ThisError)]
 pub enum Error {
     /// project cache I/O failed: {source}
-    Io {
-        #[from]
-        source: io::Error,
-    },
+    Io { source: io::Error },
     /// invalid project cache JSON at {path}: {source}
     Json {
         path: String,
         source: serde_json::Error,
     },
     /// {source}
-    WorkspaceHash {
-        #[from]
-        source: WorkspaceHashParseError,
-    },
+    WorkspaceHash { source: WorkspaceHashParseError },
     /// system clock is before the Unix epoch: {source}
-    Clock {
-        #[from]
-        source: SystemTimeError,
-    },
+    Clock { source: SystemTimeError },
     /// environment variable {name} must be valid Unicode
     InvalidUnicodeEnvironment { name: &'static str },
     /// environment variable {name} has invalid value {value}
@@ -52,6 +43,24 @@ pub enum Error {
     LockTimeout { path: String },
     /// HOME is required to resolve wrix cache state roots
     HomeMissing,
+}
+
+impl From<io::Error> for Error {
+    fn from(source: io::Error) -> Self {
+        Self::Io { source }
+    }
+}
+
+impl From<WorkspaceHashParseError> for Error {
+    fn from(source: WorkspaceHashParseError) -> Self {
+        Self::WorkspaceHash { source }
+    }
+}
+
+impl From<SystemTimeError> for Error {
+    fn from(source: SystemTimeError) -> Self {
+        Self::Clock { source }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -264,18 +273,15 @@ fn run_automatic_publish(paths: &Paths, root: Root) -> Result<Report> {
     let result = publish_roots(paths, &[root], Vec::new(), None);
     let release = lock.release();
     match (result, release) {
-        (Ok(mut report), Ok(())) => {
-            lines.append(&mut report.lines);
-            Ok(Report { lines })
-        }
+        (Ok(mut report), Ok(())) => lines.append(&mut report.lines),
         (Err(error), _) | (_, Err(error)) => {
             write_cache_status(paths, true, Some("warning"), None, Some(&error.to_string()))?;
             lines.push(format!(
                 "warning: automatic project cache publish failed: {error}"
             ));
-            Ok(Report { lines })
         }
     }
+    Ok(Report { lines })
 }
 
 fn with_explicit_lock<T>(paths: &Paths, operation: impl FnOnce() -> Result<T>) -> Result<T> {

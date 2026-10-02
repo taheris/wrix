@@ -683,7 +683,7 @@ mod tests {
     fn test_list_windows_empty_when_no_session() {
         let session = TmuxSession::with_executor(StaticMockExecutor);
         let windows = session.list_windows().unwrap();
-        assert!(windows.is_empty());
+        assert_eq!(windows, Vec::<WindowInfo>::new());
     }
 
     #[test]

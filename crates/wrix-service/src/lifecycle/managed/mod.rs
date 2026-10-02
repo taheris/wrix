@@ -11,22 +11,31 @@ use thiserror::Error as ThisError;
 #[derive(Debug, Display, ThisError)]
 pub enum Error {
     /// cannot configure Wrix-managed Beads: {source}
-    Io {
-        #[from]
-        source: io::Error,
-    },
+    Io { source: io::Error },
     /// invalid Beads local YAML configuration: {source}
-    Yaml {
-        #[from]
-        source: serde_yaml_ng::Error,
-    },
+    Yaml { source: serde_yaml_ng::Error },
     /// invalid Beads metadata: {source}
-    Json {
-        #[from]
-        source: serde_json::Error,
-    },
+    Json { source: serde_json::Error },
     /// Beads configuration {key} must be a mapping
     Mapping { key: String },
+}
+
+impl From<io::Error> for Error {
+    fn from(source: io::Error) -> Self {
+        Self::Io { source }
+    }
+}
+
+impl From<serde_yaml_ng::Error> for Error {
+    fn from(source: serde_yaml_ng::Error) -> Self {
+        Self::Yaml { source }
+    }
+}
+
+impl From<serde_json::Error> for Error {
+    fn from(source: serde_json::Error) -> Self {
+        Self::Json { source }
+    }
 }
 
 /// Persist hook policy without changing sync settings or connecting to the database.

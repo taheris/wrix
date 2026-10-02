@@ -1069,7 +1069,7 @@ mod tests {
             .unwrap();
 
         assert!(list_panes.input_schema.properties.is_empty());
-        assert!(list_panes.input_schema.required.is_empty());
+        assert_eq!(list_panes.input_schema.required, Vec::<String>::new());
     }
 
     // --- MCP Method Parsing Tests ---

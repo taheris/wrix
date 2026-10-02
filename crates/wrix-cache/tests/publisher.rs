@@ -461,6 +461,32 @@ fn warm_subsets_preserve_full_publish_manifest_and_check_retention() -> TestResu
 }
 
 #[test]
+fn automatic_publish_records_failure_as_warning() -> TestResult {
+    let fixture = Fixture::new("automatic-query-failure")?;
+    fixture.write_roots(&[RootSpec::new(
+        "packages.demo",
+        ".#demo",
+        PROJECT_DRV,
+        &[PROJECT_OUT],
+    )])?;
+
+    let report = fixture.run_auto(PROJECT_DRV, PROJECT_OUT, &[("WRIX_FAKE_QUERY_FAIL", "1")])?;
+
+    assert!(report.contains("warning: automatic project cache publish failed:"));
+    let status: serde_json::Value =
+        serde_json::from_slice(&fs::read(fixture.state_root.join("cache-status.json"))?)?;
+    assert_eq!(status["dirty"], true);
+    assert_eq!(status["last_publish"], "warning");
+    assert!(
+        status["last_error"]
+            .as_str()
+            .unwrap()
+            .contains("nix-store --query --requisites")
+    );
+    Ok(())
+}
+
+#[test]
 fn automatic_publish_does_not_reconcile_other_root_markers() -> TestResult {
     let fixture = Fixture::new("automatic-retention")?;
     fixture.write_roots(&[

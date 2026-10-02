@@ -230,7 +230,7 @@ fn cache_identity_child() -> TestResult {
     let status = wrix_cli::command::run(&args, &mut stdout, &mut stderr)?;
 
     assert_eq!(status, std::process::ExitCode::SUCCESS);
-    assert!(stderr.is_empty());
+    assert_eq!(stderr, Vec::<u8>::new());
     assert!(String::from_utf8(stdout)?.contains("cache size:"));
     Ok(())
 }

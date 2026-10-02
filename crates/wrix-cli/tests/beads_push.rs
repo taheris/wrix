@@ -1093,7 +1093,7 @@ fn git_sync_invocations_skip_prek() -> TestResult {
         .position(|line| line.contains("\tgit\trev-parse\t--verify\tbeads"))
         .ok_or_else(|| io::Error::other("git sync did not probe the beads branch"))?;
     let sync_lines = lines[sync_start..].iter().collect::<Vec<_>>();
-    assert!(!sync_lines.is_empty());
+    assert_ne!(sync_lines, Vec::<&String>::new());
     assert!(
         sync_lines
             .iter()

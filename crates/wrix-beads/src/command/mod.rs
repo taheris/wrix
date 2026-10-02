@@ -60,20 +60,11 @@ impl fmt::Display for IssueId {
 #[derive(Debug, Display, ThisError)]
 pub enum Error {
     /// beads workflow I/O failed: {source}
-    Io {
-        #[from]
-        source: io::Error,
-    },
+    Io { source: io::Error },
     /// invalid beads sync branch: {source}
-    BeadsConfig {
-        #[from]
-        source: ReadError,
-    },
+    BeadsConfig { source: ReadError },
     /// invalid issue identifier returned by beads: {source}
-    InvalidIssueId {
-        #[from]
-        source: IssueIdParseError,
-    },
+    InvalidIssueId { source: IssueIdParseError },
     /// {program} failed: {stderr}
     CommandFailed {
         program: &'static str,
@@ -92,6 +83,24 @@ pub enum Error {
         recovery: Box<Self>,
         restore: Box<Self>,
     },
+}
+
+impl From<io::Error> for Error {
+    fn from(source: io::Error) -> Self {
+        Self::Io { source }
+    }
+}
+
+impl From<ReadError> for Error {
+    fn from(source: ReadError) -> Self {
+        Self::BeadsConfig { source }
+    }
+}
+
+impl From<IssueIdParseError> for Error {
+    fn from(source: IssueIdParseError) -> Self {
+        Self::InvalidIssueId { source }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

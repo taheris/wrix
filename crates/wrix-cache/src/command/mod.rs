@@ -13,19 +13,25 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug, Display, ThisError)]
 pub enum Error {
     /// cache command I/O failed: {source}
-    Io {
-        #[from]
-        source: io::Error,
-    },
+    Io { source: io::Error },
     /// {source}
-    Publisher {
-        #[from]
-        source: publisher::Error,
-    },
+    Publisher { source: publisher::Error },
     /// unknown cache warm option: {option}
     UnknownWarmOption { option: String },
     /// unexpected cache option: {option}
     UnexpectedOption { option: String },
+}
+
+impl From<io::Error> for Error {
+    fn from(source: io::Error) -> Self {
+        Self::Io { source }
+    }
+}
+
+impl From<publisher::Error> for Error {
+    fn from(source: publisher::Error) -> Self {
+        Self::Publisher { source }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

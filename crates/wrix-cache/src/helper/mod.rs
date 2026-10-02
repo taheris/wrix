@@ -21,20 +21,11 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug, Display, ThisError)]
 pub enum Error {
     /// cache helper I/O failed: {source}
-    Io {
-        #[from]
-        source: io::Error,
-    },
+    Io { source: io::Error },
     /// {source}
-    Publisher {
-        #[from]
-        source: crate::publisher::Error,
-    },
+    Publisher { source: crate::publisher::Error },
     /// {source}
-    WorkspaceHash {
-        #[from]
-        source: WorkspaceHashParseError,
-    },
+    WorkspaceHash { source: WorkspaceHashParseError },
     /// environment variable {name} is required
     MissingEnvironment { name: &'static str },
     /// environment variable {name} must be valid Unicode
@@ -62,6 +53,24 @@ pub enum Error {
     },
     /// invalid publish manifest JSON: {source}
     ManifestJson { source: serde_json::Error },
+}
+
+impl From<io::Error> for Error {
+    fn from(source: io::Error) -> Self {
+        Self::Io { source }
+    }
+}
+
+impl From<crate::publisher::Error> for Error {
+    fn from(source: crate::publisher::Error) -> Self {
+        Self::Publisher { source }
+    }
+}
+
+impl From<WorkspaceHashParseError> for Error {
+    fn from(source: WorkspaceHashParseError) -> Self {
+        Self::WorkspaceHash { source }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

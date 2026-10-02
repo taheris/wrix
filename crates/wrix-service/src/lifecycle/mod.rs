@@ -51,25 +51,15 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug, Display, ThisError)]
 pub enum Error {
     /// service lifecycle I/O failed
-    Io {
-        #[from]
-        source: io::Error,
-    },
+    Io { source: io::Error },
     /// managed Beads configuration failed: {source}
-    Beads {
-        #[from]
-        source: managed::Error,
-    },
+    Beads { source: managed::Error },
     /// project cache operation failed: {source}
     Cache {
-        #[from]
         source: wrix_cache::publisher::Error,
     },
     /// runtime image operation failed: {source}
-    Image {
-        #[from]
-        source: runtime_image::Error,
-    },
+    Image { source: runtime_image::Error },
     /// environment variable {name} must be valid Unicode
     InvalidUnicodeEnvironment { name: &'static str },
     /// unknown Dolt transport: {value}
@@ -114,10 +104,37 @@ pub enum Error {
     /// invalid persisted workspace hash: {value}
     InvalidPersistedWorkspaceHash { value: String },
     /// {source}
-    BeadsConfig {
-        #[from]
-        source: ReadError,
-    },
+    BeadsConfig { source: ReadError },
+}
+
+impl From<io::Error> for Error {
+    fn from(source: io::Error) -> Self {
+        Self::Io { source }
+    }
+}
+
+impl From<managed::Error> for Error {
+    fn from(source: managed::Error) -> Self {
+        Self::Beads { source }
+    }
+}
+
+impl From<wrix_cache::publisher::Error> for Error {
+    fn from(source: wrix_cache::publisher::Error) -> Self {
+        Self::Cache { source }
+    }
+}
+
+impl From<runtime_image::Error> for Error {
+    fn from(source: runtime_image::Error) -> Self {
+        Self::Image { source }
+    }
+}
+
+impl From<ReadError> for Error {
+    fn from(source: ReadError) -> Self {
+        Self::BeadsConfig { source }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

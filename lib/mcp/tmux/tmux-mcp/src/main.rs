@@ -847,7 +847,7 @@ mod tests {
         assert!(response.result.is_some());
         let result = response.result.unwrap();
         let content = result.get("content").unwrap().as_array().unwrap();
-        assert!(!content.is_empty());
+        assert_ne!(content, &Vec::<serde_json::Value>::new());
 
         // Check isError is not present or false
         assert!(

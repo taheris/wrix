@@ -190,7 +190,7 @@ fn head_reads_only_metadata_and_get_streams_large_files() -> TestResult {
         if line == "\r\n" {
             break;
         }
-        assert!(!line.is_empty());
+        assert_ne!(line, "");
         headers.push_str(&line);
     }
     assert!(headers.contains("Content-Length: 268435456\r\n"));

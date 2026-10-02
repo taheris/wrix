@@ -47,7 +47,7 @@ pub(super) fn serve(listener: &TcpListener, root: &Path) -> io::Result<()> {
             Err(error) => return Err(error),
         };
         if active
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
                 (count < MAX_CONNECTIONS).then_some(count + 1)
             })
             .is_err()

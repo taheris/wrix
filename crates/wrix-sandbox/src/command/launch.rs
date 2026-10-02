@@ -2974,8 +2974,8 @@ mod test {
         let darwin =
             super::darwin_mounts_from_rendered(&profile_mounts, &[], &staging.root).unwrap();
         assert!(darwin.mounts.is_empty());
-        assert!(darwin.dir_mappings.is_empty());
-        assert!(darwin.file_mappings.is_empty());
+        assert_eq!(darwin.dir_mappings, Vec::<(String, String)>::new());
+        assert_eq!(darwin.file_mappings, Vec::<(String, String)>::new());
     }
 
     #[test]

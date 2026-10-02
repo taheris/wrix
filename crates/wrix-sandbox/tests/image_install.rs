@@ -33,7 +33,7 @@ fn digest_preflight_skips_source_execution_on_hit() -> TestResult {
     )?;
 
     assert!(!missing_source.exists());
-    assert!(store.copy_calls().is_empty());
+    assert_eq!(store.copy_calls(), Vec::<Call>::new());
     assert!(!store.loaded_archive());
     Ok(())
 }
@@ -132,7 +132,7 @@ fn descriptor_digest_preflight_works_without_profile_digest() -> TestResult {
             None,
         )?,
     )?;
-    assert!(store.copy_calls().is_empty());
+    assert_eq!(store.copy_calls(), Vec::<Call>::new());
     assert!(!store.loaded_archive());
     Ok(())
 }
@@ -161,7 +161,7 @@ fn already_loaded_image_performs_no_store_writes() -> TestResult {
 
     image::install(&mut store, &request)?;
 
-    assert!(store.copy_calls().is_empty());
+    assert_eq!(store.copy_calls(), Vec::<Call>::new());
     assert!(!store.loaded_archive());
     Ok(())
 }
@@ -204,7 +204,7 @@ fn darwin_docker_archive_sources_tag_loaded_image() -> TestResult {
         ]
     );
     assert!(!store.archive_copy_used());
-    assert!(store.copy_calls().is_empty());
+    assert_eq!(store.copy_calls(), Vec::<Call>::new());
     Ok(())
 }
 

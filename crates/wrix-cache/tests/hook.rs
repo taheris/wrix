@@ -126,7 +126,7 @@ fn post_build_hook_never_publishes_when_owner_switch_fails() -> TestResult {
         "publisher ran: {:?}",
         output.stdout
     );
-    assert!(!output.stderr.is_empty());
+    assert_ne!(output.stderr, Vec::<u8>::new());
     Ok(())
 }
 
