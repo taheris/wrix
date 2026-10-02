@@ -32,14 +32,7 @@ let
     "aarch64-linux"
     "x86_64-linux"
   ];
-  krunRuntime = linuxPkgs.crun.overrideAttrs (old: {
-    pname = "crun-krun";
-    buildInputs = old.buildInputs ++ [ linuxPkgs.libkrun ];
-    configureFlags = (old.configureFlags or [ ]) ++ [ "--with-libkrun" ];
-    postFixup = (old.postFixup or "") + ''
-      patchelf --add-rpath ${linuxPkgs.lib.getLib linuxPkgs.libkrun}/lib $out/bin/crun
-    '';
-  });
+  krunRuntime = import ./linux/krun-runtime.nix { inherit linuxPkgs; };
 
   manifest = import ./manifest.nix {
     inherit pkgs;

@@ -223,7 +223,10 @@ let
       pi-default-model = import ./sandbox/pi-default-model.nix { inherit pkgs wrix; };
       profile-images-launcher = import ./profiles/manifest.nix { inherit pkgs wrix; };
     }
-    // loomTests.checks;
+    // loomTests.checks
+    // optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+      crun-ring-buffer-constrained = import ./sandbox/crun-ring-buffer.nix { inherit linuxPkgs; };
+    };
 
   # ============================================================================
   # Test Runner Apps
