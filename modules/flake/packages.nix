@@ -8,6 +8,7 @@ _:
       test,
       wrix,
       linuxPkgs,
+      linuxLoomCli,
       ...
     }:
     let
@@ -58,7 +59,17 @@ _:
           variant:
           map (sandbox: mkProfile sandbox "${prefix}${variant.suffix}" (baseExtra // variant.extra)) sandboxes
         ) variants;
-      mkSandboxFor = sandbox: extra: wrix.mkSandbox ({ inherit (sandbox) profile; } // extra);
+      mkSandboxFor =
+        sandbox: extra:
+        wrix.mkSandbox (
+          {
+            inherit (sandbox) profile;
+          }
+          // extra
+          // {
+            packages = [ linuxLoomCli ] ++ (extra.packages or [ ]);
+          }
+        );
 
       mkImagePackages = agent: images: listToAttrs (map (mkImagePackage agent images) sandboxes);
       mkImagePackage = agent: images: p: {
@@ -87,7 +98,10 @@ _:
           (wrix.mkSandbox {
             agent = "pi";
             profile = profiles.rust;
-            packages = [ linuxPkgs.podman ];
+            packages = [
+              linuxLoomCli
+              linuxPkgs.podman
+            ];
           }).package;
       };
       sandboxOverlays = listToAttrs (

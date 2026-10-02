@@ -39,6 +39,7 @@ let
       fakeConfig = {
         packages = {
           profile-images-pi = writeText "profile-images-pi" "{}";
+          loom = writeShellScriptBin "loom" "exit 0";
         };
         treefmt.build.wrapper = writeShellScriptBin "treefmt" "exit 0";
       };
@@ -65,6 +66,7 @@ let
       result = (import "${rootString}/modules/flake/devshell.nix" { }).perSystem {
         config = fakeConfig;
         inherit pkgs;
+        linuxLoomCli = fakeConfig.packages.loom;
         wrix = fakeWrix;
       };
       shell = result.devShells.default;

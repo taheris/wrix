@@ -6,12 +6,14 @@ _:
       config,
       pkgs,
       wrix,
+      linuxLoomCli,
       ...
     }:
     let
       sandbox = wrix.mkSandbox {
         profile = wrix.profiles.rust;
         agent = "pi";
+        packages = [ linuxLoomCli ];
       };
     in
     {
@@ -22,6 +24,7 @@ _:
         };
 
         packages = [
+          config.packages.loom
           config.treefmt.build.wrapper
           pkgs.flock
           pkgs.podman

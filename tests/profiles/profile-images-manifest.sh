@@ -173,19 +173,18 @@ test_flake_outputs_present() {
     if ! expected_sources=$(nix eval --json --impure --no-warn-dirty --expr "
       let
         flake = builtins.getFlake \"$flake_url\";
-        lib = flake.legacyPackages.${system}.lib;
-        sourceFor = profile: agent:
-          toString (lib.mkSandbox { inherit profile agent; }).image.source;
+        packages = flake.packages.${system};
+        sourceFor = sandbox: toString sandbox.image.source;
       in {
-        image-base = sourceFor lib.profiles.base \"direct\";
-        image-base-claude = sourceFor lib.profiles.base \"claude\";
-        image-base-pi = sourceFor lib.profiles.base \"pi\";
-        image-rust = sourceFor lib.profiles.rust \"direct\";
-        image-rust-claude = sourceFor lib.profiles.rust \"claude\";
-        image-rust-pi = sourceFor lib.profiles.rust \"pi\";
-        image-python = sourceFor lib.profiles.python \"direct\";
-        image-python-claude = sourceFor lib.profiles.python \"claude\";
-        image-python-pi = sourceFor lib.profiles.python \"pi\";
+        image-base = sourceFor packages.sandbox;
+        image-base-claude = sourceFor packages.sandbox-claude;
+        image-base-pi = sourceFor packages.sandbox-pi;
+        image-rust = sourceFor packages.sandbox-rust;
+        image-rust-claude = sourceFor packages.sandbox-rust-claude;
+        image-rust-pi = sourceFor packages.sandbox-rust-pi;
+        image-python = sourceFor packages.sandbox-python;
+        image-python-claude = sourceFor packages.sandbox-python-claude;
+        image-python-pi = sourceFor packages.sandbox-python-pi;
       }
     "); then
         echo "matching sandbox image sources failed to evaluate" >&2

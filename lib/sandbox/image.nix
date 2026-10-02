@@ -497,5 +497,6 @@ rawImage
     materializedRoots
     mcpAvailableJson
     piSettingsJson
+    profileEnv
     ;
 }

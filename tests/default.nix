@@ -8,6 +8,10 @@
   wrix,
   crane,
   fenix,
+  loomTests ? {
+    checks = { };
+    ciApps = [ ];
+  },
 }:
 
 let
@@ -217,7 +221,8 @@ let
       image-assembly-native = sandboxImageChecks.imageAssemblyNativeCheck;
       pi-auth-storage = import ./security/pi-auth.nix { inherit pkgs; };
       pi-default-model = import ./sandbox/pi-default-model.nix { inherit pkgs wrix; };
-    };
+    }
+    // loomTests.checks;
 
   # ============================================================================
   # Test Runner Apps
@@ -241,7 +246,7 @@ let
       [[ -e "${test}" ]]
     '';
 
-  ciApps = [
+  ciApps = loomTests.ciApps ++ [
     (mkCiApp sandboxImageChecks.imageInstallRealSkopeoTest "test-image-install-real-skopeo")
     (mkCiApp sandboxImageChecks.imageInstallDigestSkipTest "test-image-install-digest-skip")
     (mkCiApp sandboxImageChecks.digestMatchesStoredIdTest "test-image-digest-matches-stored-id")

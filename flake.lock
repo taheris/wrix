@@ -62,6 +62,24 @@
         "url": "https://github.com/hercules-ci/flake-parts.git"
       }
     },
+    "loom-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1790942650,
+        "narHash": "sha256-axgXZDxp9SdMnckgzjz9H7CAWrGcMXUnQQ6jGpFucBw=",
+        "ref": "main",
+        "rev": "775f71eb45bd7dda08f6397213abe274292df028",
+        "shallow": true,
+        "type": "git",
+        "url": "https://github.com/taheris/loom.git"
+      },
+      "original": {
+        "ref": "main",
+        "shallow": true,
+        "type": "git",
+        "url": "https://github.com/taheris/loom.git"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1790652569,
@@ -84,6 +102,7 @@
         "crane": "crane",
         "fenix": "fenix",
         "flake-parts": "flake-parts",
+        "loom-src": "loom-src",
         "nixpkgs": "nixpkgs",
         "treefmt-nix": "treefmt-nix"
       }

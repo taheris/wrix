@@ -34,6 +34,12 @@ let
     '
   '';
 
+  flakeCheck = name: ''
+    local root
+    root="$(repo_root)"
+    nix build --no-link --no-warn-dirty "$root#checks.${system}.${name}"
+  '';
+
   buildPackage = function: repoScript "tests/profiles/build-package.sh" function;
   corePackages = function: repoScript "tests/profiles/core-packages.sh" function;
   mkDevShell = function: repoScript "tests/profiles/mkdevshell.sh" function;
@@ -67,6 +73,8 @@ in
   "profiles.extra-packages-not-core" = corePackages "test_extra_not_in_core";
   "profiles.host-image-package-split" = profileComposition "test_host_packages_split";
   "profiles.image-flake-outputs" = profileImages "test_flake_outputs_present";
+  "profiles.loom-source-only" = flakeCheck "loom-source-only";
+  "profiles.loom-package-wiring" = flakeCheck "loom-package-wiring";
   "profiles.nested-derive" = profileComposition "test_nested_derive_profile";
   "profiles.no-dev-toolchain-lib" = nixEval "profiles.no-dev-toolchain-lib";
   "profiles.no-rust-with-toolchain" = nixEval "profiles.no-rust-with-toolchain";

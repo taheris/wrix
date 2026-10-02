@@ -294,8 +294,29 @@ Agent suffixes are `-claude` and `-pi`. `packages.default` is the Rust Pi
 sandbox and runs through `wrix-run`. MCP selection is orthogonal to profiles;
 there are no per-server profile variants.
 
+## Repository Loom Tooling
+
+The repository devshell supplies the native Loom CLI, while its packaged
+sandbox/image variants supply the Linux CLI from the same source revision.
+This applies across profiles, agent runtimes, and MCP variants, including the
+default and debug sandboxes. Reusable profile-library constructors remain
+orchestrator-neutral.
+
+Loom tracks `main` through a source-only input pinned by `flake.lock`. Building
+the CLI uses the repository's existing package-builder inputs without
+evaluating Loom's flake or following its Wrix input. Input updates refresh the
+source pin without introducing a reciprocal flake dependency.
+
 ## Success Criteria
 
+- The repository's Loom input tracks `main` as locked source only and does not carry transitive flake inputs
+  [check](verify:profiles.loom-source-only)
+- Repository outputs keep host-native and Linux-image Loom packages on their respective surfaces, from the same source revision, across all sandbox variants
+  [check](verify:profiles.loom-package-wiring)
+- The repository devshell exposes a working `loom gate verify --help` command without shipping the direct runner or mock agent as CLI tools
+  [system](test-ci:test-loom-devshell)
+- Every repository sandbox variant wires Loom into its assembled image environment; those environments execute `loom gate verify --help` on Linux
+  [system](test-ci:test-loom-agent-images)
 - Base profile provides functional development environment
   [judge](../tests/judges/profiles.sh#test_base_profile_functional)
 - Base profile exposes `python3` on both image and host package surfaces for stdlib-only ad hoc scripting, while `uv`, `ruff`, `ty`, `UV_CACHE_DIR`, and the uv cache mount remain Python-profile-only.
