@@ -364,10 +364,54 @@ let
           return 1
         }
 
+        batch_dir=""
+        declare -A ci_runners=()
+        trap 'if [[ -n "$batch_dir" ]]; then rm -rf "$batch_dir"; fi' EXIT
+
+        prepare_ci_apps() {
+          local app runner index
+          local selected=() installables=() links=()
+          local -A seen=()
+          for app in "$@"; do
+            if is_ci_app "$app" && [[ ! -v "seen[$app]" ]]; then
+              selected+=("$app")
+              installables+=(".#legacyPackages.${system}.ciApps.$app")
+              seen["$app"]=1
+            fi
+          done
+          if [[ "''${#selected[@]}" -lt 2 ]]; then
+            return 0
+          fi
+          batch_dir=$(mktemp -d -t wrix-ci-runners.XXXXXX)
+          if ! ${pkgs.nix}/bin/nix build --no-warn-dirty --out-link "$batch_dir/runner" "''${installables[@]}"; then
+            return 0 # Preserve per-app build verdicts through isolated fallback builds.
+          fi
+          links=("$batch_dir"/runner*)
+          if [[ "''${#links[@]}" -ne "''${#selected[@]}" ]]; then
+            return 0 # Ambiguous aliases or multiple outputs retain the existing individual path.
+          fi
+          for index in "''${!selected[@]}"; do
+            app="''${selected[$index]}"
+            runner="$batch_dir/runner"
+            if [[ "$index" -ne 0 ]]; then
+              runner="$runner-$index"
+            fi
+            if [[ ! -x "$runner/bin/$app" ]]; then
+              ci_runners=()
+              return 0 # Missing executables retain the existing per-app failure behavior.
+            fi
+            ci_runners["$app"]="$(${coreutils}/bin/readlink "$runner")"
+          done
+        }
+
         run_ci_app() {
           local app="$1"
           local runner
-          runner=$(${pkgs.nix}/bin/nix build --no-link --print-out-paths --no-warn-dirty ".#legacyPackages.${system}.ciApps.$app")
+          if [[ -v "ci_runners[$app]" ]]; then
+            runner="''${ci_runners[$app]}"
+          else
+            runner=$(${pkgs.nix}/bin/nix build --no-link --print-out-paths --no-warn-dirty ".#legacyPackages.${system}.ciApps.$app")
+          fi
           "$runner/bin/$app"
         }
 
@@ -378,6 +422,7 @@ let
             exit 64
           fi
 
+          prepare_ci_apps "$@"
           json_failed=0
           for app in "$@"; do
             if ! is_ci_app "$app"; then

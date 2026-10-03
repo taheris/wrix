@@ -190,6 +190,8 @@ The `.wrix/push-verified` stamp is an exact-transaction, one-use approval: the p
   [check](verify:prek.ci-only-heavy-checks)
 - Pre-push runs `test-ci:` targets on Linux and reports a policy skip without realizing them on Darwin, while direct Darwin invocation still runs them
   [system](verify:prek.ci-platform-policy)
+- Batched `test-ci:` execution resolves only the selected app runners together while keeping each invocation and verdict independent, including duplicate targets, script failures, exit-77 results, unknown apps, and partial build failures
+  [system](verify:prek.ci-batching)
 
 ## Requirements
 

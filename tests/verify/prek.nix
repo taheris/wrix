@@ -1,4 +1,4 @@
-{ pkgs, ... }:
+{ pkgs, system, ... }:
 
 let
   inherit (pkgs.lib) escapeShellArg;
@@ -46,4 +46,12 @@ in
   "prek.config-wrapper-contract" = wholeRepoScript "tests/prek/wrix-pre-push-config.sh";
   "prek.ci-only-heavy-checks" = wholeRepoScript "tests/prek/ci-only-heavy-checks.sh";
   "prek.ci-platform-policy" = wholeRepoScript "tests/prek/test-ci-platform-policy.sh";
+  "prek.ci-batching" = ''
+    local root test_ci_runner
+    root="$(repo_root)"
+    nix run --no-warn-dirty "$root#test-ci" -- --list >/dev/null
+    test_ci_runner=$(nix eval --raw --no-warn-dirty "$root#apps.${system}.test-ci.program")
+    ${pkgs.python3}/bin/python3 "$root/tests/prek/test-ci-batching.py" \
+      "$test_ci_runner" ${escapeShellArg system} ${pkgs.bash} ${pkgs.coreutils}
+  '';
 }
