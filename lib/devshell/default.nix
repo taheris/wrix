@@ -23,6 +23,7 @@ let
   hostNixConfig = pkgs.writeText "wrix-host-nix-config.sh" (readFile ../services/host-nix-config.sh);
   startIndependent = import ../services/start.nix { inherit (pkgs.stdenv.hostPlatform) isDarwin; };
   prekHooksBundle = import ../prek/bundle.nix { inherit pkgs; };
+  prekRunner = import ../prek/runner.nix { inherit pkgs; };
   prekWrappers = import ../prek/wrappers.nix { inherit pkgs; };
 
   boolEnv = value: if value then "1" else "0";
@@ -94,6 +95,7 @@ in
         else
           ''
             if git rev-parse --git-dir >/dev/null 2>&1 && [[ -f .pre-commit-config.yaml ]]; then
+              ${prekRunner}/bin/wrix-prek --bind || { return 1 2>/dev/null || exit 1; }
               _wrix_hooks_target='${hooksTarget}'
               if _wrix_hooks_current=$(git config --local --get core.hooksPath); then
                 if [[ "$_wrix_hooks_current" != "$_wrix_hooks_target" ]]; then

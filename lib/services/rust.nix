@@ -1,7 +1,12 @@
-{ pkgs, rustProfile }:
+{
+  pkgs,
+  rustProfile,
+  prekDevShellHook ? null,
+}:
 
 let
   inherit (builtins) concatStringsSep;
+  inherit (pkgs.lib) makeBinPath optionalAttrs;
 
   workspace = rustProfile.buildPackage {
     src = ../..;
@@ -34,6 +39,22 @@ let
 
   prekHooksBundle = import ../prek/bundle.nix { inherit pkgs; };
   prekRunner = import ../prek/runner.nix { inherit pkgs; };
+
+  wrixPackage = mkWrappedBinaryPackage "wrix" [
+    "--set"
+    "WRIX_PREK_HOOKS"
+    "${prekHooksBundle}"
+    "--set"
+    "WRIX_PREK_RUNNER"
+    "${prekRunner}/bin/wrix-prek"
+    "--prefix"
+    "PATH"
+    ":"
+    "${makeBinPath [
+      pkgs.coreutils
+      pkgs.dolt
+    ]}"
+  ];
 
   binaryMeta = name: {
     description = "Rust ${name} binary";
@@ -89,22 +110,20 @@ in
         export HOME
       '';
       WRIX_TEST_PUBLISHER_HELPER = "${cacheHookTestPublisher}/bin/wrix-cache-test-publisher";
+      WRIX_TEST_PREK_HOOKS = "${prekHooksBundle}";
+      WRIX_TEST_PREK_RUNNER = "${prekRunner}/bin/wrix-prek";
+      WRIX_TEST_BROKEN_PREK_RUNNER = "${
+        import ../../tests/prek/missing-runtime.nix { inherit pkgs; }
+      }/bin/wrix-prek";
+      WRIX_TEST_PACKAGED_WRIX = "${wrixPackage}/bin/wrix";
+    }
+    // optionalAttrs (prekDevShellHook != null) {
+      WRIX_TEST_DEVSHELL_HOOK = pkgs.writeText "wrix-test-devshell-hook" prekDevShellHook;
     }
   );
 
   package = workspace.bin;
-  wrix = mkWrappedBinaryPackage "wrix" [
-    "--set"
-    "WRIX_PREK_HOOKS"
-    "${prekHooksBundle}"
-    "--prefix"
-    "PATH"
-    ":"
-    "${pkgs.lib.makeBinPath [
-      pkgs.coreutils
-      pkgs.dolt
-    ]}"
-  ];
+  wrix = wrixPackage;
   cacheHook = mkBinaryPackage "wrix-cache-hook";
   cachePublish = mkBinaryPackage "wrix-cache-publish";
   cacheServe = mkBinaryPackage "wrix-cache-serve";

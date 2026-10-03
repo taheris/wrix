@@ -97,7 +97,8 @@ fn init_command(repo: &Path, home: &Path, deploy_key: &Path, hooks: &Path) -> Te
     command
         .env("HOME", home)
         .env("WRIX_DEPLOY_KEY", deploy_key)
-        .env("WRIX_PREK_HOOKS", hooks);
+        .env("WRIX_PREK_HOOKS", hooks)
+        .env("WRIX_PREK_RUNNER", &common::prek::runtime()?.runner);
     Ok(command)
 }
 

@@ -510,7 +510,8 @@ run_core_hooks_path_case() {
   mkdir -p "$hooks_path"
   case "$git_layout" in
     directory)
-      mkdir -p "$workspace/.git"
+      mkdir -p "$workspace"
+      git -C "$workspace" init -q -b main
       ;;
     linked-worktree)
       local primary="$TEST_TMP/hooks-$platform-$git_layout/primary"
@@ -530,19 +531,61 @@ run_core_hooks_path_case() {
   : >"$git_log"
 
   WRIX_PREK_HOOKS="$hooks_path"
+  WRIX_PREK_RUNNER=$(command -v wrix-prek)
   WRIX_FAKE_GIT_LOG="$git_log"
-  export WRIX_PREK_HOOKS WRIX_FAKE_GIT_LOG
+  export WRIX_PREK_HOOKS WRIX_PREK_RUNNER WRIX_FAKE_GIT_LOG
   if ! run_entrypoint "$platform" direct "$stdout_path" "$stderr_path" "$workspace" true; then
-    unset WRIX_PREK_HOOKS WRIX_FAKE_GIT_LOG
+    unset WRIX_PREK_HOOKS WRIX_PREK_RUNNER WRIX_FAKE_GIT_LOG
     fail "$platform entrypoint failed: $(<"$stderr_path")"
     return 1
   fi
-  unset WRIX_PREK_HOOKS WRIX_FAKE_GIT_LOG
+  unset WRIX_PREK_HOOKS WRIX_PREK_RUNNER WRIX_FAKE_GIT_LOG
 
+  local system runner
+  system=$(nix eval --raw --impure --expr 'builtins.currentSystem')
+  runner=$(git -C "$workspace" config --local --get "wrix.prek-container-$system.runner")
+  if [[ ! -x "$runner" ]]; then
+    fail "$platform entrypoint did not bind its packaged container runner"
+    return 1
+  fi
   if ! grep -qxF -- "-C $workspace config --local core.hooksPath $hooks_path" "$git_log"; then
     fail "$platform entrypoint did not configure core.hooksPath to WRIX_PREK_HOOKS; git log: $(<"$git_log")"
     return 1
   fi
+}
+
+test_missing_hook_runtime_blocks_agent_both() {
+  local platform dependency workspace stdout_path stderr_path hooks_path runner
+  require_command git
+  require_command jq
+  for platform in linux darwin; do
+    for dependency in runner bundle; do
+      workspace="$TEST_TMP/missing-hooks-$platform-$dependency/workspace"
+      stdout_path="$TEST_TMP/missing-hooks-$platform-$dependency.out"
+      stderr_path="$TEST_TMP/missing-hooks-$platform-$dependency.err"
+      hooks_path="$TEST_TMP/missing-hooks-$platform-$dependency/bundle"
+      mkdir -p "$workspace" "$hooks_path"
+      git -C "$workspace" init -q
+      printf 'repos: []\n' >"$workspace/.pre-commit-config.yaml"
+      runner=$(command -v wrix-prek)
+      if [[ "$dependency" == runner ]]; then
+        runner="$TEST_TMP/missing-runner"
+      else
+        hooks_path="$TEST_TMP/missing-bundle"
+      fi
+      if WRIX_PREK_HOOKS="$hooks_path" WRIX_PREK_RUNNER="$runner" \
+        run_entrypoint "$platform" direct "$stdout_path" "$stderr_path" "$workspace" \
+        bash -c 'printf AGENT_RAN'; then
+        fail "$platform entrypoint accepted missing hook $dependency"
+        return 1
+      fi
+      assert_output_contains "$platform missing hook $dependency" "$(<"$stderr_path")" "rebuild the Wrix worker image"
+      if [[ "$(<"$stdout_path")" == *AGENT_RAN* ]]; then
+        fail "$platform entrypoint ran the agent without its hook runtime"
+        return 1
+      fi
+    done
+  done
 }
 
 test_linux_core_hooks_path() {

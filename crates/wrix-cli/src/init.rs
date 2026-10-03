@@ -1660,8 +1660,26 @@ fn configure_prek_hooks(root: &Path, common_dir: &Path, policy: HookPolicy) -> R
         return Ok(());
     }
     let hooks_path = resolve_prek_hooks_path()?;
+    bind_prek_runner(root)?;
     write_common_git_config(common_dir, "core.hooksPath", &path_string(&hooks_path))?;
     verify_prek_hooks(common_dir, &hooks_path)
+}
+
+fn bind_prek_runner(root: &Path) -> Result<(), Error> {
+    let runner =
+        env::var_os("WRIX_PREK_RUNNER").map_or_else(|| PathBuf::from("wrix-prek"), PathBuf::from);
+    let output = ProcessCommand::new(&runner)
+        .arg("--bind")
+        .current_dir(root)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|source| Error::PrekRunnerIo { source })?;
+    if !output.status.success() {
+        return Err(Error::PrekRunnerBind {
+            detail: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        });
+    }
+    Ok(())
 }
 
 fn resolve_prek_hooks_path() -> Result<PathBuf, Error> {
@@ -2370,6 +2388,10 @@ enum Error {
     PrekHooksEnvEmpty,
     /// cannot read Wrix prek hook bundle at {path}: {source}
     PrekHooksIo { path: String, source: io::Error },
+    /// cannot execute the hook runner; reload the Wrix devshell or use the Nix-packaged wrix init: {source}
+    PrekRunnerIo { source: io::Error },
+    /// cannot bind the packaged hook runtime; reload the Wrix devshell or use the Nix-packaged wrix init: {detail}
+    PrekRunnerBind { detail: String },
     /// Wrix prek hook bundle is not a directory: {path}
     PrekHooksNotDirectory { path: String },
     /// Wrix prek hook is missing or not executable: {path}

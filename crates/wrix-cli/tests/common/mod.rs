@@ -13,6 +13,8 @@ use std::{
     process::{Command, ExitStatus},
 };
 
+pub mod prek;
+
 pub type TestResult<T = ()> = Result<T, Box<dyn Error>>;
 
 pub struct RunResult {
@@ -591,6 +593,8 @@ fn set_isolated_env(command: &mut Command, extra_paths: &[&Path]) -> TestResult 
         "WRIX_DEPLOY_KEY",
         "WRIX_SIGNING_KEY",
         "WRIX_PREK_HOOKS",
+        "WRIX_PREK_RUNNER",
+        "WRIX_PREK_CONTEXT",
         "GIT_AUTHOR_NAME",
         "GIT_AUTHOR_EMAIL",
         "GIT_COMMITTER_NAME",
@@ -621,7 +625,7 @@ fn path_with_binary_dir(extra_paths: &[&Path]) -> TestResult<OsString> {
     Ok(env::join_paths(paths)?)
 }
 
-fn command_path(name: &str) -> TestResult<PathBuf> {
+pub fn command_path(name: &str) -> TestResult<PathBuf> {
     let path = env::var_os("PATH")
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "PATH is not set"))?;
     for directory in env::split_paths(&path) {

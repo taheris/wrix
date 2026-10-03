@@ -279,6 +279,8 @@ let
     "PATH=${profileEnv}/bin:/bin:/usr/bin"
     "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
     "WRIX_PREK_HOOKS=${prekHooksBundle}"
+    "WRIX_PREK_RUNNER=${prekRunner}/bin/wrix-prek"
+    "WRIX_PREK_CONTEXT=container"
     "XDG_CACHE_HOME=/var/cache"
   ]
   ++ (mapAttrsToList (name: value: "${name}=${value}") (profile.env or { }));

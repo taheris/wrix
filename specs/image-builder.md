@@ -131,7 +131,14 @@ Every profile image carries the prek surfaces defined by `pre-commit.md` § Hook
 
 - the `wrix.prekHooks` bundle is materialized in the image closure and exposed to the entrypoint as the hook path;
 - the wrapper binaries defined by `pre-commit.md` § Hook-Entry Wrappers are available on the profile image `PATH`;
-- the platform entrypoint sets `core.hooksPath` for the Git repository at `/workspace` to the `wrix.prekHooks` store path when `.pre-commit-config.yaml` is present, whether `.git` is a directory or a linked-worktree file.
+- the image exposes its absolute Linux-native runner as `WRIX_PREK_RUNNER` and selects `WRIX_PREK_CONTEXT=container`;
+- the platform entrypoint binds that runner in the repository-local Git config before setting `core.hooksPath` at `/workspace` to the shared `wrix.prekHooks` path when `.pre-commit-config.yaml` is present, whether `.git` is a directory or a linked-worktree file;
+- a missing packaged runner blocks worker initialization with image-rebuild guidance; it does not silently omit configured hooks.
+
+`pre-commit.md` owns platform/context isolation and runtime resolution. Both
+entrypoints execute Linux image binaries; Darwin host executables are not
+recorded as worker bindings. Refresh/rebuild worker images when updating Wrix.
+[system](verify:images.missing-hook-runtime-blocks-agent)
 
 Wrapper behavior, hook-stage semantics, and optional-tool policy remain owned by `pre-commit.md`. The image builder does not inject `SKIP=` env vars, stub missing tools on `PATH`, or maintain a hook-id skip list.
 
@@ -190,6 +197,8 @@ Wrapper behavior, hook-stage semantics, and optional-tool policy remain owned by
   [system](verify:images.linux-entrypoint-core-hooks-path)
 - The Darwin entrypoint mirrors the Linux entrypoint's `core.hooksPath` setup for the `/workspace` Git repository
   [system](verify:images.darwin-entrypoint-core-hooks-path)
+- Missing packaged hook bundles or runners block agent initialization with image-rebuild guidance in both entrypoints
+  [system](verify:images.missing-hook-runtime-blocks-agent)
 - Both entrypoints configure `core.hooksPath` when `/workspace` is a linked worktree represented by a `.git` file
   [system](verify:images.linked-worktree-core-hooks-path)
 - Every wrix-managed Nix-built image source covered by this spec exposes the platform source kind (`nix-descriptor` on Linux, `docker-archive` on Darwin), including service/support images such as `wrix-builder`

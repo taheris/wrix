@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-_wrix_prek_bin=$(wrix-prek --print-bin-dir)
-export PATH="$_wrix_prek_bin:$PATH"
+# shellcheck source=../binding.sh
+source "${BASH_SOURCE[0]%/*}/_binding.sh"
+wrix_prek_resolve
 exec prek hook-impl --hook-type=pre-commit --hook-dir "$(dirname "$0")" --script-version 4 -- "$@"

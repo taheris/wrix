@@ -4,7 +4,7 @@
 #   test_bundle_contents
 #     lib.prekHooks is a directory derivation containing executable shims for
 #     pre-commit, pre-push, prepare-commit-msg, post-checkout, post-merge —
-#     and no other paths.
+#     plus the platform-neutral binding helper.
 #
 #   test_bundle_path_is_context_stable
 #     Every supported host/image system resolves the bundle to the same
@@ -97,7 +97,7 @@ test_bundle_contents() {
 
   local found
   found=$(find "$bundle" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)
-  local expected=$'post-checkout\npost-merge\npre-commit\npre-push\nprepare-commit-msg'
+  local expected=$'_binding.sh\npost-checkout\npost-merge\npre-commit\npre-push\nprepare-commit-msg'
   if [[ "$found" != "$expected" ]]; then
     echo "FAIL: bundle contains unexpected paths:" >&2
     printf '%s\n' "$found" >&2
@@ -212,7 +212,7 @@ test_shims_resolve_packaged_prek_at_runtime() (
   trap 'rm -rf "$work"' EXIT
 
   mkdir -p "$tools"
-  for command in bash cat chmod dirname git mkdir rm; do
+  for command in bash cat chmod dirname git mkdir rm uname; do
     ln -s "$(command -v "$command")" "$tools/$command"
   done
   export PATH="${resolver%/*}:$tools"

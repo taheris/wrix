@@ -198,7 +198,8 @@ fn init_command(
         .env("HOSTNAME", "devhost")
         .env("WRIX_DEPLOY_KEY", deploy_key)
         .env("WRIX_SIGNING_KEY", signing_key)
-        .env("WRIX_PREK_HOOKS", hooks);
+        .env("WRIX_PREK_HOOKS", hooks)
+        .env("WRIX_PREK_RUNNER", &common::prek::runtime()?.runner);
     Ok(command)
 }
 

@@ -73,7 +73,7 @@ The applied Git state includes:
 - a context-aware Git transport helper selected by `core.sshCommand`;
 - context-aware SSH signing configuration when signing is enabled;
 - a context-stable allowed-signers file for the selected signing key;
-- the Wrix prek hook bundle as `core.hooksPath` when hook configuration is enabled and `.pre-commit-config.yaml` exists;
+- the platform/context-specific Nix runner binding and Wrix prek bundle as `core.hooksPath` when hook configuration is enabled and `.pre-commit-config.yaml` exists (runtime resolution and compatibility are owned by `pre-commit.md`);
 - Wrix-pinned GitHub host keys for SSH verification.
 
 ### Context-Aware Git Helpers
@@ -191,6 +191,10 @@ reported separately from host-key failure.
   generated-helper, and Git object state while avoiding file-metadata churn and
   remote mutation.
   [test](../crates/wrix-cli/tests/init_idempotency.rs::repeated_init_does_not_churn_managed_state)
+- The packaged launcher supplies the Nix-resolved runner during init even when it is absent from PATH
+  [test](../crates/wrix-cli/tests/prek_runtime.rs::packaged_launcher_initializes_binding_without_runner_on_path)
+- Packaged init installs/repairs the runner binding before selecting the hook bundle, including stale installations; repeated initialization preserves identical config
+  [test](../crates/wrix-cli/tests/prek_runtime.rs::init_repairs_stale_runner_and_hook_path)
 - When `.pre-commit-config.yaml` exists and hook setup is enabled, `wrix init` points the invoked repository's `core.hooksPath` at Wrix's prek hook bundle without mutating a nested integration clone; running init inside that clone configures its own hooks. When hooks are disabled by flag or config, init leaves hook config unchanged.
   [test](../crates/wrix-cli/tests/init_prek.rs::prek_hooks)
 

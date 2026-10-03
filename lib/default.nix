@@ -29,6 +29,11 @@ let
   rustCli = import ./services/rust.nix {
     inherit pkgs;
     rustProfile = sandbox.profiles.rust;
+    prekDevShellHook =
+      (devshell.mkDevShell {
+        profile = sandbox.profiles.base;
+        nixCache = false;
+      }).shellHook;
   };
 
   sandboxLib = import ./sandbox {

@@ -146,6 +146,7 @@ fn init_command(
     command
         .env("HOME", home)
         .env("WRIX_PREK_HOOKS", hooks)
+        .env("WRIX_PREK_RUNNER", &common::prek::runtime()?.runner)
         .env_remove("WRIX_DEPLOY_KEY")
         .env_remove("WRIX_SIGNING_KEY");
     Ok(command)

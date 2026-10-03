@@ -364,8 +364,16 @@ WRIX_BD_WRAPPER
 
 # Install the image's hook bundle as specified by specs/image-builder.md § Hook Installation.
 if [[ -f /workspace/.pre-commit-config.yaml ]] \
-  && [[ -n "${WRIX_PREK_HOOKS:-}" ]] \
   && git -C /workspace rev-parse --git-dir >/dev/null 2>&1; then
+  [[ -d "${WRIX_PREK_HOOKS:-}" ]] || {
+    echo "wrix: packaged hook bundle is missing; rebuild the Wrix worker image" >&2
+    exit 1
+  }
+  [[ -n "${WRIX_PREK_RUNNER:-}" && -x "$WRIX_PREK_RUNNER" ]] || {
+    echo "wrix: packaged hook runner is missing; rebuild the Wrix worker image" >&2
+    exit 1
+  }
+  (cd /workspace && WRIX_PREK_CONTEXT=container "$WRIX_PREK_RUNNER" --bind)
   if _wrix_hooks_current=$(git -C /workspace config --local --get core.hooksPath); then
     if [[ "$_wrix_hooks_current" != "$WRIX_PREK_HOOKS" ]]; then
       echo "wrix: overriding stale core.hooksPath ($_wrix_hooks_current) -> $WRIX_PREK_HOOKS" >&2

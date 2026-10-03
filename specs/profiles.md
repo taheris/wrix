@@ -260,11 +260,14 @@ selection before the profile and consumer hooks. The cache schema belongs to
 #### Prek hook management
 
 When `.pre-commit-config.yaml` exists and `prekHooks` resolves to a derivation,
-the lifecycle sets local `core.hooksPath` to that derivation on every shell
-entry. `true` selects the default bundle, `false` performs no hook-path action,
-and a derivation substitutes the bundle. An existing different path is
-overwritten with a one-line notice. Opting out leaves any existing value
-unchanged. `pre-commit.md` owns bundle contents and hook semantics.
+the lifecycle first binds the absolute Nix-resolved runner for the current
+platform/context, then sets local `core.hooksPath` to that derivation on every
+shell entry. Reload repairs missing/stale bindings even when the hook path
+already matches. `true` selects the default bundle, `false` performs no binding
+or hook-path action, and a derivation substitutes the bundle. An existing
+different path is overwritten with a one-line notice. Opting out leaves
+existing state unchanged. `pre-commit.md` owns runtime resolution, compatibility,
+and shared-worktree behavior.
 
 ## Profile-Image Manifest
 
@@ -375,6 +378,8 @@ source pin without introducing a reciprocal flake dependency.
   [check](verify:prek.wrappers-on-devshell-path)
 - `wrix.mkDevShell { profile = ...; }` with `.pre-commit-config.yaml` present sets `core.hooksPath` to the default hook bundle on entry
   [system](verify:devshell.prek-auto-set)
+- Devshell entry repairs a missing/stale runner binding even when the canonical hook path already matches
+  [test](../crates/wrix-cli/tests/prek_runtime.rs::devshell_entry_repairs_binding_even_when_hook_path_is_current)
 - `wrix.mkDevShell { profile = ...; }` without `.pre-commit-config.yaml` does NOT set `core.hooksPath` on entry
   [system](verify:devshell.prek-skip-absent-config)
 - `wrix.mkDevShell { profile = ...; prekHooks = false; }` does NOT set `core.hooksPath` even when `.pre-commit-config.yaml` is present

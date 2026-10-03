@@ -8,7 +8,7 @@ A wrix consumer using prek wants the same hook chain to fire in every context �
 
 ## Architecture
 
-All git hooks for prek-using wrix repositories are served from a single Nix-store derivation — `wrix.prekHooks` — pointed at by `core.hooksPath`. The bundle contains one shim per stage prek serves. Every shim injects the Nix-store `prek` package into `PATH` before invoking prek, so hooks work from plain host shells, devshells, and profile containers. The pre-commit and post-* shims `exec` it, while the pre-push shim wraps the call in a stamp-file dance to survive an SSH disconnect mid-check (see § Pre-Push Stamp Dance):
+All git hooks for prek-using wrix repositories are served from a single content-addressed Nix-store derivation — `wrix.prekHooks` — pointed at by `core.hooksPath`. Its five stage shims and shared binding helper contain no platform-specific executable paths, so Darwin hosts and Linux workers select the same bundle. Each shim resolves a platform-native packaged runner before injecting its Nix-pinned prek, Git, and utility directories into `PATH`; an active devshell is not required. The pre-commit and post-* shims `exec` prek, while pre-push retains the stamp dance described below:
 
 | Stage | Shim behavior |
 |-------|---------------|
@@ -23,6 +23,54 @@ Each shim uses `prek hook-impl --hook-type=<stage>` rather than `prek run` becau
 `profiles.md` § Prek hook management owns devshell installation, `cli.md` owns repository-scoped `wrix init` installation for ordinary host Git and Loom clones, and `image-builder.md` § Hook Installation owns profile-image and container-entrypoint installation. This spec owns the shared bundle and its behavior after those surfaces select it.
 
 Consumers do not vendor shims, do not set `core.hooksPath` themselves, and do not run `prek install`. Git never reads `.git/hooks/` while `core.hooksPath` is set, so whatever lands there (e.g. `bd hooks install`) is inert — no chmod-lockdown is needed and no `prek install -f` runs from any wrix lifecycle.
+
+## Installation and Runtime Resolution
+
+Wrix-managed installation binds the Nix-resolved `wrix-prek` executable before
+selecting `core.hooksPath`. The repository-local Git key is
+`wrix.prek-<context>-<system>.runner`, where `<system>` is the executing Nix
+platform (for example `aarch64-darwin` or `x86_64-linux`) and `<context>` is
+`host` or `container`. `uname` normalizes Darwin `arm64` to `aarch64`. The
+context defaults to container when `/etc/wrix/image-agent` exists, otherwise
+host; profile images explicitly set `WRIX_PREK_CONTEXT=container`.
+[test](../crates/wrix-cli/tests/prek_runtime.rs::worker_binding_preserves_host_and_foreign_platform_bindings)
+
+The binding lives in common repository config, not a worktree-relative file.
+Linked worktrees share it; independent integration and bead clones need their
+own installation. An installer updates only its platform/context binding, so a
+Linux worker does not replace a Darwin binding or even a same-platform host
+binding. The canonical shared hook bundle remains `core.hooksPath` in every
+context.
+[test](../crates/wrix-cli/tests/prek_runtime.rs::linked_worktree_uses_common_binding_but_clone_needs_its_own)
+
+Hooks need Bash, Git, and `uname` on the bootstrap PATH, but not Wrix or prek.
+They read only the matching repository-local binding and execute its absolute
+runner as `--print-bin-dir`. The runner supplies its packaged runtime PATH;
+hook argv, stdin, policy, and exit status retain the stage-specific behavior.
+No Wrix execution lock is introduced; upstream prek locking is unchanged.
+[test](../crates/wrix-cli/tests/prek_runtime.rs::every_packaged_stage_runs_without_devshell_path)
+
+For compatibility with installers that only select the bundle, an absent
+binding can resolve packaged `wrix-prek` on PATH. An existing invalid/stale
+binding never falls back to another platform/context or an ambient runner.
+Missing bootstrap tools, runner, or packaged runtime fail with repair guidance,
+not a silent hook skip. Optional consumer tools still use explicit
+`skip-if-missing` policy.
+[test](../crates/wrix-cli/tests/prek_runtime.rs::stale_binding_does_not_fall_back_to_ambient_runner)
+
+Reloading the updated Wrix devshell repairs the current binding even when
+`core.hooksPath` already matches. Packaged `wrix init` repairs the binding and
+stale hook path when hook policy is enabled; `--no-hooks` remains a passive
+opt-out. Worker entrypoints bind their image-native runner before installing
+hooks. Existing worker images need rebuilding after a Wrix pin update.
+[test](../crates/wrix-cli/tests/prek_runtime.rs::init_repairs_stale_runner_and_hook_path)
+
+Repair each independent clone in its own directory: re-enter its updated
+Wrix devshell, or run the updated Nix-packaged `wrix init` with the existing
+repository key/signing policy. No key provisioning or global installation is
+needed. A runner path collected by Nix GC is repaired the same way. Ordinary
+Git operations thereafter need no active devshell.
+[test](../crates/wrix-cli/tests/prek_runtime.rs::devshell_entry_repairs_binding_even_when_hook_path_is_current)
 
 ## Pre-Push Stamp Dance
 
@@ -80,8 +128,26 @@ The `.wrix/push-verified` stamp is an exact-transaction, one-use approval: the p
   [check](verify:prek.bundle-contents)
 - The pre-commit and pre-push shims both invoke `prek hook-impl --hook-type=<stage>` (not `prek run`, which would mistake git's positional args for hook/project selectors)
   [system](verify:prek.shims-use-hook-impl)
-- No shim sources `lock.sh`, calls `_prek_acquire_lock`, or invokes `flock`; every shim invokes `prek hook-impl --hook-type=<its-stage>` and pins the Nix-store `prek` package on `PATH`
+- No shim sources `lock.sh`, calls `_prek_acquire_lock`, or invokes `flock`; every shim invokes `prek hook-impl --hook-type=<its-stage>` through its packaged runtime
   [system](verify:prek.shims-no-flock)
+- All five real packaged stage shims execute with a minimal PATH lacking both Wrix and prek
+  [test](../crates/wrix-cli/tests/prek_runtime.rs::every_packaged_stage_runs_without_devshell_path)
+- All five stage shims propagate configured hook failure, and failed pre-push checks do not mint approval stamps
+  [test](../crates/wrix-cli/tests/prek_runtime.rs::every_packaged_stage_propagates_hook_failure)
+- Real Git commit and push dispatch through the installed canonical bundle outside a devshell
+  [test](../crates/wrix-cli/tests/prek_runtime.rs::git_commit_and_push_use_installed_bundle_with_minimal_path)
+- Missing bindings fail with actionable reload/init instructions
+  [test](../crates/wrix-cli/tests/prek_runtime.rs::missing_binding_fails_with_repair_instructions)
+- Missing bootstrap dependencies produce actionable failures
+  [test](../crates/wrix-cli/tests/prek_runtime.rs::missing_bootstrap_dependency_reports_actionable_failure)
+- A runner missing its packaged prek dependency fails with repair guidance through the real hook/runtime seam
+  [test](../crates/wrix-cli/tests/prek_runtime.rs::broken_runtime_reports_actionable_failure)
+- Installation rejects missing packaged dependencies before changing the runner binding
+  [test](../crates/wrix-cli/tests/prek_runtime.rs::binding_rejects_missing_packaged_dependency_before_mutation)
+- Older bundle-only installations remain usable with a packaged runner on PATH
+  [test](../crates/wrix-cli/tests/prek_runtime.rs::legacy_installation_can_use_packaged_runner_on_path)
+- Synthetic foreign-platform execution cannot consume the native platform binding; this is not live Darwin verification
+  [test](../crates/wrix-cli/tests/prek_runtime.rs::synthetic_foreign_platform_does_not_use_native_binding)
 - The pre-push shim writes `.wrix/push-verified` after successful checks, binding the approval to the current HEAD, the remote name and location, and the complete ordered ref transaction; the next exact transaction consumes the stamp and skips checks once
   [system](verify:prek.pre-push-stamp)
 - A same-HEAD invocation with a different remote name, remote location, local or remote ref name, local or remote object ID, or ref set consumes the old stamp and runs the checks
