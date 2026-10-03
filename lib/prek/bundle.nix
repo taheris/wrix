@@ -8,6 +8,7 @@ pkgs.runCommand "wrix-prek-hooks"
   }
   ''
     set -euo pipefail
-    cp -a ${./hooks}/. "$out"
+    mkdir -p "$out"
+    cp -a ${./hooks}/* "$out/"
     cp ${./binding.sh} "$out/_binding.sh"
   ''

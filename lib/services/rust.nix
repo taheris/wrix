@@ -115,6 +115,7 @@ in
       WRIX_TEST_BROKEN_PREK_RUNNER = "${
         import ../../tests/prek/missing-runtime.nix { inherit pkgs; }
       }/bin/wrix-prek";
+      WRIX_TEST_PREK_BUILD_SPEC = import ../../tests/prek/bundle-build-spec.nix { inherit pkgs; };
       WRIX_TEST_PACKAGED_WRIX = "${wrixPackage}/bin/wrix";
     }
     // optionalAttrs (prekDevShellHook != null) {

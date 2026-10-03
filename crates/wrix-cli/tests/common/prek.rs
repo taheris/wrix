@@ -6,6 +6,7 @@ pub struct Runtime {
     pub hooks: PathBuf,
     pub runner: PathBuf,
     pub broken_runner: PathBuf,
+    pub builder_spec: PathBuf,
 }
 
 pub fn runtime() -> TestResult<&'static Runtime> {
@@ -61,15 +62,17 @@ pub fn devshell_hook() -> TestResult<String> {
 }
 
 fn build_runtime() -> TestResult<Runtime> {
-    if let (Some(hooks), Some(runner), Some(broken_runner)) = (
+    if let (Some(hooks), Some(runner), Some(broken_runner), Some(builder_spec)) = (
         env::var_os("WRIX_TEST_PREK_HOOKS"),
         env::var_os("WRIX_TEST_PREK_RUNNER"),
         env::var_os("WRIX_TEST_BROKEN_PREK_RUNNER"),
+        env::var_os("WRIX_TEST_PREK_BUILD_SPEC"),
     ) {
         return Ok(Runtime {
             hooks: PathBuf::from(hooks),
             runner: PathBuf::from(runner),
             broken_runner: PathBuf::from(broken_runner),
+            builder_spec: PathBuf::from(builder_spec),
         });
     }
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -81,6 +84,7 @@ fn build_runtime() -> TestResult<Runtime> {
       { name = "hooks"; path = import (root + "/lib/prek/bundle.nix") { inherit pkgs; }; }
       { name = "runner"; path = import (root + "/lib/prek/runner.nix") { inherit pkgs; }; }
       { name = "broken-runner"; path = import (root + "/tests/prek/missing-runtime.nix") { inherit pkgs; }; }
+      { name = "builder-spec"; path = import (root + "/tests/prek/bundle-build-spec.nix") { inherit pkgs; }; }
     ]"#;
     let result = run_command(
         Command::new("nix")
@@ -102,5 +106,6 @@ fn build_runtime() -> TestResult<Runtime> {
         hooks: fs::canonicalize(path.join("hooks"))?,
         runner: fs::canonicalize(path.join("runner/bin/wrix-prek"))?,
         broken_runner: fs::canonicalize(path.join("broken-runner/bin/wrix-prek"))?,
+        builder_spec: fs::canonicalize(path.join("builder-spec"))?,
     })
 }

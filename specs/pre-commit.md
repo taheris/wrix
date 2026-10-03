@@ -124,6 +124,8 @@ The `.wrix/push-verified` stamp is an exact-transaction, one-use approval: the p
 
 ## Success Criteria
 
+- The real bundle derivation builder assembles the complete bundle without root write privileges, including when Nix inputs are read-only
+  [test](../crates/wrix-cli/tests/prek_bundle_build.rs::real_bundle_builder_works_without_root_write_privileges)
 - The `wrix.prekHooks` derivation contains executable shims for `pre-commit`, `pre-push`, `prepare-commit-msg`, `post-checkout`, and `post-merge`
   [check](verify:prek.bundle-contents)
 - The pre-commit and pre-push shims both invoke `prek hook-impl --hook-type=<stage>` (not `prek run`, which would mistake git's positional args for hook/project selectors)
