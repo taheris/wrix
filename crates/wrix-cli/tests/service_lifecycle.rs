@@ -3,7 +3,7 @@ mod common;
 use std::{
     fs,
     net::TcpListener,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::Command,
     time::{Duration, Instant},
 };
@@ -68,9 +68,14 @@ impl Fixture {
         let root = tempfile::Builder::new()
             .prefix("apple-service")
             .tempdir_in("/tmp")?;
+        Self::from_root(root)
+    }
+
+    fn from_root(root: tempfile::TempDir) -> TestResult<Self> {
         let workspace = root.path().join("workspace");
         let runtime = root.path().join("container");
         fs::create_dir_all(workspace.join(".beads/dolt"))?;
+        initialize_repository(&workspace)?;
         fs::write(&runtime, APPLE_RUNTIME)?;
         set_mode(&runtime, 0o755)?;
         let mut fixture = Self {
@@ -204,12 +209,46 @@ impl Fixture {
     }
 }
 
+fn initialize_repository(path: &Path) -> TestResult {
+    let output = run_command(
+        Command::new(common::command_path("git")?)
+            .env_clear()
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .current_dir(path)
+            .args(["init", "-q"]),
+    )?;
+    assert!(output.status.success(), "{}", output.stderr);
+    Ok(())
+}
+
+#[test]
+fn enclosing_repository_does_not_change_service_fixture_identity() -> TestResult {
+    let outer = tempfile::Builder::new()
+        .prefix("service-fixture-enclosing-repository")
+        .tempdir_in("/tmp")?;
+    initialize_repository(outer.path())?;
+    let root = tempfile::Builder::new()
+        .prefix("apple-service")
+        .tempdir_in(outer.path())?;
+    let fixture = Fixture::from_root(root)?;
+    assert_eq!(
+        fixture.metadata["workspace_path"].as_str(),
+        fixture.workspace.canonicalize()?.to_str(),
+    );
+    assert!(fixture.workspace.join(".git").is_dir());
+    assert_ne!(fixture.port("cache_http")?, 0);
+    assert_ne!(fixture.port("dolt_tcp")?, 0);
+    assert!(!outer.path().join(".wrix").exists());
+    Ok(())
+}
+
 #[test]
 fn repository_local_tempdir_does_not_change_service_fixture_identity() -> TestResult {
     let outer = tempfile::Builder::new()
         .prefix("service-fixture-repository")
         .tempdir_in("/tmp")?;
-    common::run_git(outer.path(), &["init", "-q"])?;
+    initialize_repository(outer.path())?;
     let tmpdir = outer.path().join(".loom/scratch");
     fs::create_dir_all(&tmpdir)?;
     let output = run_command(
@@ -219,7 +258,10 @@ fn repository_local_tempdir_does_not_change_service_fixture_identity() -> TestRe
                 "apple_sandbox_endpoint_uses_service_vm_instead_of_host_loopback",
                 "--nocapture",
             ])
-            .env("TMPDIR", tmpdir),
+            .env("TMPDIR", tmpdir)
+            .env("GIT_DIR", outer.path().join(".git"))
+            .env("GIT_COMMON_DIR", outer.path().join(".git"))
+            .env("GIT_WORK_TREE", outer.path()),
     )?;
     assert!(
         output.status.success(),
