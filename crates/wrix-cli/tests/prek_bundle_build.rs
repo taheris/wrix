@@ -77,7 +77,10 @@ fn drop_root_privileges(command: &mut Command) -> TestResult {
             command.uid(65534).gid(65534);
         }
         #[cfg(not(target_os = "linux"))]
-        return Err("run this packaging regression as an unprivileged user".into());
+        {
+            let _ = command;
+            return Err("run this packaging regression as an unprivileged user".into());
+        }
     }
     Ok(())
 }
