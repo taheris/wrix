@@ -49,7 +49,7 @@ pub fn devshell_hook() -> TestResult<String> {
                 "--impure",
                 "--expr",
                 r#"let
-          flake = builtins.getFlake (builtins.getEnv "WRIX_TEST_REPO");
+          flake = builtins.getFlake ("git+file://" + builtins.getEnv "WRIX_TEST_REPO");
           lib = flake.legacyPackages.${builtins.currentSystem}.lib;
         in (lib.mkDevShell { profile = lib.profiles.base; nixCache = false; }).shellHook"#,
             ])
@@ -78,7 +78,7 @@ fn build_runtime() -> TestResult<Runtime> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let expression = r#"let
       root = builtins.toPath (builtins.getEnv "WRIX_TEST_REPO");
-      flake = builtins.getFlake (toString root);
+      flake = builtins.getFlake ("git+file://" + toString root);
       pkgs = import flake.inputs.nixpkgs { system = builtins.currentSystem; };
     in pkgs.linkFarm "wrix-test-prek-runtime" [
       { name = "hooks"; path = import (root + "/lib/prek/bundle.nix") { inherit pkgs; }; }

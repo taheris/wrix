@@ -64,7 +64,10 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> TestResult<Self> {
-        let root = tempfile::Builder::new().prefix("apple-service").tempdir()?;
+        // Repository-local TMPDIR paths inherit the enclosing checkout's service identity.
+        let root = tempfile::Builder::new()
+            .prefix("apple-service")
+            .tempdir_in("/tmp")?;
         let workspace = root.path().join("workspace");
         let runtime = root.path().join("container");
         fs::create_dir_all(workspace.join(".beads/dolt"))?;
@@ -185,6 +188,33 @@ impl Fixture {
         )?;
         Ok(())
     }
+}
+
+#[test]
+fn repository_local_tempdir_does_not_change_service_fixture_identity() -> TestResult {
+    let outer = tempfile::Builder::new()
+        .prefix("service-fixture-repository")
+        .tempdir_in("/tmp")?;
+    common::run_git(outer.path(), &["init", "-q"])?;
+    let tmpdir = outer.path().join(".loom/scratch");
+    fs::create_dir_all(&tmpdir)?;
+    let output = run_command(
+        Command::new(std::env::current_exe()?)
+            .args([
+                "--exact",
+                "apple_sandbox_endpoint_uses_service_vm_instead_of_host_loopback",
+                "--nocapture",
+            ])
+            .env("TMPDIR", tmpdir),
+    )?;
+    assert!(
+        output.status.success(),
+        "{} {}",
+        output.stdout,
+        output.stderr
+    );
+    assert!(!outer.path().join(".wrix").exists());
+    Ok(())
 }
 
 #[test]
