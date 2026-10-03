@@ -262,11 +262,12 @@ Plus consumer-defined fields the entrypoint reads from the original config mount
   [check](test-ci:test-profile-config-wrapper)
 - `ProfileConfig.image` includes `ref`, `source`, explicit `source_kind`, and `digest`; the launcher/runtime installer rejects configs where `source_kind` is missing or incompatible with the selected platform install path
   [check](test-ci:test-profile-config-image-source-kind)
-- Complete `ProfileConfig` parsing rejects malformed fields and duplicate JSON
-  fields before subprocesses, while retaining intentional wire extensibility and
-  platform-specific source semantics
+- Complete `ProfileConfig` parsing rejects malformed fields before subprocesses
   [test](../crates/wrix-cli/tests/sandbox_launch.rs::malformed_profile_config_fails_before_subprocesses)
+- Complete `ProfileConfig` parsing rejects duplicate JSON fields before subprocesses
   [test](../crates/wrix-cli/tests/sandbox_launch.rs::duplicate_profile_config_fields_fail_at_the_json_boundary)
+- Complete `ProfileConfig` parsing retains intentional wire extensibility and
+  platform-specific source semantics
   [test](../crates/wrix-sandbox/src/command/config.rs::profile_boundary_preserves_extension_fields_and_typed_source_semantics)
 - Image installer construction rejects empty source paths and contradictory
   runtime/source combinations before store operations

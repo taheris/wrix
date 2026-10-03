@@ -83,6 +83,13 @@ impl Fixture {
         let output = fixture.run("endpoints")?;
         assert!(output.status.success(), "{}", output.stderr);
         fixture.metadata = serde_json::from_str(&output.stdout)?;
+        assert_eq!(
+            fixture.metadata["workspace_path"].as_str(),
+            fixture.workspace.canonicalize()?.to_str(),
+            "fixture resolved another workspace; CLI: {}; endpoints: {}",
+            env!("CARGO_BIN_EXE_wrix"),
+            fixture.metadata,
+        );
         fixture.snapshot = json!([{
             "configuration": {
                 "id": fixture.metadata["container_name"],
@@ -172,9 +179,16 @@ impl Fixture {
     }
 
     fn port(&self, endpoint: &str) -> TestResult<u16> {
-        Ok(serde_json::from_value(
-            self.metadata["endpoints"][endpoint]["port"].clone(),
-        )?)
+        serde_json::from_value(self.metadata["endpoints"][endpoint]["port"].clone())
+            .map_err(|error| {
+                format!(
+                    "invalid fixture endpoint {endpoint} port: {error}; CLI: {}; workspace: {}; endpoints: {}",
+                    env!("CARGO_BIN_EXE_wrix"),
+                    self.workspace.display(),
+                    self.metadata,
+                )
+                .into()
+            })
     }
 
     fn state_root(&self) -> TestResult<PathBuf> {
@@ -214,6 +228,21 @@ fn repository_local_tempdir_does_not_change_service_fixture_identity() -> TestRe
         output.stderr
     );
     assert!(!outer.path().join(".wrix").exists());
+    Ok(())
+}
+
+#[test]
+fn null_fixture_endpoint_reports_cli_workspace_and_payload() -> TestResult {
+    let mut fixture = Fixture::new()?;
+    fixture.metadata["endpoints"]["dolt_tcp"] = Value::Null;
+    let error = fixture.port("dolt_tcp").unwrap_err().to_string();
+    assert!(error.contains("dolt_tcp"), "{error}");
+    assert!(error.contains(env!("CARGO_BIN_EXE_wrix")), "{error}");
+    assert!(
+        error.contains(&fixture.workspace.display().to_string()),
+        "{error}"
+    );
+    assert!(error.contains(&fixture.metadata.to_string()), "{error}");
     Ok(())
 }
 

@@ -91,6 +91,7 @@ write_verify_targets() {
 verify:images.darwin-entrypoint-core-hooks-path
 verify:images.linked-worktree-core-hooks-path
 verify:images.linux-entrypoint-core-hooks-path
+verify:images.missing-hook-runtime-blocks-agent
 TARGETS
 
   grep -rhoE '\[(check|system)\]\(test-ci:[^)]+\)' "$REPO_ROOT/specs" \
