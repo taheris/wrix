@@ -223,6 +223,23 @@ let
       builder-vmnet-route = builderRouteTest;
       image-assembly-native = sandboxImageChecks.imageAssemblyNativeCheck;
       audit-start-clock = auditClock.check;
+      entrypoint-hook-failures =
+        pkgs.runCommandLocal "entrypoint-hook-failures"
+          {
+            nativeBuildInputs = [
+              bash
+              coreutils
+              git
+              jq
+              pkgs.python3
+            ];
+          }
+          ''
+            set -euo pipefail
+            export REPO_ROOT=${src}
+            ${pkgs.python3}/bin/python3 ${./sandbox/test_entrypoint_failures.py}
+            touch "$out"
+          '';
       pi-auth-storage = import ./security/pi-auth.nix { inherit pkgs; };
       pi-default-model = import ./sandbox/pi-default-model.nix { inherit pkgs wrix; };
       profile-images-launcher = import ./profiles/manifest.nix { inherit pkgs wrix; };

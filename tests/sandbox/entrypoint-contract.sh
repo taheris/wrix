@@ -738,13 +738,13 @@ test_missing_hook_runtime_blocks_agent_both() {
 
 test_linux_core_hooks_path() {
   require_command jq
-  run_core_hooks_path_case linux
+  run_core_hooks_path_case linux || return "$?"
   printf 'PASS: linux entrypoint configures core.hooksPath when pre-commit config is present\n' >&2
 }
 
 test_darwin_core_hooks_path() {
   require_command jq
-  run_core_hooks_path_case darwin
+  run_core_hooks_path_case darwin || return "$?"
   printf 'PASS: darwin entrypoint configures core.hooksPath when pre-commit config is present\n' >&2
 }
 
@@ -753,7 +753,7 @@ test_linked_worktree_core_hooks_path_both() {
   require_command jq
   local platform
   for platform in linux darwin; do
-    run_core_hooks_path_case "$platform" linked-worktree
+    run_core_hooks_path_case "$platform" linked-worktree || return "$?"
   done
   printf 'PASS: both entrypoints configure core.hooksPath in linked worktrees\n' >&2
 }
