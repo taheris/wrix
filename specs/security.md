@@ -343,6 +343,9 @@ section is a reference index only.
   identities; a fresh host-side GitHub SSH operation reaches authentication or
   repository authorization without host-key verification failure.
   [system](test-ci:test-security-host-container-loom-git-helper)
+- Linux live-test images provide the production context-resolved Git helper,
+  and their packaged tools can initialize, sign, and verify a repository.
+  [system](test-ci:test-image-git-helper-parity)
 - When `WRIX_DEPLOY_KEY` or `WRIX_SIGNING_KEY` is set in the
   launcher's environment but the pointed-at file does not exist, the
   launcher exits non-zero with a stderr message naming the missing

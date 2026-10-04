@@ -65,27 +65,27 @@ let
   # the platform store only takes on bytes for the changed top layer.
   auditClock = import ./security/audit-clock.nix { inherit pkgs linuxPkgs wrix; };
 
+  mkTestImage =
+    args:
+    import ./sandbox/test-image.nix (
+      {
+        pkgs = linuxPkgs;
+        inherit treefmt;
+        inherit (wrix) mkSandbox;
+      }
+      // args
+    );
+
   testImages = {
     auditCollision = auditClock.image;
-    base = import ./sandbox/test-image.nix {
-      pkgs = linuxPkgs;
-      inherit treefmt;
-    };
-    basePerturbed = import ./sandbox/test-image.nix {
-      pkgs = linuxPkgs;
-      inherit treefmt;
+    base = mkTestImage { };
+    basePerturbed = mkTestImage {
       claudeConfig = {
         _wrix_delta_bounded_probe = "v2";
       };
     };
-    baseDirect = import ./sandbox/test-image.nix {
-      pkgs = linuxPkgs;
-      inherit treefmt;
-      agent = "direct";
-    };
-    basePi = import ./sandbox/test-image.nix {
-      pkgs = linuxPkgs;
-      inherit treefmt;
+    baseDirect = mkTestImage { agent = "direct"; };
+    basePi = mkTestImage {
       agent = "pi";
     };
     baseBeads = import ./sandbox/beads-test-image.nix {
@@ -95,9 +95,7 @@ let
     # nix-shipping profile. Consumed by tests/sandbox/nix-in-container.sh,
     # which drives live `nix develop`/`nix build` as the unprivileged
     # runtime user and asserts no store-permission failure (FR #13).
-    nix = import ./sandbox/test-image.nix {
-      pkgs = linuxPkgs;
-      inherit treefmt;
+    nix = mkTestImage {
       shipNix = true;
     };
   };
@@ -326,6 +324,7 @@ let
     (mkCiApp testSecurityAuditTrailAnchor "test-security-audit-trail-anchor")
     (mkCiApp testSecurityGitSshBootstrap "test-security-git-ssh-bootstrap")
     (mkCiApp testSecurityHostContainerLoomGitHelper "test-security-host-container-loom-git-helper")
+    (mkCiApp testImageGitHelperParity "test-image-git-helper-parity")
     (mkCiApp testSecurityNestedKeyPropagation "test-security-nested-key-propagation")
     (mkCiApp testSecurityPiAuthIsolation "test-security-pi-auth-isolation")
     (mkCiApp testSecurityProviderCredentialEnv "test-security-provider-credential-env")
@@ -677,6 +676,20 @@ let
     args = [ "test_host_container_and_loom_helper" ];
     environment = securityCiEnvironment;
   };
+  testImageGitHelperParity = writeShellScriptBin "test-image-git-helper-parity" (
+    if pkgs.stdenv.hostPlatform.isLinux then
+      ''
+        set -euo pipefail
+        export PATH="${testImages.base.profileEnv}/bin"
+        exec ${bash}/bin/bash ${./sandbox/git-helper-parity.sh}
+      ''
+    else
+      ''
+        set -euo pipefail
+        echo "SKIP: Linux fixture executable conformance requires Linux" >&2
+        exit 77
+      ''
+  );
   testSecurityNestedKeyPropagation = mkRepoScriptCiApp {
     name = "test-security-nested-key-propagation";
     script = "tests/security/nested-key-propagation.sh";

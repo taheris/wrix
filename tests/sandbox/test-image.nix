@@ -22,6 +22,7 @@
 # runtime process — rootless container-root (specs/sandbox.md FR #13).
 {
   pkgs,
+  mkSandbox,
   treefmt ? null,
   claudeConfig ? { },
   shipNix ? false,
@@ -34,7 +35,7 @@ let
     pkgs = testPkgs;
     inherit treefmt;
   };
-  profile =
+  baseProfile =
     if shipNix then
       profiles.base
       // {
@@ -43,6 +44,7 @@ let
       }
     else
       profiles.base;
+  inherit ((mkSandbox { profile = baseProfile; })) profile;
 in
 import ../../lib/sandbox/image.nix {
   pkgs = testPkgs;
