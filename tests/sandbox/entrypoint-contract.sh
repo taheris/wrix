@@ -243,7 +243,7 @@ run_entrypoint() {
     WRIX_MCP_TMUX_AUDIT="${WRIX_TEST_MCP_TMUX_AUDIT:-}" \
     WRIX_MCP_TMUX_AUDIT_FULL="${WRIX_TEST_MCP_TMUX_AUDIT_FULL:-}" \
     WRIX_NETWORK=open \
-    WRIX_STDIO=1 \
+    WRIX_STDIO="${WRIX_TEST_STDIO:-1}" \
     bash "$entrypoint" "$@" >"$stdout_path" 2>"$stderr_path"
 }
 
@@ -319,6 +319,140 @@ EOF
     done
   done
   printf 'PASS: both entrypoints dispatch WRIX_AGENT to direct, claude, and pi binaries\n' >&2
+  test_interactive_claude_without_prompt_mount_both_entrypoints || return 1
+  test_interactive_claude_mounted_prompt_both_entrypoints || return 1
+  test_interactive_claude_invalid_prompt_blocks_agent_both_entrypoints || return 1
+}
+
+write_claude_argv_probe() {
+  local workspace="$1"
+  mkdir -p "$workspace/bin"
+  cat >"$workspace/bin/claude" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+jq -n --args '$ARGS.positional' -- "$@"
+EOF
+  chmod +x "$workspace/bin/claude"
+}
+
+assert_interactive_claude_launch() {
+  local platform="$1"
+  local workspace="$2"
+  local stdout_path="$3"
+  local stderr_path="$4"
+  local expected_prompt="$5"
+  local expected_args
+  local -a log_files
+
+  if ! WRIX_TEST_STDIO=0 run_entrypoint "$platform" claude "$stdout_path" "$stderr_path" "$workspace"; then
+    fail "$platform interactive Claude failed: $(<"$stderr_path")"
+    return 1
+  fi
+  expected_args=$(jq -nc --arg prompt "$expected_prompt" '
+    ["--dangerously-skip-permissions"]
+    + if $prompt == "" then [] else ["--append-system-prompt", $prompt] end
+  ')
+  if ! jq -e --argjson expected "$expected_args" '. == $expected' "$stdout_path" >/dev/null; then
+    fail "$platform interactive Claude argv differs: $(<"$stdout_path")"
+    return 1
+  fi
+  mapfile -t log_files < <(find "$workspace/.wrix/log" -maxdepth 1 -name '*.json' -type f)
+  if [[ "${#log_files[@]}" -ne 1 ]] || ! jq -e --arg session_dir "$workspace/.claude" \
+    '.exit_code == 0 and .agent_session_dir == $session_dir' "${log_files[0]}" >/dev/null; then
+    fail "$platform interactive Claude did not write one successful audit index"
+    return 1
+  fi
+}
+
+test_interactive_claude_without_prompt_mount_both_entrypoints() {
+  require_command jq
+  local platform context workspace stdout_path stderr_path expected_prompt
+  for platform in linux darwin; do
+    for context in absent readme; do
+      workspace="$TEST_TMP/interactive-$platform-$context/workspace"
+      stdout_path="$TEST_TMP/interactive-$platform-$context.out"
+      stderr_path="$TEST_TMP/interactive-$platform-$context.err"
+      write_claude_argv_probe "$workspace"
+      expected_prompt=""
+      if [[ "$context" == readme ]]; then
+        mkdir -p "$workspace/docs"
+        printf 'Project context with spaces\n' >"$workspace/docs/README.md"
+        expected_prompt="
+
+## Project Context (from docs/README.md)
+
+Project context with spaces"
+      fi
+      assert_interactive_claude_launch "$platform" "$workspace" "$stdout_path" "$stderr_path" "$expected_prompt" || return 1
+    done
+  done
+  printf 'PASS: interactive Claude starts without a prompt mount and retains README context on both platforms\n' >&2
+}
+
+test_interactive_claude_mounted_prompt_both_entrypoints() {
+  require_command jq
+  local platform context workspace stdout_path stderr_path case_dir prompt_path expected_prompt
+  for platform in linux darwin; do
+    for context in absent readme; do
+      workspace="$TEST_TMP/mounted-$platform-$context/workspace"
+      stdout_path="$TEST_TMP/mounted-$platform-$context.out"
+      stderr_path="$TEST_TMP/mounted-$platform-$context.err"
+      case_dir="$TEST_TMP/$platform-claude-$(basename "$stdout_path" .out)"
+      case "$platform" in
+        linux) prompt_path="$case_dir/etc/wrix-prompt" ;;
+        darwin) prompt_path="$case_dir/etc/wrix-prompts/wrix-prompt" ;;
+      esac
+      mkdir -p "$(dirname "$prompt_path")"
+      expected_prompt="Mounted prompt with spaces"
+      printf '%s\n' "$expected_prompt" >"$prompt_path"
+      write_claude_argv_probe "$workspace"
+      if [[ "$context" == readme ]]; then
+        mkdir -p "$workspace/docs"
+        printf 'Project context\n' >"$workspace/docs/README.md"
+        expected_prompt="$expected_prompt
+
+## Project Context (from docs/README.md)
+
+Project context"
+      fi
+      assert_interactive_claude_launch "$platform" "$workspace" "$stdout_path" "$stderr_path" "$expected_prompt" || return 1
+    done
+  done
+  printf 'PASS: both interactive entrypoints preserve mounted prompts and README augmentation as one argv value\n' >&2
+}
+
+test_interactive_claude_invalid_prompt_blocks_agent_both_entrypoints() {
+  require_command jq
+  local platform invalid workspace stdout_path stderr_path case_dir prompt_path
+  for platform in linux darwin; do
+    for invalid in directory dangling; do
+      workspace="$TEST_TMP/invalid-$platform-$invalid/workspace"
+      stdout_path="$TEST_TMP/invalid-$platform-$invalid.out"
+      stderr_path="$TEST_TMP/invalid-$platform-$invalid.err"
+      case_dir="$TEST_TMP/$platform-claude-$(basename "$stdout_path" .out)"
+      case "$platform" in
+        linux) prompt_path="$case_dir/etc/wrix-prompt" ;;
+        darwin) prompt_path="$case_dir/etc/wrix-prompts/wrix-prompt" ;;
+      esac
+      mkdir -p "$(dirname "$prompt_path")"
+      if [[ "$invalid" == directory ]]; then
+        mkdir "$prompt_path"
+      else
+        ln -s "$case_dir/missing-prompt" "$prompt_path"
+      fi
+      write_claude_argv_probe "$workspace"
+      if WRIX_TEST_STDIO=0 run_entrypoint "$platform" claude "$stdout_path" "$stderr_path" "$workspace"; then
+        fail "$platform interactive Claude accepted a $invalid prompt"
+        return 1
+      fi
+      if [[ -s "$stdout_path" ]]; then
+        fail "$platform interactive Claude ran despite an invalid prompt"
+        return 1
+      fi
+      assert_output_contains "$platform invalid prompt" "$(<"$stderr_path")" "$prompt_path" || return 1
+    done
+  done
+  printf 'PASS: both interactive entrypoints reject invalid existing prompt inputs before running Claude\n' >&2
 }
 
 test_agent_config_homes_both_entrypoints() {

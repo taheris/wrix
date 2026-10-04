@@ -165,6 +165,20 @@ in
         mkdir "$out"
       '';
 
+  entrypoint-agent-dispatch =
+    runCommandLocal "smoke-entrypoint-agent-dispatch"
+      {
+        nativeBuildInputs = [
+          bash
+          jq
+        ];
+      }
+      ''
+        set -euo pipefail
+        REPO_ROOT=${../..} bash ${./entrypoint-contract.sh} test_agent_dispatch_both_entrypoints
+        mkdir "$out"
+      '';
+
   script-syntax =
     runCommandLocal "smoke-rust-launcher-dry-run"
       {

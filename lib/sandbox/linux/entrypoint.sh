@@ -411,9 +411,11 @@ elif [[ "$WRIX_AGENT" = "claude" ]] && [[ "${WRIX_STDIO:-}" = "1" ]]; then
     --output-format stream-json \
     || MAIN_EXIT=$?
 else
-  # Build system prompt only for interactive claude (not needed for command
-  # overrides).  Requires /etc/wrix-prompt to be mounted.
-  SYSTEM_PROMPT=$(cat /etc/wrix-prompt)
+  # Interactive Claude accepts an optional mounted prompt and project context.
+  SYSTEM_PROMPT=""
+  if [[ -e /etc/wrix-prompt || -L /etc/wrix-prompt ]]; then
+    SYSTEM_PROMPT=$(cat /etc/wrix-prompt)
+  fi
   if [[ -f /workspace/docs/README.md ]]; then
     SYSTEM_PROMPT="$SYSTEM_PROMPT
 
@@ -421,7 +423,11 @@ else
 
 $(cat /workspace/docs/README.md)"
   fi
-  claude --dangerously-skip-permissions --append-system-prompt "$SYSTEM_PROMPT" || MAIN_EXIT=$?
+  CLAUDE_PROMPT_ARGS=()
+  if [[ -n "$SYSTEM_PROMPT" ]]; then
+    CLAUDE_PROMPT_ARGS=(--append-system-prompt "$SYSTEM_PROMPT")
+  fi
+  claude --dangerously-skip-permissions "${CLAUDE_PROMPT_ARGS[@]}" || MAIN_EXIT=$?
 fi
 
 exit "$MAIN_EXIT"
