@@ -37,15 +37,20 @@ pub(super) fn server_command(
 }
 
 pub(super) fn probe_tcp(port: u16, budget: Duration) -> io::Result<()> {
+    probe_tcp_with_client(port, budget, Path::new("dolt"))
+}
+
+fn probe_tcp_with_client(port: u16, budget: Duration, client: &Path) -> io::Result<()> {
     if budget.is_zero() {
         return Err(io::Error::new(
             io::ErrorKind::TimedOut,
             "Dolt SQL probe timed out",
         ));
     }
-    let timeout = budget.min(Duration::from_secs(1)).as_secs_f64().to_string();
+    let timeout = budget.as_secs_f64().to_string();
     let output = Command::new("timeout")
-        .args(["--signal=KILL", &timeout, "dolt"])
+        .args(["--signal=KILL", &timeout])
+        .arg(client)
         .args(["--host", "127.0.0.1", "--port", &port.to_string()])
         .args(["--no-tls", "--user", "root", "--password", ""])
         .args(["sql", "-q", "SELECT 1"])

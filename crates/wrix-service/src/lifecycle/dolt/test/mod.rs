@@ -7,7 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::{DoltTransport, probe_tcp, server_command};
+use super::{DoltTransport, probe_tcp, probe_tcp_with_client, server_command};
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
@@ -221,6 +221,25 @@ fn sql_probe_rejects_a_reachable_server_with_invalid_credentials() -> TestResult
     let error = probe_tcp(fixture.port, Duration::from_secs(2)).unwrap_err();
     assert!(error.to_string().contains("Access denied"), "{error}");
     Ok(())
+}
+
+#[test]
+fn sql_probe_honors_a_caller_budget_longer_than_one_second() -> TestResult {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempfile::tempdir()?;
+    let client = root.path().join("dolt");
+    fs::write(&client, "#!/bin/sh\nsleep 1.1\nexit 0\n")?;
+    fs::set_permissions(&client, fs::Permissions::from_mode(0o755))?;
+    probe_tcp_with_client(12345, Duration::from_secs(3), &client)?;
+    Ok(())
+}
+
+#[test]
+fn sql_probe_zero_budget_does_not_spawn_a_client() {
+    let error = probe_tcp_with_client(12345, Duration::ZERO, Path::new("/missing-dolt-client"))
+        .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
 }
 
 #[test]
