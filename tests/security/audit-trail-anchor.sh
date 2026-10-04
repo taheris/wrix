@@ -5,14 +5,29 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 # shellcheck source=tests/lib/live-sandbox.sh
 source "$SCRIPT_DIR/../lib/live-sandbox.sh"
+# shellcheck source=tests/security/audit-clock.sh
+source "$SCRIPT_DIR/audit-clock.sh"
 
 cd "$REPO_ROOT"
 
 TEST_TMP=$(mktemp -d -t wrix-audit-trail.XXXXXX)
 IMAGE_REFS=()
+AUDIT_START_BARRIER=""
+AUDIT_START_PIDS=()
 cleanup() {
-  local image_ref
+  local image_ref pid status
 
+  if [[ -n "$AUDIT_START_BARRIER" && -d "$AUDIT_START_BARRIER" ]]; then
+    : >"$AUDIT_START_BARRIER/release"
+  fi
+  for pid in "${AUDIT_START_PIDS[@]}"; do
+    if wait "$pid"; then
+      :
+    else
+      status=$?
+      printf 'audit collision cleanup: launcher exited %s\n' "$status" >&2
+    fi
+  done
   rm -rf "$TEST_TMP"
   for image_ref in "${IMAGE_REFS[@]}"; do
     wrix_remove_image_ref "$image_ref"
@@ -245,10 +260,11 @@ assert_same_second_sessions_have_distinct_indexes() {
   local agent="direct"
   local image_source image_ref profile_config spawn_config workspace warm_out warm_err
   local first_out first_err second_out second_err first_pid second_pid first_status second_status
-  local attempt current_second timestamp_count
+  local first_config second_config member config ready_status=0 timestamp_count
   local -a log_files
 
-  image_source=$(wrix_realize_test_image_source "$agent")
+  image_source=$(nix build --no-link --print-out-paths --no-warn-dirty \
+    ".#${WRIX_TEST_AUDIT_COLLISION_IMAGE_ATTR:?run this verifier through test-ci}")
   image_ref=$(wrix_live_image_ref "audit-collision-$$")
   IMAGE_REFS+=("$image_ref")
   wrix_remove_image_ref "$image_ref"
@@ -274,53 +290,65 @@ assert_same_second_sessions_have_distinct_indexes() {
     return
   fi
 
-  for ((attempt = 1; attempt <= 3; attempt++)); do
-    rm -rf "$workspace/.wrix/log"
-    current_second=$(date +%s)
-    while [[ "$(date +%s)" = "$current_second" ]]; do
-      sleep 0.01
-    done
-
-    HOME="$HOME_DIR" XDG_CACHE_HOME="$XDG_CACHE_HOME" \
-      WRIX_DEPLOY_KEY="$DEPLOY_KEY" WRIX_GIT_SIGN=0 \
-      wrix_run_spawn "$LAUNCHER" "$profile_config" "$spawn_config" >"$first_out" 2>"$first_err" &
-    first_pid=$!
-    HOME="$HOME_DIR" XDG_CACHE_HOME="$XDG_CACHE_HOME" \
-      WRIX_DEPLOY_KEY="$DEPLOY_KEY" WRIX_GIT_SIGN=0 \
-      wrix_run_spawn "$LAUNCHER" "$profile_config" "$spawn_config" >"$second_out" 2>"$second_err" &
-    second_pid=$!
-    first_status=0
-    second_status=0
-    wait "$first_pid" || first_status=$?
-    wait "$second_pid" || second_status=$?
-    if [[ "$first_status" -ne 0 || "$second_status" -ne 0 ]]; then
-      fail "same-second audit launches failed ($first_status, $second_status)"
-      sed 's/^/    /' "$first_err" >&2
-      sed 's/^/    /' "$second_err" >&2
-      return
-    fi
-
-    mapfile -t log_files < <(find "$workspace/.wrix/log" -maxdepth 1 -name '*.json' -type f | sort)
-    if [[ "${#log_files[@]}" -lt 2 ]]; then
-      fail "same-workspace sessions overwrote a session-metadata index"
-      return
-    fi
-    if [[ "${#log_files[@]}" -gt 2 ]]; then
-      fail "same-workspace sessions wrote more than one index each"
-      return
-    fi
-    if ! assert_session_metadata_schema "same-second first" "${log_files[0]}" \
-      || ! assert_session_metadata_schema "same-second second" "${log_files[1]}"; then
-      return
-    fi
-    timestamp_count=$(jq -r '.timestamp_start' "${log_files[@]}" | sort -u | wc -l)
-    if [[ "$timestamp_count" -eq 1 ]]; then
-      pass "same-workspace sessions starting in one second retain distinct metadata indexes"
-      return
-    fi
+  rm -rf "$workspace/.wrix/log"
+  AUDIT_START_BARRIER="$workspace/.wrix/audit-start"
+  mkdir -p "$AUDIT_START_BARRIER"
+  first_config="$TEST_TMP/spawn-collision-first.json"
+  second_config="$TEST_TMP/spawn-collision-second.json"
+  for member in first second; do
+    config="$TEST_TMP/spawn-collision-$member.json"
+    jq --arg member "$member" \
+      '.env += [["WRIX_TEST_AUDIT_START_BARRIER", "/workspace/.wrix/audit-start"],
+                ["WRIX_TEST_AUDIT_START_MEMBER", $member]]' "$spawn_config" >"$config"
   done
 
-  fail "could not schedule two audit sessions within the same UTC second"
+  HOME="$HOME_DIR" XDG_CACHE_HOME="$XDG_CACHE_HOME" \
+    WRIX_DEPLOY_KEY="$DEPLOY_KEY" WRIX_GIT_SIGN=0 \
+    wrix_run_spawn "$LAUNCHER" "$profile_config" "$first_config" >"$first_out" 2>"$first_err" &
+  first_pid=$!
+  AUDIT_START_PIDS+=("$first_pid")
+  HOME="$HOME_DIR" XDG_CACHE_HOME="$XDG_CACHE_HOME" \
+    WRIX_DEPLOY_KEY="$DEPLOY_KEY" WRIX_GIT_SIGN=0 \
+    wrix_run_spawn "$LAUNCHER" "$profile_config" "$second_config" >"$second_out" 2>"$second_err" &
+  second_pid=$!
+  AUDIT_START_PIDS+=("$second_pid")
+  audit_wait_for_start_clocks "$AUDIT_START_BARRIER" "$first_pid" "$second_pid" || ready_status=$?
+  if [[ "$ready_status" -eq 0 ]]; then
+    audit_release_start_clocks "$AUDIT_START_BARRIER"
+  else
+    : >"$AUDIT_START_BARRIER/release"
+  fi
+  first_status=0
+  second_status=0
+  wait "$first_pid" || first_status=$?
+  wait "$second_pid" || second_status=$?
+  AUDIT_START_PIDS=()
+  if [[ "$ready_status" -ne 0 || "$first_status" -ne 0 || "$second_status" -ne 0 ]]; then
+    fail "same-second audit startup failed (ready=$ready_status, first=$first_status, second=$second_status)"
+    sed 's/^/    /' "$first_err" >&2
+    sed 's/^/    /' "$second_err" >&2
+    return
+  fi
+
+  mapfile -t log_files < <(find "$workspace/.wrix/log" -maxdepth 1 -name '*.json' -type f | sort)
+  if [[ "${#log_files[@]}" -lt 2 ]]; then
+    fail "same-workspace sessions overwrote a session-metadata index"
+    return
+  fi
+  if [[ "${#log_files[@]}" -gt 2 ]]; then
+    fail "same-workspace sessions wrote more than one index each"
+    return
+  fi
+  if ! assert_session_metadata_schema "same-second first" "${log_files[0]}" \
+    || ! assert_session_metadata_schema "same-second second" "${log_files[1]}"; then
+    return
+  fi
+  timestamp_count=$(jq -r '.timestamp_start' "${log_files[@]}" | sort -u | wc -l)
+  if [[ "$timestamp_count" -ne 1 ]]; then
+    fail "coordinated entrypoint start clocks did not record the same UTC second"
+    return
+  fi
+  pass "same-workspace sessions starting in one second retain distinct metadata indexes"
 }
 
 assert_setup_failure_writes_audit_index() {

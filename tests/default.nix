@@ -63,7 +63,10 @@ let
   # changes while every base-layer blob remains identical. The
   # image-install-delta-bounded verifier installs both and asserts
   # the platform store only takes on bytes for the changed top layer.
+  auditClock = import ./security/audit-clock.nix { inherit pkgs linuxPkgs wrix; };
+
   testImages = {
+    auditCollision = auditClock.image;
     base = import ./sandbox/test-image.nix {
       pkgs = linuxPkgs;
       inherit treefmt;
@@ -219,6 +222,7 @@ let
     // {
       builder-vmnet-route = builderRouteTest;
       image-assembly-native = sandboxImageChecks.imageAssemblyNativeCheck;
+      audit-start-clock = auditClock.check;
       pi-auth-storage = import ./security/pi-auth.nix { inherit pkgs; };
       pi-default-model = import ./sandbox/pi-default-model.nix { inherit pkgs wrix; };
       profile-images-launcher = import ./profiles/manifest.nix { inherit pkgs wrix; };
@@ -640,7 +644,9 @@ let
     name = "test-security-audit-trail-anchor";
     script = "tests/security/audit-trail-anchor.sh";
     args = [ ];
-    environment = securityCiEnvironment;
+    environment = securityCiEnvironment + ''
+      export WRIX_TEST_AUDIT_COLLISION_IMAGE_ATTR="legacyPackages.${system}.testFixtures.auditCollision.source"
+    '';
   };
   testSecurityGitSshBootstrap = mkRepoScriptCiApp {
     name = "test-security-git-ssh-bootstrap";

@@ -44,5 +44,6 @@
       legacyPackages.ciApps = test.ciAppDerivations;
       legacyPackages.systemTests = test.systemTests;
       legacyPackages.testApps = test.testAppDerivations;
+      legacyPackages.testFixtures.auditCollision = test.testImages.auditCollision;
     };
 }
