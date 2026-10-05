@@ -58,12 +58,16 @@ agent_binary() {
   esac
 }
 
+write_bash_fixture() {
+  local path="$1"
+  { printf '#!%s\n' "$BASH"; cat; } >"$path"
+}
+
 write_fake_runtime_tools() {
   local bin_dir="$1"
   mkdir -p "$bin_dir"
 
-  cat >"$bin_dir/git" <<'EOF'
-#!/usr/bin/env bash
+  write_bash_fixture "$bin_dir/git" <<'EOF'
 set -euo pipefail
 if [[ -n "${WRIX_FAKE_GIT_LOG:-}" ]]; then
   printf '%s\n' "$*" >>"$WRIX_FAKE_GIT_LOG"
@@ -72,8 +76,7 @@ exit 0
 EOF
   chmod +x "$bin_dir/git"
 
-  cat >"$bin_dir/getent" <<'EOF'
-#!/usr/bin/env bash
+  write_bash_fixture "$bin_dir/getent" <<'EOF'
 set -euo pipefail
 if [[ "${1:-}" != "ahostsv4" ]]; then
   exit 2
@@ -82,8 +85,7 @@ printf '93.184.216.34 STREAM %s\n' "${2:-example.com}"
 EOF
   chmod +x "$bin_dir/getent"
 
-  cat >"$bin_dir/bd" <<'EOF'
-#!/usr/bin/env bash
+  write_bash_fixture "$bin_dir/bd" <<'EOF'
 set -euo pipefail
 
 log="${WRIX_FAKE_BD_LOG:?}"
@@ -127,8 +129,7 @@ exit 64
 EOF
   chmod +x "$bin_dir/bd"
 
-  cat >"$bin_dir/unshare" <<'EOF'
-#!/usr/bin/env bash
+  write_bash_fixture "$bin_dir/unshare" <<'EOF'
 set -euo pipefail
 while [[ "$#" -gt 0 && "$1" != "--" ]]; do
   shift
@@ -139,6 +140,19 @@ fi
 exec "$@"
 EOF
   chmod +x "$bin_dir/unshare"
+}
+
+test_runtime_fixtures_do_not_need_env_or_path() {
+  local tools="$TEST_TMP/hermetic-tools"
+  local log="$TEST_TMP/hermetic-bd.log"
+  local state="$TEST_TMP/hermetic-bd.state"
+  write_fake_runtime_tools "$tools"
+  PATH="" "$tools/git" status || return "$?"
+  PATH="" "$tools/getent" ahostsv4 example.invalid || return "$?"
+  PATH="" WRIX_FAKE_BD_LOG="$log" WRIX_FAKE_BD_STATE="$state" \
+    BEADS_DOLT_AUTO_START=0 BD_IMPORT_AUTO=false \
+    "$tools/bd" --readonly sql 'SELECT 1' || return "$?"
+  PATH="" "$tools/unshare" -- "$BASH" -c 'printf "PASS: hermetic runtime fixtures\\n"'
 }
 
 rewrite_entrypoint() {
@@ -154,7 +168,7 @@ rewrite_entrypoint() {
   capability_status="$workspace/proc-self-status"
   ready_file="$workspace/network-ready"
   capability_hex="${WRIX_TEST_CAP_STATUS_HEX:-0000000000000000}"
-  printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' >"$setup_path"
+  write_bash_fixture "$setup_path" <<< 'set -euo pipefail'
   for field in CapInh CapPrm CapEff CapBnd CapAmb; do
     if [[ "$field" == "${WRIX_TEST_CAP_FIELD:-CapEff}" ]]; then
       printf '%s:\t%s\n' "$field" "$capability_hex"
@@ -279,8 +293,7 @@ test_workspace_bin_path_prepend_both() {
     local stderr_path="$TEST_TMP/path-$platform.err"
     local output
     mkdir -p "$workspace/bin"
-    cat >"$workspace/bin/path-probe" <<'EOF'
-#!/usr/bin/env bash
+    write_bash_fixture "$workspace/bin/path-probe" <<'EOF'
 set -euo pipefail
 printf 'PATH_PROBE_RAN\n'
 EOF
@@ -311,8 +324,7 @@ test_agent_dispatch_both_entrypoints() {
       local binary output
       binary="$(agent_binary "$agent")"
       mkdir -p "$workspace/bin"
-      cat >"$workspace/bin/$binary" <<EOF
-#!/usr/bin/env bash
+      write_bash_fixture "$workspace/bin/$binary" <<EOF
 set -euo pipefail
 printf 'AGENT_DISPATCH=%s\n' '$agent'
 printf 'AGENT_ARGS=%s\n' "\$*"
@@ -341,8 +353,7 @@ EOF
 write_claude_argv_probe() {
   local workspace="$1"
   mkdir -p "$workspace/bin"
-  cat >"$workspace/bin/claude" <<'EOF'
-#!/usr/bin/env bash
+  write_bash_fixture "$workspace/bin/claude" <<'EOF'
 set -euo pipefail
 jq -n --args '$ARGS.positional' -- "$@"
 EOF
@@ -857,7 +868,8 @@ test_stale_beads_endpoint_blocks_agent_both() {
     mkdir -p "$workspace/.beads" "$workspace/bin"
     printf '%s\n' '{"backend":"dolt","dolt_mode":"server"}' >"$workspace/.beads/metadata.json"
     printf 'sync.mode: dolt-native\n' >"$workspace/.beads/config.yaml"
-    printf '#!/usr/bin/env bash\nset -euo pipefail\ntouch "%s/agent-ran"\n' "$workspace" >"$workspace/bin/loom-direct-runner"
+    printf 'set -euo pipefail\ntouch %q\n' "$workspace/agent-ran" \
+      | write_bash_fixture "$workspace/bin/loom-direct-runner"
     chmod +x "$workspace/bin/loom-direct-runner"
     export BEADS_DOLT_SERVER_HOST=192.0.2.10 BEADS_DOLT_SERVER_PORT=24470
     export WRIX_FAKE_BD_UNREACHABLE=1 WRIX_FAKE_BD_LOG="$workspace.bd-log" WRIX_FAKE_BD_STATE="$workspace.bd-state"
@@ -981,6 +993,7 @@ test_same_second_audit_indexes_both_entrypoints() {
 }
 
 ALL_TESTS=(
+  test_runtime_fixtures_do_not_need_env_or_path
   test_workspace_bin_path_prepend_both
   test_agent_dispatch_both_entrypoints
   test_agent_config_homes_both_entrypoints

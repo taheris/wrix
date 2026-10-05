@@ -165,6 +165,17 @@ in
         mkdir "$out"
       '';
 
+  entrypoint-fixture-interpreters =
+    runCommandLocal "smoke-entrypoint-fixture-interpreters"
+      {
+        nativeBuildInputs = [ bash ];
+      }
+      ''
+        set -euo pipefail
+        REPO_ROOT=${../..} bash ${./entrypoint-contract.sh} test_runtime_fixtures_do_not_need_env_or_path
+        mkdir "$out"
+      '';
+
   entrypoint-agent-dispatch =
     runCommandLocal "smoke-entrypoint-agent-dispatch"
       {

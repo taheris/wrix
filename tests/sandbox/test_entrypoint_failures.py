@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -20,8 +21,10 @@ class HookFailurePropagation(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="wrix-hook-failure-") as temp:
             root = Path(temp)
             runner = root / "wrix-prek"
+            bash = shutil.which("bash")
+            self.assertIsNotNone(bash, "Bash is required for the entrypoint fixture")
             runner.write_text(
-                '#!/usr/bin/env bash\nset -euo pipefail\n'
+                f'#!{bash}\nset -euo pipefail\n'
                 'printf "fixture hook binding failed\\n" >&2\nexit 23\n'
             )
             runner.chmod(0o755)
@@ -41,7 +44,7 @@ class HookFailurePropagation(unittest.TestCase):
                 env.pop(name, None)
             env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
             result = subprocess.run(
-                ["bash", str(ROOT / "tests/sandbox/entrypoint-contract.sh"), "review_hook_cases"],
+                [bash, str(ROOT / "tests/sandbox/entrypoint-contract.sh"), "review_hook_cases"],
                 env=env, cwd=ROOT, capture_output=True, text=True, check=False,
             )
             self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
