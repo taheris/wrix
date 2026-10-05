@@ -37,9 +37,15 @@ verifier_preflight() {
           verifier_missing_capability "$capability" "$runtime is not on PATH"
           return 77
         fi
-        if [[ "$platform" == *-linux && -e /run/.containerenv ]]; then
-          verifier_missing_capability "$capability" "nested container: rootless Podman unavailable"
-          return 77
+        if [[ "$platform" == *-linux ]]; then
+          if [[ ! -c /dev/net/tun ]]; then
+            verifier_missing_capability "$capability" "Podman networking requires /dev/net/tun"
+            return 77
+          fi
+          if ! podman info >&2; then
+            verifier_missing_capability "$capability" "Podman runtime preflight is unavailable"
+            return 77
+          fi
         fi
         ;;
       kvm)

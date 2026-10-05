@@ -12,6 +12,7 @@ PASS = "test-linux-builder-sshd-hardening"
 STATUS = "test-linux-builder-image-source-kind"
 BROKEN = "test-linux-builder-source-kind-load-transport"
 LIVE_BROKEN = "test-security-audit-trail-anchor"
+OFFLINE_HOOK = "test-container-pre-commit"
 GIT_LOCAL_ENV = subprocess.check_output(["git", "rev-parse", "--local-env-vars"], text=True).splitlines()
 
 
@@ -53,6 +54,10 @@ class CiBatching(unittest.TestCase):
               {PASS} = mkRunner "{PASS}" ''
                 set -euo pipefail
                 printf '%s\\n' '{PASS}' >>"$WRIX_TEST_CI_CALLS"
+              '';
+              {OFFLINE_HOOK} = mkRunner "{OFFLINE_HOOK}" ''
+                set -euo pipefail
+                printf '%s\\n' '{OFFLINE_HOOK}' >>"$WRIX_TEST_CI_CALLS"
               '';
               {STATUS} = mkRunner "{STATUS}" ''
                 set -euo pipefail
@@ -144,6 +149,13 @@ class CiBatching(unittest.TestCase):
         self.assertEqual(result.returncode, 77)
         self.assertTrue(all(v["skipped"] for v in verdicts))
         self.assertEqual(calls, [STATUS, STATUS])
+
+    def test_offline_hook_executes_without_host_networking_capability(self):
+        result, verdicts, calls = self.run_apps(PASS, OFFLINE_HOOK)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([v["outcome"] for v in verdicts], ["passed", "passed"])
+        self.assertEqual(verdicts[1]["execution"]["capabilities"], [])
+        self.assertEqual(calls, [PASS, OFFLINE_HOOK])
 
     def test_missing_runtime_cannot_conceal_a_failed_live_app_build(self):
         result, verdicts, calls = self.run_apps(PASS, LIVE_BROKEN)

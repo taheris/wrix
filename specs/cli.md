@@ -45,11 +45,13 @@ Declared prerequisites are checked before executing a target. An excluded
 platform emits `outcome: "skipped"` and
 `skip_reason: {kind: "foreign-platform", reason}`. A missing declared
 prerequisite emits `skip_reason: {kind: "missing-capability", capability,
-reason}`. Live host-container checks require `container-runtime`: the platform
-CLI and, on Linux, a non-nested host runtime context. MicroVM checks also require an
-accessible KVM device; real Linux firewall checks require user/network
-namespaces. These declarations do not apply to tests using fake runtimes or
-asserting that unavailable KVM is rejected.
+reason}`. Live Wrix networking checks require `container-runtime`: the
+platform CLI and, on Linux, the TUN device and a successful Podman availability
+probe. A container marker alone is not evidence of runtime absence. MicroVM
+checks also require an accessible KVM device; real Linux firewall checks require
+user/network namespaces. These declarations do not apply to tests using fake
+runtimes, nested offline container hooks, or assertions that unavailable KVM is
+rejected.
 
 An exit 77 without a successful prerequisite classification remains an
 unauthorized legacy skip (`pass: false`, `skipped: true`, explicit evidence and
