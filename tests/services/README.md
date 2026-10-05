@@ -10,7 +10,9 @@ The `virtiofsd-capabilities` prerequisite checks the VM executor, not a Nix
 daemon or remote builder. The pinned virtiofsd, with the NixOS driver's
 `--sandbox=none` and default inode handles, installs CHOWN, DAC_OVERRIDE,
 DAC_READ_SEARCH, FOWNER, FSETID, SETGID, SETUID, MKNOD and SETFCAP when run as
-root. A missing member of the Linux bounding set prevents that operation.
+root. A capability absent from the Linux bounding, permitted and inheritable
+sets cannot be acquired by the executor. A dropped bounding bit alone is not
+sufficient evidence when the capability is already permitted or inheritable.
 Unprivileged virtiofsd does not install this root capability set. Malformed
 capability data is a preflight failure, not an exemption.
 

@@ -43,10 +43,10 @@ class VmPrerequisites(unittest.TestCase):
         self.env.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="safe.directory", GIT_CONFIG_VALUE_0=str(self.root))
         subprocess.run(["git", "init", "-q", str(self.root)], env=self.env, check=True)
 
-    def helper(self, uid, bounding):
+    def helper(self, uid, bounding, permitted="0000000000000000", inheritable="0000000000000000"):
         return subprocess.run(
-            [BASH + "/bin/bash", "-c", 'source "$1"; verifier_virtiofsd_bounding_set "$2" "$3"',
-             "fixture", LIBRARY, str(uid), bounding],
+            [BASH + "/bin/bash", "-c", 'source "$1"; verifier_virtiofsd_capability_set "$2" "$3" "$4" "$5"',
+             "fixture", LIBRARY, str(uid), bounding, permitted, inheritable],
             capture_output=True, text=True, check=False,
         )
 
@@ -65,17 +65,28 @@ class VmPrerequisites(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "")
 
+    def test_permitted_or_inheritable_capabilities_prevent_a_false_bounding_skip(self):
+        for permitted, inheritable in ((f"{REQUIRED_BITS:016x}", "0000000000000000"),
+                                       ("0000000000000000", f"{REQUIRED_BITS:016x}")):
+            with self.subTest(permitted=permitted, inheritable=inheritable):
+                result = self.helper(0, "0000000000000000", permitted, inheritable)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, "")
+
     def test_unprivileged_virtiofsd_does_not_install_root_capabilities(self):
         result = self.helper(65534, "0000000000000000")
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_invalid_kernel_capability_data_fails_instead_of_skipping(self):
-        for bounding in ("", "not-hex", "00000000800405fb extra", "0"):
-            with self.subTest(bounding=bounding):
-                result = self.helper(0, bounding)
-                self.assertEqual(result.returncode, 1)
-                self.assertIn("invalid Linux capability", result.stderr)
-                self.assertEqual(result.stdout, "")
+        for invalid in ("", "not-hex", "00000000800405fb extra", "0"):
+            for index in range(3):
+                with self.subTest(invalid=invalid, index=index):
+                    masks = [f"{REQUIRED_BITS:016x}"] * 3
+                    masks[index] = invalid
+                    result = self.helper(0, *masks)
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn("invalid Linux capability", result.stderr)
+                    self.assertEqual(result.stdout, "")
 
     def test_kernel_preflight_retains_metadata_and_never_executes_when_unavailable(self):
         result = subprocess.run(
@@ -83,9 +94,11 @@ class VmPrerequisites(unittest.TestCase):
              "fixture", LIBRARY, json.dumps(REQUIREMENTS), str(self.root / "executed")],
             env=self.env, capture_output=True, text=True, check=False,
         )
-        bounding = next(line.split()[1] for line in Path("/proc/self/status").read_text().splitlines()
-                        if line.startswith("CapBnd:"))
-        available = os.geteuid() != 0 or int(bounding, 16) & REQUIRED_BITS == REQUIRED_BITS
+        masks = {line.split()[0]: int(line.split()[1], 16)
+                 for line in Path("/proc/self/status").read_text().splitlines()
+                 if line.startswith(("CapBnd:", "CapPrm:", "CapInh:"))}
+        available_bits = masks["CapBnd:"] | masks["CapPrm:"] | masks["CapInh:"]
+        available = os.geteuid() != 0 or available_bits & REQUIRED_BITS == REQUIRED_BITS
         self.assertEqual(result.returncode, 0 if available else 77, result.stderr)
         record = json.loads(result.stdout)
         self.assertEqual(record["execution"], dict(REQUIREMENTS, platform=SYSTEM))
@@ -93,7 +106,8 @@ class VmPrerequisites(unittest.TestCase):
         self.assertEqual((self.root / "executed").exists(), available)
         if not available:
             self.assertEqual(record["skip_reason"]["capability"], "virtiofsd-capabilities")
-            self.assertIn("CapBnd=" + bounding, record["skip_reason"]["reason"])
+            for name, mask in masks.items():
+                self.assertIn(f"{name[:-1]}={mask:016x}", record["skip_reason"]["reason"])
 
     def test_direct_app_checks_prerequisites_before_driver_preparation(self):
         probe = subprocess.run(
