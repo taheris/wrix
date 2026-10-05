@@ -31,15 +31,23 @@ SCRIPT
 chmod +x "$TEST_TMP/bin/uname"
 
 test_darwin_pre_push_skips_test_ci() {
-  local output="$TEST_TMP/darwin-pre-push.jsonl"
+  local output="$TEST_TMP/darwin-pre-push.jsonl" status
 
-  WRIX_PRE_PUSH=1 \
+  if WRIX_PRE_PUSH=1 \
     WRIX_TEST_CI_FAKE_PLATFORM=Darwin \
     WRIX_TEST_CI_FAKE_NIX_LOG="$FAKE_NIX_LOG" \
     PATH="$TEST_TMP/bin:$PATH" \
     "$REPO_ROOT/bin/test-ci-verifiers" \
     test-image-tier-graph \
-    test-image-nix-config >"$output"
+    test-image-nix-config >"$output"; then
+    status=0
+  else
+    status="$?"
+  fi
+  if [[ "$status" -ne 77 ]]; then
+    echo "FAIL: Darwin policy skip exited $status; expected 77" >&2
+    return 1
+  fi
 
   if [[ -e "$FAKE_NIX_LOG" ]]; then
     echo "FAIL: Darwin pre-push invoked test-ci: $(<"$FAKE_NIX_LOG")" >&2
@@ -49,7 +57,7 @@ test_darwin_pre_push_skips_test_ci() {
     echo "FAIL: Darwin pre-push did not emit one verdict per test-ci target" >&2
     return 1
   fi
-  if ! jq -e -s 'all(.[]; .pass == true and (.evidence | contains("disabled by default for Darwin pre-push")))' "$output" >/dev/null; then
+  if ! jq -e -s 'all(.[]; .pass == false and .skipped == true and (.evidence | contains("disabled by default for Darwin pre-push")))' "$output" >/dev/null; then
     echo "FAIL: Darwin pre-push verdicts do not report the test-ci policy skip" >&2
     return 1
   fi

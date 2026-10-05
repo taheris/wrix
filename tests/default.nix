@@ -257,10 +257,41 @@ let
     exec ${pkgs.nix}/bin/nix flake check "$@"
   '';
 
+  inherit (import ./lib/verifier.nix) linux native;
   mkCiApp = package: executable: {
     name = executable;
     inherit package executable;
   };
+  mkLiveCiApp =
+    package: executable:
+    (mkCiApp package executable)
+    // {
+      platforms = native;
+      capabilities = [ "container-runtime" ];
+    };
+  ciRequirements = pkgs.writeText "test-ci-requirements.json" (
+    builtins.toJSON (
+      builtins.listToAttrs (
+        map (app: {
+          inherit (app) name;
+          value = {
+            platforms = app.platforms or [ ];
+            capabilities = app.capabilities or [ ];
+          };
+        }) ciApps
+      )
+    )
+  );
+  ciPreflightPath = makeBinPath (
+    [
+      jq
+      coreutils
+    ]
+    ++ optionals pkgs.stdenv.hostPlatform.isLinux [
+      pkgs.podman
+      pkgs.util-linux
+    ]
+  );
 
   mkSystemTestCiApp =
     name: test:
@@ -310,8 +341,8 @@ let
     (mkCiApp testProfileImagesManifestShape "test-profile-images-manifest-shape")
     (mkCiApp testProfileConfigImageSourceKind "test-profile-config-image-source-kind")
     (mkCiApp testProfileConfigWrapper "test-profile-config-wrapper")
-    (mkCiApp testContainerPreCommit "test-container-pre-commit")
-    (mkCiApp testContainerPrePush "test-container-pre-push")
+    (mkLiveCiApp testContainerPreCommit "test-container-pre-commit")
+    (mkLiveCiApp testContainerPrePush "test-container-pre-push")
     (mkCiApp testWrixCliInProfile "test-wrix-cli-in-profile")
     (mkCiApp testSandboxAgentSettings "test-sandbox-agent-settings")
     (mkCiApp testPlaywrightChromiumClosure "test-playwright-chromium-closure")
@@ -321,13 +352,18 @@ let
     (mkCiApp testBeadsLiveSystem "test-beads-live-system")
     (mkCiApp testServicesDevshellStartIndependent "test-services-devshell-start-independent")
     (mkCiApp testServicesLimitModeCacheEndpoint "test-services-limit-mode-cache-endpoint")
-    (mkCiApp testSecurityAuditTrailAnchor "test-security-audit-trail-anchor")
-    (mkCiApp testSecurityGitSshBootstrap "test-security-git-ssh-bootstrap")
-    (mkCiApp testSecurityHostContainerLoomGitHelper "test-security-host-container-loom-git-helper")
-    (mkCiApp testImageGitHelperParity "test-image-git-helper-parity")
-    (mkCiApp testSecurityNestedKeyPropagation "test-security-nested-key-propagation")
-    (mkCiApp testSecurityPiAuthIsolation "test-security-pi-auth-isolation")
-    (mkCiApp testSecurityProviderCredentialEnv "test-security-provider-credential-env")
+    (mkLiveCiApp testSecurityAuditTrailAnchor "test-security-audit-trail-anchor")
+    (mkLiveCiApp testSecurityGitSshBootstrap "test-security-git-ssh-bootstrap")
+    (mkLiveCiApp testSecurityHostContainerLoomGitHelper "test-security-host-container-loom-git-helper")
+    ((mkCiApp testImageGitHelperParity "test-image-git-helper-parity") // { platforms = linux; })
+    (mkLiveCiApp testSecurityNestedKeyPropagation "test-security-nested-key-propagation")
+    (mkLiveCiApp testSecurityPiAuthIsolation "test-security-pi-auth-isolation")
+    (
+      (mkLiveCiApp testSecurityProviderCredentialEnv "test-security-provider-credential-env")
+      // {
+        platforms = linux;
+      }
+    )
   ];
 
   ciAppNameLines = concatStringsSep "\n" (map (app: "      ${app.name}") ciApps);
@@ -345,6 +381,8 @@ let
 
   testCi = writeShellScriptBin "test-ci" ''
         set -euo pipefail
+        export PATH="${ciPreflightPath}:$PATH"
+        source ${./lib/verifier.sh}
 
         ci_checks=(
           builder-keys-structure
@@ -424,15 +462,35 @@ let
           done
         }
 
-        run_ci_app() {
+        resolve_ci_app() {
           local app="$1"
-          local runner
           if [[ -v "ci_runners[$app]" ]]; then
-            runner="''${ci_runners[$app]}"
+            printf '%s\n' "''${ci_runners[$app]}"
           else
-            runner=$(${pkgs.nix}/bin/nix build --no-link --print-out-paths --no-warn-dirty ".#legacyPackages.${system}.ciApps.$app")
+            ${pkgs.nix}/bin/nix build --no-link --print-out-paths --no-warn-dirty ".#legacyPackages.${system}.ciApps.$app"
           fi
+        }
+
+        run_ci_app() {
+          local app="$1" runner
+          runner=$(resolve_ci_app "$app") || return 1
           "$runner/bin/$app"
+        }
+
+        run_ci_json_app() {
+          local app="$1" runner requirements build_log evidence
+          requirements=$(jq -c --arg target "$app" '.[$target]' ${ciRequirements})
+          build_log=$(mktemp -t wrix-ci-build.XXXXXX)
+          if runner=$(resolve_ci_app "$app" 2>"$build_log"); then
+            rm -f "$build_log"
+            verifier_run "$app" "$requirements" "$runner/bin/$app"
+          else
+            evidence=$(head -c 4000 "$build_log")
+            cat "$build_log" >&2
+            rm -f "$build_log"
+            verifier_emit "$app" failed "CI app build failed: $evidence" "$(verifier_platform)" "$requirements"
+            return 1
+          fi
         }
 
         if [[ "''${1:-}" = "--json" ]]; then
@@ -444,39 +502,30 @@ let
 
           prepare_ci_apps "$@"
           json_failed=0
+          json_skipped=0
           for app in "$@"; do
             if ! is_ci_app "$app"; then
-              ${jq}/bin/jq -cn \
-                --arg target "$app" \
-                --arg evidence "unknown test-ci app" \
-                '{target:$target,pass:false,evidence:$evidence}'
+              verifier_emit "$app" failed "unknown test-ci app" "$(verifier_platform)" '{"platforms":[],"capabilities":[]}'
               json_failed=$((json_failed + 1))
               continue
             fi
 
-            app_log=$(mktemp -t wrix-test-ci.XXXXXX)
-            if run_ci_app "$app" >"$app_log" 2>&1; then
-              ${jq}/bin/jq -cn \
-                --arg target "$app" \
-                '{target:$target,pass:true,evidence:"passed"}'
+            if run_ci_json_app "$app"; then
+              continue
             else
-              evidence=$(head -c 4000 "$app_log")
-              ${jq}/bin/jq -cn \
-                --arg target "$app" \
-                --arg evidence "$evidence" \
-                '{target:$target,pass:false,evidence:$evidence}'
-              json_failed=$((json_failed + 1))
+              status="$?"
             fi
-            rm -f "$app_log"
+            case "$status" in
+              77) json_skipped=$((json_skipped + 1)) ;;
+              *) json_failed=$((json_failed + 1)) ;;
+            esac
           done
-
-          if [[ "$json_failed" -ne 0 ]]; then
-            exit 1
-          fi
+          verifier_batch_exit "$json_failed" "$json_skipped"
           exit 0
         fi
 
         failed=0
+        skipped=0
         run_step() {
           local name="$1"
           shift
@@ -484,8 +533,14 @@ let
           if "$@"; then
             echo "PASS: $name"
           else
-            echo "FAIL: $name" >&2
-            failed=$((failed + 1))
+            local status="$?"
+            if [[ "$status" -eq 77 ]]; then
+              echo "SKIP: $name" >&2
+              skipped=$((skipped + 1))
+            else
+              echo "FAIL: $name" >&2
+              failed=$((failed + 1))
+            fi
           fi
         }
 
@@ -499,10 +554,7 @@ let
           run_step "$app" run_ci_app "$app"
         done
 
-        if [[ "$failed" -ne 0 ]]; then
-          echo "$failed CI step(s) failed" >&2
-          exit 1
-        fi
+        verifier_batch_exit "$failed" "$skipped"
   '';
 
   # profiles.rust.buildPackage hash invariant verifies (specs/profiles.md).

@@ -2,6 +2,7 @@
 
 let
   inherit (pkgs.lib) escapeShellArg makeBinPath optionals;
+  inherit (import ../lib/verifier.nix) darwinLive linuxLive live;
   fixture = import ../standalone/notify-fixture.nix { inherit pkgs; };
   notifyPath = makeBinPath (
     [
@@ -44,11 +45,13 @@ in
 
   "notifications.client-tcp-endpoint-override" = notifyTest "test_client_tcp_endpoint_override";
 
-  "notifications.container-transport-darwin" = notifyTest "test_container_transport_darwin";
+  "notifications.container-transport-darwin" = darwinLive (
+    notifyTest "test_container_transport_darwin"
+  );
 
-  "notifications.container-transport-linux" = notifyTest "test_container_transport_linux";
+  "notifications.container-transport-linux" = linuxLive (notifyTest "test_container_transport_linux");
 
-  "notifications.daemon-dispatch-latency" = notifyTest "test_daemon_dispatch_latency";
+  "notifications.daemon-dispatch-latency" = live (notifyTest "test_daemon_dispatch_latency");
 
   "notifications.focus-override" = notifyTest "test_focus_override";
 

@@ -2,6 +2,13 @@
 
 let
   inherit (pkgs.lib) escapeShellArg makeBinPath optionalString;
+  inherit (import ../lib/verifier.nix)
+    darwinLive
+    linux
+    linuxLive
+    live
+    requiring
+    ;
 
   sandboxScript = script: function: ''
     run_repo_script ${escapeShellArg "tests/sandbox/${script}.sh"} ${escapeShellArg function}
@@ -19,38 +26,22 @@ let
   entrypoint = sandboxScript "entrypoint-contract";
   network = sandboxScript "network-baseline";
   platform = sandboxScript "platform-dispatch";
-  darwinOnly =
-    body:
-    if pkgs.stdenv.hostPlatform.isDarwin then
-      body
-    else
-      ''
-        printf '%s\n' 'SKIP: Darwin-only verifier is not applicable on this host' >&2
-        exit 77
-      '';
-  linuxOnly =
-    body:
-    if pkgs.stdenv.hostPlatform.isLinux then
-      body
-    else
-      ''
-        printf '%s\n' 'PASS: Linux-only verifier is not applicable on this host'
-      '';
+
 in
 {
-  "sandbox.agent-binary-guard" = sandboxScriptAll "agent-binary-guard";
+  "sandbox.agent-binary-guard" = linuxLive (sandboxScriptAll "agent-binary-guard");
 
   "sandbox.agent-config-homes" = entrypoint "test_agent_config_homes_both_entrypoints";
 
-  "sandbox.agent-lacks-net-admin" = network "test_agent_lacks_net_admin";
+  "sandbox.agent-lacks-net-admin" = live (network "test_agent_lacks_net_admin");
 
   "sandbox.custom-mounts-env" = sandboxScriptAllWithWrix "custom-mounts-env";
 
-  "sandbox.darwin-container-starts" = darwinOnly (containerStarts "test_darwin_container_starts");
+  "sandbox.darwin-container-starts" = darwinLive (containerStarts "test_darwin_container_starts");
 
-  "sandbox.darwin-image-load" = darwinOnly (sandboxScriptAll "image-install-darwin-load");
+  "sandbox.darwin-image-load" = darwinLive (sandboxScriptAll "image-install-darwin-load");
 
-  "sandbox.darwin-network-bootstrap" = darwinOnly (sandboxScriptAll "darwin-network-bootstrap");
+  "sandbox.darwin-network-bootstrap" = darwinLive (sandboxScriptAll "darwin-network-bootstrap");
 
   "sandbox.entrypoint-agent-dispatch" = entrypoint "test_agent_dispatch_both_entrypoints";
 
@@ -61,17 +52,19 @@ in
 
   "sandbox.entrypoint-workspace-bin-prepend" = entrypoint "test_workspace_bin_path_prepend_both";
 
-  "sandbox.filesystem-isolation" = sandboxScriptAll "filesystem-isolation";
+  "sandbox.filesystem-isolation" = live (sandboxScriptAll "filesystem-isolation");
 
-  "sandbox.linux-container-starts" = containerStarts "test_linux_container_starts";
+  "sandbox.linux-container-starts" = linuxLive (containerStarts "test_linux_container_starts");
 
-  "sandbox.linux-microvm-missing-kvm" = linuxOnly (
+  "sandbox.linux-microvm-missing-kvm" = requiring linux [ ] (
     sandboxScriptWithWrix "rust-launcher-live" "test_linux_microvm_missing_kvm_fails_before_podman"
   );
 
-  "sandbox.linux-microvm-runtime" = linuxOnly (sandboxScriptAll "microvm-runtime");
+  "sandbox.linux-microvm-runtime" = requiring linux [ "kvm" "container-runtime" ] (
+    sandboxScriptAll "microvm-runtime"
+  );
 
-  "sandbox.linux-network-bootstrap" = ''
+  "sandbox.linux-network-bootstrap" = requiring linux [ "user-network-namespace" ] ''
     ${optionalString pkgs.stdenv.hostPlatform.isLinux ''
       export PATH="${
         makeBinPath [
@@ -96,17 +89,17 @@ in
     ${sandboxScriptAll "mcp-agent-adapters"}
   '';
 
-  "sandbox.network-fail-closed" = network "test_fail_closed";
+  "sandbox.network-fail-closed" = live (network "test_fail_closed");
 
-  "sandbox.network-ipv6-blocked" = network "test_ipv6_blocked";
+  "sandbox.network-ipv6-blocked" = live (network "test_ipv6_blocked");
 
-  "sandbox.network-limit-allowlist" = network "test_limit_allowlist";
+  "sandbox.network-limit-allowlist" = live (network "test_limit_allowlist");
 
-  "sandbox.network-open-blocks-lan" = network "test_open_blocks_lan";
+  "sandbox.network-open-blocks-lan" = live (network "test_open_blocks_lan");
 
-  "sandbox.nix-in-container" = sandboxScriptAll "nix-in-container";
+  "sandbox.nix-in-container" = linuxLive (sandboxScriptAll "nix-in-container");
 
-  "sandbox.nix-store-verify-clean" = sandboxScriptAll "nix-store-verify-clean";
+  "sandbox.nix-store-verify-clean" = linuxLive (sandboxScriptAll "nix-store-verify-clean");
 
   "sandbox.pi-default-model" = ''
     nix build --no-link ".#checks.${system}.pi-default-model"
@@ -121,14 +114,16 @@ in
 
   "sandbox.platform-dispatch" = platform "test_platform_dispatch_current_system";
 
-  "sandbox.uid-mapping" = sandboxScriptAll "uid-mapping";
+  "sandbox.uid-mapping" = linuxLive (sandboxScriptAll "uid-mapping");
 
   "sandbox.unsupported-system-error" = platform "test_unsupported_system_error";
 
-  "sandbox.unsafe-podman-socket" = sandboxScriptAllWithWrix "unsafe-podman-socket";
+  "sandbox.unsafe-podman-socket" = requiring linux [ ] (
+    sandboxScriptAllWithWrix "unsafe-podman-socket"
+  );
 
-  "sandbox.workspace-bin-path-absent" = sandboxScriptAll "workspace-bin-path";
+  "sandbox.workspace-bin-path-absent" = linuxLive (sandboxScriptAll "workspace-bin-path");
 
-  "sandbox.workspace-bin-path-present" = sandboxScriptAll "workspace-bin-path";
+  "sandbox.workspace-bin-path-present" = linuxLive (sandboxScriptAll "workspace-bin-path");
 
 }

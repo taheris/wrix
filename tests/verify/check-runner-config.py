@@ -12,6 +12,8 @@ EXPECTED = {
     "join": " ",
     "parse": "json-lines",
     "cwd": ".",
+    "skip_policy": "sandbox-capability",
+    "skip_capabilities": ["container-runtime", "kvm", "user-network-namespace"],
 }
 DUPLICATED_TARGETS = (
     "verify:cli.package-surface",
@@ -33,11 +35,27 @@ def require(condition, message):
         fail(message)
 
 
-def runner_entry(runner, tier):
+def runner_entry(runner, tier, name):
     try:
-        return runner[tier]["verify"]
+        return runner[tier][name]
     except KeyError:
-        fail(f"missing [runner.{tier}.verify]")
+        fail(f"missing [runner.{tier}.{name}]")
+
+
+def runner_errors(entry, expected):
+    return [
+        f"{key} is {entry.get(key)!r}, expected {value!r}"
+        for key, value in expected.items()
+        if entry.get(key) != value
+    ]
+
+
+def test_runner_policy_audit():
+    require(not runner_errors(EXPECTED, EXPECTED), "valid runner rejected")
+    for key in ("skip_policy", "skip_capabilities", "parse", "command"):
+        broken = dict(EXPECTED)
+        broken.pop(key)
+        require(runner_errors(broken, EXPECTED), f"missing {key} was not rejected")
 
 
 def file_selector_error(root, spec, target):
@@ -131,13 +149,15 @@ def main():
     config = tomllib.loads(raw)
     runner = config.get("runner", {})
 
+    test_runner_policy_audit()
     for tier in ("check", "system"):
-        entry = runner_entry(runner, tier)
-        for key, value in EXPECTED.items():
-            require(
-                entry.get(key) == value,
-                f"[runner.{tier}.verify] {key} is {entry.get(key)!r}, expected {value!r}",
-            )
+        for name in ("verify", "test-ci"):
+            expected = dict(EXPECTED)
+            if name == "test-ci":
+                expected.update(match=r"^test-ci:(.+)$", command="bin/test-ci-verifiers {targets}")
+            entry = runner_entry(runner, tier, name)
+            errors = runner_errors(entry, expected)
+            require(not errors, f"[runner.{tier}.{name}] {'; '.join(errors)}")
 
     require(
         runner.get("test", {}).get("command") == TEST_RUNNER_COMMAND,

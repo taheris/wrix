@@ -122,6 +122,14 @@ The `.wrix/push-verified` stamp is an exact-transaction, one-use approval: the p
 
 `image-builder.md` § Hook Installation owns the profile-image closure, wrapper PATH exposure, and entrypoint configuration of `core.hooksPath`, including linked-worktree handling. This spec owns the resulting hook behavior: configured pre-commit and pre-push stages dispatch through the shared bundle, and a failing hook aborts the Git operation. Optional tools remain explicit at the point of use through `skip-if-missing` rather than a wrix-side hook-id skip list.
 
+### CI result policy
+
+Darwin's pre-push cost-policy skip is not a missing sandbox capability and does
+not count as a verified pass or an authorized worker exemption. Direct CI
+invocations and the separate integration-branch host-test stage retain live
+execution; worker acceptance cannot supply host coverage or a push marker.
+[system](verify:prek.ci-platform-policy)
+
 ## Success Criteria
 
 - The real bundle derivation builder assembles the complete bundle without root write privileges, including when Nix inputs are read-only
@@ -188,9 +196,9 @@ The `.wrix/push-verified` stamp is an exact-transaction, one-use approval: the p
   [check](verify:prek.ci-only-heavy-checks)
 - Full image realization criteria use `test-ci:<app>` targets instead of the generic `verify:` registry
   [check](verify:prek.ci-only-heavy-checks)
-- Pre-push runs `test-ci:` targets on Linux and reports a policy skip without realizing them on Darwin, while direct Darwin invocation still runs them
+- Pre-push runs `test-ci:` targets on Linux and reports an unverified policy skip with exit 77 without realizing them on Darwin, while direct Darwin invocation still runs them
   [system](verify:prek.ci-platform-policy)
-- Batched `test-ci:` execution resolves only the selected app runners together while keeping each invocation and verdict independent, including duplicate targets, script failures, exit-77 results, unknown apps, and partial build failures
+- Batched `test-ci:` execution resolves only the selected app runners together while keeping each invocation and verdict independent, including duplicate targets, script failures, exit-77 results, unknown apps, and partial build failures; result reporting follows `cli.md` § Verifier results and worker acceptance
   [system](verify:prek.ci-batching)
 
 ## Requirements

@@ -16,6 +16,8 @@ target = "{capture_1}"
 join = " "
 parse = "json-lines"
 cwd = "."
+skip_policy = "sandbox-capability"
+skip_capabilities = ["container-runtime", "kvm", "user-network-namespace"]
 
 [runner.check.test-ci]
 match = '^test-ci:(.+)$'
@@ -24,6 +26,8 @@ target = "{capture_1}"
 join = " "
 parse = "json-lines"
 cwd = "."
+skip_policy = "sandbox-capability"
+skip_capabilities = ["container-runtime", "kvm", "user-network-namespace"]
 
 [runner.system.verify]
 match = '^verify:(.+)$'
@@ -32,6 +36,8 @@ target = "{capture_1}"
 join = " "
 parse = "json-lines"
 cwd = "."
+skip_policy = "sandbox-capability"
+skip_capabilities = ["container-runtime", "kvm", "user-network-namespace"]
 
 [runner.system.test-ci]
 match = '^test-ci:(.+)$'
@@ -40,3 +46,5 @@ target = "{capture_1}"
 join = " "
 parse = "json-lines"
 cwd = "."
+skip_policy = "sandbox-capability"
+skip_capabilities = ["container-runtime", "kvm", "user-network-namespace"]

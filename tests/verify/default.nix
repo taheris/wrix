@@ -5,8 +5,18 @@
 }:
 
 let
-  inherit (builtins) attrNames concatStringsSep;
-  inherit (pkgs.lib) escapeShellArg sort;
+  inherit (builtins)
+    attrNames
+    concatStringsSep
+    mapAttrs
+    toJSON
+    ;
+  inherit (pkgs.lib)
+    escapeShellArg
+    makeBinPath
+    optionals
+    sort
+    ;
   inherit (pkgs)
     bash
     coreutils
@@ -39,7 +49,23 @@ let
     (import ./services.nix { inherit pkgs system; })
     (import ./tmux-mcp.nix { inherit pkgs system; })
   ];
-  registry = builtins.foldl' (acc: next: acc // next) { } domainRegistries;
+  registry = mapAttrs (_: entry: if builtins.isString entry then { script = entry; } else entry) (
+    builtins.foldl' (acc: next: acc // next) { } domainRegistries
+  );
+  requirements = pkgs.writeText "verify-requirements.json" (
+    toJSON (
+      mapAttrs (_: entry: {
+        platforms = entry.platforms or [ ];
+        capabilities = entry.capabilities or [ ];
+      }) registry
+    )
+  );
+  preflightPath = makeBinPath (
+    optionals pkgs.stdenv.hostPlatform.isLinux [
+      pkgs.podman
+      pkgs.util-linux
+    ]
+  );
   targetNames = sort builtins.lessThan (attrNames registry);
   listArguments = concatStringsSep " \\\n        " (
     map (target: escapeShellArg "verify:${target}") targetNames
@@ -48,7 +74,7 @@ let
   caseArms = concatStringsSep "\n" (
     map (target: ''
       ${escapeShellArg target})
-        ${registry.${target}}
+        ${registry.${target}.script}
         ;;
     '') targetNames
   );
@@ -58,6 +84,8 @@ let
 
     export PATH="${bash}/bin:${coreutils}/bin:${findutils}/bin:${gawk}/bin:${git}/bin:${gnugrep}/bin:${gnused}/bin:${jq}/bin:${nix}/bin:${openssh}/bin:${prek}/bin:${python3}/bin:${wrixPrek}/bin:$PATH"
     SELF="$0"
+    export PATH="${preflightPath}:$PATH"
+    source ${../lib/verifier.sh}
 
     fail() {
       local message="$1"
@@ -178,27 +206,9 @@ let
       local label="$1"
       local json_lines="$2"
       local target="$3"
-      if ! printf '%s\n' "$json_lines" | jq -e --arg target "$target" 'select(.target == $target and .pass == true)' >/dev/null; then
+      if ! printf '%s\n' "$json_lines" | jq -e --arg target "$target" 'select(.target == $target and .outcome == "passed")' >/dev/null; then
         fail "$label: missing passing JSON verdict for $target"
       fi
-    }
-
-    emit_verdict() {
-      local target="$1"
-      local pass="$2"
-      local evidence="$3"
-      jq -cn --arg target "$target" --argjson pass "$pass" --arg evidence "$evidence" '{target:$target,pass:$pass,evidence:$evidence}'
-    }
-
-    summarize_evidence() {
-      local path="$1"
-      local fallback="$2"
-      local evidence
-      evidence="$(head -c 4000 "$path")"
-      if [[ -z "$evidence" ]]; then
-        evidence="$fallback"
-      fi
-      printf '%s\n' "$evidence"
     }
 
     run_target() {
@@ -211,33 +221,9 @@ let
 
     run_one() {
       local target="$1"
-      local out_file
-      local status
-      local evidence
-      out_file="$(mktemp -t wrix-verify.XXXXXX)"
-      set +e
-      (
-        set -euo pipefail
-        run_target "$target"
-      ) >"$out_file" 2>&1
-      status="$?"
-      set -e
-      if [[ "$status" -eq 0 ]]; then
-        rm -f "$out_file"
-        emit_verdict "$target" true passed
-        return 0
-      fi
-      evidence="$(summarize_evidence "$out_file" "failed with exit $status")"
-      if [[ "$status" -eq 77 ]]; then
-        cat "$out_file" >&2
-        rm -f "$out_file"
-        emit_verdict "$target" false "skipped: $evidence"
-        return 1
-      fi
-      cat "$out_file" >&2
-      rm -f "$out_file"
-      emit_verdict "$target" false "$evidence"
-      return 1
+      local requirements
+      requirements="$(jq -c --arg target "$target" '.[$target]' ${requirements})"
+      verifier_run "$target" "$requirements" bash "$SELF" --execute-target "$target"
     }
 
     main() {
@@ -247,6 +233,12 @@ let
       fi
 
       case "''${1:-}" in
+        --execute-target)
+          [[ "$#" -eq 2 ]] || fail "internal target execution requires one ID"
+          is_known_target "$2" || fail "unknown internal target: $2"
+          run_target "$2"
+          return
+          ;;
         --help|-h)
           usage
           return 0
@@ -264,17 +256,20 @@ let
 
       local raw
       local target
-      local failed=0
+      local failed=0 skipped=0 status
       for raw in "$@"; do
         target="$(normalize_target "$raw")"
-        if ! run_one "$target"; then
-          failed=$((failed + 1))
+        if run_one "$target"; then
+          continue
+        else
+          status="$?"
         fi
+        case "$status" in
+          77) skipped=$((skipped + 1)) ;;
+          *) failed=$((failed + 1)) ;;
+        esac
       done
-      if [[ "$failed" -ne 0 ]]; then
-        printf '%s verify target(s) failed\n' "$failed" >&2
-        return 1
-      fi
+      verifier_batch_exit "$failed" "$skipped"
     }
 
     main "$@"

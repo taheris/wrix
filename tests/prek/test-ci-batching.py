@@ -11,6 +11,7 @@ RUNNER, SYSTEM, BASH, COREUTILS = sys.argv[1:]
 PASS = "test-linux-builder-sshd-hardening"
 STATUS = "test-linux-builder-image-source-kind"
 BROKEN = "test-linux-builder-source-kind-load-transport"
+LIVE_BROKEN = "test-security-audit-trail-anchor"
 GIT_LOCAL_ENV = subprocess.check_output(["git", "rev-parse", "--local-env-vars"], text=True).splitlines()
 
 
@@ -62,6 +63,12 @@ class CiBatching(unittest.TestCase):
                   skip) echo fixture-skip >&2; exit 77 ;;
                 esac
               '';
+              {LIVE_BROKEN} = derivation {{
+                name = "ci-fixture-live-build-failure";
+                system = "{SYSTEM}";
+                builder = "${{bash}}/bin/bash";
+                args = [ "-c" "exit 77" ];
+              }};
               {BROKEN} = derivation {{
                 name = "ci-fixture-build-failure";
                 system = "{SYSTEM}";
@@ -97,47 +104,73 @@ class CiBatching(unittest.TestCase):
     def test_selected_runners_batch_before_independent_execution(self):
         result, verdicts, calls = self.run_apps(PASS, STATUS, PASS)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue(all(v["pass"] for v in verdicts))
+        self.assertTrue(all(v["outcome"] == "passed" for v in verdicts))
         self.assertEqual(calls, [PASS, STATUS, PASS])
         self.assertIn("trace: WRIX-CI-BATCH-QUERY", result.stderr)
 
     def test_fixture_execution_is_independent_of_caller_git_context(self):
         result, verdicts, calls = self.run_apps(PASS, STATUS, git_dir=self.root / "not-a-repository")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue(all(v["pass"] for v in verdicts))
+        self.assertTrue(all(v["outcome"] == "passed" for v in verdicts))
         self.assertEqual(calls, [PASS, STATUS])
 
     def test_script_failure_keeps_other_app_verdicts(self):
         result, verdicts, calls = self.run_apps(PASS, STATUS, status="fail")
         self.assertEqual(result.returncode, 1)
-        self.assertEqual([v["pass"] for v in verdicts], [True, False])
+        self.assertEqual([v["outcome"] for v in verdicts], ["passed", "failed"])
         self.assertIn("fixture-failure", verdicts[1]["evidence"])
         self.assertEqual(calls, [PASS, STATUS])
 
-    def test_exit_77_remains_a_failed_json_verdict(self):
+    def test_unreported_exit_77_retains_skip_without_policy_authorization(self):
         result, verdicts, _ = self.run_apps(PASS, STATUS, status="skip")
-        self.assertEqual(result.returncode, 1)
-        self.assertEqual([v["pass"] for v in verdicts], [True, False])
+        self.assertEqual(result.returncode, 77)
+        self.assertEqual(verdicts[0]["outcome"], "passed")
+        self.assertFalse(verdicts[1]["pass"])
+        self.assertTrue(verdicts[1]["skipped"])
+        self.assertNotIn("skip_reason", verdicts[1])
+        self.assertEqual(verdicts[1]["execution"]["capabilities"], [])
         self.assertIn("fixture-skip", verdicts[1]["evidence"])
+
+    def test_build_failure_dominates_skip_and_keeps_individual_results(self):
+        result, verdicts, calls = self.run_apps(PASS, STATUS, BROKEN, status="skip")
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(verdicts[0]["outcome"], "passed")
+        self.assertTrue(verdicts[1]["skipped"])
+        self.assertEqual(verdicts[2]["outcome"], "failed")
+        self.assertEqual(calls, [PASS, STATUS])
+
+    def test_all_unreported_skips_exit_77(self):
+        result, verdicts, calls = self.run_apps(STATUS, STATUS, status="skip")
+        self.assertEqual(result.returncode, 77)
+        self.assertTrue(all(v["skipped"] for v in verdicts))
+        self.assertEqual(calls, [STATUS, STATUS])
+
+    def test_missing_runtime_cannot_conceal_a_failed_live_app_build(self):
+        result, verdicts, calls = self.run_apps(PASS, LIVE_BROKEN)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual([v["outcome"] for v in verdicts], ["passed", "failed"])
+        self.assertIn("CI app build failed", verdicts[1]["evidence"])
+        self.assertNotIn("skip_reason", verdicts[1])
+        self.assertEqual(calls, [PASS])
 
     def test_failed_batch_falls_back_to_individual_build_verdicts(self):
         result, verdicts, calls = self.run_apps(PASS, BROKEN)
         self.assertEqual(result.returncode, 1)
-        self.assertEqual([v["pass"] for v in verdicts], [True, False])
+        self.assertEqual([v["outcome"] for v in verdicts], ["passed", "failed"])
         self.assertTrue(verdicts[1]["evidence"])
         self.assertEqual(calls, [PASS])
 
     def test_unknown_apps_fail_without_suppressing_valid_apps(self):
         result, verdicts, calls = self.run_apps(PASS, "not-a-ci-app", STATUS)
         self.assertEqual(result.returncode, 1)
-        self.assertEqual([v["pass"] for v in verdicts], [True, False, True])
+        self.assertEqual([v["outcome"] for v in verdicts], ["passed", "failed", "passed"])
         self.assertEqual(verdicts[1]["evidence"], "unknown test-ci app")
         self.assertEqual(calls, [PASS, STATUS])
 
     def test_single_app_retains_individual_build_execution(self):
         result, verdicts, calls = self.run_apps(PASS)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue(verdicts[0]["pass"])
+        self.assertEqual(verdicts[0]["outcome"], "passed")
         self.assertEqual(calls, [PASS])
 
 

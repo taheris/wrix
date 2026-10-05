@@ -32,6 +32,46 @@ The repository exposes a developer-facing flake app `.#verify` for Nix-owned and
 
 `.#verify --list` prints the supported logical IDs and is the authoritative inventory for the runner's configured verifier registry. Invoking `.#verify` with one or more IDs runs exactly those checks and reports unknown IDs as actionable failures. Each ID has a single owner spec: the domain prefix names the owning area (`profiles.*`, `images.*`, `sandbox.*`, `prek.*`, and so on), while this spec owns the shared app surface and batching contract.
 
+### Verifier results and worker acceptance
+
+The shared `.#verify` app and `.#test-ci --json` emit JSON-lines results.
+Passed and failed executions use `outcome: "passed"` or `"failed"`, with
+`target`, `evidence`, and `execution: {platform, platforms, capabilities}`.
+`platform` is the actual canonical architecture/OS token; `platforms` declares
+applicability (empty means all platforms), and `capabilities` declares local
+prerequisites. Optional fields are omitted, not null.
+
+Declared prerequisites are checked before executing a target. An excluded
+platform emits `outcome: "skipped"` and
+`skip_reason: {kind: "foreign-platform", reason}`. A missing declared
+prerequisite emits `skip_reason: {kind: "missing-capability", capability,
+reason}`. Live host-container checks require `container-runtime`: the platform
+CLI and, on Linux, a non-nested host runtime context. MicroVM checks also require an
+accessible KVM device; real Linux firewall checks require user/network
+namespaces. These declarations do not apply to tests using fake runtimes or
+asserting that unavailable KVM is rejected.
+
+An exit 77 without a successful prerequisite classification remains an
+unauthorized legacy skip (`pass: false`, `skipped: true`, explicit evidence and
+execution metadata). Its evidence is never parsed to grant an exemption.
+Assertion, invocation, unknown-target, preflight-tool, and build errors remain
+failures. A batch exits 0 only for all passes, 77 for skips without failures,
+and nonzero other than 77 when any member fails; every member retains its own
+result. Direct repeated IDs retain independent invocations; Loom batches unique
+requested targets and rejects duplicate/conflicting result records.
+[check](verify:cli.shared-verifier-app)
+
+Wrix's check/system runners opt into Loom's `sandbox-capability` policy with an
+explicit capability allowlist. Only genuine declared platform or allowlisted
+prerequisite gaps can be nonblocking for an otherwise clean worker
+`loom gate verify` (`LOOM_INSIDE=1`). Unexpected skips and failures block.
+Execution remains skipped, with exit 77 from the producer and tier commands;
+worker acceptance is not verified coverage and cannot authorize a push marker.
+Outside a worker, permitted skips retain exit 77. Live platform testing remains
+in the separate end-of-loop integration-test-branch host stage, not a worker
+SSH bridge or per-bead remote-receipt requirement.
+[check](verify:cli.shared-verifier-app)
+
 ### Optional `wrix.toml`
 
 `wrix.toml` is an optional repository-root override file. A repository with default Wrix behavior does not need the file, and `wrix init` does not create it merely to record defaults. When present, it contains policy only — never private key material, generated host keys, absolute private-key paths, per-machine cache paths, or secrets.
@@ -124,6 +164,8 @@ reported separately from host-key failure.
   [check](verify:cli.shared-verifier-app)
 - Runner configuration maps `verify:` annotations to the batched `.#verify` app invocation rather than spawning one Nix process per criterion, and treats the `.#verify --list` inventory as the verifier registry.
   [check](verify:cli.verify-runner-batching)
+- Shared result reporting preserves platform/capability skips as exit 77, lets failures dominate mixed batches, and never grants worker acceptance to an unexpected skip or a real failure.
+  [check](verify:cli.shared-verifier-app)
 - `wrix init --help` exits zero without mutating Git config or creating `wrix.toml`.
   [test](../crates/wrix-cli/tests/cli_surface.rs::init_help_is_non_mutating)
 - Unsupported flags and surplus arguments on beads, Dolt, and service operations fail before any subprocess is invoked; agent command passthrough remains owned by the sandbox parser.

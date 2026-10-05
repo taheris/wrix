@@ -11,10 +11,10 @@ if [[ "$platform" == "Darwin" && "${WRIX_PRE_PUSH:-0}" == "1" ]]; then
   for target in "$@"; do
     jq -cn \
       --arg target "$target" \
-      --arg evidence "skipped: test-ci is disabled by default for Darwin pre-push" \
-      '{target:$target,pass:true,evidence:$evidence}'
+      --arg evidence "policy skip: test-ci is disabled by default for Darwin pre-push" \
+      '{target:$target,pass:false,skipped:true,evidence:$evidence}'
   done
-  exit 0
+  exit 77
 fi
 
 exec nix run .#test-ci -- --json "$@"

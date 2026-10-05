@@ -21,6 +21,11 @@ wrix-notify                      wrix-notifyd
 
 Two processes: `wrix-notify` is the in-container client invoked from a Claude Code Stop hook; `wrix-notifyd` is the host-side daemon that displays notifications via the platform's native bridge. Linux uses the mounted Unix socket; Darwin uses TCP as required by the Darwin mount contract in `sandbox.md`.
 
+[cli.md § Verifier results and worker acceptance](cli.md#verifier-results-and-worker-acceptance)
+owns result reporting and sandbox-stage skip acceptance. A worker's platform or
+runtime skip does not prove notification delivery; the live transport checks
+remain part of the separate integration-branch host-test stage.
+
 ## Wire Protocol
 
 Newline-delimited JSON, one envelope per notification:
