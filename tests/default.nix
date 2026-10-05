@@ -244,6 +244,7 @@ let
     }
     // loomTests.checks
     // optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+      system-test-prerequisites = import ./services/vm-prerequisites.nix { inherit pkgs system; };
       crun-ring-buffer-constrained = import ./sandbox/crun-ring-buffer.nix { inherit linuxPkgs; };
     };
 
@@ -257,7 +258,7 @@ let
     exec ${pkgs.nix}/bin/nix flake check "$@"
   '';
 
-  inherit (import ./lib/verifier.nix) linux native;
+  inherit (import ./lib/verifier.nix) linux native nixosVm;
   mkCiApp = package: executable: {
     name = executable;
     inherit package executable;
@@ -295,10 +296,26 @@ let
 
   mkSystemTestCiApp =
     name: test:
-    writeShellScriptBin name ''
-      set -euo pipefail
-      [[ -e "${test}" ]]
-    '';
+    import ./lib/system-test.nix {
+      inherit
+        pkgs
+        system
+        name
+        test
+        ;
+    };
+  mkServiceCiApp =
+    package: executable:
+    (mkCiApp package executable)
+    // (
+      if pkgs.stdenv.hostPlatform.isLinux then
+        nixosVm
+      else
+        {
+          platforms = native;
+          capabilities = [ "container-runtime" ];
+        }
+    );
 
   ciApps = loomTests.ciApps ++ [
     (mkCiApp sandboxImageChecks.imageInstallRealSkopeoTest "test-image-install-real-skopeo")
@@ -350,8 +367,8 @@ let
     (mkCiApp testPlaywrightMandatoryFlags "test-playwright-mandatory-flags")
     (mkCiApp testPlaywrightUserOptionsConfig "test-playwright-user-options-config")
     (mkCiApp testBeadsLiveSystem "test-beads-live-system")
-    (mkCiApp testServicesDevshellStartIndependent "test-services-devshell-start-independent")
-    (mkCiApp testServicesLimitModeCacheEndpoint "test-services-limit-mode-cache-endpoint")
+    (mkServiceCiApp testServicesDevshellStartIndependent "test-services-devshell-start-independent")
+    (mkServiceCiApp testServicesLimitModeCacheEndpoint "test-services-limit-mode-cache-endpoint")
     (mkLiveCiApp testSecurityAuditTrailAnchor "test-security-audit-trail-anchor")
     (mkLiveCiApp testSecurityGitSshBootstrap "test-security-git-ssh-bootstrap")
     (mkLiveCiApp testSecurityHostContainerLoomGitHelper "test-security-host-container-loom-git-helper")
@@ -676,7 +693,7 @@ let
   '';
   testServicesDevshellStartIndependent =
     if pkgs.stdenv.hostPlatform.isLinux then
-      mkSystemTestCiApp "test-services-devshell-start-independent" systemTests.services-devshell-start-independent
+      mkSystemTestCiApp "test-services-devshell-start-independent" "services-devshell-start-independent"
     else
       mkRepoScriptCiApp {
         name = "test-services-devshell-start-independent";
@@ -686,7 +703,7 @@ let
       };
   testServicesLimitModeCacheEndpoint =
     if pkgs.stdenv.hostPlatform.isLinux then
-      mkSystemTestCiApp "test-services-limit-mode-cache-endpoint" systemTests.services-limit-mode-cache-endpoint
+      mkSystemTestCiApp "test-services-limit-mode-cache-endpoint" "services-limit-mode-cache-endpoint"
     else
       mkRepoScriptCiApp {
         name = "test-services-limit-mode-cache-endpoint";

@@ -1,18 +1,25 @@
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 import tempfile
 import unittest
 
 
-RUNNER, SYSTEM, BASH, COREUTILS = sys.argv[1:]
+RUNNER, SYSTEM, BASH, COREUTILS, LIBRARY, LOOM = sys.argv[1:]
 PASS = "test-linux-builder-sshd-hardening"
 STATUS = "test-linux-builder-image-source-kind"
 BROKEN = "test-linux-builder-source-kind-load-transport"
 LIVE_BROKEN = "test-security-audit-trail-anchor"
 OFFLINE_HOOK = "test-container-pre-commit"
+VM = "test-services-devshell-start-independent"
+VM_BROKEN = "test-services-limit-mode-cache-endpoint"
+VM_REQUIREMENTS = {
+    "platforms": ["aarch64-linux", "x86_64-linux"],
+    "capabilities": ["virtiofsd-capabilities"],
+}
 GIT_LOCAL_ENV = subprocess.check_output(["git", "rev-parse", "--local-env-vars"], text=True).splitlines()
 
 
@@ -68,6 +75,16 @@ class CiBatching(unittest.TestCase):
                   skip) echo fixture-skip >&2; exit 77 ;;
                 esac
               '';
+              {VM} = mkRunner "{VM}" ''
+                set -euo pipefail
+                printf '%s\\n' '{VM}' >>"$WRIX_TEST_CI_CALLS"
+              '';
+              {VM_BROKEN} = derivation {{
+                name = "ci-fixture-vm-runner-build-failure";
+                system = "{SYSTEM}";
+                builder = "${{bash}}/bin/bash";
+                args = [ "-c" "echo vm-runner-build-failure >&2; exit 77" ];
+              }};
               {LIVE_BROKEN} = derivation {{
                 name = "ci-fixture-live-build-failure";
                 system = "{SYSTEM}";
@@ -178,6 +195,76 @@ class CiBatching(unittest.TestCase):
         self.assertEqual([v["outcome"] for v in verdicts], ["passed", "failed", "passed"])
         self.assertEqual(verdicts[1]["evidence"], "unknown test-ci app")
         self.assertEqual(calls, [PASS, STATUS])
+
+    @unittest.skipUnless(SYSTEM.endswith("-linux"), "Linux VM prerequisite")
+    def test_vm_prerequisite_precedes_execution_with_matching_metadata(self):
+        probe = command("bash", "-c", 'source "$1"; verifier_preflight "$2" "$3"',
+                        "fixture", LIBRARY, SYSTEM, json.dumps(VM_REQUIREMENTS))
+        self.assertIn(probe.returncode, (0, 77), probe.stderr)
+        result, verdicts, calls = self.run_apps(VM, VM)
+        self.assertEqual(result.returncode, probe.returncode, result.stderr)
+        self.assertEqual(calls, [VM, VM] if probe.returncode == 0 else [])
+        for verdict in verdicts:
+            self.assertEqual(verdict["execution"], dict(VM_REQUIREMENTS, platform=SYSTEM))
+            self.assertEqual(verdict["outcome"], "passed" if probe.returncode == 0 else "skipped")
+            if probe.returncode == 77:
+                self.assertEqual(verdict["skip_reason"], json.loads(probe.stdout))
+
+    @unittest.skipUnless(SYSTEM.endswith("-linux"), "Linux VM prerequisite")
+    def test_vm_runner_build_failure_dominates_a_supported_capability_skip(self):
+        result, verdicts, _ = self.run_apps(VM, VM_BROKEN)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn(verdicts[0]["outcome"], ("passed", "skipped"))
+        self.assertEqual(verdicts[1]["outcome"], "failed")
+        self.assertEqual(verdicts[1]["execution"], dict(VM_REQUIREMENTS, platform=SYSTEM))
+        self.assertIn("CI app build failed", verdicts[1]["evidence"])
+        self.assertNotIn("skip_reason", verdicts[1])
+
+    def gate_apps(self, *apps, worker=True, status="pass"):
+        (self.root / "specs").mkdir(exist_ok=True)
+        (self.root / "specs/fixture.md").write_text(
+            "# Fixture\n\n## Success Criteria\n\n" + "".join(
+                f"- Target {index} [check](test-ci:{app})\n" for index, app in enumerate(apps)
+            )
+        )
+        (self.root / "loom.toml").write_text(
+            "[runner.check.test-ci]\nmatch = '^test-ci:(.+)$'\n"
+            f"command = {json.dumps(shlex.quote(RUNNER) + ' --json {targets}')}\n"
+            "target = '{capture_1}'\njoin = ' '\nparse = 'json-lines'\ncwd = '.'\n"
+            "skip_policy = 'sandbox-capability'\nskip_capabilities = ['virtiofsd-capabilities']\n"
+        )
+        env = dict(os.environ, WRIX_TEST_CI_STATUS=status, WRIX_TEST_CI_CALLS=str(self.root / "calls"))
+        env.pop("LOOM_INSIDE", None)
+        if worker:
+            env["LOOM_INSIDE"] = "1"
+        for args in [("add", "specs", "loom.toml"),
+                     ("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                      "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "Update gate fixture")]:
+            result = command("git", *args, cwd=self.root, env=env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        return command(LOOM, "gate", "verify", "--workspace", str(self.root), "--tree",
+                       cwd=self.root, env=env)
+
+    @unittest.skipUnless(SYSTEM.endswith("-linux"), "Linux VM prerequisite")
+    def test_worker_accepts_vm_capability_gap_without_claiming_coverage(self):
+        result = self.gate_apps(VM)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        probe, verdicts, _ = self.run_apps(VM)
+        if probe.returncode == 77:
+            self.assertIn("unverified", result.stdout + result.stderr)
+            self.assertEqual(verdicts[0]["outcome"], "skipped")
+            self.assertFalse((self.root / ".loom/marker.json").exists())
+
+    @unittest.skipUnless(SYSTEM.endswith("-linux"), "Linux VM prerequisite")
+    def test_host_vm_capability_skip_retains_exit_77(self):
+        probe, _, _ = self.run_apps(VM)
+        result = self.gate_apps(VM, worker=False)
+        self.assertEqual(result.returncode, probe.returncode, result.stdout + result.stderr)
+
+    @unittest.skipUnless(SYSTEM.endswith("-linux"), "Linux VM prerequisite")
+    def test_worker_vm_skip_cannot_mask_a_runtime_failure(self):
+        result = self.gate_apps(VM, STATUS, status="fail")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
 
     def test_single_app_retains_individual_build_execution(self):
         result, verdicts, calls = self.run_apps(PASS)

@@ -154,7 +154,10 @@ def main():
         for name in ("verify", "test-ci"):
             expected = dict(EXPECTED)
             if name == "test-ci":
-                expected.update(match=r"^test-ci:(.+)$", command="bin/test-ci-verifiers {targets}")
+                expected.update(
+                    match=r"^test-ci:(.+)$", command="bin/test-ci-verifiers {targets}",
+                    skip_capabilities=EXPECTED["skip_capabilities"] + ["virtiofsd-capabilities"],
+                )
             entry = runner_entry(runner, tier, name)
             errors = runner_errors(entry, expected)
             require(not errors, f"[runner.{tier}.{name}] {'; '.join(errors)}")

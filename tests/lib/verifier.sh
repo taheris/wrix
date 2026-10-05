@@ -17,6 +17,37 @@ verifier_missing_capability() {
   return 77
 }
 
+# Root virtiofsd with default inode handles must install these capabilities.
+verifier_virtiofsd_bounding_set() {
+  local uid="$1" bounding="$2" entry capability bit
+  [[ "$uid" == 0 ]] || return 0
+  if [[ ! "$bounding" =~ ^[[:xdigit:]]{16}$ ]]; then
+    printf 'invalid Linux capability bounding set: %s\n' "$bounding" >&2
+    return 1
+  fi
+  for entry in CAP_CHOWN:0 CAP_DAC_OVERRIDE:1 CAP_DAC_READ_SEARCH:2 CAP_FOWNER:3 \
+    CAP_FSETID:4 CAP_SETGID:6 CAP_SETUID:7 CAP_MKNOD:27 CAP_SETFCAP:31; do
+    capability="${entry%:*}"
+    bit="${entry#*:}"
+    if [[ "$((16#$bounding & (1 << bit)))" -eq 0 ]]; then
+      verifier_missing_capability virtiofsd-capabilities \
+        "root virtiofsd requires $capability, absent from Linux CapBnd=$bounding"
+      return 77
+    fi
+  done
+}
+
+verifier_virtiofsd_capabilities() {
+  local field value bounding=""
+  [[ "$EUID" == 0 ]] || return 0
+  while read -r field value; do
+    if [[ "$field" == CapBnd: ]]; then
+      bounding="$value"
+    fi
+  done </proc/self/status
+  verifier_virtiofsd_bounding_set "$EUID" "$bounding"
+}
+
 verifier_preflight() {
   local platform="$1" requirements="$2" capability runtime
   if ! jq -e --arg platform "$platform" \
@@ -47,6 +78,13 @@ verifier_preflight() {
             return 77
           fi
         fi
+        ;;
+      virtiofsd-capabilities)
+        if [[ "$platform" != *-linux ]]; then
+          printf 'virtiofsd capability preflight requires Linux\n' >&2
+          return 1
+        fi
+        verifier_virtiofsd_capabilities || return "$?"
         ;;
       kvm)
         if [[ ! -c /dev/kvm || ! -r /dev/kvm || ! -w /dev/kvm ]]; then

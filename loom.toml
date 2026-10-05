@@ -27,7 +27,7 @@ join = " "
 parse = "json-lines"
 cwd = "."
 skip_policy = "sandbox-capability"
-skip_capabilities = ["container-runtime", "kvm", "user-network-namespace"]
+skip_capabilities = ["container-runtime", "kvm", "user-network-namespace", "virtiofsd-capabilities"]
 
 [runner.system.verify]
 match = '^verify:(.+)$'
@@ -47,4 +47,4 @@ join = " "
 parse = "json-lines"
 cwd = "."
 skip_policy = "sandbox-capability"
-skip_capabilities = ["container-runtime", "kvm", "user-network-namespace"]
+skip_capabilities = ["container-runtime", "kvm", "user-network-namespace", "virtiofsd-capabilities"]

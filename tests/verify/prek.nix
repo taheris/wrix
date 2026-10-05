@@ -47,11 +47,15 @@ in
   "prek.ci-only-heavy-checks" = wholeRepoScript "tests/prek/ci-only-heavy-checks.sh";
   "prek.ci-platform-policy" = wholeRepoScript "tests/prek/test-ci-platform-policy.sh";
   "prek.ci-batching" = ''
-    local root test_ci_runner
+    local root test_ci_runner loom
     root="$(repo_root)"
+    loom="$(build_flake_package loom)"
     nix run --no-warn-dirty "$root#test-ci" -- --list >/dev/null
     test_ci_runner=$(nix eval --raw --no-warn-dirty "$root#apps.${system}.test-ci.program")
+    ${pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
+      nix build --no-link --no-warn-dirty "$root#checks.${system}.system-test-prerequisites"
+    ''}
     ${pkgs.python3}/bin/python3 "$root/tests/prek/test-ci-batching.py" \
-      "$test_ci_runner" ${escapeShellArg system} ${pkgs.bash} ${pkgs.coreutils}
+      "$test_ci_runner" ${escapeShellArg system} ${pkgs.bash} ${pkgs.coreutils} ${../lib/verifier.sh} "$loom/bin/loom"
   '';
 }

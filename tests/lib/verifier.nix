@@ -17,6 +17,10 @@ in
     native
     requiring
     ;
+  nixosVm = {
+    platforms = linux;
+    capabilities = [ "virtiofsd-capabilities" ];
+  };
   live = requiring native [ "container-runtime" ];
   linuxLive = requiring linux [ "container-runtime" ];
   darwinLive = requiring darwin [ "container-runtime" ];
