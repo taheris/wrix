@@ -2,8 +2,14 @@
 set -euo pipefail
 
 if [[ "$#" -eq 0 ]]; then
-  echo "Usage: test-ci-verifiers <ci-app>..." >&2
+  echo "Usage: test-ci-verifiers [--print-inputs] <ci-app>..." >&2
   exit 64
+fi
+
+# Discovery does not execute a test, so Darwin's execution-only policy cannot
+# turn a valid metadata response into a skip or suppress protocol errors.
+if [[ "$1" == "--print-inputs" ]]; then
+  exec nix run .#test-ci -- "$@"
 fi
 
 platform="$(uname -s)"

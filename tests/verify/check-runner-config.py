@@ -15,6 +15,10 @@ EXPECTED = {
     "skip_policy": "sandbox-capability",
     "skip_capabilities": ["container-runtime", "kvm", "user-network-namespace"],
 }
+INPUTS = {
+    "verify": "nix run .#verify -- {print_inputs} {targets}",
+    "test-ci": "bin/test-ci-verifiers {print_inputs} {targets}",
+}
 DUPLICATED_TARGETS = (
     "verify:cli.package-surface",
     "verify:cli.shared-verifier-app",
@@ -52,10 +56,11 @@ def runner_errors(entry, expected):
 
 def test_runner_policy_audit():
     require(not runner_errors(EXPECTED, EXPECTED), "valid runner rejected")
-    for key in ("skip_policy", "skip_capabilities", "parse", "command"):
-        broken = dict(EXPECTED)
+    expected = dict(EXPECTED, inputs=INPUTS["verify"])
+    for key in ("skip_policy", "skip_capabilities", "parse", "command", "inputs"):
+        broken = dict(expected)
         broken.pop(key)
-        require(runner_errors(broken, EXPECTED), f"missing {key} was not rejected")
+        require(runner_errors(broken, expected), f"missing {key} was not rejected")
 
 
 def file_selector_error(root, spec, target):
@@ -158,6 +163,7 @@ def main():
                     match=r"^test-ci:(.+)$", command="bin/test-ci-verifiers {targets}",
                     skip_capabilities=EXPECTED["skip_capabilities"] + ["virtiofsd-capabilities"],
                 )
+            expected["inputs"] = INPUTS[name] if tier == "check" else None
             entry = runner_entry(runner, tier, name)
             errors = runner_errors(entry, expected)
             require(not errors, f"[runner.{tier}.{name}] {'; '.join(errors)}")

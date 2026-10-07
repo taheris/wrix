@@ -90,6 +90,25 @@ test_linux_pre_push_keeps_test_ci() {
   fi
 }
 
+test_darwin_pre_push_queries_inputs_without_execution_skip() {
+  local output="$TEST_TMP/darwin-inputs.out"
+
+  WRIX_PRE_PUSH=1 \
+    WRIX_TEST_CI_FAKE_PLATFORM=Darwin \
+    WRIX_TEST_CI_FAKE_NIX_LOG="$FAKE_NIX_LOG" \
+    PATH="$TEST_TMP/bin:$PATH" \
+    "$REPO_ROOT/bin/test-ci-verifiers" --print-inputs test-image-tier-graph >"$output"
+
+  if [[ "$(<"$FAKE_NIX_LOG")" != "run .#test-ci -- --print-inputs test-image-tier-graph" ]]; then
+    echo "FAIL: Darwin discovery did not invoke the input provider" >&2
+    return 1
+  fi
+  if [[ -s "$output" ]]; then
+    echo "FAIL: Darwin discovery was replaced by an execution skip verdict" >&2
+    return 1
+  fi
+}
+
 failed=0
 if ! test_darwin_pre_push_skips_test_ci; then
   failed=$((failed + 1))
@@ -98,6 +117,10 @@ if ! test_manual_darwin_keeps_test_ci; then
   failed=$((failed + 1))
 fi
 if ! test_linux_pre_push_keeps_test_ci; then
+  failed=$((failed + 1))
+fi
+
+if ! test_darwin_pre_push_queries_inputs_without_execution_skip; then
   failed=$((failed + 1))
 fi
 

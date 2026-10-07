@@ -60,6 +60,8 @@ let
       }) registry
     )
   );
+  inputDefinition = import ../lib/inputs.nix { };
+  inputDescriptions = pkgs.writeText "verify-inputs.json" (toJSON (inputDefinition.project registry));
   preflightPath = makeBinPath (
     optionals pkgs.stdenv.hostPlatform.isLinux [
       pkgs.podman
@@ -86,6 +88,7 @@ let
     SELF="$0"
     export PATH="${preflightPath}:$PATH"
     source ${../lib/verifier.sh}
+    source ${../lib/print-inputs.sh}
 
     fail() {
       local message="$1"
@@ -99,7 +102,7 @@ let
     }
 
     usage() {
-      printf 'Usage: nix run .#verify -- [--list] <id>...\n'
+      printf 'Usage: nix run .#verify -- [--list | --print-inputs] <id>...\n'
       printf 'IDs may be passed as verify:<domain>.<check-id> or <domain>.<check-id>.\n'
     }
 
@@ -242,6 +245,17 @@ let
         --help|-h)
           usage
           return 0
+          ;;
+        --print-inputs)
+          shift
+          validate_targets "$@"
+          local raw
+          local targets=()
+          for raw in "$@"; do
+            targets+=("$(normalize_target "$raw")")
+          done
+          verifier_print_inputs ${inputDescriptions} "''${targets[@]}"
+          return
           ;;
         --list)
           if [[ "$#" -ne 1 ]]; then

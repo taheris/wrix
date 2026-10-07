@@ -10,6 +10,9 @@ Wrix provides sandboxed containers for AI-driven development. See
 - [`docs/style-rules.md`](style-rules.md) — code-style and test-quality rules
   organized by rule family (SH-, NX-, DOC-, GIT-, TST-, RS-, COM-, CLI-).
 
+[Verifier input discovery and measurements](verifier-inputs.md) describes
+checked resource projections, conservative scope, and measured worker costs.
+
 ## Specs
 
 Individual spec files live in [`../specs/`](../specs/). This table is the session-start

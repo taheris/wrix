@@ -14,12 +14,28 @@ let
     writeShellApplication
     ;
 
-  builderImage = import ../../lib/sandbox/builder/image.nix {
+  inputDefinition = import ../lib/inputs.nix { };
+  library = inputDefinition.directory ../../lib;
+  fixtures = inputDefinition.directory ./.;
+  # These resource roots supply the imports and fixture execution below.
+  # Keep the whole library/fixture cones, including newly added resources.
+  mkCheck =
+    {
+      name,
+      runtimeInputs,
+      text,
+    }:
+    {
+      inputs = inputDefinition.nix (library.inputs ++ fixtures.inputs);
+      package = writeShellApplication { inherit name runtimeInputs text; };
+    };
+
+  builderImage = import (library.path + "/sandbox/builder/image.nix") {
     pkgs = linuxPkgs;
     hostPkgs = pkgs;
     asTarball = true;
   };
-  fixtureBuilder = import ./fixture.nix { inherit pkgs linuxPkgs; };
+  fixtureBuilder = import (fixtures.path + "/fixture.nix") { inherit pkgs linuxPkgs; };
   expectedSourceKind = "docker-archive";
   expectedRefPrefix = "wrix-builder:";
   labelsJson = toJSON builderImage.labels;
@@ -70,7 +86,7 @@ let
   '';
 in
 {
-  sshdHardeningTest = writeShellApplication {
+  sshdHardeningTest = mkCheck {
     name = "test-linux-builder-sshd-hardening";
     runtimeInputs = [
       bash
@@ -127,13 +143,19 @@ in
       if ! extract_layer_member "$tmp/image" "$tmp/image.layers" "usr/lib/wrix-builder/nix-daemon.sh" "$tmp/nix-daemon.sh"; then
           fail "builder image is missing /usr/lib/wrix-builder/nix-daemon.sh"
       fi
-      if [[ "$(sha256sum "$tmp/entrypoint.sh" | cut -d ' ' -f 1)" != "$(sha256sum "${../../lib/sandbox/builder/entrypoint.sh}" | cut -d ' ' -f 1)" ]]; then
+      if [[ "$(sha256sum "$tmp/entrypoint.sh" | cut -d ' ' -f 1)" != "$(sha256sum "${
+        library.path + "/sandbox/builder/entrypoint.sh"
+      }" | cut -d ' ' -f 1)" ]]; then
           fail "builder image /entrypoint.sh does not match the entrypoint source"
       fi
-      if [[ "$(sha256sum "$tmp/sshd.sh" | cut -d ' ' -f 1)" != "$(sha256sum "${../../lib/sandbox/builder/sshd.sh}" | cut -d ' ' -f 1)" ]]; then
+      if [[ "$(sha256sum "$tmp/sshd.sh" | cut -d ' ' -f 1)" != "$(sha256sum "${
+        library.path + "/sandbox/builder/sshd.sh"
+      }" | cut -d ' ' -f 1)" ]]; then
           fail "builder image sshd helper does not match the helper source"
       fi
-      if [[ "$(sha256sum "$tmp/nix-daemon.sh" | cut -d ' ' -f 1)" != "$(sha256sum "${../../lib/sandbox/builder/nix-daemon.sh}" | cut -d ' ' -f 1)" ]]; then
+      if [[ "$(sha256sum "$tmp/nix-daemon.sh" | cut -d ' ' -f 1)" != "$(sha256sum "${
+        library.path + "/sandbox/builder/nix-daemon.sh"
+      }" | cut -d ' ' -f 1)" ]]; then
           fail "builder image Nix daemon helper does not match the helper source"
       fi
 
@@ -161,13 +183,13 @@ in
         || fail "builder nix.conf does not trust the authenticated builder user"
 
       WRIX_BUILDER_BIN='${fixtureBuilder}/bin/wrix-builder' \
-        bash ${./key-material.sh} test_start_publishes_ssh_only_on_host_loopback
+        bash ${fixtures.path + "/key-material.sh"} test_start_publishes_ssh_only_on_host_loopback
 
       echo "test-linux-builder-sshd-hardening: PASS"
     '';
   };
 
-  sourceKindLoadTransportTest = writeShellApplication {
+  sourceKindLoadTransportTest = mkCheck {
     name = "test-linux-builder-source-kind-load-transport";
     runtimeInputs = [
       bash
@@ -180,11 +202,11 @@ in
     ];
     text = ''
       WRIX_BUILDER_BIN='${fixtureBuilder}/bin/wrix-builder' \
-        bash ${./key-material.sh} test_loads_image_through_source_kind_contract
+        bash ${fixtures.path + "/key-material.sh"} test_loads_image_through_source_kind_contract
     '';
   };
 
-  imageSourceKindTest = writeShellApplication {
+  imageSourceKindTest = mkCheck {
     name = "test-linux-builder-image-source-kind";
     runtimeInputs = [
       coreutils

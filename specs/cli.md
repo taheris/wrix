@@ -32,6 +32,17 @@ The repository exposes a developer-facing flake app `.#verify` for Nix-owned and
 
 `.#verify --list` prints the supported logical IDs and is the authoritative inventory for the runner's configured verifier registry. Invoking `.#verify` with one or more IDs runs exactly those checks and reports unknown IDs as actionable failures. Each ID has a single owner spec: the domain prefix names the owning area (`profiles.*`, `images.*`, `sandbox.*`, `prek.*`, and so on), while this spec owns the shared app surface and batching contract.
 
+`--print-inputs [id ...]` on `.#verify` and `.#test-ci` reports a batch
+`{"inputs":{"id":["glob", ...]}}` projection of checked resource operands.
+Description queries do not execute checks or provision images. Opaque
+execution definitions are omitted, retaining Loom's unknown-input always-run
+behavior; they are not represented by an empty known input set. Unknown IDs
+fail before producing a description. The check runners opt into these batched
+queries; system runners remain conservative without queries, avoiding
+per-scenario discovery overhead while preserving their execution coverage.
+[check](verify:cli.shared-verifier-app)
+[check](verify:cli.verify-runner-batching)
+
 ### Verifier results and worker acceptance
 
 The shared `.#verify` app and `.#test-ci --json` emit JSON-lines results.

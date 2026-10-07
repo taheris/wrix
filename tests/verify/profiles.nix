@@ -7,17 +7,26 @@ let
     run_repo_script ${escapeShellArg path} ${escapeShellArg function}
   '';
 
-  nixEval = target: ''
-    local root
-    root="$(repo_root)"
-    REPO_ROOT="$root" VERIFY_SYSTEM=${escapeShellArg system} VERIFY_TARGET=${escapeShellArg target} nix eval --raw --impure --no-warn-dirty --expr '
-      import (builtins.getEnv "REPO_ROOT" + "/tests/verify/profiles-eval.nix") {
-        root = builtins.getEnv "REPO_ROOT";
-        system = builtins.getEnv "VERIFY_SYSTEM";
-        target = builtins.getEnv "VERIFY_TARGET";
-      }
-    ' >/dev/null
-  '';
+  descriptions = import ./profiles-eval.nix {
+    root = ../..;
+    inherit system;
+    target = "";
+    describe = true;
+  };
+  nixEval = target: {
+    inputs = descriptions.${target};
+    script = ''
+      local root
+      root="$(repo_root)"
+      REPO_ROOT="$root" VERIFY_SYSTEM=${escapeShellArg system} VERIFY_TARGET=${escapeShellArg target} nix eval --raw --impure --no-warn-dirty --expr '
+        import (builtins.getEnv "REPO_ROOT" + "/tests/verify/profiles-eval.nix") {
+          root = builtins.getEnv "REPO_ROOT";
+          system = builtins.getEnv "VERIFY_SYSTEM";
+          target = builtins.getEnv "VERIFY_TARGET";
+        }
+      ' >/dev/null
+    '';
+  };
 
   rustCompileRun = ''
     local root

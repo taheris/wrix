@@ -25,10 +25,10 @@
         "rust-analyzer-src": "rust-analyzer-src"
       },
       "locked": {
-        "lastModified": 1791291961,
-        "narHash": "sha256-z5Mff3AcQ/oa2OskKN7vpU7J4h7nsn4IP2YUgEwdx0Q=",
+        "lastModified": 1791378032,
+        "narHash": "sha256-NaMw9W7dWAkYlz7Ej6pEjX8kXUDDO1UBy7AwuPwEuyE=",
         "ref": "main",
-        "rev": "eff70f371f14fef5af78d58ace7c7f6bb60f3da8",
+        "rev": "9aadb1d479ad081f67eac50920558e140f26d167",
         "shallow": true,
         "type": "git",
         "url": "https://github.com/nix-community/fenix.git"
@@ -65,10 +65,10 @@
     "loom-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1791376659,
-        "narHash": "sha256-n1C0nj4YEOYDe8sgV9l8E1qilKjM4cE/Tbko7o5eg64=",
+        "lastModified": 1791413962,
+        "narHash": "sha256-DQnRtUKrG9oUf/OfPnaPqxTMNgOvwYqZF+jzwPSIY4o=",
         "ref": "main",
-        "rev": "7d4fcbd334fc610dc746b5fb34dfdb49c5fcb3e0",
+        "rev": "3cf971a1bd042641100b427925c0d8a10679543c",
         "shallow": true,
         "type": "git",
         "url": "https://github.com/taheris/loom.git"
@@ -110,11 +110,11 @@
     "rust-analyzer-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1791221318,
-        "narHash": "sha256-Qjdu1LEaFlYt1Ghkt8ToGJdlHu00R8fHYm7Z9lKlJVg=",
+        "lastModified": 1791303611,
+        "narHash": "sha256-9uKpjZzi0aZBvdbaGUyLmCawYu1eAXfZQOZVOPOGS8A=",
         "owner": "rust-lang",
         "repo": "rust-analyzer",
-        "rev": "ce37b245369ade4e2a18063ae4d60a17606c6d26",
+        "rev": "021bfc15e24909389bd208d1622b7f4f3942b91a",
         "type": "github"
       },
       "original": {

@@ -1,5 +1,14 @@
-_:
+{ pkgs, system, ... }:
 
+let
+  inherit (pkgs.lib) escapeShellArg;
+  # Retain the existing store source without coercing/copying its path again.
+  nixpkgsSource =
+    let
+      path = toString pkgs.path;
+    in
+    builtins.appendContext path { "${path}".path = true; };
+in
 {
   "cli.package-surface" = ''
     local package
@@ -36,10 +45,14 @@ _:
       fail "batched verifier emitted $verdict_count passing verdicts; expected 2"
     fi
 
-    local root loom
+    local root loom test_ci
     root="$(repo_root)"
+    nix build --no-link --no-warn-dirty "$root#checks.${system}.verifier-inputs"
     loom="$(build_flake_package loom)"
     python3 "$root/tests/verify/test_results.py" "$SELF" "$loom/bin/loom" ${../lib/verifier.sh}
+    nix run --no-warn-dirty "$root#test-ci" -- --list >/dev/null
+    test_ci="$(nix eval --raw --no-warn-dirty "$root#apps.${system}.test-ci.program")"
+    python3 "$root/tests/verify/test_inputs.py" "$SELF" "$test_ci" "$loom/bin/loom" "$root" ${escapeShellArg nixpkgsSource} ${escapeShellArg system}
   '';
 
   "cli.verify-runner-batching" = ''

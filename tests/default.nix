@@ -241,6 +241,7 @@ let
       pi-auth-storage = import ./security/pi-auth.nix { inherit pkgs; };
       pi-default-model = import ./sandbox/pi-default-model.nix { inherit pkgs wrix; };
       profile-images-launcher = import ./profiles/manifest.nix { inherit pkgs wrix; };
+      verifier-inputs = import ./lib/inputs-test.nix { inherit pkgs; };
     }
     // loomTests.checks
     // optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
@@ -263,6 +264,8 @@ let
     name = executable;
     inherit package executable;
   };
+  mkDefinedCiApp =
+    { package, inputs }: executable: (mkCiApp package executable) // { inherit inputs; };
   mkLiveCiApp =
     package: executable:
     (mkCiApp package executable)
@@ -280,6 +283,19 @@ let
             capabilities = app.capabilities or [ ];
           };
         }) ciApps
+      )
+    )
+  );
+  inputDefinition = import ./lib/inputs.nix { };
+  ciInputDescriptions = pkgs.writeText "test-ci-inputs.json" (
+    builtins.toJSON (
+      inputDefinition.project (
+        builtins.listToAttrs (
+          map (app: {
+            inherit (app) name;
+            value = app;
+          }) ciApps
+        )
       )
     )
   );
@@ -351,9 +367,9 @@ let
     (mkCiApp sandboxImageChecks.customisationLayerBoundedTest "test-customisation-layer-bounded")
     (mkCiApp sandboxImageChecks.imageNixDbConsistentTest "test-image-nix-db-consistent")
     (mkCiApp sandboxImageChecks.imageNixDbNoDanglingTest "test-image-nix-db-no-dangling")
-    (mkCiApp linuxBuilderChecks.sshdHardeningTest "test-linux-builder-sshd-hardening")
-    (mkCiApp linuxBuilderChecks.imageSourceKindTest "test-linux-builder-image-source-kind")
-    (mkCiApp linuxBuilderChecks.sourceKindLoadTransportTest "test-linux-builder-source-kind-load-transport")
+    (mkDefinedCiApp linuxBuilderChecks.sshdHardeningTest "test-linux-builder-sshd-hardening")
+    (mkDefinedCiApp linuxBuilderChecks.imageSourceKindTest "test-linux-builder-image-source-kind")
+    (mkDefinedCiApp linuxBuilderChecks.sourceKindLoadTransportTest "test-linux-builder-source-kind-load-transport")
     (mkCiApp testProfilesBuildPackage "test-profiles-build-package")
     (mkCiApp testProfileImagesManifestShape "test-profile-images-manifest-shape")
     (mkCiApp testProfileConfigImageSourceKind "test-profile-config-image-source-kind")
@@ -400,6 +416,7 @@ let
         set -euo pipefail
         export PATH="${ciPreflightPath}:$PATH"
         source ${./lib/verifier.sh}
+        source ${./lib/print-inputs.sh}
 
         ci_checks=(
           builder-keys-structure
@@ -438,6 +455,18 @@ let
           done
           return 1
         }
+
+        if [[ "''${1:-}" = "--print-inputs" ]]; then
+          shift
+          for app in "$@"; do
+            if ! is_ci_app "$app"; then
+              printf 'Unknown test-ci app: %s\n' "$app" >&2
+              exit 64
+            fi
+          done
+          verifier_print_inputs ${ciInputDescriptions} "$@"
+          exit 0
+        fi
 
         batch_dir=""
         declare -A ci_runners=()
