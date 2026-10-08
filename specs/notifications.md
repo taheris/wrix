@@ -1,174 +1,144 @@
 # Notification System
 
-Desktop notifications when Claude Code needs attention.
+Focus-aware desktop notifications when a sandboxed coding agent needs attention.
 
 ## Problem Statement
 
-When Claude Code stops and waits for input, users may not notice if they are
-working in another window, the terminal is in a background tab, or they have
-stepped away. Notifications must alert when the agent needs attention, suppress
-when the terminal is already focused, and traverse the container/host boundary.
+Users may miss an agent waiting for input while its terminal is in the
+background. Wrix carries agent attention signals across the container boundary
+to the host desktop and suppresses notifications when the associated terminal is
+already focused, without treating conversation completion as container exit.
 
 ## Architecture
 
-```
-Container                          Host
----------                          ----
-wrix-notify                      wrix-notifyd
-    │                                  │
-    ├─ Linux: Unix socket ────────────►├─ notify-send
-    │   (/run/wrix/notify.sock)      │
-    │                                  │
-    └─ macOS: TCP:5959 ───────────────►└─ terminal-notifier
-```
+`wrix-notify` is the in-container client; `wrix-notifyd` is the host daemon.
+Linux uses the mounted Unix socket `/run/wrix/notify.sock` and `notify-send`.
+Darwin uses TCP on the vmnet gateway and `terminal-notifier`, consistent with
+the mount contract in `sandbox.md`. Agents use small lifecycle adapters, not a
+Wrix-owned event bus or agent framework.
 
-Two processes: `wrix-notify` is the in-container client invoked from a Claude
-Code Stop hook; `wrix-notifyd` is the host-side daemon that displays
-notifications via the platform's native bridge. Linux uses the mounted Unix
-socket; Darwin uses TCP as required by the Darwin mount contract in
-`sandbox.md`.
+Claude's native `Stop` hook invokes the client. Pi's adapter invokes it on
+`agent_settled`, when Pi has no automatic continuation pending, not on
+`agent_end`, which can precede recovery or queued work. Pi sends one
+notification per settled event, with an agent-identifying title and a
+waiting-for-input message. Consumer direct runners may invoke the same client
+themselves; Wrix does not infer their conversation state from process output.
 
-[cli.md § Verifier results and worker acceptance](cli.md#verifier-results-and-worker-acceptance)
-owns result reporting and sandbox-stage skip acceptance. A worker's platform or
-runtime skip does not prove notification delivery; the live transport checks
-remain part of the separate integration-branch host-test stage.
+The focus target belongs to the host terminal, not a debugging tmux session
+inside the container. Execution and conversation identities in `security.md` are
+separate from this routing value.
+
+[cli.md](cli.md#verifier-results-and-worker-acceptance) owns verifier reporting
+and sandbox-stage skip acceptance. A platform or runtime skip is not evidence of
+notification delivery; live transport checks remain in the host-test stage.
 
 ## Wire Protocol
 
-Newline-delimited JSON, one envelope per notification:
+`wrix-notify <title> <message> [sound]` sends one newline-delimited JSON
+envelope:
 
 ```json
-{"title": "Claude Code", "message": "Waiting", "sound": "Ping", "session_id": "0:1.0"}
+{"title": "Pi", "message": "Waiting for input", "sound": "Ping", "focus_target": "0:1.0"}
 ```
 
-| Field        | Required | Description                      |
-| ------------ | -------- | -------------------------------- |
-| `title`      | Yes      | Notification title               |
-| `message`    | Yes      | Notification body                |
-| `sound`      | No       | macOS sound name                 |
-| `session_id` | No       | tmux session for focus detection |
+`title` and `message` are required strings. `sound` is an optional macOS sound
+name. `focus_target` is an optional opaque string identifying the registered
+host terminal/tmux target. It is not an agent session ID; `session_id` is not a
+wire alias. The client writes without waiting for an acknowledgement.
+
+The launcher exports its registered host routing target to the container as
+`WRIX_FOCUS_TARGET`. The client copies a nonempty value into `focus_target`;
+when the variable is unset or empty, it omits the field and still sends the
+notification. `WRIX_SESSION_ID` is not an input or compatibility alias. This
+handoff does not use an agent conversation ID or discover a debugging tmux pane
+inside the container.
 
 ## Focus Detection
 
-1. Launcher registers the tmux session with the platform focus target
-2. The session file lands in the runtime directory
-3. Daemon checks whether the registered target is focused
-4. Notification is suppressed if focused
+The launcher registers the host terminal target at container start using the
+same runtime-file naming as the daemon. Linux/niri records its window ID; Darwin
+records its terminal application. Where applicable, tmux's active pane is also
+checked. The daemon suppresses only when it positively identifies the registered
+target as focused. Missing registration or unavailable focus information does
+not suppress an otherwise valid notification.
 
-| Platform     | Focus Detection Method         |
-| ------------ | ------------------------------ |
-| Linux (niri) | Query window ID via compositor |
-| macOS        | Check frontmost application    |
-
-## Environment Variables
-
-| Variable                    | Description            | Verification                                                |
-| --------------------------- | ---------------------- | ----------------------------------------------------------- |
-| `WRIX_NOTIFY_ALWAYS=1`      | Disable focus checking | [system](verify:notifications.focus-override)               |
-| `WRIX_NOTIFY_VERBOSE=1`     | Enable debug logging   | [system](verify:notifications.verbose-logging)              |
-| `WRIX_NOTIFY_TCP=host:port` | Override TCP endpoint  | [system](verify:notifications.client-tcp-endpoint-override) |
-
-## Claude Code Hook Configuration
-
-```json
-{
-  "hooks": {
-    "Stop": [{
-      "matcher": "",
-      "hooks": [{
-        "type": "command",
-        "command": "wrix-notify 'Claude' 'Waiting'"
-      }]
-    }]
-  }
-}
-```
+`WRIX_NOTIFY_ALWAYS=1` bypasses focus checking, `WRIX_NOTIFY_VERBOSE=1` enables
+diagnostic logging, and `WRIX_NOTIFY_TCP=host:port` overrides the client's TCP
+endpoint.
 
 ## Security
 
-The daemon's macOS TCP transport binds to the vmnet gateway (192.168.64.1:5959),
-reachable only from containers on the vmnet bridge. There is no authentication
-on the notification protocol; the worst-case abuse is unwanted desktop
-notification spam, since notifications are cosmetic and cannot execute code.
-Linux uses a Unix socket mounted into the container — filesystem permissions on
-the socket provide access control.
+The Darwin listener binds to the vmnet gateway (`192.168.64.1:5959`), not
+`0.0.0.0`. The protocol has no authentication; it carries cosmetic desktop
+notifications, not commands to execute. Linux socket filesystem permissions
+provide transport access control. Notification failure does not terminate agent
+work, but failures are reported through diagnostics rather than hidden.
 
 ## Success Criteria
 
-- On Linux, `wrix-notify` invoked through `wrix spawn` from inside a container
-  reaches a running host daemon through the mounted Unix socket; skips with exit
-  77 when Podman is unavailable
+- On Linux, the packaged client invoked through `wrix spawn` reaches the host
+  daemon through the mounted Unix socket
   [system](verify:notifications.container-transport-linux)
-- On Darwin, `wrix-notify` invoked through `wrix spawn` from inside a container
-  reaches a running host daemon through TCP on the vmnet gateway; skips with
-  exit 77 when Apple `container` is unavailable
+- On Darwin, the packaged client invoked through `wrix spawn` reaches the host
+  daemon through TCP on the vmnet gateway, including optional sound delivery
   [system](verify:notifications.container-transport-darwin)
 - `WRIX_NOTIFY_TCP=host:port` selects the client TCP endpoint
   [system](verify:notifications.client-tcp-endpoint-override)
-- `wrix-notify` sends exactly one JSON envelope containing title, message,
-  optional sound, and `session_id`
-  [system](verify:notifications.client-envelope)
-- `wrix-notify` exits without waiting for an acknowledgement
+- The client sends exactly one envelope with title, message, optional sound, and
+  `focus_target` copied from nonempty `WRIX_FOCUS_TARGET`; an unset or empty
+  variable omits the field without preventing delivery, and neither
+  `WRIX_SESSION_ID` nor a `session_id` wire alias is used
+  [system?](verify:notifications.focus-target-envelope)
+- The client exits without waiting for an acknowledgement
   [system](verify:notifications.client-non-blocking)
-- A notification reaches the daemon's native bridge within one second of
-  `wrix-notify` invocation
-  [system](verify:notifications.daemon-dispatch-latency)
-- Claude Code settings invoke the `wrix-notify` command from a `Stop` hook
+- A notification reaches the daemon's native bridge within one second of client
+  invocation [system](verify:notifications.daemon-dispatch-latency)
+- Claude settings invoke `wrix-notify` from the native `Stop` hook
   [check](verify:notifications.claude-stop-hook-config)
-- The host daemon dispatches via native notification bridges and continues
-  serving after client disconnects
+- Packaged Pi emits one attention notification on settling, but none at an
+  intermediate `agent_end` while recovery or queued work continues
+  [system?](verify:notifications.pi-settled)
+- A Pi notification carries an agent-identifying title and the registered host
+  focus target through the production client/daemon path
+  [system?](verify:notifications.pi-focus-routing)
+- Notification transport failures are diagnosed without stopping Pi's agent work
+  or turning a completed turn into a failed turn
+  [system?](verify:notifications.pi-notify-failure)
+- Host native dispatch remains available after client disconnects
   [judge](../tests/judges/notifications.sh#test_native_dispatch_and_reliability)
-- Focus-aware suppression happens only when the daemon positively identifies the
-  registered session target as focused
-  [judge](../tests/judges/notifications.sh#test_focus_suppression)
-- Launchers register tmux session focus targets using the same session-file
-  naming that the daemon reads
-  [judge](../tests/judges/notifications.sh#test_session_registration)
-- macOS TCP listener binds to the vmnet gateway address (`192.168.64.1`);
-  `0.0.0.0` is not used as a bind address
+- Launcher registration, the exported `WRIX_FOCUS_TARGET`, and daemon lookup
+  agree on the opaque host target, suppress only positively focused targets, and
+  never substitute an execution ID, agent conversation ID, or in-container
+  debugging pane ID [system?](verify:notifications.focus-target-registration)
+- `WRIX_NOTIFY_ALWAYS=1` disables focus checking
+  [system](verify:notifications.focus-override)
+- `WRIX_NOTIFY_VERBOSE=1` enables diagnostic logging
+  [system](verify:notifications.verbose-logging)
+- The Darwin TCP listener binds to `192.168.64.1`, never `0.0.0.0`
   [check](verify:notifications.macos-tcp-bind-address)
 
 ## Requirements
 
 ### Functional
 
-1. **Client command** — `wrix-notify <title> <message>` sends a notification
-   envelope from inside the container.
-   [system](verify:notifications.client-envelope)
-2. **Host daemon** — `wrix-notifyd` receives envelopes and dispatches via the
-   platform-native notification bridge.
-   [judge](../tests/judges/notifications.sh#test_native_dispatch_and_reliability)
-3. **Linux transport** — Linux uses a Unix socket bind-mounted into the
-   container at `/run/wrix/notify.sock`.
-   [system](verify:notifications.container-transport-linux)
-4. **Darwin transport** — macOS uses TCP to the vmnet gateway (5959), consistent
-   with the Darwin mount contract in `sandbox.md`.
-   [system](verify:notifications.container-transport-darwin)
-5. **Focus-aware suppression** — when the registered tmux session's window is
-   focused, the daemon discards the notification before dispatch.
-   [judge](../tests/judges/notifications.sh#test_focus_suppression)
-6. **Session tracking** — the launcher registers `(session_id, window_id)` on
-   Linux or `(session_id, terminal_app)` on macOS at container start so focus
-   detection has a target.
-   [judge](../tests/judges/notifications.sh#test_session_registration)
-7. **Sound support** — clients may pass an optional `sound` field consumed by
-   `terminal-notifier` on macOS.
-   [system](verify:notifications.container-transport-darwin)
+1. **Agent adapters** — Claude uses Stop and Pi uses settled as described in
+   Architecture; external runners own their own attention semantics.
+2. **Transport** — the client and host daemon implement the wire and platform
+   contracts above, independently of the selected agent.
+3. **Focus routing** — host terminal registration, not conversation identity,
+   controls focus suppression.
 
 ### Non-Functional
 
-1. **Low latency** — notifications appear within one second of `wrix-notify`
-   invocation. [system](verify:notifications.daemon-dispatch-latency)
-2. **Reliable** — daemon survives client disconnects and accepts new connections
-   without restart.
-   [judge](../tests/judges/notifications.sh#test_native_dispatch_and_reliability)
-3. **Non-blocking client** — `wrix-notify` exits immediately after writing the
-   envelope, with no acknowledgement round-trip.
-   [system](verify:notifications.client-non-blocking)
+1. **Low overhead** — the client does not await an acknowledgement, and native
+   dispatch meets the one-second bound above.
+2. **Best-effort notification** — failures remain visible but do not prevent
+   agent work; disconnected clients do not terminate the daemon.
 
 ## Out of Scope
 
-- Mobile / remote notifications
-- Notification history
-- Custom notification actions
-- Rate limiting
+- Mobile or remote notifications, notification history, custom actions, and rate
+  limiting; this is a local desktop attention channel
+- A general lifecycle event bus or automatic recovery; agents own settled-state
+  semantics and `security.md` owns execution records
+- Automatic lifecycle detection for arbitrary consumer direct runners

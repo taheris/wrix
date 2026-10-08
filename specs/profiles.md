@@ -281,24 +281,27 @@ profile-config paths retain Nix store context. `image-builder.md` owns and
 verifies source kind and composition; `sandbox.md` owns agent selection.
 [check](verify:profiles.manifest-launcher)
 
-Bundled `packages.profile-images` covers direct images and
-`packages.profile-images-pi` covers the Pi images used by the repository
-runtime. External flakes call `mkProfileImages` for custom profiles.
+Bundled `packages.profile-images` covers the Pi images used by the repository
+runtime. External flakes call `mkProfileImages` for custom profiles or explicit
+consumer direct runners; no redundant `profile-images-pi` manifest is exposed.
 
 ## Flake Outputs
 
 For each built-in `base`, `rust`, and `python` profile, the flake exposes:
 
-| Family                                     | Contract                                                        |
-| ------------------------------------------ | --------------------------------------------------------------- |
-| `packages.image-<profile>[-<agent>]`       | Selected OCI image source; the unsuffixed image is direct       |
-| `packages.sandbox-<profile>[-<agent>]`     | Runnable configured launcher; the unsuffixed launcher is direct |
-| `packages.sandbox-<profile>[-<agent>]-mcp` | Same agent/profile with runtime MCP selection                   |
-| `packages.profile-images`                  | Direct profile manifest                                         |
+| Family                                     | Contract                                                    |
+| ------------------------------------------ | ----------------------------------------------------------- |
+| `packages.image-<profile>[-<agent>]`       | Selected OCI image source; the unsuffixed image is Pi       |
+| `packages.sandbox-<profile>[-<agent>]`     | Runnable configured launcher; the unsuffixed launcher is Pi |
+| `packages.sandbox-<profile>[-<agent>]-mcp` | Same agent/profile with runtime MCP selection               |
+| `packages.profile-images`                  | Pi profile manifest                                         |
 
-Agent suffixes are `-claude` and `-pi`. `packages.default` is the Rust Pi
-sandbox and runs through `wrix-run`. MCP selection is orthogonal to profiles;
-there are no per-server profile variants.
+Agent suffixes are `-claude` and `-pi`; the unsuffixed family selects the
+default Pi variant. `packages.default` is the Rust Pi sandbox and runs through
+`wrix-run`. Built-in outputs do not manufacture a direct runner; consumers
+construct direct outputs with their own package under `sandbox.md`'s contract.
+MCP selection is orthogonal to profiles; there are no per-server profile
+variants.
 
 ## Repository Loom Tooling
 
@@ -469,11 +472,15 @@ without introducing a reciprocal flake dependency.
   `(wrix.mkSandbox { profile = wrix.profiles.rust; agent = …; }).image`; its
   values and meanings are owned and verified by `image-builder.md`
   [check](test-ci:test-profile-images-manifest-shape)
-- `packages.image-<name>[-<agent>]` resolves to the matching sandbox's selected
-  `.image.source`; source metadata remains owned by `image-builder.md`. All
-  sandbox and profile-manifest outputs evaluate for each built-in profile, and
-  `packages.default` resolves to `sandbox-rust-pi` with
-  `meta.mainProgram = "wrix-run"` [check](verify:profiles.image-flake-outputs)
+- Each built-in profile's unsuffixed image/sandbox outputs select Pi, explicit
+  Claude/Pi variants resolve to their selected image sources, and
+  `packages.default` selects Rust Pi with `meta.mainProgram = "wrix-run"`; no
+  built-in output supplies a placeholder direct runner
+  [check?](verify:profiles.pi-default-outputs)
+- `packages.profile-images` contains the built-in Pi entries with their matching
+  launcher/profile config, with no redundant `profile-images-pi` output; custom
+  direct manifests retain the generic `mkProfileImages` contract
+  [check?](verify:profiles.pi-default-manifest)
 - `profiles.rust.buildPackage` is exposed and returns an attrset with `bin`,
   `clippy`, `nextest`, and `cargoArtifacts` fields
   [check](verify:profiles.rust-build-package-exposed)
@@ -495,10 +502,6 @@ without introducing a reciprocal flake dependency.
   and `nextest` for both `wrix.profiles.rust` and
   `wrix.rustProfile { toolchain; sha256; }`
   [check](verify:profiles.rust-build-package-toolchain-alignment)
-- The tmux MCP package depends on the Rust profile's `buildPackage` boundary:
-  its runtime package consumes `bin`, while `clippy` and `nextest` remain
-  independent checks
-  [check](verify:profiles.rust-build-package-consumer-boundary)
 - The repository devshell depends on the sandbox-owned `devShell` constructor
   rather than reconstructing profile toolchain or environment state
   [check](verify:devshell.sandbox-boundary)

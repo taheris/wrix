@@ -51,7 +51,8 @@ Build pipeline:
 1. Collect packages from the profile (profile toolchain + agent tooling + MCP
    server packages if any)
 2. Compose the agent tier (`wrix-agent-<agent>-<name>`) with exactly the
-   selected `agentPkg`; a non-selected agent's binary is not present
+   selected `agentPkg` and its dependency closure; Wrix does not automatically
+   add non-selected agent runtimes
 3. Configure `/etc/nix/nix.conf` for flakes and disabled in-container sandbox
    (the outer container is the security boundary — see `specs/security.md`)
 4. Bundle CA certificates from `pkgs.cacert`
@@ -92,7 +93,7 @@ The four tiers, bottom (most stable) to top (most volatile):
 | ------------------ | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------- |
 | 0 — base           | `wrix-base-image`            | universal nixpkgs bottom-of-closure (glibc, gcc-lib, openssl, cacert, shells, coreutils)                                                                                                                                                   | nixpkgs pin                                              |
 | 1 — stable-profile | `wrix-stable-profile-<name>` | the profile's `corePackages` plus wrix-generated derivations (notify client, prek wrappers + bundle, nix.conf, passwd/group) — **no agent runtime**                                                                                        | wrix source, nixpkgs pin, a toolchain re-pin             |
-| 2 — agent          | `wrix-agent-<agent>-<name>`  | exactly the **one** selected `agentPkg` runtime and its closure. A non-selected agent's binary is absent                                                                                                                                   | the agent selection and that agent package's own version |
+| 2 — agent          | `wrix-agent-<agent>-<name>`  | the selected `agentPkg` runtime and its dependency closure, without automatic additions of other agent runtimes                                                                                                                            | the agent selection and that agent package's own version |
 | 3 — leaf           | the per-profile image        | downstream-appended packages (`profile.packages` − `corePackages`) and per-invocation generated content (merged agent settings, MCP configs, the `profileEnv` symlink tree, entrypoint `extraCommands`), plus the Nix DB registration file | each consumer iteration                                  |
 
 Linux represents tiers as OCI layer descriptors plus a final JSON image
@@ -117,6 +118,13 @@ the appended delta `profile.packages` − `corePackages` and the volatile
 generated files — is tier 3 (leaf). A downstream-**pinned** toolchain
 (`rustProfile { toolchain = ./rust-toolchain.toml }`) is part of `corePackages`
 and therefore tier 1.
+
+**Agent exclusivity.** Exclusivity governs Wrix's automatic runtime additions,
+not consumer-supplied contents. An `agentPkg` dependency closure or an appended
+profile package may deliberately include Pi, Claude, or another runtime. Those
+paths remain in the image under the normal tier-membership rules; their presence
+does not change the selected agent variant or which executable the entrypoint
+launches.
 
 **Tier ordering (toolchain below agent).** The agent tier sits _above_ the
 toolchain, not below, because a change low in the graph re-emits every tier
@@ -328,11 +336,18 @@ missing tools on `PATH`, or maintain a hook-id skip list.
   [check](test-ci:test-agent-tier-isolated)
 - The leaf image declares the selected agent variant in `/etc/wrix/image-agent`
   [check](test-ci:test-image-agent-marker)
-- A non-selected agent's binary is absent from the image: an `agent = "direct"`
-  image contains neither `claude-code` nor a `pi` runtime
+- Wrix adds no non-selected agent runtime automatically: absent
+  consumer-supplied dependencies or packages that include them, a standalone
+  `agent = "direct"` image contains neither `claude-code` nor a `pi` runtime
   [check](test-ci:test-agent-exclusive)
-- default `agent = "direct"` produces an image that contains
-  `loom-direct-runner` [check](test-ci:test-agent-direct-runner)
+- Consumer runner dependencies and appended profile packages may include Pi or
+  Claude; image composition preserves those closures without changing the
+  selected agent variant or its configured entrypoint executable
+  [check?](test-ci:test-agent-consumer-runtime-closures)
+- An explicit `agent = "direct"` image contains the consumer package and its
+  declared executable, with no Wrix placeholder or requirement that the
+  executable be Loom-named; selection validation is owned by `sandbox.md`
+  [check?](test-ci:test-agent-declared-direct-runner)
 - `agent = "claude"` produces an image that contains `claude-code`
   [check](test-ci:test-agent-claude-runtime)
 - The `agentPkg` code path threads the selected agent package into the image
@@ -389,11 +404,12 @@ missing tools on `PATH`, or maintain a hook-id skip list.
 2. **Package bundling** — every derivation in the profile's `packages` list
    lands in the image's store closure.
 3. **Agent runtime composition** — the image builder materializes the runtime
-   selected under `sandbox.md` and its resolved `agentPkg` as tier 2. Exactly
-   that resolved package is baked, so non-selected agent packages are absent;
-   the tier composes orthogonally with the workspace profile. The selector
-   values, defaults, package-override API, and runtime meanings remain owned by
-   `sandbox.md`.
+   selected under `sandbox.md` and its resolved `agentPkg` as tier 2, preserving
+   its dependency closure. Wrix adds no other runtime automatically; consumer
+   dependencies and profile additions follow the exclusivity and tier-membership
+   rules above. The tier composes orthogonally with the workspace profile. The
+   selector values, defaults, package-override API, and runtime meanings remain
+   owned by `sandbox.md`.
 4. **Nix configuration** — `flakes` and `nix-command` are enabled; the
    in-container Nix sandbox is disabled (the outer container is the boundary).
 5. **CA certificates** — `pkgs.cacert` is included and `SSL_CERT_FILE` resolves

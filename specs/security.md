@@ -6,8 +6,8 @@ diagnostics.
 
 ## Problem Statement
 
-AI coding agents running inside wrix sandboxes hold three kinds of credentials
-(deploy key, signing key, agent API credentials), reach network destinations
+AI coding agents running inside wrix sandboxes may receive repository deploy
+keys, commit signing keys, and agent API credentials, reach network destinations
 governed by wrix's `open` / `limit` egress policy, and produce session artefacts
 the operator can later inspect. The per-component specs (`sandbox.md`,
 `image-builder.md`, `linux-builder.md`, `profiles.md`) own the _mechanics_ of
@@ -63,42 +63,42 @@ non-interactively. Acceptable because:
 - The signing key adds attribution to commits; it does not grant any additional
   access.
 
-**Host-source resolution precedence.** When staging a key for the sandbox, the
-launcher resolves the _host_ source path. The rule below is stated for the
-deploy key; the signing key follows the same rule with `WRIX_SIGNING_KEY` and
+**Explicit grants.** `cli.md` owns `[wrix.git]` policy and `sandbox.md` owns
+launch overrides. Neither `run` nor `spawn` receives deploy or signing keys
+without the corresponding effective grant. Grants are independent: signing alone
+does not grant repository access, and deploying alone does not grant signing. A
+deploy grant exposes the key's actual repository permissions; it is not a
+read-only Git capability or a validated publishing transaction.
+
+**Repository policy trust.** The repository's `wrix.toml` is trusted launch
+input, not agent-resistant authorization storage. Because the workspace is
+writable, an agent can edit that policy and change grants on subsequent launches
+that inherit it. Explicit caller overrides still take precedence. Grants control
+Wrix-managed key delivery; they do not protect policy from workspace writers.
+
+**Host-source resolution precedence.** Only after a key is granted does the
+launcher resolve its _host_ source path. The rule below is stated for the deploy
+key; the signing key follows the same rule with `WRIX_SIGNING_KEY` and
 `$HOME/.ssh/deploy_keys/<name>-signing` substituted in. The two keys are
 resolved independently — neither affects the other.
 
-1. If `WRIX_DEPLOY_KEY` is set in the launcher's environment and points at an
-   existing file, that path is the source.
-2. Else if `$HOME/.ssh/deploy_keys/<name>` exists, that path is the source.
-3. Else the deploy key is not mounted.
+1. If `WRIX_DEPLOY_KEY` is set in the launcher's environment, it is the only
+   candidate. Use it if it names an existing file; otherwise fail before service
+   or container startup, naming the key and invalid source path.
+2. Only when `WRIX_DEPLOY_KEY` is unset, use `$HOME/.ssh/deploy_keys/<name>` if
+   that file exists.
+3. If that fallback is also absent, fail before service or container startup,
+   naming the granted but unresolved key.
 
-If `WRIX_DEPLOY_KEY` is set but the pointed-at file does not exist, the launcher
-**fails loudly** (non-zero exit before the container starts, with a stderr
-message naming the missing path) rather than silently falling through to the
-`$HOME` path. A set-but-missing env var indicates a parent-process mistake the
-operator wants to see, not a recoverable condition. Same for `WRIX_SIGNING_KEY`.
+An ungranted key is not resolved, staged, mounted, or advertised through a child
+key-path environment variable, even if its host fallback exists or an ambient
+pointer is set. A host pointer selects a source; it is not a grant. Provider
+credentials remain subject to their separate policy below.
 
-**Spawn mode requires both keys.** The rule-3 no-mount fall-through (silent
-keyless boot) applies only to interactive `wrix run`. Under `wrix spawn` — the
-non-interactive path loom uses for loop agents — an unresolved key (no env
-pointer _and_ no `$HOME/.ssh/deploy_keys/` fallback) is fail-loud: the launcher
-exits non-zero before the container starts, naming the unresolved key. A loop
-agent that boots keyless cannot sign or push and only discovers the gap at
-land-the-plane time, after its work is done and lost when the container exits;
-failing at launch turns a wasted agent run into an immediate, actionable error.
-The deploy key is always required under spawn; the signing key is required
-unless `WRIX_GIT_SIGN=0` disables commit signing, in which case an unresolved
-signing key is not fail-loud (a keyless boot still needs the deploy key to
-push).
-
-This precedence exists to support **nested sandboxes**: a parent wrix container
-can spawn a child wrix container, injecting keys at arbitrary host paths and
-passing those paths through `WRIX_DEPLOY_KEY` / `WRIX_SIGNING_KEY`. Without this
-rule the child would boot without keys (the parent's `$HOME` has no
-`~/.ssh/deploy_keys/`), agents would produce unsigned commits, and `git push`
-would fail.
+The same rules apply to `run` and `spawn`, including nested launches. A trusted
+parent may supply key source pointers for a child, but the child still needs an
+effective grant. Wrix does not inherit publishing authority merely because the
+caller is an orchestrator.
 
 **In-container delivery is fixed.** `sandbox.md` owns deploy-key-name
 validation, mount destinations, and the child environment values. The security
@@ -123,9 +123,12 @@ SSH directories or compatibility config/known-hosts files, directory modes are
 `0700` and `config` / `known_hosts` file modes are `0600`.
 
 Commit signing follows the same context-resolution rule through the signing key
-(`WRIX_SIGNING_KEY` or `$HOME/.ssh/deploy_keys/<name>-signing`). Signing is
-default-on for initialized repositories; missing signing material is a hard
-failure unless the operator explicitly disables signing.
+(`WRIX_SIGNING_KEY` or `$HOME/.ssh/deploy_keys/<name>-signing`) when enabled
+under `cli.md` policy. Missing requested signing material is a hard failure.
+Inside a sandbox, the effective sign grant controls default Git signing even if
+the mounted repository has different host signing configuration. This is an
+execution-local override: it does not rewrite the repository's shared Git
+configuration or affect concurrent host sessions.
 
 **Trust model.** The launcher's parent process is trusted to choose the host
 source path. The launcher's only validation is presence (`[ -f ]`); it performs
@@ -254,36 +257,75 @@ resolution, IPv6 policy, and fail-closed `capsh` capability drop) are owned by
 
 ### Audit Trail
 
-Policy-leakage detection is anchored in the selected **agent's own session
-transcript** when the runtime produces one. Claude uses `/workspace/.claude/`,
-Pi uses `/workspace/.pi/agent/sessions`, and an external direct runner owns any
-transcript it persists under its `/workspace` session root. Wrix's placeholder
-direct runner does not synthesize intent or reasoning content. At every session
-termination, including setup failure and signals, wrix writes a
-**session-metadata index** to a collision-resistant, timestamp-prefixed JSON
-file under `/workspace/.wrix/log/` containing:
+The selected **agent's own session transcript**, when present, is evidence for
+investigating policy leakage. Claude uses `/workspace/.claude/`, Pi uses
+`/workspace/.pi/agent/sessions`, and a consumer direct runner owns any
+transcript it persists. Wrix does not synthesize conversation content for
+runtimes that provide none.
 
-- `timestamp_start`, `timestamp_end`, `duration_seconds`
-- `exit_code`, `mode`
-- `bead_id` (read from the mounted orchestrator `SpawnConfig`; null in
-  non-orchestrated sessions)
-- `wrix_session_id`, `claude_session_id`
-- `agent_session_dir` — pointer to the selected runtime's session root
+The host launcher writes an **execution-metadata index** after validating the
+launch inputs and before starting workspace services, container setup, or agent
+work. Each execution gets one collision-resistant, timestamp-prefixed JSON file
+under the selected workspace's `.wrix/log/`, visible inside the container as
+`/workspace/.wrix/log/`. Failure to establish this initial record prevents
+execution rather than allowing unindexed work.
 
-The index is the **audit anchor**; a runtime-provided agent transcript is the
-**audit content**. Together they are Wrix's authoritative security audit surface
-for transcript-producing runtimes. The index remains authoritative session
-metadata when a placeholder direct runtime produces no transcript. It is the
-smallest artefact that makes a session findable post-hoc (by bead, by time, by
-exit code); only a real agent transcript is rich enough to reason about what the
-agent intended at each step.
+The record contains:
 
-Wrix deliberately does not synthesize a parallel global syscall-level or
-tool-call-level audit log. When the selected runtime provides a transcript, it
-already contains intent, reasoning, and outcome at the granularity that matters
-for policy leakage; OS-level audit (strace, process tree) would only add value
-against an adversarial agent that hides its actions from its own transcript — a
-different threat class.
+- `execution_id` — unique string for this launch attempt, not a conversation or
+  terminal identity
+- `state` — `"incomplete"` until the launcher's terminal outcome is recorded,
+  then `"completed"`, whether the attempt succeeded or failed
+- `timestamp_start` — UTC timestamp string; `timestamp_end` and
+  `duration_seconds` are null until completion, then a UTC timestamp and a
+  nonnegative number
+- `exit_code` — integer exit code observed from the foreground container-runtime
+  command (`podman run` or Apple `container run`), otherwise null
+- `signal` — signal name, such as `SIGTERM`, when the launcher observes that
+  runtime command terminated by a signal, otherwise null
+- `mode` — `"run"` or `"spawn"`; `agent_kind` — the selected runtime kind
+- `bead_id` — orchestrator-provided issue identifier or null
+- `agent_session_id` — runtime-reported conversation identifier or null
+- `agent_session_dir` — session-root absolute path in the container's filesystem
+  when known, otherwise null; `/workspace/...` maps to the selected host
+  workspace, not the host's literal `/workspace` directory
+- `focus_target` — the optional opaque terminal target used by the notification
+  system, or null; never used as an execution or conversation identifier
+
+Completion updates the same file atomically. `"completed"` means the launcher
+recorded the end of its attempt, not that the attempt succeeded or that Wrix
+independently verified every container process stopped. A setup/launch failure
+before a container-runtime status is available completes the record with null
+`exit_code` and `signal`; the launcher still reports the failure.
+
+Exit metadata describes that runtime command, not a separately observed agent
+process. An ordinary numeric exit such as `137` remains an exit code; Wrix does
+not infer a signal from `128 + signal-number`. Known session roots use container
+coordinates consistently, including for direct runners; a path outside
+`/workspace` requires its declared mount mapping for host access.
+
+In both launch modes, an unavailable completion update produces a stderr
+diagnostic and leaves the record incomplete. It does not replace an observed
+runtime status with a metadata error: successful and failed runtime outcomes
+retain their caller-visible status. If launch failed before a runtime status was
+available, the original launch failure remains caller-visible.
+
+Concurrent executions never overwrite each other's records. Optional
+conversation fields are populated only from information attributable to that
+execution, not the latest unrelated transcript in a shared directory.
+
+An incomplete record means completion was not recorded, not that the process is
+definitely running or definitely stopped. A killed launcher or host failure may
+leave it incomplete permanently; Wrix does not fabricate an exit status, claim a
+shell trap handles every failure, or automatically recover that work. No
+independent environment lifecycle or environment identity is introduced.
+
+The index is the **audit anchor** and a runtime transcript is the available
+**audit content**. Neither is an exhaustive audit: codemode may expose only a
+selected summary while intermediate tool results and side effects remain outside
+the recorded content. Missing transcript evidence is not evidence that an action
+did not occur. Wrix does not synthesize a parallel global syscall log,
+nested-tool recorder, or diagnostic aggregator.
 
 Individual components may expose focused diagnostic artifacts as an explicit,
 default-off feature that the operator enables by configuring a destination.
@@ -309,22 +351,22 @@ section is a reference index only.
 - **Project Nix cache boundary** — `services.md`
 - **Host repository Git bootstrap** — `cli.md`
 - **Unsafe host container-runtime control** — `sandbox.md`
-- **tmux component diagnostics** — `tmux-mcp.md`
 
 ## Success Criteria
 
-- When the launcher's environment sets `WRIX_DEPLOY_KEY` and `WRIX_SIGNING_KEY`
-  to existing files outside `$HOME/.ssh/deploy_keys/`, the child container
-  observes both env vars and files at the sandbox-owned in-container
-  destinations, and `git commit` in the child produces a commit whose
-  `git cat-file -p HEAD` output contains a non-empty `gpgsig` field.
-  [system](test-ci:test-security-nested-key-propagation)
-- A fresh spawned sandbox configures global `user.name` / `user.email`, installs
-  pinned GitHub host keys at `/etc/ssh/ssh_known_hosts`, uses the mounted deploy
-  key with strict host-key checking for GitHub SSH, makes an empty signed
-  commit, and verifies that commit as a good SSH signature without manual
-  `ssh-keyscan` or `git config`.
-  [system](test-ci:test-security-git-ssh-bootstrap)
+- When both Git grants are explicitly enabled and the launcher's environment
+  sets `WRIX_DEPLOY_KEY` and `WRIX_SIGNING_KEY` to existing files outside
+  `$HOME/.ssh/deploy_keys/`, the child container observes both env vars and
+  files at the sandbox-owned in-container destinations, and `git commit` in the
+  child produces a commit whose `git cat-file -p HEAD` output contains a
+  non-empty `gpgsig` field.
+  [system?](test-ci:test-security-explicit-nested-key-grants)
+- A fresh spawned sandbox with both Git grants explicitly enabled configures
+  `user.name` / `user.email`, installs pinned GitHub host keys at
+  `/etc/ssh/ssh_known_hosts`, uses the mounted deploy key with strict host-key
+  checking for GitHub SSH, makes an empty signed commit, and verifies that
+  commit as a good SSH signature without manual `ssh-keyscan` or `git config`.
+  [system?](test-ci:test-security-explicit-git-ssh-bootstrap)
 - Wrix-initialized host Git, container Git, and Loom's independent
   `.loom/integration` clone all use context-resolved repo deploy/signing keys,
   strict pinned GitHub host-key verification, and no ambient user SSH
@@ -334,26 +376,55 @@ section is a reference index only.
 - Linux live-test images provide the production context-resolved Git helper, and
   their packaged tools can initialize, sign, and verify a repository.
   [system](test-ci:test-image-git-helper-parity)
-- When `WRIX_DEPLOY_KEY` or `WRIX_SIGNING_KEY` is set in the launcher's
-  environment but the pointed-at file does not exist, the launcher exits
-  non-zero with a stderr message naming the missing path, before the container
-  is started.
-  [test](../crates/wrix-sandbox/tests/launch.rs::missing_key_env_paths_fail_before_container_start)
-- Under `wrix spawn`, when the deploy key does not resolve (no env pointer and
-  no `$HOME/.ssh/deploy_keys/` fallback), the launcher exits non-zero before the
-  container starts. An unresolved signing key does the same unless
-  `WRIX_GIT_SIGN=0` explicitly disables signing. Both failures name the
-  unresolved key, while interactive `wrix run` permits the no-mount case.
-  [test](../crates/wrix-sandbox/tests/launch.rs::spawn_requires_resolved_keys_but_run_allows_missing_keys)
-- Every sandbox session, including setup failures and signal interruption,
-  contributes exactly one collision-resistant session-metadata index under
-  `/workspace/.wrix/log/`; all fields have their documented types,
-  orchestrator-provided `bead_id` is preserved, `agent_session_dir` resolves to
-  an existing directory, and same-workspace sessions starting within one UTC
-  second retain distinct files.
-  [system](test-ci:test-security-audit-trail-anchor)
+- A granted deploy or signing key with a missing explicit source fails even when
+  a valid fallback exists; with no explicit source, a missing fallback also
+  fails. Both failures name the unresolved key before services or containers
+  start, identically for run and spawn
+  [test?](../crates/wrix-sandbox/tests/launch.rs::granted_git_keys_are_required_before_startup)
+- With no grants, both launch modes succeed without Git keys and do not resolve
+  or stage ambient key sources; all four deploy/sign combinations deliver
+  exactly the granted keys independently
+  [test?](../crates/wrix-sandbox/tests/launch.rs::git_key_grants_are_independent_and_ambient_sources_do_not_grant)
+- Security documentation identifies repository Git policy as trusted, mutable
+  launch input whose modification can change grants on subsequent launches; it
+  does not describe key-delivery grants as an agent-resistant authorization
+  boundary
+  [judge?](../tests/judges/security.sh#test_repository_git_policy_trust_boundary)
+- Live Linux and Darwin sandbox launches expose exactly the granted private keys
+  and corresponding child environment paths, including signing-only and no-key
+  launches when host keys exist
+  [system?](test-ci:test-security-git-grant-isolation)
+- Effective sandbox signing policy overrides mounted host signing settings for
+  container Git only, permits unsigned commits with sign disabled, and leaves
+  shared repository config unchanged
+  [system?](test-ci:test-security-session-local-signing)
+- Each validated launch establishes one correctly typed execution record before
+  any service/container startup, preserves optional issue and focus identities,
+  and keeps concurrent same-second execution IDs and files distinct
+  [test?](../crates/wrix-sandbox/tests/execution_metadata.rs::launch_records_precede_work_and_do_not_collide)
+- A record-creation failure prevents work; observed success, failure, or signal
+  termination atomically completes the same record without inventing a
+  conversation identity
+  [test?](../crates/wrix-sandbox/tests/execution_metadata.rs::observed_termination_updates_the_original_record)
+- In both launch modes, a completion-update failure leaves the record incomplete
+  and emits a stderr diagnostic without replacing the observed runtime status or
+  the original pre-runtime launch failure
+  [test?](../crates/wrix-sandbox/tests/execution_metadata.rs::completion_update_errors_preserve_launch_outcome)
+- Exit metadata records the foreground runtime command's observed exit code or
+  signal without inferring agent status or decoding ordinary `128 + n` exit
+  codes as signals; failures without a runtime status complete with null status
+  fields rather than claiming success
+  [test?](../crates/wrix-sandbox/tests/execution_metadata.rs::metadata_status_tracks_the_container_runtime_command)
+- Known session roots are recorded as container-absolute paths for all agent
+  kinds, with `/workspace` mapped to the selected host workspace; unavailable
+  roots remain null rather than mixing host and container coordinates
+  [test?](../crates/wrix-sandbox/tests/execution_metadata.rs::session_roots_use_container_absolute_paths)
+- Live packaged launches retain an incomplete record after an abruptly killed
+  launcher and complete records for observed startup failures and normal exits;
+  agent-specific conversation information cannot leak between executions
+  [system?](test-ci:test-security-execution-metadata-lifecycle)
 - Explicit, default-off component diagnostics remain separate from the agent
-  transcript and session-metadata index: they are not automatically enabled,
+  transcript and execution-metadata index: they are not automatically enabled,
   indexed, synthesized, or aggregated as authoritative Wrix audit content, and
   their component/operator ownership boundary is explicit.
   [judge](../tests/judges/security.sh#test_scoped_component_diagnostics_policy)
@@ -396,22 +467,20 @@ section is a reference index only.
 - Host preparation rejects guest-controlled auth symlinks without reading or
   changing their targets.
   [test](command::launch::pi_auth::test::unsafe_shared_storage_is_rejected_without_touching_symlink_target)
-- A transcript-producing built-in agent, or an external direct runner that
-  persists its own transcript, provides fit-for-purpose audit content for the
-  stated policy-leakage threat model without claiming adversarial-agent
-  detection or content from Wrix's placeholder direct runner.
-  [judge](../tests/judges/security.sh#test_agent_transcript_audit_fit)
+- Audit documentation and metadata distinguish execution from conversation and
+  focus identities, treat absent completion as unknown, and describe transcripts
+  as non-exhaustive evidence without promising intermediate codemode outcomes,
+  automatic recovery, or adversarial-agent detection
+  [judge?](../tests/judges/security.sh#test_execution_and_transcript_evidence_limits)
 
 ## Requirements
 
 ### Functional
 
-1. **Host-source resolution precedence** — launcher resolves each key's host
-   source by env-first, `$HOME/.ssh/deploy_keys/`-second; independently per key;
-   fails loud if env is set but file does not exist. Under `wrix spawn`, an
-   unresolved deploy key is fail-loud, as is an unresolved signing key unless
-   `WRIX_GIT_SIGN=0`; interactive `run` permits the no-mount fall-through. (See
-   _Credential Surfaces_.)
+1. **Granted key resolution** — only granted keys are resolved, independently,
+   by env-first then `$HOME/.ssh/deploy_keys/` fallback. Every requested key is
+   required; unrequested keys are absent even when ambient sources exist. Run
+   and spawn obey the same rules in _Credential Surfaces_.
 2. **In-container key delivery** — after host-source resolution, the launcher
    uses the validation, mount, and child-environment contract owned by
    `sandbox.md`. Host source paths do not cross the boundary.
@@ -429,11 +498,10 @@ section is a reference index only.
    declarations serialize only validated names plus required/optional policy;
    neither channel contributes secret values to Nix evaluation, `ProfileConfig`,
    image config, or image layers.
-6. **Audit anchor** — every sandbox session writes one uniquely named
-   session-metadata index whose complete field set identifies the session and
-   whose `agent_session_dir` points at the selected runtime's session root. For
-   Claude and Pi that root contains the agent transcript; an external direct
-   runner owns any transcript content under its session root.
+6. **Audit anchor** — the host establishes one execution record before work and
+   atomically adds observed completion, as defined in _Audit Trail_.
+   Conversation metadata is optional and execution-specific; unobserved
+   completion remains incomplete rather than asserting success or recovery.
 7. **Scoped component diagnostics** — a component may emit operator-enabled,
    default-off diagnostics without changing the authoritative audit anchor. Wrix
    does not automatically index, synthesize, or aggregate those artifacts; the
@@ -447,10 +515,10 @@ section is a reference index only.
    ownership, mode, or content check.
 2. **Composability** — every wrix launcher behaves identically with respect to
    keys regardless of whether its parent is a shell or another wrix container.
-3. **Audit fit** — when a selected runtime produces an agent transcript, it is
-   treated as fit-for-purpose audit content for the stated threat model (policy
-   leakage from a misbehaving but not adversarial agent). Wrix's placeholder
-   direct runner supplies metadata only.
+3. **Audit limits** — transcripts are evidence for the policy-leakage threat
+   model, not exhaustive records of effects or intermediate tool results.
+   Runtimes without transcripts still have execution metadata, not synthesized
+   conversation content.
 
 ## Out of Scope
 
@@ -472,3 +540,16 @@ section is a reference index only.
   explicit cache populated by project-scoped publish rules, not a host-store
   view.
 - **Multi-tenant sharing** of a sandbox between operators.
+- **Credential brokering or a host-side agent supervisor** — provider
+  credentials retain the documented runtime-delivery model; the entire agent
+  remains inside the sandbox.
+- **Workload role presets, read-only workspace roles, or validated publishing
+  transactions** — Git grants control Wrix-managed key delivery, not arbitrary
+  credentials deliberately supplied by the trusted caller, workspace write
+  access, or what a granted repository key may do.
+- **Protecting Git grant policy from workspace writers** — repository policy is
+  trusted input; no independently secured authorization store or agent-resistant
+  policy boundary is provided.
+- **Automatic recovery, background lifecycle reconciliation, and power-loss
+  durability guarantees** — incomplete execution records expose uncertainty;
+  they do not restart work or restore transient processes.
