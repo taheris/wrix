@@ -9,7 +9,11 @@ use std::{
 
 use serde::Deserialize;
 use serde_json::Value;
-use wrix_core::deploy_key::{Name as KeyName, ParseError as KeyNameParseError};
+use wrix_core::{
+    deploy_key::{Name as KeyName, ParseError as KeyNameParseError},
+    git::remote::{Name as RemoteName, ParseError as RemoteNameParseError},
+    repository_policy,
+};
 
 const GITHUB_KNOWN_HOSTS: &str = concat!(
     "github.com ssh-ed25519 ",
@@ -64,7 +68,7 @@ pub fn run(
     }
 }
 
-pub const HELP: &str = "Initialize repository Git policy.\n\nUsage: wrix init [options]\n\nOptions:\n  --deploy         Generate and register GitHub keys; requires online verification.\n  --key <name>     Use <name> for deploy and signing keys (default: policy or <repo>-<host>).\n  --remote <name>  Use <name> for GitHub detection and verification (default: policy or origin).\n  --offline        Skip network and API checks; cannot be combined with --deploy.\n  --no-sign        Disable SSH commit signing, which is enabled by default.\n  --no-hooks       Skip prek hook setup (default: enabled when prek config exists).\n  --force          Replace conflicting key material and registrations when supported.\n  -h, --help       Print help.\n";
+pub const HELP: &str = "Initialize repository Git policy.\n\nUsage: wrix init [options]\n\nOptions:\n  --deploy         Provision GitHub deploy keys (and signing keys when enabled), not sandbox grants; requires online verification.\n  --key <name>     Use <name> for deploy and signing keys (default: policy or <repo>-<host>).\n  --remote <name>  Use <name> for GitHub detection and verification (default: policy or origin).\n  --offline        Skip network and API checks; cannot be combined with --deploy.\n  --sign           Enable SSH commit signing (default: policy or disabled); conflicts with --no-sign.\n  --no-sign        Disable SSH commit signing for this invocation; conflicts with --sign.\n  --no-hooks       Skip prek hook setup (default: enabled when prek config exists).\n  --force          Replace conflicting key material and registrations when supported.\n  -h, --help       Print help.\n";
 
 pub fn write_help(stdout: &mut impl Write) -> io::Result<()> {
     stdout.write_all(HELP.as_bytes())
@@ -81,30 +85,8 @@ fn parse_key_name(value: &str, origin: &'static str) -> Result<KeyName, Error> {
     KeyName::parse(value).map_err(|source| Error::InvalidKeyName { origin, source })
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct RemoteName(String);
-
-impl RemoteName {
-    fn parse(value: &str, origin: &'static str) -> Result<Self, Error> {
-        let value = value.trim();
-        if value.is_empty() || value.chars().any(char::is_whitespace) {
-            return Err(Error::InvalidRemoteName {
-                origin,
-                value: value.to_owned(),
-            });
-        }
-        Ok(Self(value.to_owned()))
-    }
-
-    fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Display for RemoteName {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0)
-    }
+fn parse_remote_name(value: &str, origin: &'static str) -> Result<RemoteName, Error> {
+    RemoteName::parse(value).map_err(|source| Error::InvalidRemoteName { origin, source })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -301,45 +283,6 @@ struct Flags {
     force: ForcePolicy,
 }
 
-#[derive(Debug, Default)]
-struct FilePolicy {
-    deploy_key: Option<KeyName>,
-    signing: Option<SigningPolicy>,
-    remote: Option<RemoteName>,
-    hooks: Option<HookPolicy>,
-    verification: Option<VerificationPolicy>,
-}
-
-#[derive(Default, Deserialize)]
-struct RawFilePolicy {
-    #[serde(default)]
-    wrix: RawWrixPolicy,
-}
-
-#[derive(Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawWrixPolicy {
-    #[serde(default)]
-    git: RawGitPolicy,
-    #[serde(default)]
-    init: RawInitPolicy,
-}
-
-#[derive(Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawGitPolicy {
-    deploy_key: Option<String>,
-    sign_commits: Option<bool>,
-    remote: Option<String>,
-}
-
-#[derive(Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawInitPolicy {
-    prek_hooks: Option<bool>,
-    online_verify: Option<bool>,
-}
-
 #[derive(Default)]
 struct ProfilePolicy {
     deploy_key: Option<KeyName>,
@@ -531,7 +474,7 @@ impl Plan {
         writeln!(stdout, "wrix init: repository policy resolved")?;
         writeln!(stdout, "repo: {}", self.root.display())?;
         writeln!(stdout, "deploy_key: {}", self.key_name)?;
-        writeln!(stdout, "sign_commits: {}", self.signing.as_bool())?;
+        writeln!(stdout, "sign: {}", self.signing.as_bool())?;
         writeln!(stdout, "remote: {}", self.remote)?;
         writeln!(stdout, "prek_hooks: {}", self.hooks.as_bool())?;
         writeln!(stdout, "online_verify: {}", self.verification.as_bool())?;
@@ -548,29 +491,34 @@ fn build_plan(profile_config_path: Option<&Path>, args: &[String]) -> Result<Pla
 
     let current_dir = env::current_dir().map_err(Error::CurrentDir)?;
     let root = git_root(&current_dir)?;
-    let file_policy = load_file_policy(&root.join("wrix.toml"))?;
+    let file_policy = repository_policy::read(&root)?;
     let profile_policy = load_profile_policy(profile_config_path)?;
 
     let key_name = flags
         .key_name
-        .or(file_policy.deploy_key)
+        .or(file_policy.git.deploy_key)
         .or(profile_policy.deploy_key)
         .map_or_else(|| derive_key_name(&root), Ok)?;
     let signing = flags
         .signing
-        .or(file_policy.signing)
-        .unwrap_or(SigningPolicy::Enabled);
+        .or_else(|| file_policy.git.sign.map(SigningPolicy::from_bool))
+        .unwrap_or(SigningPolicy::Disabled);
     let remote = flags
         .remote
-        .or(file_policy.remote)
-        .unwrap_or_else(|| RemoteName(String::from("origin")));
+        .or(file_policy.git.remote)
+        .map_or_else(|| parse_remote_name("origin", "default remote"), Ok)?;
     let hooks = flags
         .hooks
-        .or(file_policy.hooks)
+        .or_else(|| file_policy.init.prek_hooks.map(HookPolicy::from_bool))
         .unwrap_or_else(|| HookPolicy::from_bool(root.join(".pre-commit-config.yaml").is_file()));
     let verification = flags
         .verification
-        .or(file_policy.verification)
+        .or_else(|| {
+            file_policy
+                .init
+                .online_verify
+                .map(VerificationPolicy::from_bool)
+        })
         .unwrap_or(VerificationPolicy::Online);
 
     if flags.deploy.enabled() && verification == VerificationPolicy::Offline {
@@ -642,20 +590,24 @@ fn parse_flags(args: &[String]) -> Result<Flags, Error> {
                     flag: "--remote",
                     value_name: "<name>",
                 })?;
-                flags.remote = Some(RemoteName::parse(value, "--remote")?);
+                flags.remote = Some(parse_remote_name(value, "--remote")?);
                 index += 2;
             }
             value if value.starts_with("--remote=") => {
                 let value = value.trim_start_matches("--remote=");
-                flags.remote = Some(RemoteName::parse(value, "--remote")?);
+                flags.remote = Some(parse_remote_name(value, "--remote")?);
                 index += 1;
             }
             "--offline" => {
                 flags.verification = Some(VerificationPolicy::Offline);
                 index += 1;
             }
-            "--no-sign" => {
-                flags.signing = Some(SigningPolicy::Disabled);
+            "--sign" | "--no-sign" => {
+                let signing = SigningPolicy::from_bool(args[index] == "--sign");
+                if flags.signing.is_some_and(|existing| existing != signing) {
+                    return Err(Error::ConflictingSignFlags);
+                }
+                flags.signing = Some(signing);
                 index += 1;
             }
             "--no-hooks" => {
@@ -2181,47 +2133,6 @@ fn load_profile_policy(path: Option<&Path>) -> Result<ProfilePolicy, Error> {
     Ok(ProfilePolicy { deploy_key })
 }
 
-fn load_file_policy(path: &Path) -> Result<FilePolicy, Error> {
-    if !path.exists() {
-        return Ok(FilePolicy::default());
-    }
-    let content = fs::read_to_string(path).map_err(|source| Error::ConfigIo {
-        path: path_string(path),
-        source,
-    })?;
-    parse_file_policy(path, &content)
-}
-
-fn parse_file_policy(path: &Path, content: &str) -> Result<FilePolicy, Error> {
-    let raw = toml::from_str::<RawFilePolicy>(content).map_err(|source| Error::ConfigToml {
-        path: path_string(path),
-        source,
-    })?;
-    Ok(FilePolicy {
-        deploy_key: raw
-            .wrix
-            .git
-            .deploy_key
-            .as_deref()
-            .map(|value| parse_key_name(value, "wrix.git.deploy_key"))
-            .transpose()?,
-        signing: raw.wrix.git.sign_commits.map(SigningPolicy::from_bool),
-        remote: raw
-            .wrix
-            .git
-            .remote
-            .as_deref()
-            .map(|value| RemoteName::parse(value, "wrix.git.remote"))
-            .transpose()?,
-        hooks: raw.wrix.init.prek_hooks.map(HookPolicy::from_bool),
-        verification: raw
-            .wrix
-            .init
-            .online_verify
-            .map(VerificationPolicy::from_bool),
-    })
-}
-
 fn path_string(path: &Path) -> String {
     path.display().to_string()
 }
@@ -2244,8 +2155,13 @@ enum Error {
         origin: &'static str,
         source: KeyNameParseError,
     },
-    /// {origin} must be a non-empty Git remote name without whitespace: {value}
-    InvalidRemoteName { origin: &'static str, value: String },
+    /// invalid {origin}: {source}
+    InvalidRemoteName {
+        origin: &'static str,
+        source: RemoteNameParseError,
+    },
+    /// --sign cannot be combined with --no-sign
+    ConflictingSignFlags,
     /// --deploy cannot be used with --offline because deploy provisioning requires online verification
     DeployOfflineFlag,
     /// --deploy requires online verification; remove --deploy or set wrix.init.online_verify = true
@@ -2423,23 +2339,16 @@ enum Error {
         path: String,
         source: serde_json::Error,
     },
-    /// cannot read {path}: {source}
-    ConfigIo { path: String, source: io::Error },
-    /// invalid TOML in {path}: {source}
-    ConfigToml {
-        path: String,
-        source: toml::de::Error,
-    },
+    /// {0}
+    RepositoryPolicy(#[from] repository_policy::ReadError),
 }
 
 #[cfg(test)]
 mod test {
-    use std::path::Path;
-
     use super::{
-        DeployPolicy, FilePolicy, ForcePolicy, HookPolicy, KeyName, OnlineFailure, RemoteKeyId,
-        RemoteName, SigningPolicy, VerificationPolicy, classify_online_failure, parse_file_policy,
-        parse_flags, parse_github_remote,
+        DeployPolicy, ForcePolicy, HookPolicy, KeyName, OnlineFailure, RemoteKeyId, RemoteName,
+        SigningPolicy, VerificationPolicy, classify_online_failure, parse_flags,
+        parse_github_remote,
     };
 
     #[test]
@@ -2457,45 +2366,11 @@ mod test {
         let flags = parse_flags(&args).unwrap();
         assert_eq!(flags.deploy, DeployPolicy::Provision);
         assert_eq!(flags.key_name, Some(KeyName::parse("repo-key").unwrap()));
-        assert_eq!(flags.remote, Some(RemoteName(String::from("upstream"))));
+        assert_eq!(flags.remote, Some(RemoteName::parse("upstream").unwrap()));
         assert_eq!(flags.verification, Some(VerificationPolicy::Offline));
         assert_eq!(flags.signing, Some(SigningPolicy::Disabled));
         assert_eq!(flags.hooks, Some(HookPolicy::Disabled));
         assert_eq!(flags.force, ForcePolicy::Replace);
-    }
-
-    #[test]
-    fn wrix_toml_parses_supported_policy_keys() {
-        let content = r"
-[wrix.git]
-deploy_key = 'toml-key'
-sign_commits = false
-remote = 'upstream'
-
-[wrix.init]
-prek_hooks = false
-online_verify = false
-";
-        let policy = parse_file_policy(Path::new("wrix.toml"), content).unwrap();
-        assert_policy(
-            &policy,
-            Some(&KeyName::parse("toml-key").unwrap()),
-            Some(SigningPolicy::Disabled),
-            Some(&RemoteName(String::from("upstream"))),
-            Some(HookPolicy::Disabled),
-            Some(VerificationPolicy::Offline),
-        );
-    }
-
-    #[test]
-    fn wrix_toml_rejects_duplicate_policy_keys() {
-        let content = r"
-[wrix.git]
-deploy_key = 'first-key'
-deploy_key = 'second-key'
-";
-        let error = parse_file_policy(Path::new("wrix.toml"), content).unwrap_err();
-        assert!(error.to_string().contains("duplicate key"));
     }
 
     #[test]
@@ -2554,20 +2429,5 @@ deploy_key = 'second-key'
         ] {
             assert!(parse_github_remote(url).is_err(), "accepted {url}");
         }
-    }
-
-    fn assert_policy(
-        policy: &FilePolicy,
-        deploy_key: Option<&KeyName>,
-        signing: Option<SigningPolicy>,
-        remote: Option<&RemoteName>,
-        hooks: Option<HookPolicy>,
-        verification: Option<VerificationPolicy>,
-    ) {
-        assert_eq!(policy.deploy_key.as_ref(), deploy_key);
-        assert_eq!(policy.signing, signing);
-        assert_eq!(policy.remote.as_ref(), remote);
-        assert_eq!(policy.hooks, hooks);
-        assert_eq!(policy.verification, verification);
     }
 }

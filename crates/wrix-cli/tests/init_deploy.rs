@@ -10,7 +10,7 @@ use common::{
 };
 
 #[test]
-fn github_deploy_and_signing_keys() -> TestResult {
+fn explicit_deploy_and_sign_provision_both_keys() -> TestResult {
     let fixture = DeployFixture::new()?;
     let repo = setup_committed_repo("deploy-target", false)?;
     let home = fixture.home("initial");
@@ -18,12 +18,12 @@ fn github_deploy_and_signing_keys() -> TestResult {
     let result = fixture.run_init(
         repo.path(),
         &home,
-        &["--deploy", "--key", "deploy-key", "--no-hooks"],
+        &["--deploy", "--sign", "--key", "deploy-key", "--no-hooks"],
     )?;
 
     assert_success_with_clean_stderr(&result);
     assert_contains("deploy output", &result.stdout, "deploy: true");
-    assert_contains("deploy output", &result.stdout, "sign_commits: true");
+    assert_contains("deploy output", &result.stdout, "sign: true");
     let deploy_key = home.join(".ssh/deploy_keys/deploy-key");
     let signing_key = home.join(".ssh/deploy_keys/deploy-key-signing");
     for path in [
@@ -42,6 +42,13 @@ fn github_deploy_and_signing_keys() -> TestResult {
     assert_eq!(mode(&home.join(".ssh/deploy_keys"))?, 0o700);
     assert_eq!(mode(&deploy_key)?, 0o600);
     assert_eq!(mode(&signing_key)?, 0o600);
+    assert_eq!(mode(&deploy_key.with_extension("pub"))?, 0o644);
+    assert_eq!(mode(&signing_key.with_extension("pub"))?, 0o644);
+    assert_ne!(public_key(&deploy_key)?, public_key(&signing_key)?);
+    assert!(!repo.path().join("wrix.toml").exists());
+    let grants = wrix_core::repository_policy::read(repo.path())?.git;
+    assert!(!grants.deploy_enabled());
+    assert!(!grants.sign_enabled());
 
     assert_eq!(fixture.state_value("deploy_key")?, public_key(&deploy_key)?);
     assert_eq!(
@@ -71,11 +78,133 @@ fn github_deploy_and_signing_keys() -> TestResult {
 }
 
 #[test]
+fn deploy_provisioning_does_not_grant_sandbox_credentials() -> TestResult {
+    for policy in [None, Some("[wrix.git]\ndeploy = false\nsign = false\n")] {
+        let fixture = DeployFixture::new()?;
+        let repo = setup_committed_repo("deploy-without-grants", false)?;
+        let home = fixture.home("deploy-only");
+        if let Some(policy) = policy {
+            fs::write(repo.path().join("wrix.toml"), policy)?;
+        }
+        let args = ["--deploy", "--key", "deploy-key", "--no-hooks"];
+        let result = fixture.run_init(repo.path(), &home, &args)?;
+        assert_success_with_clean_stderr(&result);
+        assert_contains("deploy-only output", &result.stdout, "sign: false");
+        let deploy_key = home.join(".ssh/deploy_keys/deploy-key");
+        assert_eq!(fixture.state_value("deploy_key")?, public_key(&deploy_key)?);
+        assert_eq!(mode(&deploy_key)?, 0o600);
+        assert_absent(&home.join(".ssh/deploy_keys/deploy-key-signing"));
+        assert_absent(&home.join(".ssh/deploy_keys/deploy-key-signing.pub"));
+        assert_absent(&fixture.gh_state.join("signing_key"));
+        assert_absent(&repo.path().join(".git/wrix/allowed_signers"));
+        let log = fs::read_to_string(&fixture.gh_log)?;
+        assert_contains(
+            "deploy-only registration",
+            &log,
+            "POST repos/example/deploy-without-grants/keys",
+        );
+        assert_contains("deploy-only registration", &log, "read_only=false");
+        assert_not_contains("deploy-only registration", &log, "user/ssh_signing_keys");
+        assert_not_contains(
+            "deploy-only key generation",
+            &fs::read_to_string(&fixture.ssh_keygen_log)?,
+            "wrix signing key",
+        );
+        let grants = wrix_core::repository_policy::read(repo.path())?.git;
+        assert!(!grants.deploy_enabled());
+        assert!(!grants.sign_enabled());
+        if let Some(policy) = policy {
+            assert_eq!(fs::read_to_string(repo.path().join("wrix.toml"))?, policy);
+        } else {
+            assert_absent(&repo.path().join("wrix.toml"));
+        }
+        let original_key = fs::read(&deploy_key)?;
+        fixture.clear_gh_log()?;
+        assert_success_with_clean_stderr(&fixture.run_init(repo.path(), &home, &args)?);
+        assert_eq!(fs::read(&deploy_key)?, original_key);
+        fixture.assert_no_remote_mutation("deploy-only reuse")?;
+    }
+
+    let fixture = DeployFixture::new()?;
+    let repo = setup_committed_repo("deploy-grant-not-provisioning", false)?;
+    let home = fixture.home("grant-only");
+    let policy = "[wrix.git]\ndeploy = true\n";
+    fs::write(repo.path().join("wrix.toml"), policy)?;
+    let result = fixture.run_init(repo.path(), &home, &["--key", "deploy-key", "--no-hooks"])?;
+    assert_failure_with_clean_stdout(&result);
+    assert_contains(
+        "grant without provisioning",
+        &result.stderr,
+        "fallback deploy key does not exist",
+    );
+    assert_absent(&home);
+    fixture.assert_gh_log_empty("grant without provisioning")?;
+    assert_eq!(fs::read_to_string(&fixture.ssh_keygen_log)?, "");
+    assert_eq!(fs::read_to_string(repo.path().join("wrix.toml"))?, policy);
+    Ok(())
+}
+
+#[test]
+fn provisioning_honors_repository_signing_policy() -> TestResult {
+    let fixture = DeployFixture::new()?;
+    let repo = setup_committed_repo("deploy-signing-policy", false)?;
+    let home = fixture.home("policy-signing");
+    let policy = "[wrix.git]\ndeploy = false\nsign = true\n";
+    fs::write(repo.path().join("wrix.toml"), policy)?;
+    let result = fixture.run_init(
+        repo.path(),
+        &home,
+        &["--deploy", "--key", "deploy-key", "--no-hooks"],
+    )?;
+    assert_success_with_clean_stderr(&result);
+    assert_eq!(
+        fixture.state_value("signing_key")?,
+        public_key(&home.join(".ssh/deploy_keys/deploy-key-signing"))?
+    );
+    assert_eq!(fs::read_to_string(repo.path().join("wrix.toml"))?, policy);
+    assert!(
+        !wrix_core::repository_policy::read(repo.path())?
+            .git
+            .deploy_enabled()
+    );
+    Ok(())
+}
+
+#[test]
+fn no_sign_provisioning_overrides_repository_signing_policy() -> TestResult {
+    let fixture = DeployFixture::new()?;
+    let repo = setup_committed_repo("deploy-no-sign-override", false)?;
+    let home = fixture.home("no-sign-override");
+    let policy = "[wrix.git]\ndeploy = false\nsign = true\n";
+    fs::write(repo.path().join("wrix.toml"), policy)?;
+    let result = fixture.run_init(
+        repo.path(),
+        &home,
+        &["--deploy", "--no-sign", "--key", "deploy-key", "--no-hooks"],
+    )?;
+    assert_success_with_clean_stderr(&result);
+    assert_contains("no-sign provisioning", &result.stdout, "sign: false");
+    assert_eq!(
+        fixture.state_value("deploy_key")?,
+        public_key(&home.join(".ssh/deploy_keys/deploy-key"))?
+    );
+    assert_absent(&home.join(".ssh/deploy_keys/deploy-key-signing"));
+    assert_absent(&home.join(".ssh/deploy_keys/deploy-key-signing.pub"));
+    assert_not_contains(
+        "no-sign provisioning",
+        &fs::read_to_string(&fixture.gh_log)?,
+        "user/ssh_signing_keys",
+    );
+    assert_eq!(fs::read_to_string(repo.path().join("wrix.toml"))?, policy);
+    Ok(())
+}
+
+#[test]
 fn matching_deploy_keys_are_reused() -> TestResult {
     let fixture = DeployFixture::new()?;
     let repo = setup_committed_repo("deploy-reuse", false)?;
     let home = fixture.home("reuse");
-    let args = ["--deploy", "--key", "deploy-key", "--no-hooks"];
+    let args = ["--deploy", "--sign", "--key", "deploy-key", "--no-hooks"];
     assert_success_with_clean_stderr(&fixture.run_init(repo.path(), &home, &args)?);
     let deploy_key = home.join(".ssh/deploy_keys/deploy-key");
     let signing_key = home.join(".ssh/deploy_keys/deploy-key-signing");
@@ -99,7 +228,7 @@ fn legacy_setup_signing_registration_is_reused_without_rotation() -> TestResult 
     let fixture = DeployFixture::new()?;
     let repo = setup_committed_repo("legacy-deploy-setup", false)?;
     let home = fixture.home("legacy-setup");
-    let args = ["--deploy", "--key", "deploy-key", "--no-hooks"];
+    let args = ["--deploy", "--sign", "--key", "deploy-key", "--no-hooks"];
     assert_success_with_clean_stderr(&fixture.run_init(repo.path(), &home, &args)?);
     let deploy_key = home.join(".ssh/deploy_keys/deploy-key");
     let signing_key = home.join(".ssh/deploy_keys/deploy-key-signing");
@@ -120,7 +249,7 @@ fn local_key_conflict_requires_force() -> TestResult {
     let fixture = DeployFixture::new()?;
     let repo = setup_committed_repo("deploy-local-conflict", false)?;
     let home = fixture.home("local-conflict");
-    let args = ["--deploy", "--key", "deploy-key", "--no-hooks"];
+    let args = ["--deploy", "--sign", "--key", "deploy-key", "--no-hooks"];
     assert_success_with_clean_stderr(&fixture.run_init(repo.path(), &home, &args)?);
     let deploy_key = home.join(".ssh/deploy_keys/deploy-key");
     set_mode(&deploy_key, 0o644)?;
@@ -140,7 +269,14 @@ fn local_key_conflict_requires_force() -> TestResult {
     let replaced = fixture.run_init(
         repo.path(),
         &home,
-        &["--deploy", "--key", "deploy-key", "--no-hooks", "--force"],
+        &[
+            "--deploy",
+            "--sign",
+            "--key",
+            "deploy-key",
+            "--no-hooks",
+            "--force",
+        ],
     )?;
     assert_success_with_clean_stderr(&replaced);
     assert_contains("force output", &replaced.stdout, "force: true");
@@ -164,7 +300,7 @@ fn remote_key_conflict_requires_force() -> TestResult {
     let fixture = DeployFixture::new()?;
     let repo = setup_committed_repo("deploy-remote-conflict", false)?;
     let home = fixture.home("remote-conflict");
-    let args = ["--deploy", "--key", "deploy-key", "--no-hooks"];
+    let args = ["--deploy", "--sign", "--key", "deploy-key", "--no-hooks"];
     assert_success_with_clean_stderr(&fixture.run_init(repo.path(), &home, &args)?);
     let conflict_key = fixture.directory.path().join("conflict-key");
     write_ed25519_key(&conflict_key)?;
@@ -190,7 +326,14 @@ fn remote_key_conflict_requires_force() -> TestResult {
     let replaced = fixture.run_init(
         repo.path(),
         &home,
-        &["--deploy", "--key", "deploy-key", "--no-hooks", "--force"],
+        &[
+            "--deploy",
+            "--sign",
+            "--key",
+            "deploy-key",
+            "--no-hooks",
+            "--force",
+        ],
     )?;
     assert_success_with_clean_stderr(&replaced);
     assert_contains("remote force output", &replaced.stdout, "force: true");

@@ -38,7 +38,7 @@ fn outer_init_leaves_independent_loom_integration_clone_unchanged() -> TestResul
     let mut command = wrix_command(repo.path())?;
     command
         .arg("init")
-        .args(["--offline", "--key", "common-key"])
+        .args(["--offline", "--sign", "--key", "common-key"])
         .env("HOME", &home);
     let result = run_command(&mut command)?;
     assert_success_with_clean_stderr(&result);

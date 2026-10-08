@@ -84,6 +84,7 @@ fn root_and_subcommand_help() -> TestResult {
     assert_contains("init help", &init.stdout, "Usage: wrix init");
     assert_contains("init help", &init.stdout, "--deploy");
     assert_contains("init help", &init.stdout, "--offline");
+    assert_eq!(init.stdout, include_str!("snapshots/init_help.txt"));
 
     Ok(())
 }
@@ -135,6 +136,7 @@ fn public_flags_have_descriptions() -> TestResult {
                 "--key <name>",
                 "--remote <name>",
                 "--offline",
+                "--sign",
                 "--no-sign",
                 "--no-hooks",
                 "--force",
@@ -190,6 +192,44 @@ fn missing_init_flag_value_is_non_mutating() -> TestResult {
     assert_contains("missing key", &result.stderr, "--key requires <name>");
     assert_contains("missing key", &result.stderr, "Usage: wrix init");
     assert_eq!(before, git_config(repo.path())?);
+    Ok(())
+}
+
+#[test]
+fn conflicting_sign_flags_are_non_mutating() -> TestResult {
+    let repo = setup_repo("cli-conflicting-sign-flags")?;
+    let home = tempfile::Builder::new()
+        .prefix("cli-sign-conflict-home")
+        .tempdir()?;
+    let policy = "[wrix.git]\nsign = true\n";
+    fs::write(repo.path().join("wrix.toml"), policy)?;
+    let before = git_config(repo.path())?;
+
+    for flags in [["--sign", "--no-sign"], ["--no-sign", "--sign"]] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_wrix"));
+        command
+            .current_dir(repo.path())
+            .args(["init", "--deploy"])
+            .args(flags)
+            .env("HOME", home.path())
+            .env("PATH", "");
+        let result = run_wrix_command(&mut command)?;
+        assert_failure_with_clean_stdout(&result);
+        assert_contains(
+            "conflicting signing flags",
+            &result.stderr,
+            "--sign cannot be combined with --no-sign",
+        );
+        assert_contains(
+            "conflicting signing flags",
+            &result.stderr,
+            "Usage: wrix init",
+        );
+        assert_eq!(before, git_config(repo.path())?);
+        assert_eq!(fs::read_to_string(repo.path().join("wrix.toml"))?, policy);
+        assert!(!repo.path().join(".git/wrix").exists());
+        assert_eq!(fs::read_dir(home.path())?.count(), 0);
+    }
     Ok(())
 }
 

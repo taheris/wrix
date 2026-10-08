@@ -26,7 +26,7 @@ fn repeated_init_does_not_churn_managed_state() -> TestResult {
     let gh_log = fixture.path().join("gh.log");
     let fake_gh = write_fake_gh(&fixture.path().join("fake-gh"), &gh_state, &gh_log)?;
     let hooks = write_prek_hooks(&fixture.path().join("hooks"))?;
-    let args = ["--deploy", "--key", "stable-key"];
+    let args = ["--deploy", "--sign", "--key", "stable-key"];
     let initial_objects = git_object_state(repo.path())?;
 
     let first = run_init(repo.path(), &home, &fake_git, &fake_gh, &hooks, &args)?;

@@ -326,31 +326,31 @@ separately from host-key failure.
   [test](../crates/wrix-cli/tests/init_verify.rs::worktree_transport_override_fails_verification)
 - Repository Git policy defaults both `deploy` and `sign` to false; explicit
   values are independent, and key identity alone does not grant credentials
-  [test?](../crates/wrix-cli/tests/init_config.rs::git_grants_are_independent_and_default_false)
+  [test](../crates/wrix-cli/tests/init_config.rs::git_grants_are_independent_and_default_false)
 - The policy reader rejects malformed grants and the unsupported `sign_commits`
   spelling before repository mutation
-  [test?](../crates/wrix-cli/tests/init_config.rs::invalid_and_retired_git_grants_are_rejected)
+  [test](../crates/wrix-cli/tests/init_config.rs::invalid_and_retired_git_grants_are_rejected)
 - `wrix init` leaves signing disabled by default; `--sign` or
   `wrix.git.sign = true` configures signing and produces a verifiable signed
   test commit
-  [test?](../crates/wrix-cli/tests/init_signing.rs::signing_is_opt_in)
+  [test](../crates/wrix-cli/tests/init_signing.rs::signing_is_opt_in)
 - Conflicting `wrix init --sign --no-sign` flags fail before repository mutation
-  [test?](../crates/wrix-cli/tests/cli_surface.rs::conflicting_sign_flags_are_non_mutating)
+  [test](../crates/wrix-cli/tests/cli_surface.rs::conflicting_sign_flags_are_non_mutating)
 - Missing fallback signing material is a hard failure when signing is enabled.
   [test](../crates/wrix-cli/tests/init_signing.rs::fallback_signing_key_is_required)
 - `--no-sign` explicitly disables commit signing.
   [test](../crates/wrix-cli/tests/init_signing.rs::no_sign_flag_disables_signing)
 - Explicit init signing flags override `wrix.git.sign` without rewriting
   repository policy
-  [test?](../crates/wrix-cli/tests/init_signing.rs::sign_flags_override_repository_policy)
+  [test](../crates/wrix-cli/tests/init_signing.rs::sign_flags_override_repository_policy)
 - `wrix init --deploy --sign` generates separate passphraseless deploy and
   signing ed25519 keys with secure permissions, registers the deploy key with
   write access, and registers the signing key with GitHub
-  [test?](../crates/wrix-cli/tests/init_deploy.rs::explicit_deploy_and_sign_provision_both_keys)
+  [test](../crates/wrix-cli/tests/init_deploy.rs::explicit_deploy_and_sign_provision_both_keys)
 - `wrix init --deploy` with signing disabled provisions only the deploy key and
   does not write sandbox grant policy; setting `wrix.git.deploy` alone does not
   trigger provisioning
-  [test?](../crates/wrix-cli/tests/init_deploy.rs::deploy_provisioning_does_not_grant_sandbox_credentials)
+  [test](../crates/wrix-cli/tests/init_deploy.rs::deploy_provisioning_does_not_grant_sandbox_credentials)
 - Deploy provisioning reuses matching local and remote keys without remote
   mutation.
   [test](../crates/wrix-cli/tests/init_deploy.rs::matching_deploy_keys_are_reused)

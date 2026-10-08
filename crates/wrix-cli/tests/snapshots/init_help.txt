@@ -1,0 +1,14 @@
+Initialize repository Git policy.
+
+Usage: wrix init [options]
+
+Options:
+  --deploy         Provision GitHub deploy keys (and signing keys when enabled), not sandbox grants; requires online verification.
+  --key <name>     Use <name> for deploy and signing keys (default: policy or <repo>-<host>).
+  --remote <name>  Use <name> for GitHub detection and verification (default: policy or origin).
+  --offline        Skip network and API checks; cannot be combined with --deploy.
+  --sign           Enable SSH commit signing (default: policy or disabled); conflicts with --no-sign.
+  --no-sign        Disable SSH commit signing for this invocation; conflicts with --sign.
+  --no-hooks       Skip prek hook setup (default: enabled when prek config exists).
+  --force          Replace conflicting key material and registrations when supported.
+  -h, --help       Print help.
