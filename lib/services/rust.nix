@@ -12,6 +12,8 @@ let
     src = ../..;
     cargoLock = ../../Cargo.lock;
     extraSrcs = {
+      "crates/wrix-cli/tests/snapshots/init_help.txt" =
+        ../../crates/wrix-cli/tests/snapshots/init_help.txt;
       "crates/wrix-sandbox/tests/fixtures/consumer-entrypoint.sh" =
         ../../crates/wrix-sandbox/tests/fixtures/consumer-entrypoint.sh;
       "crates/wrix-sandbox/tests/fixtures/container-spawn-runtime.sh" =

@@ -96,8 +96,10 @@ profile-only shells. See [specs/profiles.md](specs/profiles.md) for the
 
 See [specs/sandbox.md](specs/sandbox.md) for full details.
 
-`wrix init --deploy --key <name>` provisions GitHub deploy/signing keys and
-configures and verifies local Git policy, including hooks when configured.
+`wrix init --deploy --key <name>` provisions a GitHub deploy key and configures
+and verifies local Git policy, including hooks when configured. Signing defaults
+off; add `--sign` or set `wrix.git.sign = true` to provision a separate signing
+key and enable signing. Provisioning does not enable sandbox credential grants.
 Matching keys are reused; `--force` permits replacing conflicting material. See
 [repository initialization](specs/cli.md#wrix-init) for prerequisites and
 options.

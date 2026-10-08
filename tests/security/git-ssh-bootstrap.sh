@@ -409,7 +409,7 @@ test_host_container_and_loom_helper() {
   write_ambient_ssh_home "$ambient_home" || { fail "failed to create ambient SSH home"; return; }
   write_fake_ssh "$fake_bin" || { fail "failed to create fake ssh"; return; }
 
-  if ! output="$(cd "$repo" && PATH="$bin_dir:$PATH" HOME="$home" WRIX_DEPLOY_KEY="$env_deploy" WRIX_SIGNING_KEY="$env_signing" "$wrix_bin" init --offline --key parity-key 2>&1)"; then
+  if ! output="$(cd "$repo" && PATH="$bin_dir:$PATH" HOME="$home" WRIX_DEPLOY_KEY="$env_deploy" WRIX_SIGNING_KEY="$env_signing" "$wrix_bin" init --offline --sign --key parity-key 2>&1)"; then
     fail "wrix init with env keys failed: $output"
     return
   fi
@@ -442,7 +442,7 @@ test_host_container_and_loom_helper() {
     fail "outer init mutated the independent .loom/integration clone"
     return
   fi
-  if ! output="$(cd "$integration" && PATH="$bin_dir:$PATH" HOME="$home" WRIX_DEPLOY_KEY="$env_deploy" WRIX_SIGNING_KEY="$env_signing" "$wrix_bin" init --offline --key parity-key 2>&1)"; then
+  if ! output="$(cd "$integration" && PATH="$bin_dir:$PATH" HOME="$home" WRIX_DEPLOY_KEY="$env_deploy" WRIX_SIGNING_KEY="$env_signing" "$wrix_bin" init --offline --sign --key parity-key 2>&1)"; then
     fail "wrix init inside the integration clone failed: $output"
     return
   fi
@@ -508,7 +508,7 @@ test_host_container_and_loom_helper() {
   PATH="$bin_dir:$PATH" HOME="$home" WRIX_SIGNING_KEY="$env_signing" \
     git -C "$integration" verify-commit HEAD >/dev/null || { fail "integration env-signed commit did not verify"; return; }
 
-  if ! output="$(cd "$repo" && env -u WRIX_DEPLOY_KEY -u WRIX_SIGNING_KEY PATH="$bin_dir:$PATH" HOME="$home" "$wrix_bin" init --offline --key parity-key 2>&1)"; then
+  if ! output="$(cd "$repo" && env -u WRIX_DEPLOY_KEY -u WRIX_SIGNING_KEY PATH="$bin_dir:$PATH" HOME="$home" "$wrix_bin" init --offline --sign --key parity-key 2>&1)"; then
     fail "wrix init with HOME fallback keys failed: $output"
     return
   fi
@@ -539,7 +539,7 @@ test_host_container_and_loom_helper() {
   output="$(<"$missing_output")"
   assert_contains "missing signing output" "$output" "fallback signing key does not exist" || return 0
 
-  if ! output="$(cd "$repo" && PATH="$bin_dir:$PATH" HOME="$home" WRIX_DEPLOY_KEY="$env_deploy" WRIX_SIGNING_KEY="$env_signing" "$wrix_bin" init --offline --key parity-key 2>&1)"; then
+  if ! output="$(cd "$repo" && PATH="$bin_dir:$PATH" HOME="$home" WRIX_DEPLOY_KEY="$env_deploy" WRIX_SIGNING_KEY="$env_signing" "$wrix_bin" init --offline --sign --key parity-key 2>&1)"; then
     fail "wrix init restoring env signing key failed: $output"
     return
   fi

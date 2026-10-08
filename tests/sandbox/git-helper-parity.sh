@@ -18,7 +18,7 @@ git remote add origin git@github.com:example/parity.git
 git config user.name Fixture
 git config user.email fixture@example.invalid
 wrix-git-sign --wrix-probe
-wrix init --offline --key parity
+wrix init --offline --sign --key parity
 [[ "$(git config gpg.ssh.program)" == wrix-git-sign ]]
 git commit --allow-empty -qm "Sign with the image helper"
 git verify-commit HEAD
