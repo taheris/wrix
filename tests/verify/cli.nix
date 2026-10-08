@@ -49,7 +49,7 @@ in
     root="$(repo_root)"
     nix build --no-link --no-warn-dirty "$root#checks.${system}.verifier-inputs"
     loom="$(build_flake_package loom)"
-    python3 "$root/tests/verify/test_results.py" "$SELF" "$loom/bin/loom" ${../lib/verifier.sh}
+    python3 "$root/tests/verify/test_results.py" "$SELF" "$loom/bin/loom" ${../lib/verifier.sh} ${../standalone/builder-test.sh}
     nix run --no-warn-dirty "$root#test-ci" -- --list >/dev/null
     test_ci="$(nix eval --raw --no-warn-dirty "$root#apps.${system}.test-ci.program")"
     python3 "$root/tests/verify/test_inputs.py" "$SELF" "$test_ci" "$loom/bin/loom" "$root" ${escapeShellArg nixpkgsSource} ${escapeShellArg system}

@@ -30,6 +30,7 @@ in
     if [[ "$status" -ne 77 ]]; then
       fail "builder integration exited $status; expected unsupported-platform skip"
     fi
+    return 77
   '';
 
   "linux-builder.key-material-generation" = builderScript "test_generates_per_user_ed25519_material";
