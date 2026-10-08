@@ -3,9 +3,14 @@
 Secure sandbox for running AI coding agents in isolated containers.
 
 - **Linux**: Podman rootless container
-- **macOS**: Apple [container CLI](https://github.com/apple/container) (macOS 26+, Apple Silicon)
+- **macOS**: Apple [container CLI](https://github.com/apple/container) (macOS
+  26+, Apple Silicon)
 
-Provides filesystem and process isolation — code inside the container cannot access your host filesystem outside `/workspace` or affect host processes. Public-internet egress is available by default, while LAN/private/host-local/VPN/special ranges remain blocked. See the [security model](docs/architecture.md#security-model) for details.
+Provides filesystem and process isolation — code inside the container cannot
+access your host filesystem outside `/workspace` or affect host processes.
+Public-internet egress is available by default, while
+LAN/private/host-local/VPN/special ranges remain blocked. See the
+[security model](docs/architecture.md#security-model) for details.
 
 ## Quick Start
 
@@ -18,21 +23,31 @@ nix run github:taheris/wrix#sandbox-rust-claude  # rust profile, claude overlay
 
 ## Agent Runtimes
 
-The agent binary baked into the image is selected **at build time** by `mkSandbox { agent = …; }`, surfaced as the `sandbox-<profile>[-<agent>]` flake output. Exactly one agent rides each image.
+The agent binary baked into the image is selected **at build time** by
+`mkSandbox { agent = …; }`, surfaced as the `sandbox-<profile>[-<agent>]` flake
+output. Exactly one agent rides each image.
 
-| Agent | Runtime | How it talks to the host |
-|-------|---------|--------------------------|
-| `direct` *(default)* | Direct runner binary | JSONL stdio; intended for orchestrators |
-| `claude` | [Claude Code](https://claude.ai/code) | Interactive TTY, or stream-json via `WRIX_STDIO=1` |
-| `pi` | [Pi coding agent](https://github.com/earendil-works/pi) | Interactive TTY, or JSONL RPC on stdio (`pi --mode rpc`) |
+| Agent                | Runtime                                                 | How it talks to the host                                 |
+| -------------------- | ------------------------------------------------------- | -------------------------------------------------------- |
+| `direct` _(default)_ | Direct runner binary                                    | JSONL stdio; intended for orchestrators                  |
+| `claude`             | [Claude Code](https://claude.ai/code)                   | Interactive TTY, or stream-json via `WRIX_STDIO=1`       |
+| `pi`                 | [Pi coding agent](https://github.com/earendil-works/pi) | Interactive TTY, or JSONL RPC on stdio (`pi --mode rpc`) |
 
-`packages.image-<profile>` ships the default direct runtime. Agent overlays are exposed as `packages.image-<profile>-claude` and `packages.image-<profile>-pi`.
+`packages.image-<profile>` ships the default direct runtime. Agent overlays are
+exposed as `packages.image-<profile>-claude` and `packages.image-<profile>-pi`.
 
-Pi images seed OpenAI Codex subscription defaults, high reasoning, trusted project fallback, regular terminal mode for tmux scrollback, and all-at-once steering/follow-up queues. Run `/login` in Pi and choose ChatGPT Plus/Pro (Codex) once; credentials persist in host `~/.pi/agent/auth.json`. Pi session state is written under workspace `.pi/`, so consumer repositories should add `.pi/` to `.gitignore`.
+Pi images seed OpenAI Codex subscription defaults, high reasoning, trusted
+project fallback, regular terminal mode for tmux scrollback, and all-at-once
+steering/follow-up queues. Run `/login` in Pi and choose ChatGPT Plus/Pro
+(Codex) once; credentials persist in host `~/.pi/agent/auth.json`. Pi session
+state is written under workspace `.pi/`, so consumer repositories should add
+`.pi/` to `.gitignore`.
 
 ## Flake Integration
 
-The canonical pattern feeds one profile to both the host devshell and sandbox image. Linux resolves `rustc` to one store path on both sides; Darwin resolves channel-matched host and Linux-image derivations:
+The canonical pattern feeds one profile to both the host devshell and sandbox
+image. Linux resolves `rustc` to one store path on both sides; Darwin resolves
+channel-matched host and Linux-image derivations:
 
 ```nix
 {
@@ -58,47 +73,53 @@ The canonical pattern feeds one profile to both the host devshell and sandbox im
 }
 ```
 
-`sandbox.devShell { }` is the safest host-devshell entry point: the same
-sandbox object supplies the profile, image config, and configured `wrix`
-wrapper used by `nix run`. `wrix.mkDevShell { profile = ...; }` remains
-available for profile-only shells. See [specs/profiles.md](specs/profiles.md)
-for the `rustProfile` constructor signature and devshell composition rules.
+`sandbox.devShell { }` is the safest host-devshell entry point: the same sandbox
+object supplies the profile, image config, and configured `wrix` wrapper used by
+`nix run`. `wrix.mkDevShell { profile = ...; }` remains available for
+profile-only shells. See [specs/profiles.md](specs/profiles.md) for the
+`rustProfile` constructor signature and devshell composition rules.
 
 ### mkSandbox Options
 
-| Option | Type | Description |
-|--------|------|-------------|
-| `profile` | profile attrset | Base environment (`profiles.{base,rust,python}`) |
-| `packages` | list of packages | Additional Nix packages to include |
-| `env` | attrset of strings | Environment variables |
-| `mounts` | list of `{ source, dest, mode }` | Host paths to mount into the container |
-| `agent` | `"direct"` \| `"claude"` \| `"pi"` | Agent runtime baked into the image (default `"direct"`) |
-| `agentPkg` | Linux derivation or `null` | Optional selected-agent package override |
-| `agentSettings` | attrset | Settings for the selected agent (`claude` or `pi`) |
-| `deployKey` | string | SSH key name for git push (provision with `wrix init --deploy --key <name>`) |
-| `mcp` | attrset of server configs | Baked-in MCP servers (e.g. `{ tmux = { }; }`) |
-| `mcpRuntime` | bool | Include all MCP servers, select at runtime via `WRIX_MCP` |
+| Option          | Type                               | Description                                                                  |
+| --------------- | ---------------------------------- | ---------------------------------------------------------------------------- |
+| `profile`       | profile attrset                    | Base environment (`profiles.{base,rust,python}`)                             |
+| `packages`      | list of packages                   | Additional Nix packages to include                                           |
+| `env`           | attrset of strings                 | Environment variables                                                        |
+| `mounts`        | list of `{ source, dest, mode }`   | Host paths to mount into the container                                       |
+| `agent`         | `"direct"` \| `"claude"` \| `"pi"` | Agent runtime baked into the image (default `"direct"`)                      |
+| `agentPkg`      | Linux derivation or `null`         | Optional selected-agent package override                                     |
+| `agentSettings` | attrset                            | Settings for the selected agent (`claude` or `pi`)                           |
+| `deployKey`     | string                             | SSH key name for git push (provision with `wrix init --deploy --key <name>`) |
+| `mcp`           | attrset of server configs          | Baked-in MCP servers (e.g. `{ tmux = { }; }`)                                |
+| `mcpRuntime`    | bool                               | Include all MCP servers, select at runtime via `WRIX_MCP`                    |
 
 See [specs/sandbox.md](specs/sandbox.md) for full details.
 
 `wrix init --deploy --key <name>` provisions GitHub deploy/signing keys and
 configures and verifies local Git policy, including hooks when configured.
-Matching keys are reused; `--force` permits replacing conflicting material.
-See [repository initialization](specs/cli.md#wrix-init) for prerequisites and options.
+Matching keys are reused; `--force` permits replacing conflicting material. See
+[repository initialization](specs/cli.md#wrix-init) for prerequisites and
+options.
 
 ## Profiles
 
-| Profile | Packages |
-|---------|----------|
-| `base` | git, ripgrep, fd, jq, python3, vim, treefmt wrapper |
-| `rust` | base + fenix toolchain, sccache, gcc, openssl, pkg-config |
-| `python` | base + uv, ty, ruff |
+| Profile  | Packages                                                  |
+| -------- | --------------------------------------------------------- |
+| `base`   | git, ripgrep, fd, jq, python3, vim, treefmt wrapper       |
+| `rust`   | base + fenix toolchain, sccache, gcc, openssl, pkg-config |
+| `python` | base + uv, ty, ruff                                       |
 
-See [specs/profiles.md](specs/profiles.md) for the full schema and `buildPackage` API.
+See [specs/profiles.md](specs/profiles.md) for the full schema and
+`buildPackage` API.
 
 ## Consumer-supplied agents
 
-`agent = "direct"` is the integration seam for external orchestrators (e.g. [Loom](https://github.com/taheris/loom)) that drive the container themselves over JSONL stdio. The built-in direct image carries a placeholder runner so the default image family is buildable; production orchestrators should pass their own `agentPkg`:
+`agent = "direct"` is the integration seam for external orchestrators (e.g.
+[Loom](https://github.com/taheris/loom)) that drive the container themselves
+over JSONL stdio. The built-in direct image carries a placeholder runner so the
+default image family is buildable; production orchestrators should pass their
+own `agentPkg`:
 
 ```nix
 let
@@ -113,10 +134,14 @@ in
 { packages.sandbox = sandbox.package; }
 ```
 
-The launcher exposes two entry points (both honour the profile's mounts, env passthrough, and deploy key):
+The launcher exposes two entry points (both honour the profile's mounts, env
+passthrough, and deploy key):
 
 - `wrix run [DIR] [CMD…]` — interactive TTY.
-- `wrix spawn --spawn-config <file> [--stdio]` — programmatic JSONL dispatch. The orchestrator writes a `SpawnConfig` JSON file with `image_ref`, `image_source`, the matching `image_source_kind`, `workspace`, `env`, and `agent_args`, then pipes JSONL on stdin/stdout.
+- `wrix spawn --spawn-config <file> [--stdio]` — programmatic JSONL dispatch.
+  The orchestrator writes a `SpawnConfig` JSON file with `image_ref`,
+  `image_source`, the matching `image_source_kind`, `workspace`, `env`, and
+  `agent_args`, then pipes JSONL on stdin/stdout.
 
 ## MCP Servers
 
@@ -126,12 +151,20 @@ nix run github:taheris/wrix#sandbox-rust-pi-mcp    # rust + all MCP servers
 WRIX_MCP=tmux nix run .#sandbox-pi-mcp             # select specific servers
 ```
 
-Available: [tmux](specs/tmux-mcp.md) (pane management for debugging), [playwright](specs/playwright-mcp.md) (browser automation). In flakes: `mcp.tmux = { }` or `mcpRuntime = true`. Wrix adapts the selected `WRIX_MCP_MANIFEST` for Claude and Pi; external direct runners consume that same manifest handoff.
+Available: [tmux](specs/tmux-mcp.md) (pane management for debugging),
+[playwright](specs/playwright-mcp.md) (browser automation). In flakes:
+`mcp.tmux = { }` or `mcpRuntime = true`. Wrix adapts the selected
+`WRIX_MCP_MANIFEST` for Claude and Pi; external direct runners consume that same
+manifest handoff.
 
 ## Notifications
 
-Desktop alerts when the agent needs attention: `nix run github:taheris/wrix#wrix-notifyd`. See [specs/notifications.md](specs/notifications.md).
+Desktop alerts when the agent needs attention:
+`nix run github:taheris/wrix#wrix-notifyd`. See
+[specs/notifications.md](specs/notifications.md).
 
 ## Linux Builder (macOS)
 
-Remote Nix builds for aarch64-linux on macOS: `wrix-builder start && wrix-builder setup`. See [specs/linux-builder.md](specs/linux-builder.md).
+Remote Nix builds for aarch64-linux on macOS:
+`wrix-builder start && wrix-builder setup`. See
+[specs/linux-builder.md](specs/linux-builder.md).

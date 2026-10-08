@@ -15,6 +15,15 @@
         programs = {
           deadnix.enable = true;
           nixfmt.enable = true;
+          prettier = {
+            enable = true;
+            includes = [ "*.md" ];
+            settings = {
+              embeddedLanguageFormatting = "off";
+              printWidth = 80;
+              proseWrap = "always";
+            };
+          };
           rustfmt.enable = true;
           statix.enable = true;
         };

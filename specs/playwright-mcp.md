@@ -1,35 +1,56 @@
 # playwright-mcp
 
-MCP server providing browser automation for AI-assisted frontend development and testing within wrix sandboxes.
+MCP server providing browser automation for AI-assisted frontend development and
+testing within wrix sandboxes.
 
 ## Problem Statement
 
-AI agents building web frontends cannot see what they've built. They edit HTML/CSS/JS but have no way to verify the result visually — detecting misalignment, overflow, broken layouts, or rendering bugs requires actually looking at the page. The single-command Bash tool can run a dev server but cannot interact with a browser.
+AI agents building web frontends cannot see what they've built. They edit
+HTML/CSS/JS but have no way to verify the result visually — detecting
+misalignment, overflow, broken layouts, or rendering bugs requires actually
+looking at the page. The single-command Bash tool can run a dev server but
+cannot interact with a browser.
 
 ## Architecture
 
-Wraps Microsoft's `@playwright/mcp` server to provide browser automation inside wrix sandboxes. The agent can navigate pages, take screenshots (returned as base64 PNG for direct visual interpretation), fill forms, click elements, and inspect accessibility trees — enabling a tight edit-code-check-browser iteration loop.
+Wraps Microsoft's `@playwright/mcp` server to provide browser automation inside
+wrix sandboxes. The agent can navigate pages, take screenshots (returned as
+base64 PNG for direct visual interpretation), fill forms, click elements, and
+inspect accessibility trees — enabling a tight edit-code-check-browser iteration
+loop.
 
-The server enters Wrix's agent-neutral stdio registry through `mkSandbox`'s `mcp` parameter (see `sandbox.md`); the selected agent adapter registers its tools, and MCP servers compose orthogonally with workspace profiles. Container construction, manifest selection, adapter ownership, isolation, and the trust boundary belong to `sandbox.md`; this spec owns the Playwright server's wiring on top.
+The server enters Wrix's agent-neutral stdio registry through `mkSandbox`'s
+`mcp` parameter (see `sandbox.md`); the selected agent adapter registers its
+tools, and MCP servers compose orthogonally with workspace profiles. Container
+construction, manifest selection, adapter ownership, isolation, and the trust
+boundary belong to `sandbox.md`; this spec owns the Playwright server's wiring
+on top.
 
 Load-bearing decisions:
 
 - Wraps `@playwright/mcp` rather than reimplementing browser automation
-- Uses `pkgs.playwright-mcp` from nixpkgs for offline operation — no `npx` at runtime
-- Uses `pkgs.playwright-driver.browsers` as the Playwright browser source (exact expected revision; wrix selects Chromium from that bundle while avoiding upstream version skew)
-- Chromium's internal sandbox is disabled (`--no-sandbox`) because the wrix container is the trust boundary (see *Chromium Sandbox Disabled* below)
+- Uses `pkgs.playwright-mcp` from nixpkgs for offline operation — no `npx` at
+  runtime
+- Uses `pkgs.playwright-driver.browsers` as the Playwright browser source (exact
+  expected revision; wrix selects Chromium from that bundle while avoiding
+  upstream version skew)
+- Chromium's internal sandbox is disabled (`--no-sandbox`) because the wrix
+  container is the trust boundary (see _Chromium Sandbox Disabled_ below)
 
 ## MCP Tools
 
-Wrix does not define or freeze a Playwright tool whitelist. It starts the bundled `@playwright/mcp` server and exposes whatever tool set that package reports through `tools/list`. Categories for the primary use cases, using representative current tool names asserted by the smoke verifier:
+Wrix does not define or freeze a Playwright tool whitelist. It starts the
+bundled `@playwright/mcp` server and exposes whatever tool set that package
+reports through `tools/list`. Categories for the primary use cases, using
+representative current tool names asserted by the smoke verifier:
 
-| Category | Tools | Purpose |
-|----------|-------|---------|
-| Navigation | `browser_navigate`, `browser_navigate_back` | Page navigation |
-| Interaction | `browser_click`, `browser_fill_form`, `browser_select_option`, `browser_hover` | User input simulation |
-| Vision and content | `browser_take_screenshot`, `browser_snapshot` | Visual capture and accessibility tree inspection |
-| Diagnostics | `browser_network_requests`, `browser_console_messages` | Request and console inspection |
-| Browser session | `browser_tabs` | Browser tab state management |
+| Category           | Tools                                                                          | Purpose                                          |
+| ------------------ | ------------------------------------------------------------------------------ | ------------------------------------------------ |
+| Navigation         | `browser_navigate`, `browser_navigate_back`                                    | Page navigation                                  |
+| Interaction        | `browser_click`, `browser_fill_form`, `browser_select_option`, `browser_hover` | User input simulation                            |
+| Vision and content | `browser_take_screenshot`, `browser_snapshot`                                  | Visual capture and accessibility tree inspection |
+| Diagnostics        | `browser_network_requests`, `browser_console_messages`                         | Request and console inspection                   |
+| Browser session    | `browser_tabs`                                                                 | Browser tab state management                     |
 
 ## Configuration
 
@@ -46,73 +67,122 @@ mkSandbox {
 
 User options:
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `headless` | bool | `true` | Run browser in headless mode (headful requires X forwarding, unsupported in v1) |
-| `viewport` | `{ width, height }` | `{ width = 1280; height = 720; }` | Default browser viewport size |
-| `config` | attrset | `{ }` | Passthrough to `@playwright/mcp` JSON config (serialized to a temp file and passed via `--config`) |
+| Option     | Type                | Default                           | Description                                                                                        |
+| ---------- | ------------------- | --------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `headless` | bool                | `true`                            | Run browser in headless mode (headful requires X forwarding, unsupported in v1)                    |
+| `viewport` | `{ width, height }` | `{ width = 1280; height = 720; }` | Default browser viewport size                                                                      |
+| `config`   | attrset             | `{ }`                             | Passthrough to `@playwright/mcp` JSON config (serialized to a temp file and passed via `--config`) |
 
 Always set by the Nix expression (not user-facing, cannot be overridden):
 
 - `--executable-path` — derived from `pkgs.playwright-driver.browsers`
 - `--no-sandbox` — Chromium's internal sandbox is disabled (see below)
-- `--disable-dev-shm-usage` — avoids `/dev/shm` size limits in rootless containers
+- `--disable-dev-shm-usage` — avoids `/dev/shm` size limits in rootless
+  containers
 - `--disable-gpu` — avoids GPU initialization failures in headless environments
 - `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` — prevent runtime downloads
-- `PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS=true` — bypass NixOS host validation
+- `PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS=true` — bypass NixOS host
+  validation
 
-When the user supplies additional `launchOptions.args` via `config`, those args are appended to the automatic flags; the automatic flags themselves are non-overridable.
+When the user supplies additional `launchOptions.args` via `config`, those args
+are appended to the automatic flags; the automatic flags themselves are
+non-overridable.
 
 ## Chromium Sandbox Disabled
 
-The outer wrix container is the trust boundary — see `sandbox.md` and `specs/security.md` for the full posture. Chromium's own multi-layer sandbox (user namespaces, seccomp-bpf, setuid helper) is both redundant and non-functional inside the container:
+The outer wrix container is the trust boundary — see `sandbox.md` and
+`specs/security.md` for the full posture. Chromium's own multi-layer sandbox
+(user namespaces, seccomp-bpf, setuid helper) is both redundant and
+non-functional inside the container:
 
-- **Linux (rootless Podman)**: the kernel restricts nested user namespace creation. Chromium's sandbox cannot initialize without `CAP_SYS_ADMIN` or relaxed seccomp policy — granting either would weaken the container's own isolation.
-- **macOS / Linux with `WRIX_MICROVM=1`**: each container runs in its own microVM. The VM boundary is strictly stronger than Chromium's process-level sandbox.
+- **Linux (rootless Podman)**: the kernel restricts nested user namespace
+  creation. Chromium's sandbox cannot initialize without `CAP_SYS_ADMIN` or
+  relaxed seccomp policy — granting either would weaken the container's own
+  isolation.
+- **macOS / Linux with `WRIX_MICROVM=1`**: each container runs in its own
+  microVM. The VM boundary is strictly stronger than Chromium's process-level
+  sandbox.
 
-Passing `--no-sandbox` removes a redundant inner layer that cannot work, not protection that was previously in place.
+Passing `--no-sandbox` removes a redundant inner layer that cannot work, not
+protection that was previously in place.
 
 ## Platform Support
 
-The container image is Linux (aarch64 or x86_64), so `pkgs.playwright-driver.browsers` always resolves to Linux browser payloads and the configured executable path points at a Linux Chromium build regardless of host platform. All automatic Chromium flags apply identically across platforms; the differences (Podman vs Apple `container` CLI, rootless container vs microVM, `/dev/shm` sizing) belong to `sandbox.md`. `--disable-dev-shm-usage` is essential on Linux rootless containers (where `/dev/shm` is typically 64MB) and harmless under macOS / krun microVMs.
+The container image is Linux (aarch64 or x86_64), so
+`pkgs.playwright-driver.browsers` always resolves to Linux browser payloads and
+the configured executable path points at a Linux Chromium build regardless of
+host platform. All automatic Chromium flags apply identically across platforms;
+the differences (Podman vs Apple `container` CLI, rootless container vs microVM,
+`/dev/shm` sizing) belong to `sandbox.md`. `--disable-dev-shm-usage` is
+essential on Linux rootless containers (where `/dev/shm` is typically 64MB) and
+harmless under macOS / krun microVMs.
 
 ## Success Criteria
 
-- MCP server starts, responds to `initialize` and `tools/list` with representative bundled tools, and runs fully offline (no network downloads at startup)
-  [system](verify:playwright-mcp.smoke)
+- MCP server starts, responds to `initialize` and `tools/list` with
+  representative bundled tools, and runs fully offline (no network downloads at
+  startup) [system](verify:playwright-mcp.smoke)
 - Screenshot returns base64 PNG when navigating to a local HTTP server
   [system](verify:playwright-mcp.screenshot)
-- The image built with `mcp.playwright = {}` contains the chromium binary in its store closure
-  [check](test-ci:test-playwright-chromium-closure)
-- Chromium executable path is derived from `pkgs.playwright-driver.browsers`, not from a hard-coded path or `npx`
+- The image built with `mcp.playwright = {}` contains the chromium binary in its
+  store closure [check](test-ci:test-playwright-chromium-closure)
+- Chromium executable path is derived from `pkgs.playwright-driver.browsers`,
+  not from a hard-coded path or `npx`
   [check](test-ci:test-playwright-chromium-executable-path)
-- The automatic Chromium flags `--no-sandbox`, `--disable-dev-shm-usage`, and `--disable-gpu` are always passed through `launchOptions.args`
+- The automatic Chromium flags `--no-sandbox`, `--disable-dev-shm-usage`, and
+  `--disable-gpu` are always passed through `launchOptions.args`
   [check](test-ci:test-playwright-mandatory-flags)
-- The `headless`, `viewport`, and `config` user options reach the MCP server's serialized config file
-  [check](test-ci:test-playwright-user-options-config)
-- The server definition exposes the MCP registry triple (`name`, `packages`, `mkServerConfig`) so `mkSandbox` can compose it like any other server
+- The `headless`, `viewport`, and `config` user options reach the MCP server's
+  serialized config file [check](test-ci:test-playwright-user-options-config)
+- The server definition exposes the MCP registry triple (`name`, `packages`,
+  `mkServerConfig`) so `mkSandbox` can compose it like any other server
   [check](verify:playwright-mcp.registry-triple)
 
 ## Requirements
 
 ### Functional
 
-1. **MCP tool surface** — every tool the bundled `@playwright/mcp` exposes is registered; the spec does not maintain its own tool whitelist. The category table above is illustrative, not exhaustive, and the smoke verifier checks representative tools returned by the live server rather than a fixed upstream count.
-2. **Offline operation** — `pkgs.playwright-mcp` and `pkgs.playwright-driver.browsers` bake the server and Playwright browser bundle into the image. No `npx` or browser download at runtime.
-3. **MCP opt-in via sandbox** — enabled via `mcp.playwright = { … }`; composes with the workspace profile and other MCP servers without a `-playwright` profile variant. Registry selection and per-agent adapter registration are owned by `sandbox.md`.
-4. **Configuration passthrough** — `headless`, `viewport`, and `config` options reach `@playwright/mcp`'s serialized JSON config.
-5. **Non-overridable flags** — `--no-sandbox`, `--disable-dev-shm-usage`, `--disable-gpu` are always set on `browser.launchOptions.args`. User-supplied `launchOptions.args` are appended, not substituted.
+1. **MCP tool surface** — every tool the bundled `@playwright/mcp` exposes is
+   registered; the spec does not maintain its own tool whitelist. The category
+   table above is illustrative, not exhaustive, and the smoke verifier checks
+   representative tools returned by the live server rather than a fixed upstream
+   count.
+2. **Offline operation** — `pkgs.playwright-mcp` and
+   `pkgs.playwright-driver.browsers` bake the server and Playwright browser
+   bundle into the image. No `npx` or browser download at runtime.
+3. **MCP opt-in via sandbox** — enabled via `mcp.playwright = { … }`; composes
+   with the workspace profile and other MCP servers without a `-playwright`
+   profile variant. Registry selection and per-agent adapter registration are
+   owned by `sandbox.md`.
+4. **Configuration passthrough** — `headless`, `viewport`, and `config` options
+   reach `@playwright/mcp`'s serialized JSON config.
+5. **Non-overridable flags** — `--no-sandbox`, `--disable-dev-shm-usage`,
+   `--disable-gpu` are always set on `browser.launchOptions.args`. User-supplied
+   `launchOptions.args` are appended, not substituted.
 
 ### Non-Functional
 
-1. **Image size cost** — enabling `mcp.playwright` adds the `pkgs.playwright-mcp` and `pkgs.playwright-driver.browsers` closures to the image. The Playwright browser bundle may include Firefox, WebKit, headless shell, and other payloads even though wrix v1 selects Chromium only. Sandboxes without `mcp.playwright` are unaffected.
-2. **Reproducibility** — Chromium revision pinned via `pkgs.playwright-driver.browsers`; no runtime downloads.
-3. **Headless only in v1** — headful mode requires X forwarding and is not implemented.
+1. **Image size cost** — enabling `mcp.playwright` adds the
+   `pkgs.playwright-mcp` and `pkgs.playwright-driver.browsers` closures to the
+   image. The Playwright browser bundle may include Firefox, WebKit, headless
+   shell, and other payloads even though wrix v1 selects Chromium only.
+   Sandboxes without `mcp.playwright` are unaffected.
+2. **Reproducibility** — Chromium revision pinned via
+   `pkgs.playwright-driver.browsers`; no runtime downloads.
+3. **Headless only in v1** — headful mode requires X forwarding and is not
+   implemented.
 
 ## Out of Scope
 
-- **Performance metrics** — not in the `@playwright/mcp` tool set; would require custom tooling.
-- **Custom browser support (Firefox, WebKit)** — Chromium is the only supported browser for v1. Firefox and WebKit payloads may be present because `playwright-driver.browsers` is the packaged browser bundle, but wrix does not expose them as supported targets.
-- **Persistent browser profiles** — clean state per container launch is correct sandbox behavior.
-- **Playwright test runner (`@playwright/test`)** — different tool; users add it to profile packages independently.
-- **HAR recording / replay** — not built into `@playwright/mcp`; `browser_network_requests` covers common request inspection needs.
+- **Performance metrics** — not in the `@playwright/mcp` tool set; would require
+  custom tooling.
+- **Custom browser support (Firefox, WebKit)** — Chromium is the only supported
+  browser for v1. Firefox and WebKit payloads may be present because
+  `playwright-driver.browsers` is the packaged browser bundle, but wrix does not
+  expose them as supported targets.
+- **Persistent browser profiles** — clean state per container launch is correct
+  sandbox behavior.
+- **Playwright test runner (`@playwright/test`)** — different tool; users add it
+  to profile packages independently.
+- **HAR recording / replay** — not built into `@playwright/mcp`;
+  `browser_network_requests` covers common request inspection needs.

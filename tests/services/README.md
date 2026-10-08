@@ -27,7 +27,7 @@ acceptance only. It does not provide live coverage or a push marker; the
 integration-branch host-test stage still owns live execution.
 
 `checks.<system>.system-test-prerequisites` exercises the packaged wrapper with
-external Nix/driver fixtures and actual kernel preflight. `verify:prek.ci-batching`
-also exercises runner preparation, mixed-batch failure dominance and Loom's
-worker/host consumption. Fixture passes are conformance evidence, not passing
-services VM results.
+external Nix/driver fixtures and actual kernel preflight.
+`verify:prek.ci-batching` also exercises runner preparation, mixed-batch failure
+dominance and Loom's worker/host consumption. Fixture passes are conformance
+evidence, not passing services VM results.

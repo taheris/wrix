@@ -8,11 +8,12 @@ The daemon triggers native desktop notifications when Claude Code (inside a
 container) needs attention.
 
 **Transport**:
+
 - **macOS**: TCP port 5959 - VirtioFS cannot pass Unix socket operations
 - **Linux**: Unix socket (`~/.local/share/wrix/notify.sock`)
 
-On macOS, the daemon listens on both TCP (for containers) and Unix socket
-(for local testing). Containers connect to the host via the gateway IP.
+On macOS, the daemon listens on both TCP (for containers) and Unix socket (for
+local testing). Containers connect to the host via the gateway IP.
 
 ## Installation
 
@@ -59,7 +60,8 @@ Rebuild your configuration and the daemon will start automatically.
 
 ### Manual Installation
 
-For users not using home-manager, follow the platform-specific instructions below.
+For users not using home-manager, follow the platform-specific instructions
+below.
 
 #### Files
 

@@ -1,79 +1,220 @@
 # Core Sandbox
 
-Platform-agnostic container isolation for coding agents — composes a workspace profile, an OCI image source, and a launcher binary; runs on Linux (Podman, optionally krun-backed microVM) and macOS (Apple `container` CLI on Virtualization.framework).
+Platform-agnostic container isolation for coding agents — composes a workspace
+profile, an OCI image source, and a launcher binary; runs on Linux (Podman,
+optionally krun-backed microVM) and macOS (Apple `container` CLI on
+Virtualization.framework).
 
 ## Problem Statement
 
-Running AI coding assistants with unrestricted host access creates security risks. The sandbox must protect host filesystem and processes from container actions, preserve host UID/GID for workspace files, support outbound network for research and package management, and work consistently across Linux and macOS without per-platform consumer code.
+Running AI coding assistants with unrestricted host access creates security
+risks. The sandbox must protect host filesystem and processes from container
+actions, preserve host UID/GID for workspace files, support outbound network for
+research and package management, and work consistently across Linux and macOS
+without per-platform consumer code.
 
 ## Architecture
 
-`mkSandbox` is the entry point. It composes three concerns owned elsewhere and returns a sandbox attrset:
+`mkSandbox` is the entry point. It composes three concerns owned elsewhere and
+returns a sandbox attrset:
 
-- A workspace **profile** — packages, env, mounts, network allowlist, plugins (`profiles.md`)
-- An OCI **image source** built from the profile and the selected agent runtime (`image-builder.md`)
-- A profile-agnostic **launcher** binary (`wrix`; root command grammar owned by `cli.md`)
+- A workspace **profile** — packages, env, mounts, network allowlist, plugins
+  (`profiles.md`)
+- An OCI **image source** built from the profile and the selected agent runtime
+  (`image-builder.md`)
+- A profile-agnostic **launcher** binary (`wrix`; root command grammar owned by
+  `cli.md`)
 
 `mkSandbox` returns `{ package, image, launcher, profile, devShell }`:
 
-- `package` — a configured sandbox package. `bin/wrix` is the explicit configured CLI, and the package `meta.mainProgram` is `wrix-run`, which defaults `nix run .#sandbox-*` to `wrix run`. The wrapper is bound to its built `(profile × agent)` image variant; agent selection and image defaults come from the JSON, not mutable shell logic. One-shot users invoke `package` directly.
-- `image` — the per-profile OCI image-source derivation/attrset. It carries the source path plus metadata (`ref`, `source_kind`, `digest`, and `profileConfig`) so orchestrators can feed it through the platform install path without re-deriving tags or source-kind rules (see *Image install path* below).
-- `launcher` — the raw Rust `wrix` derivation. Orchestrators (e.g. loom) pass `--profile-config <store-path>` and, for `spawn`, a per-launch `SpawnConfig` JSON.
-- `profile` — the resolved profile attrset after merging consumer `packages`, `mounts`, `env`, and MCP server packages.
-- `devShell` — a helper function for host devshells backed by this sandbox object, so `wrix run` inside the shell and `nix run .#sandbox-*` use the same configured package.
+- `package` — a configured sandbox package. `bin/wrix` is the explicit
+  configured CLI, and the package `meta.mainProgram` is `wrix-run`, which
+  defaults `nix run .#sandbox-*` to `wrix run`. The wrapper is bound to its
+  built `(profile × agent)` image variant; agent selection and image defaults
+  come from the JSON, not mutable shell logic. One-shot users invoke `package`
+  directly.
+- `image` — the per-profile OCI image-source derivation/attrset. It carries the
+  source path plus metadata (`ref`, `source_kind`, `digest`, and
+  `profileConfig`) so orchestrators can feed it through the platform install
+  path without re-deriving tags or source-kind rules (see _Image install path_
+  below).
+- `launcher` — the raw Rust `wrix` derivation. Orchestrators (e.g. loom) pass
+  `--profile-config <store-path>` and, for `spawn`, a per-launch `SpawnConfig`
+  JSON.
+- `profile` — the resolved profile attrset after merging consumer `packages`,
+  `mounts`, `env`, and MCP server packages.
+- `devShell` — a helper function for host devshells backed by this sandbox
+  object, so `wrix run` inside the shell and `nix run .#sandbox-*` use the same
+  configured package.
 
-**Platform dispatch** — `lib/sandbox/default.nix` selects the platform image source, entrypoint, and configured wrapper metadata, then rejects unsupported systems at evaluation. The profile-agnostic Rust `wrix` launcher performs host runtime dispatch at execution time: Linux constructs the Podman invocation, and Darwin constructs the Apple `container` invocation.
+**Platform dispatch** — `lib/sandbox/default.nix` selects the platform image
+source, entrypoint, and configured wrapper metadata, then rejects unsupported
+systems at evaluation. The profile-agnostic Rust `wrix` launcher performs host
+runtime dispatch at execution time: Linux constructs the Podman invocation, and
+Darwin constructs the Apple `container` invocation.
 
-The **runtime image installer** is the shared host-side image install and cleanup path used by `wrix run`, `wrix spawn`, and `wrix service start`; it is not a separate public CLI.
+The **runtime image installer** is the shared host-side image install and
+cleanup path used by `wrix run`, `wrix spawn`, and `wrix service start`; it is
+not a separate public CLI.
 
-**Image install path** — Before invoking the platform install pipeline, the wrix runtime image installer checks whether the image's **content digest** recorded with the selected image source (not ref-name+tag) matches any image already present in the platform store. On Linux this digest is derived from descriptor/config metadata without executing the source; tar-loadable Darwin sources may be inspected for config metadata but are not loaded. On a digest hit, the install is skipped entirely — no source execution, no tar materialization, no stream invocation, and no `*-load` CLI call. On a miss, the installer dispatches by `ProfileConfig.image.source_kind` according to the stable source-kind contract owned by `image-builder.md`:
+**Image install path** — Before invoking the platform install pipeline, the wrix
+runtime image installer checks whether the image's **content digest** recorded
+with the selected image source (not ref-name+tag) matches any image already
+present in the platform store. On Linux this digest is derived from
+descriptor/config metadata without executing the source; tar-loadable Darwin
+sources may be inspected for config metadata but are not loaded. On a digest
+hit, the install is skipped entirely — no source execution, no tar
+materialization, no stream invocation, and no `*-load` CLI call. On a miss, the
+installer dispatches by `ProfileConfig.image.source_kind` according to the
+stable source-kind contract owned by `image-builder.md`:
 
-- The Linux descriptor source names a prebuilt OCI layout. The runtime installer reads that descriptor and copies `oci:<oci_layout>:<oci_ref>` into `containers-storage:<ref>` with skopeo (or an equivalent wrix-owned copy path). Digest preflight runs before the copy; on a miss, wrix delegates the copy to the destination store's content-addressed transport.
-- The Darwin tar-loadable source is converted to a temporary OCI archive before `container image load --input <oci-archive>`. Apple's `container` CLI surfaces no per-blob-dedup install path at this time; see `image-builder.md` § Out of Scope.
+- The Linux descriptor source names a prebuilt OCI layout. The runtime installer
+  reads that descriptor and copies `oci:<oci_layout>:<oci_ref>` into
+  `containers-storage:<ref>` with skopeo (or an equivalent wrix-owned copy
+  path). Digest preflight runs before the copy; on a miss, wrix delegates the
+  copy to the destination store's content-addressed transport.
+- The Darwin tar-loadable source is converted to a temporary OCI archive before
+  `container image load --input <oci-archive>`. Apple's `container` CLI surfaces
+  no per-blob-dedup install path at this time; see `image-builder.md` § Out of
+  Scope.
 
-Both platforms rely on the provenance-tiered graph (see `image-builder.md` § Provenance-Tiered Layering) to keep volatile changes isolated. Linux realizes the cache contract through descriptor-level layer reuse; Darwin keeps a tar/load fallback plus digest-skip preflight until a per-blob Apple path is verified.
+Both platforms rely on the provenance-tiered graph (see `image-builder.md` §
+Provenance-Tiered Layering) to keep volatile changes isolated. Linux realizes
+the cache contract through descriptor-level layer reuse; Darwin keeps a tar/load
+fallback plus digest-skip preflight until a per-blob Apple path is verified.
 
-**Image retention and cleanup** — The wrix runtime image cleanup path maintains a bounded wrix image keep set across workspaces, stored under the user's wrix cache (implementation-owned path, file name `image-mru.json`) rather than under a single repo. It keeps the image selected for the current operation, images used by existing containers, and the eight most recently used wrix image records written by any workspace/direnv. Each MRU record includes the image ref plus the resolved content digest and image ID when available; cleanup keeps an image if any recorded identifier matches. Cleanup consults that shared MRU before deleting so a launch in one repo does not remove another repo's recently cached image. Wrix-managed images outside that keep set are pruned. New images are labelled by `image-builder.md` so dangling cleanup can target wrix-owned images without touching user images. On Darwin, a successful archive load is tagged with its stable wrix ref and its temporary Apple `untagged@sha256:<digest>` load ref is removed immediately. Retention also recognizes historical untagged records as cleanup candidates when their image variant satisfies the wrix-managed label contract owned by `image-builder.md`. On Linux, legacy tagged `localhost/wrix-*` images may be removed when outside the keep set. Unlabelled dangling images are not automatically removed on either platform because ownership is ambiguous; Wrix may report those images and offer a manual/opt-in cleanup path.
+**Image retention and cleanup** — The wrix runtime image cleanup path maintains
+a bounded wrix image keep set across workspaces, stored under the user's wrix
+cache (implementation-owned path, file name `image-mru.json`) rather than under
+a single repo. It keeps the image selected for the current operation, images
+used by existing containers, and the eight most recently used wrix image records
+written by any workspace/direnv. Each MRU record includes the image ref plus the
+resolved content digest and image ID when available; cleanup keeps an image if
+any recorded identifier matches. Cleanup consults that shared MRU before
+deleting so a launch in one repo does not remove another repo's recently cached
+image. Wrix-managed images outside that keep set are pruned. New images are
+labelled by `image-builder.md` so dangling cleanup can target wrix-owned images
+without touching user images. On Darwin, a successful archive load is tagged
+with its stable wrix ref and its temporary Apple `untagged@sha256:<digest>` load
+ref is removed immediately. Retention also recognizes historical untagged
+records as cleanup candidates when their image variant satisfies the
+wrix-managed label contract owned by `image-builder.md`. On Linux, legacy tagged
+`localhost/wrix-*` images may be removed when outside the keep set. Unlabelled
+dangling images are not automatically removed on either platform because
+ownership is ambiguous; Wrix may report those images and offer a manual/opt-in
+cleanup path.
 
 **Boundary class** —
 
 - macOS: microVM via Virtualization.framework, always
-- Linux: rootless container by default; `WRIX_MICROVM=1` opts into `podman --runtime krun` when `/dev/kvm` is available. krun is bundled via Nix; without KVM the opt-in fails loudly rather than silently degrading.
+- Linux: rootless container by default; `WRIX_MICROVM=1` opts into
+  `podman --runtime krun` when `/dev/kvm` is available. krun is bundled via Nix;
+  without KVM the opt-in fails loudly rather than silently degrading.
 
-The host Podman API is outside the normal sandbox boundary. Linux exposes it only through the explicit unsafe operator opt-in `WRIX_UNSAFE_PODMAN_SOCKET`, which mounts the host user's Podman socket and exports `CONTAINER_HOST` for sibling-container workflows. The legacy `WRIX_PODMAN_SOCKET` name has no effect.
+The host Podman API is outside the normal sandbox boundary. Linux exposes it
+only through the explicit unsafe operator opt-in `WRIX_UNSAFE_PODMAN_SOCKET`,
+which mounts the host user's Podman socket and exports `CONTAINER_HOST` for
+sibling-container workflows. The legacy `WRIX_PODMAN_SOCKET` name has no effect.
 
 Threat-model rationale for these choices lives in `specs/security.md`.
 
-**Network posture** — `WRIX_NETWORK` selects public egress posture at launch time. The launcher passes the mode, merged allowlist, DNS exceptions, and wrix-owned local endpoint exceptions into the container via env/config; both platforms use an immutable first-stage bootstrap to install an in-sandbox firewall ruleset before any workspace setup or agent code runs. Linux Podman uses `nftables` by default. Darwin does not use host `pf`; it uses the firewall backend available inside the Linux guest/container (`nftables` when supported, otherwise a verified equivalent such as iptables).
+**Network posture** — `WRIX_NETWORK` selects public egress posture at launch
+time. The launcher passes the mode, merged allowlist, DNS exceptions, and
+wrix-owned local endpoint exceptions into the container via env/config; both
+platforms use an immutable first-stage bootstrap to install an in-sandbox
+firewall ruleset before any workspace setup or agent code runs. Linux Podman
+uses `nftables` by default. Darwin does not use host `pf`; it uses the firewall
+backend available inside the Linux guest/container (`nftables` when supported,
+otherwise a verified equivalent such as iptables).
 
-Baseline network isolation is always enforced in both modes: no inbound ports, IPv6 disabled/blocked for v1, and outbound traffic to LAN/private/host-local/VPN/special ranges is blocked. Exact exceptions are allowed only for wrix-owned endpoints (for example the project cache host-gateway IP/port, Darwin Dolt TCP endpoint) and configured DNS resolvers on TCP/UDP port 53.
+Baseline network isolation is always enforced in both modes: no inbound ports,
+IPv6 disabled/blocked for v1, and outbound traffic to
+LAN/private/host-local/VPN/special ranges is blocked. Exact exceptions are
+allowed only for wrix-owned endpoints (for example the project cache
+host-gateway IP/port, Darwin Dolt TCP endpoint) and configured DNS resolvers on
+TCP/UDP port 53.
 
-- `open` (default) — public-internet outbound is allowed, but LAN/private/host-local/VPN/special ranges remain blocked.
-- `limit` — outbound is restricted to the profile's merged `networkAllowlist` plus exact wrix-owned local endpoint and DNS exceptions; LAN/private/host-local/VPN/special ranges remain blocked. Any other value errors at the launcher before the container starts.
+- `open` (default) — public-internet outbound is allowed, but
+  LAN/private/host-local/VPN/special ranges remain blocked.
+- `limit` — outbound is restricted to the profile's merged `networkAllowlist`
+  plus exact wrix-owned local endpoint and DNS exceptions;
+  LAN/private/host-local/VPN/special ranges remain blocked. Any other value
+  errors at the launcher before the container starts.
 
-Filtering is fail-closed. Both platforms grant temporary in-container `NET_ADMIN` only for trusted startup. The immutable bootstrap uses only image-pinned tools, verifies the namespace-local firewall policy, and replaces itself through `capsh` with a stage that rejects `NET_ADMIN` in every Linux capability set before workspace setup or exit logging is installed. Linux rootless Podman uses this sequence for both the default container boundary and optional `WRIX_MICROVM=1` boundary; macOS runs in a microVM unconditionally. The Darwin host firewall is never mutated. `WRIX_NETWORK=limit` domains are resolved once at startup; any unresolvable allowlist domain fails launch instead of being silently omitted. If firewall setup, IPv6 disablement, or capability drop cannot be verified, launch fails; wrix never falls back to LAN-open networking.
+Filtering is fail-closed. Both platforms grant temporary in-container
+`NET_ADMIN` only for trusted startup. The immutable bootstrap uses only
+image-pinned tools, verifies the namespace-local firewall policy, and replaces
+itself through `capsh` with a stage that rejects `NET_ADMIN` in every Linux
+capability set before workspace setup or exit logging is installed. Linux
+rootless Podman uses this sequence for both the default container boundary and
+optional `WRIX_MICROVM=1` boundary; macOS runs in a microVM unconditionally. The
+Darwin host firewall is never mutated. `WRIX_NETWORK=limit` domains are resolved
+once at startup; any unresolvable allowlist domain fails launch instead of being
+silently omitted. If firewall setup, IPv6 disablement, or capability drop cannot
+be verified, launch fails; wrix never falls back to LAN-open networking.
 
-**Agent runtime axis** — the `agent` parameter selects, **at build time**, the single agent binary the image bakes and the entrypoint launches. The binary must be in the image, so this is not a runtime knob.
+**Agent runtime axis** — the `agent` parameter selects, **at build time**, the
+single agent binary the image bakes and the entrypoint launches. The binary must
+be in the image, so this is not a runtime knob.
 
-- `direct` (default) — default base image; consumers can override the placeholder with `agentPkg`
+- `direct` (default) — default base image; consumers can override the
+  placeholder with `agentPkg`
 - `claude` — `claude-code` from nixpkgs; no consumer package required
 - `pi` — `pi-coding-agent` from nixpkgs by default
 
-The selector's closed set and runtime meanings are owned here. Physical image composition and the exclusion of non-selected agent packages are owned by `image-builder.md` § Provenance-Tiered Layering. The agent tier composes orthogonally with the profile, so variants are `(profile × agent)`.
+The selector's closed set and runtime meanings are owned here. Physical image
+composition and the exclusion of non-selected agent packages are owned by
+`image-builder.md` § Provenance-Tiered Layering. The agent tier composes
+orthogonally with the profile, so variants are `(profile × agent)`.
 
-**Selection is by build target, not by caller env.** `WRIX_AGENT` is the internal wire the entrypoint reads, but callers do not select it by exporting env vars. A human selects an agent by choosing the `mkSandbox { agent = …; }` build / its `sandbox-<profile>[-<agent>]` target; that choice is encoded in the immutable `ProfileConfig` JSON. Orchestrators driving the raw `launcher` pass a matching per-call `ProfileConfig`.
+**Selection is by build target, not by caller env.** `WRIX_AGENT` is the
+internal wire the entrypoint reads, but callers do not select it by exporting
+env vars. A human selects an agent by choosing the `mkSandbox { agent = …; }`
+build / its `sandbox-<profile>[-<agent>]` target; that choice is encoded in the
+immutable `ProfileConfig` JSON. Orchestrators driving the raw `launcher` pass a
+matching per-call `ProfileConfig`.
 
-**Entrypoint agent guards.** The image declares its baked agent variant in `/etc/wrix/image-agent`. The entrypoint dispatches on `WRIX_AGENT` and, before exec, first rejects a mismatch between the ProfileConfig-selected agent and the image-declared agent with a clear ProfileConfig/image-variant error, then verifies the named binary is present (`command -v`). A request for an agent absent from the image — e.g. `WRIX_AGENT=pi` against a claude image on the raw-launcher path — fails loudly with a clear error instead of a bare `command not found`.
+**Entrypoint agent guards.** The image declares its baked agent variant in
+`/etc/wrix/image-agent`. The entrypoint dispatches on `WRIX_AGENT` and, before
+exec, first rejects a mismatch between the ProfileConfig-selected agent and the
+image-declared agent with a clear ProfileConfig/image-variant error, then
+verifies the named binary is present (`command -v`). A request for an agent
+absent from the image — e.g. `WRIX_AGENT=pi` against a claude image on the
+raw-launcher path — fails loudly with a clear error instead of a bare
+`command not found`.
 
-**Per-agent configuration is delivered, not abstracted.** Each agent keeps its own config system; wrix only delivers config to it:
+**Per-agent configuration is delivered, not abstracted.** Each agent keeps its
+own config system; wrix only delivers config to it:
 
-- *Config home* — the entrypoint seeds the agent's config home from baked defaults and persists session data via `/workspace`, per agent: claude → `~/.claude`, pi → `~/.pi/agent`; `direct` has none.
-- *Credentials* — API keys and OAuth/subscription tokens reach the agent through declared `runtimeSecrets`, same-named host env or `SpawnConfig.env`, and credential-file mounts. Static profile/mkSandbox env is non-secret and image-baked. The credential invariants are owned by `security.md`.
-- *Package/settings overrides* — `agentPkg` overrides the selected agent package; `agentSettings` merges into the selected agent's settings schema. `agentSettings` is rejected for `agent = "direct"` until direct has a settings schema.
+- _Config home_ — the entrypoint seeds the agent's config home from baked
+  defaults and persists session data via `/workspace`, per agent: claude →
+  `~/.claude`, pi → `~/.pi/agent`; `direct` has none.
+- _Credentials_ — API keys and OAuth/subscription tokens reach the agent through
+  declared `runtimeSecrets`, same-named host env or `SpawnConfig.env`, and
+  credential-file mounts. Static profile/mkSandbox env is non-secret and
+  image-baked. The credential invariants are owned by `security.md`.
+- _Package/settings overrides_ — `agentPkg` overrides the selected agent
+  package; `agentSettings` merges into the selected agent's settings schema.
+  `agentSettings` is rejected for `agent = "direct"` until direct has a settings
+  schema.
 
-**MCP servers** — `mkSandbox`'s `mcp` parameter opts servers in per sandbox (`mcp.tmux = { … }`, `mcp.playwright = { … }`). Server contracts live in their own specs (`tmux-mcp.md`, `playwright-mcp.md`). Wrix owns registry lookup and normalizes the selected stdio servers into a schema-v1 manifest whose entries carry `name`, `command`, `args`, and `env`. The entrypoint exports the selected file path as `WRIX_MCP_MANIFEST` for every agent. Explicit `mcp` configuration selects its declared servers; `mcpRuntime = true` bakes every registered server and filters the same manifest with `WRIX_MCP=<comma-separated names>` at launch.
+**MCP servers** — `mkSandbox`'s `mcp` parameter opts servers in per sandbox
+(`mcp.tmux = { … }`, `mcp.playwright = { … }`). Server contracts live in their
+own specs (`tmux-mcp.md`, `playwright-mcp.md`). Wrix owns registry lookup and
+normalizes the selected stdio servers into a schema-v1 manifest whose entries
+carry `name`, `command`, `args`, and `env`. The entrypoint exports the selected
+file path as `WRIX_MCP_MANIFEST` for every agent. Explicit `mcp` configuration
+selects its declared servers; `mcpRuntime = true` bakes every registered server
+and filters the same manifest with `WRIX_MCP=<comma-separated names>` at launch.
 
-Tool registration belongs to the selected agent adapter, not to the registry. The Claude adapter translates the manifest into Claude's `mcpServers` configuration. Pi, which has no built-in MCP configuration surface, loads the Wrix-owned extension baked into Pi images; the extension starts the manifest's stdio servers and registers their discovered tools through Pi's extension API. Direct runners receive the same `WRIX_MCP_MANIFEST` handoff and own its consumption; Wrix's built-in direct runner remains a placeholder. Profile output names for runtime bundles live in `profiles.md`.
+Tool registration belongs to the selected agent adapter, not to the registry.
+The Claude adapter translates the manifest into Claude's `mcpServers`
+configuration. Pi, which has no built-in MCP configuration surface, loads the
+Wrix-owned extension baked into Pi images; the extension starts the manifest's
+stdio servers and registers their discovered tools through Pi's extension API.
+Direct runners receive the same `WRIX_MCP_MANIFEST` handoff and own its
+consumption; Wrix's built-in direct runner remains a placeholder. Profile output
+names for runtime bundles live in `profiles.md`.
 
 ## mkSandbox API
 
@@ -105,16 +246,29 @@ Returns `{ package, image, launcher, profile, devShell }`.
 
 ## Launcher Runtime Contract
 
-`cli.md` owns that the launcher is exposed as `wrix run` and `wrix spawn`, including help and root dispatch. This section owns the runtime contract behind those subcommands. The Rust `wrix` launcher binary is profile-agnostic. Nix supplies build-time defaults through an immutable `ProfileConfig` JSON file, passed by `--profile-config <path>` or a wrapper-set equivalent. Both launcher subcommands share container construction (mounts, env passthrough, runtime selection, deploy key, workspace service startup, network firewall configuration); they differ only in stdio and per-launch configuration source.
+`cli.md` owns that the launcher is exposed as `wrix run` and `wrix spawn`,
+including help and root dispatch. This section owns the runtime contract behind
+those subcommands. The Rust `wrix` launcher binary is profile-agnostic. Nix
+supplies build-time defaults through an immutable `ProfileConfig` JSON file,
+passed by `--profile-config <path>` or a wrapper-set equivalent. Both launcher
+subcommands share container construction (mounts, env passthrough, runtime
+selection, deploy key, workspace service startup, network firewall
+configuration); they differ only in stdio and per-launch configuration source.
 
-Before launching the agent container, `wrix` ensures the per-workspace service container (`<repo>-service`) is running when beads or the project Nix cache is enabled. Dolt endpoints and project-cache `NIX_CONFIG` injection are owned by `services.md`; this spec owns only that both launcher subcommands use the same container construction path.
+Before launching the agent container, `wrix` ensures the per-workspace service
+container (`<repo>-service`) is running when beads or the project Nix cache is
+enabled. Dolt endpoints and project-cache `NIX_CONFIG` injection are owned by
+`services.md`; this spec owns only that both launcher subcommands use the same
+container construction path.
 
-| Subcommand | Stdio | Configuration source | Use case |
-|------------|-------|----------------------|----------|
-| `wrix run [DIR] [CMD…]` | TTY (`-it`) | `ProfileConfig` JSON + host env + CLI args | Interactive sessions, `nix run .#sandbox-<profile>` |
-| `wrix spawn --spawn-config <file> [--stdio]` | Piped or detached | `ProfileConfig` JSON + per-launch `SpawnConfig` JSON | Programmatic dispatch (loom; future orchestrators) |
+| Subcommand                                   | Stdio             | Configuration source                                 | Use case                                            |
+| -------------------------------------------- | ----------------- | ---------------------------------------------------- | --------------------------------------------------- |
+| `wrix run [DIR] [CMD…]`                      | TTY (`-it`)       | `ProfileConfig` JSON + host env + CLI args           | Interactive sessions, `nix run .#sandbox-<profile>` |
+| `wrix spawn --spawn-config <file> [--stdio]` | Piped or detached | `ProfileConfig` JSON + per-launch `SpawnConfig` JSON | Programmatic dispatch (loom; future orchestrators)  |
 
-`ProfileConfig` JSON is generated by Nix into the store and contains the immutable profile/image defaults. It is data, not shell code, and the Rust CLI validates it before constructing platform container argv. Schema v1:
+`ProfileConfig` JSON is generated by Nix into the store and contains the
+immutable profile/image defaults. It is data, not shell code, and the Rust CLI
+validates it before constructing platform container argv. Schema v1:
 
 ```json
 {
@@ -168,27 +322,77 @@ Before launching the agent container, `wrix` ensures the per-workspace service c
 }
 ```
 
-`profile.mounts` are profile-level mounts and are additive with `mkSandbox.mounts` and `SpawnConfig.mounts`. `profile.env` is non-secret profile/default container environment; it enters the Nix store and OCI image metadata and is overridden only by explicit per-launch env rules. `image.source_kind` uses the stable values and meanings defined by `image-builder.md`; this spec owns validation and install dispatch, not those values. `security.runtime_secrets` maps validated environment names to `optional` or `required` and contains no values; the launcher resolves values from `SpawnConfig.env` or same-named host env immediately before launch. `agent.kind` is one of `direct`, `claude`, or `pi`; callers may not change it independently of `image`. `services.beads.enable = "auto"` means start Dolt when the workspace has `.beads/dolt`; `services.nix_cache.enable` controls project-cache endpoint injection. `network.default_mode` defaults to `open` and may be overridden at launch by `WRIX_NETWORK=open|limit`; both modes keep the local-network isolation baseline.
+`profile.mounts` are profile-level mounts and are additive with
+`mkSandbox.mounts` and `SpawnConfig.mounts`. `profile.env` is non-secret
+profile/default container environment; it enters the Nix store and OCI image
+metadata and is overridden only by explicit per-launch env rules.
+`image.source_kind` uses the stable values and meanings defined by
+`image-builder.md`; this spec owns validation and install dispatch, not those
+values. `security.runtime_secrets` maps validated environment names to
+`optional` or `required` and contains no values; the launcher resolves values
+from `SpawnConfig.env` or same-named host env immediately before launch.
+`agent.kind` is one of `direct`, `claude`, or `pi`; callers may not change it
+independently of `image`. `services.beads.enable = "auto"` means start Dolt when
+the workspace has `.beads/dolt`; `services.nix_cache.enable` controls
+project-cache endpoint injection. `network.default_mode` defaults to `open` and
+may be overridden at launch by `WRIX_NETWORK=open|limit`; both modes keep the
+local-network isolation baseline.
 
 `SpawnConfig` JSON has stable top-level fields:
 
-- `image_ref` — optional per-launch image ref override; when absent, `ProfileConfig.image.ref` is used.
-- `image_source` — optional per-launch Nix store path of the image source; when absent, `ProfileConfig.image.source` is used.
-- `image_source_kind` — optional per-launch source-kind override under the `image-builder.md` source-kind contract; when absent, `ProfileConfig.image.source_kind` is used. If `image_source` is present, `image_source_kind` must also be present, even when it matches the profile kind, so source overrides never rely on launcher inference. For an `image_source` override, the installer derives and validates the selected image digest from that override source before preflight instead of reusing `ProfileConfig.image.digest`. The installer installs the selected image into the platform store before the launcher invokes the container CLI; preflight + dispatch semantics are documented in *Image install path* above.
+- `image_ref` — optional per-launch image ref override; when absent,
+  `ProfileConfig.image.ref` is used.
+- `image_source` — optional per-launch Nix store path of the image source; when
+  absent, `ProfileConfig.image.source` is used.
+- `image_source_kind` — optional per-launch source-kind override under the
+  `image-builder.md` source-kind contract; when absent,
+  `ProfileConfig.image.source_kind` is used. If `image_source` is present,
+  `image_source_kind` must also be present, even when it matches the profile
+  kind, so source overrides never rely on launcher inference. For an
+  `image_source` override, the installer derives and validates the selected
+  image digest from that override source before preflight instead of reusing
+  `ProfileConfig.image.digest`. The installer installs the selected image into
+  the platform store before the launcher invokes the container CLI; preflight +
+  dispatch semantics are documented in _Image install path_ above.
 - `workspace` — host path bind-mounted at `/workspace`
-- `env` — per-launch `[key, value]` pairs to pass through; pairs matching `security.runtime_secrets` are runtime credential sources and never enter Nix or image data
+- `env` — per-launch `[key, value]` pairs to pass through; pairs matching
+  `security.runtime_secrets` are runtime credential sources and never enter Nix
+  or image data
 - `agent_args` — argv tail passed to the agent binary
-- `mounts` — optional `[{host_path, container_path, read_only}]` list; omitted or empty means no per-launch mounts. Additive to `profile.mounts` and `mkSandbox.mounts`.
+- `mounts` — optional `[{host_path, container_path, read_only}]` list; omitted
+  or empty means no per-launch mounts. Additive to `profile.mounts` and
+  `mkSandbox.mounts`.
 
-Plus consumer-defined fields the entrypoint reads from the original config mounted read-only inside the container at the path named by `WRIX_SPAWN_CONFIG`. The schema is part of the launcher runtime contract, and CLI help mirrors it per `cli.md`. Per-launch `SpawnConfig` may override launch-time inputs (workspace, env allowlist, agent args, mounts, image ref/source for orchestrators), but it may not change the selected agent independently of the image/profile config. `wrix run` errors when no valid `ProfileConfig` is supplied; there is no implicit default image baked in.
+Plus consumer-defined fields the entrypoint reads from the original config
+mounted read-only inside the container at the path named by `WRIX_SPAWN_CONFIG`.
+The schema is part of the launcher runtime contract, and CLI help mirrors it per
+`cli.md`. Per-launch `SpawnConfig` may override launch-time inputs (workspace,
+env allowlist, agent args, mounts, image ref/source for orchestrators), but it
+may not change the selected agent independently of the image/profile config.
+`wrix run` errors when no valid `ProfileConfig` is supplied; there is no
+implicit default image baked in.
 
 ## Platform Implementations
 
 ### Linux (Podman)
 
 - Rootless Podman is the default Linux runtime; krun is optional.
-- The launcher grants temporary in-container `NET_ADMIN` for firewall setup on every launch, including `WRIX_NETWORK=open`, because baseline LAN/private/host-local/VPN blocking is always required. The immutable bootstrap installs the in-sandbox firewall ruleset (`nftables` by default on Linux Podman), disables/blocks IPv6 for v1, verifies policy, and replaces itself through `capsh` before workspace-controlled setup, the agent, or exit logging can execute.
-- Default boundary runs as rootless **container-root** (no `--userns=keep-id`), which maps to the invoking host user — the owner of the baked `/nix/store` — so store-mutating Nix ops succeed and `/workspace` files carry host UID/GID. The launcher sets `IS_SANDBOX=1` so claude permits `--dangerously-skip-permissions` while the process remains root, and does not preload `libfakeuid`. The microVM path keeps `--userns=keep-id` (krun maps host user→root inside the VM) and enters the same trusted bootstrap through `krun-init.sh`; argv decoding and libfakeuid activation occur only after the capability drop.
+- The launcher grants temporary in-container `NET_ADMIN` for firewall setup on
+  every launch, including `WRIX_NETWORK=open`, because baseline
+  LAN/private/host-local/VPN blocking is always required. The immutable
+  bootstrap installs the in-sandbox firewall ruleset (`nftables` by default on
+  Linux Podman), disables/blocks IPv6 for v1, verifies policy, and replaces
+  itself through `capsh` before workspace-controlled setup, the agent, or exit
+  logging can execute.
+- Default boundary runs as rootless **container-root** (no `--userns=keep-id`),
+  which maps to the invoking host user — the owner of the baked `/nix/store` —
+  so store-mutating Nix ops succeed and `/workspace` files carry host UID/GID.
+  The launcher sets `IS_SANDBOX=1` so claude permits
+  `--dangerously-skip-permissions` while the process remains root, and does not
+  preload `libfakeuid`. The microVM path keeps `--userns=keep-id` (krun maps
+  host user→root inside the VM) and enters the same trusted bootstrap through
+  `krun-init.sh`; argv decoding and libfakeuid activation occur only after the
+  capability drop.
 - `--pids-limit 4096` fork-bomb guard
 - `WRIX_MICROVM=1` switches to `podman --runtime krun` when `/dev/kvm` exists
 
@@ -196,75 +400,126 @@ Plus consumer-defined fields the entrypoint reads from the original config mount
 
 - Requires macOS 26+ and Apple Silicon
 - Virtualization.framework microVM, always (no separate container-mode path)
-- vmnet networking with the same always-on in-guest firewall policy: no inbound ports, public-internet outbound in `open`, allowlist-only outbound in `limit`, LAN/private/host-local/VPN/special ranges blocked in both modes, IPv6 disabled/blocked for v1. The Darwin host `pf` firewall is not part of the sandbox contract.
-- An immutable `/network-bootstrap.sh` is the only stage granted `NET_ADMIN`; it uses image-pinned binaries, verifies the firewall, and `exec`s `/entrypoint.sh` through `capsh` after dropping `NET_ADMIN`. The agent entrypoint fails before workspace setup unless the trusted bootstrap marker exists and `NET_ADMIN` is absent from inheritable, permitted, effective, bounding, and ambient capability sets.
+- vmnet networking with the same always-on in-guest firewall policy: no inbound
+  ports, public-internet outbound in `open`, allowlist-only outbound in `limit`,
+  LAN/private/host-local/VPN/special ranges blocked in both modes, IPv6
+  disabled/blocked for v1. The Darwin host `pf` firewall is not part of the
+  sandbox contract.
+- An immutable `/network-bootstrap.sh` is the only stage granted `NET_ADMIN`; it
+  uses image-pinned binaries, verifies the firewall, and `exec`s
+  `/entrypoint.sh` through `capsh` after dropping `NET_ADMIN`. The agent
+  entrypoint fails before workspace setup unless the trusted bootstrap marker
+  exists and `NET_ADMIN` is absent from inheritable, permitted, effective,
+  bounding, and ambient capability sets.
 - VirtioFS workspace mount
-- Mount classifier handles `profile.mounts` and `SpawnConfig.mounts` uniformly — directories staged + copied at launch, regular files copy-from-parent-dir, Unix-socket sources rejected at launch
+- Mount classifier handles `profile.mounts` and `SpawnConfig.mounts` uniformly —
+  directories staged + copied at launch, regular files copy-from-parent-dir,
+  Unix-socket sources rejected at launch
 - Entrypoint creates user matching host UID
 
 ## Success Criteria
 
-- `mkSandbox` accepts the documented parameter set (`profile`, `cpus`, `memoryMb`, `deployKey`, `packages`, `mounts`, `env`, `runtimeSecrets`, `mcp`, `mcpRuntime`, `agent`, `agentPkg`, `agentSettings`) and returns `{ package, image, launcher, profile, devShell }`
+- `mkSandbox` accepts the documented parameter set (`profile`, `cpus`,
+  `memoryMb`, `deployKey`, `packages`, `mounts`, `env`, `runtimeSecrets`, `mcp`,
+  `mcpRuntime`, `agent`, `agentPkg`, `agentSettings`) and returns
+  `{ package, image, launcher, profile, devShell }`
   [check](verify:sandbox.mksandbox-api)
-- Platform dispatch picks the Linux implementation on Linux hosts and the macOS implementation on Darwin hosts
-  [check](verify:sandbox.platform-dispatch)
-- Evaluating `mkSandbox` on an unsupported system throws at evaluation time rather than producing a broken derivation
+- Platform dispatch picks the Linux implementation on Linux hosts and the macOS
+  implementation on Darwin hosts [check](verify:sandbox.platform-dispatch)
+- Evaluating `mkSandbox` on an unsupported system throws at evaluation time
+  rather than producing a broken derivation
   [check](verify:sandbox.unsupported-system-error)
 - A built Linux sandbox starts a container and exits cleanly
   [system](verify:sandbox.linux-container-starts)
 - A built macOS sandbox starts an Apple `container` microVM and exits cleanly
   [system](verify:sandbox.darwin-container-starts)
-- The Darwin network bootstrap cannot resolve tools from `/workspace`, verifies the firewall before invoking `capsh`, preserves the agent argv, and enters stage two only after requesting an irreversible `NET_ADMIN` drop
+- The Darwin network bootstrap cannot resolve tools from `/workspace`, verifies
+  the firewall before invoking `capsh`, preserves the agent argv, and enters
+  stage two only after requesting an irreversible `NET_ADMIN` drop
   [system](verify:sandbox.darwin-network-bootstrap)
-- Linux container and krun initialization install the same open/limit policy and exact endpoint exceptions with image-pinned tools, preserve argv, and drop `NET_ADMIN` before workspace shims run during setup, agent execution, or exit logging
-  [system](verify:sandbox.linux-network-bootstrap)
-- Both agent entrypoints reject a missing bootstrap marker or retained `NET_ADMIN` before setup or exit logging can run
+- Linux container and krun initialization install the same open/limit policy and
+  exact endpoint exceptions with image-pinned tools, preserve argv, and drop
+  `NET_ADMIN` before workspace shims run during setup, agent execution, or exit
+  logging [system](verify:sandbox.linux-network-bootstrap)
+- Both agent entrypoints reject a missing bootstrap marker or retained
+  `NET_ADMIN` before setup or exit logging can run
   [system](verify:sandbox.entrypoint-requires-bootstrap)
-- Files created inside `/workspace` carry the host UID/GID, not a container-internal UID
-  [system](verify:sandbox.uid-mapping)
-- Host filesystem outside `/workspace` and declared mounts is not visible inside the container
-  [system](verify:sandbox.filesystem-isolation)
-- `mounts` and `env` passed to `mkSandbox` are merged into the profile and reach the container as configured
-  [system](verify:sandbox.custom-mounts-env)
-- Every sandbox image carries the `wrix` CLI, so `wrix beads push` resolves inside the container without entering `nix develop` or running `nix run`
+- Files created inside `/workspace` carry the host UID/GID, not a
+  container-internal UID [system](verify:sandbox.uid-mapping)
+- Host filesystem outside `/workspace` and declared mounts is not visible inside
+  the container [system](verify:sandbox.filesystem-isolation)
+- `mounts` and `env` passed to `mkSandbox` are merged into the profile and reach
+  the container as configured [system](verify:sandbox.custom-mounts-env)
+- Every sandbox image carries the `wrix` CLI, so `wrix beads push` resolves
+  inside the container without entering `nix develop` or running `nix run`
   [check](test-ci:test-wrix-cli-in-profile)
-- In a fresh container built from a profile that ships `nix`, the runtime process (rootless container-root) runs `nix develop -c true`, a `nix build` of a flake target, and a store-mutating op against a baked root-owned path to completion (exit 0) with no `Operation not permitted` failure on a `/nix/store` path
-  [system](verify:sandbox.nix-in-container)
-- The default container boundary sets `IS_SANDBOX=1` so claude permits `--dangerously-skip-permissions` as root without UID spoofing, does not `LD_PRELOAD` `libfakeuid`, and keeps libfakeuid restricted to the krun path
+- In a fresh container built from a profile that ships `nix`, the runtime
+  process (rootless container-root) runs `nix develop -c true`, a `nix build` of
+  a flake target, and a store-mutating op against a baked root-owned path to
+  completion (exit 0) with no `Operation not permitted` failure on a
+  `/nix/store` path [system](verify:sandbox.nix-in-container)
+- The default container boundary sets `IS_SANDBOX=1` so claude permits
+  `--dangerously-skip-permissions` as root without UID spoofing, does not
+  `LD_PRELOAD` `libfakeuid`, and keeps libfakeuid restricted to the krun path
   [test](../crates/wrix-sandbox/tests/launch.rs::linux_default_boundary_sets_is_sandbox_without_fakeuid)
-- In a fresh container built from the selected image, the runtime user completes `nix-store --verify --check-contents` and an additive `nix build` without store-integrity failures. The baked store/database guarantee is owned by `image-builder.md` § In-Container Nix Store Consistency
+- In a fresh container built from the selected image, the runtime user completes
+  `nix-store --verify --check-contents` and an additive `nix build` without
+  store-integrity failures. The baked store/database guarantee is owned by
+  `image-builder.md` § In-Container Nix Store Consistency
   [system](verify:sandbox.nix-store-verify-clean)
 - The launcher accepts exactly `WRIX_NETWORK=open` and `WRIX_NETWORK=limit`
   [test](command::launch::test::network_mode_parse_accepts_only_open_and_limit)
-- Any other `WRIX_NETWORK` value errors through the production CLI before workspace services or a container start
+- Any other `WRIX_NETWORK` value errors through the production CLI before
+  workspace services or a container start
   [test](../crates/wrix-cli/tests/sandbox_launch.rs::invalid_network_mode_fails_before_service_or_container_start)
-- The configured network default is applied when `WRIX_NETWORK` is absent; explicit `open`/`limit` overrides take precedence
+- The configured network default is applied when `WRIX_NETWORK` is absent;
+  explicit `open`/`limit` overrides take precedence
   [test](../crates/wrix-cli/tests/sandbox_launch.rs::profile_network_defaults_and_explicit_environment_precedence)
-- Malformed network defaults and unsupported IPv6 policy fail before subprocess side effects, even with a valid environment override
+- Malformed network defaults and unsupported IPv6 policy fail before subprocess
+  side effects, even with a valid environment override
   [test](../crates/wrix-cli/tests/sandbox_launch.rs::malformed_network_policy_fails_before_subprocesses_even_with_override)
-- In `WRIX_NETWORK=open`, sandbox outbound to public internet succeeds, but outbound to LAN/private/host-local/VPN/special IPv4 ranges fails except for exact DNS and wrix-owned endpoint exceptions
+- In `WRIX_NETWORK=open`, sandbox outbound to public internet succeeds, but
+  outbound to LAN/private/host-local/VPN/special IPv4 ranges fails except for
+  exact DNS and wrix-owned endpoint exceptions
   [system](verify:sandbox.network-open-blocks-lan)
-- In `WRIX_NETWORK=limit`, outbound succeeds only to the merged allowlist plus exact DNS and wrix-owned endpoint exceptions; allowlist domains are resolved once at startup, unresolvable domains fail launch, and non-allowlisted public internet plus LAN/private/host-local/VPN/special ranges fail
+- In `WRIX_NETWORK=limit`, outbound succeeds only to the merged allowlist plus
+  exact DNS and wrix-owned endpoint exceptions; allowlist domains are resolved
+  once at startup, unresolvable domains fail launch, and non-allowlisted public
+  internet plus LAN/private/host-local/VPN/special ranges fail
   [system](verify:sandbox.network-limit-allowlist)
 - IPv6 egress is disabled or blocked in both network modes for v1
   [system](verify:sandbox.network-ipv6-blocked)
-- If firewall setup, IPv6 disablement, or `NET_ADMIN` drop cannot be verified, the launcher fails closed before the agent starts and never falls back to LAN-open networking
-  [system](verify:sandbox.network-fail-closed)
-- After startup, the agent process cannot modify firewall rules (for example `nft flush ruleset` on the nft backend, or the equivalent backend flush command, fails inside the running sandbox)
+- If firewall setup, IPv6 disablement, or `NET_ADMIN` drop cannot be verified,
+  the launcher fails closed before the agent starts and never falls back to
+  LAN-open networking [system](verify:sandbox.network-fail-closed)
+- After startup, the agent process cannot modify firewall rules (for example
+  `nft flush ruleset` on the nft backend, or the equivalent backend flush
+  command, fails inside the running sandbox)
   [system](verify:sandbox.agent-lacks-net-admin)
-- `WRIX_MICROVM=1` selects `podman --runtime krun --userns=keep-id` on Linux when `/dev/kvm` is available, enters through the relay, serializes the requested command through `WRIX_KRUN_CMD`, passes terminal dimensions for PTY setup, and reaches the krun-only init/libfakeuid boundary
+- `WRIX_MICROVM=1` selects `podman --runtime krun --userns=keep-id` on Linux
+  when `/dev/kvm` is available, enters through the relay, serializes the
+  requested command through `WRIX_KRUN_CMD`, passes terminal dimensions for PTY
+  setup, and reaches the krun-only init/libfakeuid boundary
   [system](verify:sandbox.linux-microvm-runtime)
-- MicroVM opt-in fails with the typed missing-KVM error before Podman runtime dispatch when the KVM device is absent
+- MicroVM opt-in fails with the typed missing-KVM error before Podman runtime
+  dispatch when the KVM device is absent
   [system](verify:sandbox.linux-microvm-missing-kvm)
-- `wrix run` errors at startup with a clear message when no valid Nix-generated `ProfileConfig` JSON is supplied
+- `wrix run` errors at startup with a clear message when no valid Nix-generated
+  `ProfileConfig` JSON is supplied
   [test](../crates/wrix-sandbox/tests/command.rs::run_requires_valid_profile_config)
-- `mkSandbox`'s `package` wrapper keeps `bin/wrix` explicit, exposes `wrix-run` as `meta.mainProgram` for `nix run`, and passes an immutable Nix-store `ProfileConfig` JSON path to the profile-agnostic launcher for both `run` and `spawn`, with image defaults supplied by `ProfileConfig` rather than mutable `WRIX_DEFAULT_IMAGE_*` env vars
-  [check](test-ci:test-profile-config-wrapper)
-- `ProfileConfig.image` includes `ref`, `source`, explicit `source_kind`, and `digest`; the launcher/runtime installer rejects configs where `source_kind` is missing or incompatible with the selected platform install path
+- `mkSandbox`'s `package` wrapper keeps `bin/wrix` explicit, exposes `wrix-run`
+  as `meta.mainProgram` for `nix run`, and passes an immutable Nix-store
+  `ProfileConfig` JSON path to the profile-agnostic launcher for both `run` and
+  `spawn`, with image defaults supplied by `ProfileConfig` rather than mutable
+  `WRIX_DEFAULT_IMAGE_*` env vars [check](test-ci:test-profile-config-wrapper)
+- `ProfileConfig.image` includes `ref`, `source`, explicit `source_kind`, and
+  `digest`; the launcher/runtime installer rejects configs where `source_kind`
+  is missing or incompatible with the selected platform install path
   [check](test-ci:test-profile-config-image-source-kind)
 - Complete `ProfileConfig` parsing rejects malformed fields before subprocesses
   [test](../crates/wrix-cli/tests/sandbox_launch.rs::malformed_profile_config_fails_before_subprocesses)
-- Complete `ProfileConfig` parsing rejects duplicate JSON fields before subprocesses
+- Complete `ProfileConfig` parsing rejects duplicate JSON fields before
+  subprocesses
   [test](../crates/wrix-cli/tests/sandbox_launch.rs::duplicate_profile_config_fields_fail_at_the_json_boundary)
 - Complete `ProfileConfig` parsing retains intentional wire extensibility and
   platform-specific source semantics
@@ -272,121 +527,265 @@ Plus consumer-defined fields the entrypoint reads from the original config mount
 - Image installer construction rejects empty source paths and contradictory
   runtime/source combinations before store operations
   [test](../crates/wrix-sandbox/src/image.rs::installation_constructor_rejects_contradictory_sources)
-- The selected agent runtime comes from `ProfileConfig` and cannot be changed by caller env independently of the selected image/profile
+- The selected agent runtime comes from `ProfileConfig` and cannot be changed by
+  caller env independently of the selected image/profile
   [test](../crates/wrix-sandbox/tests/command.rs::profile_config_agent_cannot_be_overridden_by_env)
-- `wrix spawn --spawn-config <file>` parses the documented `SpawnConfig` fields (`image_ref`, `image_source`, `image_source_kind`, `workspace`, `env`, `agent_args`, `mounts`) into the launch plan
+- `wrix spawn --spawn-config <file>` parses the documented `SpawnConfig` fields
+  (`image_ref`, `image_source`, `image_source_kind`, `workspace`, `env`,
+  `agent_args`, `mounts`) into the launch plan
   [test](../crates/wrix-sandbox/tests/spawn_config.rs::documented_spawn_config_fields_render_into_launch_plan)
 - A `SpawnConfig.image_source` override requires an explicit source kind
   [test](../crates/wrix-sandbox/tests/spawn_config.rs::image_source_override_requires_source_kind)
-- A `SpawnConfig.image_source_kind` override must be compatible with the current platform
+- A `SpawnConfig.image_source_kind` override must be compatible with the current
+  platform
   [test](../crates/wrix-sandbox/tests/spawn_config.rs::image_source_kind_must_match_platform)
-- `SpawnConfig` cannot change the selected agent independently of `ProfileConfig`
+- `SpawnConfig` cannot change the selected agent independently of
+  `ProfileConfig`
   [test](../crates/wrix-sandbox/tests/spawn_config.rs::spawn_config_cannot_override_agent)
-- Consumer-defined `SpawnConfig` fields remain available to the in-container entrypoint through the read-only config mount and `WRIX_SPAWN_CONFIG`
+- Consumer-defined `SpawnConfig` fields remain available to the in-container
+  entrypoint through the read-only config mount and `WRIX_SPAWN_CONFIG`
   [test](../crates/wrix-sandbox/tests/spawn_config.rs::consumer_spawn_config_fields_are_mounted_for_entrypoint)
-- On Linux, each `SpawnConfig.mounts` entry becomes a `-v <host_path>:<container_path>` podman argument, with `:ro` appended when `read_only: true`. A missing or empty `mounts` list produces no additional `-v` flags.
+- On Linux, each `SpawnConfig.mounts` entry becomes a
+  `-v <host_path>:<container_path>` podman argument, with `:ro` appended when
+  `read_only: true`. A missing or empty `mounts` list produces no additional
+  `-v` flags.
   [test](../crates/wrix-sandbox/tests/spawn_config.rs::linux_spawn_mounts_render_podman_volume_args)
-- The packaged launcher does not mount the host Podman socket or export `CONTAINER_HOST` / `GC_HOST_*` by default; `WRIX_PODMAN_SOCKET` is ignored; and only `WRIX_UNSAFE_PODMAN_SOCKET` renders a real socket mount plus host-visible `CONTAINER_HOST` / `GC_HOST_*`, failing loudly when the socket is absent
-  [system](verify:sandbox.unsafe-podman-socket)
-- On Darwin, the same mount classifier handles `profile.mounts` and `SpawnConfig.mounts` — one mechanism, not two. Directories are staged + copied at launch and regular files copy from their parent directory.
+- The packaged launcher does not mount the host Podman socket or export
+  `CONTAINER_HOST` / `GC_HOST_*` by default; `WRIX_PODMAN_SOCKET` is ignored;
+  and only `WRIX_UNSAFE_PODMAN_SOCKET` renders a real socket mount plus
+  host-visible `CONTAINER_HOST` / `GC_HOST_*`, failing loudly when the socket is
+  absent [system](verify:sandbox.unsafe-podman-socket)
+- On Darwin, the same mount classifier handles `profile.mounts` and
+  `SpawnConfig.mounts` — one mechanism, not two. Directories are staged + copied
+  at launch and regular files copy from their parent directory.
   [test](../crates/wrix-sandbox/tests/darwin_mounts.rs::mount_classifier_handles_profile_and_spawn_mounts_uniformly)
-- On Darwin, mount entries whose `host_path` is a Unix socket fail before the container starts because VirtioFS does not pass socket operations
+- On Darwin, mount entries whose `host_path` is a Unix socket fail before the
+  container starts because VirtioFS does not pass socket operations
   [test](../crates/wrix-sandbox/tests/darwin_mounts.rs::mount_classifier_rejects_unix_sockets)
-- The container entrypoint switches on `WRIX_AGENT` and exec's the matching agent binary (`claude`, `pi`, `direct`)
+- The container entrypoint switches on `WRIX_AGENT` and exec's the matching
+  agent binary (`claude`, `pi`, `direct`)
   [system](verify:sandbox.entrypoint-agent-dispatch)
-- Before exec'ing the selected agent, the entrypoint rejects a mismatch between the ProfileConfig-selected `WRIX_AGENT` and the image-declared `/etc/wrix/image-agent`, then verifies the agent's binary is present and fails loudly with a clear error when it is absent from the image (e.g. `WRIX_AGENT=pi` against a claude image), rather than emitting a bare `command not found`
-  [system](verify:sandbox.agent-binary-guard)
-- Both entrypoints seed and persist each agent's own config home — claude `~/.claude`, pi `~/.pi/agent` — not only claude's
+- Before exec'ing the selected agent, the entrypoint rejects a mismatch between
+  the ProfileConfig-selected `WRIX_AGENT` and the image-declared
+  `/etc/wrix/image-agent`, then verifies the agent's binary is present and fails
+  loudly with a clear error when it is absent from the image (e.g.
+  `WRIX_AGENT=pi` against a claude image), rather than emitting a bare
+  `command not found` [system](verify:sandbox.agent-binary-guard)
+- Both entrypoints seed and persist each agent's own config home — claude
+  `~/.claude`, pi `~/.pi/agent` — not only claude's
   [system](verify:sandbox.agent-config-homes)
-- Deploy key `<name>` is mounted read-only at `/etc/wrix/keys/<name>` inside the container when `deployKey = "<name>"` is set, without mounting the `.pub` file
+- Deploy key `<name>` is mounted read-only at `/etc/wrix/keys/<name>` inside the
+  container when `deployKey = "<name>"` is set, without mounting the `.pub` file
   [test](../crates/wrix-sandbox/tests/launch.rs::deploy_key_mount_uses_container_key_dir_without_public_key)
-- `ProfileConfig.security.deploy_key` accepts only a validated,
-  single-component deploy-key name; absolute paths, separators, whitespace,
-  and dot traversal fail during config parsing before credential staging
+- `ProfileConfig.security.deploy_key` accepts only a validated, single-component
+  deploy-key name; absolute paths, separators, whitespace, and dot traversal
+  fail during config parsing before credential staging
   [test](../crates/wrix-sandbox/tests/launch.rs::profile_config_rejects_unsafe_deploy_key_names_before_staging)
-- Both entrypoints can derive the deploy public key from the mounted private key on demand with `ssh-keygen -y`
+- Both entrypoints can derive the deploy public key from the mounted private key
+  on demand with `ssh-keygen -y`
   [system](verify:sandbox.entrypoint-deploy-key-public)
-- `agentSettings` merges into the selected agent's baked settings; non-empty `agentSettings` with `agent = "direct"` fails at evaluation time
+- `agentSettings` merges into the selected agent's baked settings; non-empty
+  `agentSettings` with `agent = "direct"` fails at evaluation time
   [check](test-ci:test-sandbox-agent-settings)
-- Pi images seed `defaultModel = "gpt-6.1-sol"`, `editorPaddingX = 1`, and `enableInstallTelemetry = false`, so GPT-6.1 Sol is selected by default, the input editor has one cell of horizontal padding, and Pi's anonymous install/update ping plus optional provider attribution headers are disabled by default; update checking remains a separate Pi setting.
+- Pi images seed `defaultModel = "gpt-6.1-sol"`, `editorPaddingX = 1`, and
+  `enableInstallTelemetry = false`, so GPT-6.1 Sol is selected by default, the
+  input editor has one cell of horizontal padding, and Pi's anonymous
+  install/update ping plus optional provider attribution headers are disabled by
+  default; update checking remains a separate Pi setting.
   [check](test-ci:test-sandbox-agent-settings)
-- Pi images default to regular terminal mode (`tuiMode = "regular"`), so interactive startup uses the terminal's normal screen and scrollback; unrelated `agentSettings` preserve this default, and an explicit `agentSettings.tuiMode = "fullscreen"` takes precedence.
+- Pi images default to regular terminal mode (`tuiMode = "regular"`), so
+  interactive startup uses the terminal's normal screen and scrollback;
+  unrelated `agentSettings` preserve this default, and an explicit
+  `agentSettings.tuiMode = "fullscreen"` takes precedence.
   [check](verify:sandbox.pi-tui-mode)
-- A fresh Pi session with Codex credentials selects `gpt-6.1-sol` with xhigh reasoning using Pi's bundled model catalog, without a cached or network-refreshed catalog or a custom `models.json`.
+- A fresh Pi session with Codex credentials selects `gpt-6.1-sol` with xhigh
+  reasoning using Pi's bundled model catalog, without a cached or
+  network-refreshed catalog or a custom `models.json`.
   [check](verify:sandbox.pi-default-model)
-- When `/workspace/bin` exists inside the container, it appears first on `PATH`, so a consumer-supplied shim at `/workspace/bin/<name>` resolves ahead of a same-named binary baked into the image
+- When `/workspace/bin` exists inside the container, it appears first on `PATH`,
+  so a consumer-supplied shim at `/workspace/bin/<name>` resolves ahead of a
+  same-named binary baked into the image
   [system](verify:sandbox.workspace-bin-path-present)
-- When `/workspace/bin` does not exist, the container's `PATH` does not contain `/workspace/bin`
-  [system](verify:sandbox.workspace-bin-path-absent)
+- When `/workspace/bin` does not exist, the container's `PATH` does not contain
+  `/workspace/bin` [system](verify:sandbox.workspace-bin-path-absent)
 - Both platform entrypoints implement the `/workspace/bin` PATH prepend
   [system](verify:sandbox.entrypoint-workspace-bin-prepend)
-- The packaged runtime image installer preflight checks whether the selected image source's content digest matches any image already present in the platform store before invoking the install pipeline; on a digest hit, no image source is executed, no tar bytes are streamed, and no `*-load` CLI is invoked
+- The packaged runtime image installer preflight checks whether the selected
+  image source's content digest matches any image already present in the
+  platform store before invoking the install pipeline; on a digest hit, no image
+  source is executed, no tar bytes are streamed, and no `*-load` CLI is invoked
   [system](test-ci:test-image-install-digest-skip)
-- On Linux, the runtime image installer dispatches the Linux source kind defined by `image-builder.md` through an archive-less descriptor-to-OCI-layout install path (`oci:<oci_layout>:<oci_ref>` → `containers-storage:<ref>` with skopeo, or equivalent wrix); the docker/OCI archive conversion path is not used for Linux descriptor sources
+- On Linux, the runtime image installer dispatches the Linux source kind defined
+  by `image-builder.md` through an archive-less descriptor-to-OCI-layout install
+  path (`oci:<oci_layout>:<oci_ref>` → `containers-storage:<ref>` with skopeo,
+  or equivalent wrix); the docker/OCI archive conversion path is not used for
+  Linux descriptor sources
   [test](../crates/wrix-sandbox/tests/image_install.rs::linux_descriptor_sources_use_archiveless_install_path)
-- The packaged Linux launcher supplies a readable OCI layout to skopeo with the Podman store destination and skips installation when that image is already present
-  [system](test-ci:test-image-install-real-skopeo)
-- Digest preflight also works when the digest comes from the descriptor rather than ProfileConfig
+- The packaged Linux launcher supplies a readable OCI layout to skopeo with the
+  Podman store destination and skips installation when that image is already
+  present [system](test-ci:test-image-install-real-skopeo)
+- Digest preflight also works when the digest comes from the descriptor rather
+  than ProfileConfig
   [test](../crates/wrix-sandbox/tests/image_install.rs::descriptor_digest_preflight_works_without_profile_digest)
-- A second spawn of an already-loaded image performs no writes to the platform store's layer directory and does not execute the image source
+- A second spawn of an already-loaded image performs no writes to the platform
+  store's layer directory and does not execute the image source
   [test](../crates/wrix-sandbox/tests/image_install.rs::already_loaded_image_performs_no_store_writes)
-- The runtime image cleanup path records a bounded cross-workspace MRU of eight typed wrix image refs/digests/image IDs, preserves images used by Podman containers, prunes wrix-managed images outside the keep set, and does not automatically remove unlabelled `<none>:<none>` images
+- The runtime image cleanup path records a bounded cross-workspace MRU of eight
+  typed wrix image refs/digests/image IDs, preserves images used by Podman
+  containers, prunes wrix-managed images outside the keep set, and does not
+  automatically remove unlabelled `<none>:<none>` images
   [test](../crates/wrix-sandbox/tests/image_retention.rs::cleanup_prunes_only_wrix_managed_images_outside_bounded_keep_set)
 - Image MRU serialization preserves typed refs, digests, and IDs while accepting
   documented legacy empty fields
   [test](../crates/wrix-sandbox/src/image.rs::mru_round_trips_typed_identifiers_and_accepts_legacy_empty_fields)
 - Runtime listings parse into typed store targets
   [test](../crates/wrix-sandbox/src/image.rs::podman_rows_parse_typed_references_ids_and_absent_fields)
-- Concurrent launches update the shared MRU without losing either workspace's record or exposing partially-written JSON
+- Concurrent launches update the shared MRU without losing either workspace's
+  record or exposing partially-written JSON
   [test](../crates/wrix-sandbox/tests/image_retention.rs::concurrent_mru_updates_preserve_each_workspace_record)
-- Apple `container list` records are parsed for image references and descriptor IDs so cleanup preserves images used by existing Apple containers
+- Apple `container list` records are parsed for image references and descriptor
+  IDs so cleanup preserves images used by existing Apple containers
   [test](image::test::apple_container_list_preserves_images_used_by_existing_containers)
 - Apple image digest inspection accepts prefixed digests, bare digests, and
   content-digest IDs, without treating opaque runtime IDs as digest evidence
   [test](../crates/wrix-sandbox/src/image.rs::apple_content_digest_accepts_prefixed_bare_and_id_fallback_variants)
-- Runtime MCP selection and tmux audit overrides from the host reach the container launch environment through `WRIX_MCP` and `WRIX_MCP_TMUX_*`
+- Runtime MCP selection and tmux audit overrides from the host reach the
+  container launch environment through `WRIX_MCP` and `WRIX_MCP_TMUX_*`
   [test](../crates/wrix-sandbox/tests/launch.rs::runtime_mcp_host_configuration_reaches_entrypoint)
-- Explicit and runtime MCP selection produce the same schema-v1 `WRIX_MCP_MANIFEST` (`name`, `command`, `args`, `env`) for direct, Claude, and Pi images; Claude translates it into `mcpServers`, Pi's Wrix-owned extension discovers and forwards tools over stdio, and direct runners receive the manifest path as their adapter handoff
+- Explicit and runtime MCP selection produce the same schema-v1
+  `WRIX_MCP_MANIFEST` (`name`, `command`, `args`, `env`) for direct, Claude, and
+  Pi images; Claude translates it into `mcpServers`, Pi's Wrix-owned extension
+  discovers and forwards tools over stdio, and direct runners receive the
+  manifest path as their adapter handoff
   [system](verify:sandbox.mcp-agent-adapters)
-- On Darwin, the runtime image installer converts the Darwin source kind defined by `image-builder.md` to a temporary OCI archive before invoking `container image load --input <oci-archive>`, then removes the temporary archive and relies on digest-skip preflight while per-blob install remains out of scope
-  [system](verify:sandbox.darwin-image-load)
+- On Darwin, the runtime image installer converts the Darwin source kind defined
+  by `image-builder.md` to a temporary OCI archive before invoking
+  `container image load --input <oci-archive>`, then removes the temporary
+  archive and relies on digest-skip preflight while per-blob install remains out
+  of scope [system](verify:sandbox.darwin-image-load)
 
 ## Requirements
 
 ### Functional
 
-1. **mkSandbox API** — accepts the parameters above; returns `{ package, image, launcher, profile, devShell }`. Profile schema lives in `profiles.md`; image build in `image-builder.md`; MCP server contracts in `tmux-mcp.md` and `playwright-mcp.md`.
-2. **Platform dispatch** — Linux selects the Podman launcher; macOS selects the Apple `container` CLI launcher; unsupported systems throw.
-3. **Workspace mount** — CWD bind-mounts at `/workspace`; profile mounts merge on top.
+1. **mkSandbox API** — accepts the parameters above; returns
+   `{ package, image, launcher, profile, devShell }`. Profile schema lives in
+   `profiles.md`; image build in `image-builder.md`; MCP server contracts in
+   `tmux-mcp.md` and `playwright-mcp.md`.
+2. **Platform dispatch** — Linux selects the Podman launcher; macOS selects the
+   Apple `container` CLI launcher; unsupported systems throw.
+3. **Workspace mount** — CWD bind-mounts at `/workspace`; profile mounts merge
+   on top.
 4. **UID mapping** — files created in `/workspace` carry host UID/GID.
-5. **Custom mounts and env** — `mkSandbox`'s `mounts`, non-secret `env`, and `runtimeSecrets` extend the profile rather than replace it. Runtime-secret maps right-merge by environment name; values are resolved only by the launcher.
+5. **Custom mounts and env** — `mkSandbox`'s `mounts`, non-secret `env`, and
+   `runtimeSecrets` extend the profile rather than replace it. Runtime-secret
+   maps right-merge by environment name; values are resolved only by the
+   launcher.
 6. **Deploy keys** — `deployKey = "<name>"` parses `<name>` as a validated,
    single-component identifier and mounts the host key read-only inside the
-   container at `/etc/wrix/keys/<name>` (and
-   `/etc/wrix/keys/<name>-signing` when a signing key is present). The `.pub`
-   file is not mounted; callers can derive it from the mounted private key on
-   demand via `ssh-keygen -y`. Host-source resolution and the env-first
-   override (`WRIX_DEPLOY_KEY`, `WRIX_SIGNING_KEY`) are owned by `security.md`.
-7. **MCP opt-in** — `mcp.<server>` enables a named server per `tmux-mcp.md` / `playwright-mcp.md`. Wrix owns registry selection and the schema-v1 stdio manifest; every agent receives its path through `WRIX_MCP_MANIFEST`. `mcpRuntime = true` bakes every registered server and applies `WRIX_MCP` selection before publishing that same manifest. Claude and Pi consume it through their Wrix adapters, while an external direct runner consumes the documented handoff itself. Profile output naming remains in `profiles.md`.
-8. **Agent runtime axis** — `agent` owns the build-time selector and runtime meanings documented in *Agent runtime axis*. Selection is encoded in immutable `ProfileConfig`, not caller env. `WRIX_AGENT` remains only the launcher→entrypoint wire derived from that config. The entrypoint guards on binary presence (`command -v`) and seeds/persists each agent's own config home (claude `~/.claude`, pi `~/.pi/agent`). Agent selection adds only that agent's required config: Claude images get Claude settings, Pi images get non-secret Pi settings (`openai-codex`, `gpt-6.1-sol`, xhigh reasoning, `defaultProjectTrust = "always"`, `tuiMode = "regular"`, `editorPaddingX = 1`, `enableInstallTelemetry = false`, steering/follow-up modes set to `"all"`, explicit `/workspace/.pi/agent/sessions` session dir) plus a runtime `auth.json` mount when selected, and direct images get no agent config. `agentPkg` overrides the selected agent package; `agentSettings` merges into the selected agent's settings schema and is rejected for direct. Pi does not import arbitrary files from `/workspace/.pi/agent`; only the session directory and auth mount are wired. Secrets are delivered through declared runtime environment sources or credential-file mounts (owned by `security.md`). Physical agent-package composition and exclusion of non-selected runtimes are owned by `image-builder.md`; the resulting tier composes orthogonally with the profile.
-9. **Launcher contract** — `wrix run` reads immutable Nix-generated `ProfileConfig` JSON plus CLI/host-env runtime inputs; `wrix spawn` reads the same `ProfileConfig` plus per-launch `SpawnConfig` JSON. Both share container construction, including workspace service startup and endpoint injection when services are enabled. Wrapper config-generation rules are owned by *Architecture > `package`*; workspace service contracts are owned by `services.md`.
-10. **Image source dispatch** — image install dispatches on the explicit source kinds owned by `image-builder.md`, not filename or platform guessing. A per-launch `image_source` override must carry a matching `image_source_kind`; it may not silently inherit an incompatible kind from `ProfileConfig`. The selected source's digest is derived or validated before preflight.
-11. **Image retention** — runtime image cleanup is wrix-scoped and bounded: keep the image selected for the current operation, images used by existing containers, and eight shared cross-workspace MRU records (ref plus digest/image ID when available) before pruning; prune wrix-managed images outside the keep set; never automatically delete unlabelled `<none>:<none>` images.
-12. **Per-launch mounts via SpawnConfig** — `wrix spawn`'s `SpawnConfig.mounts` adds per-launch bind mounts on top of `profile.mounts` and `mkSandbox`'s `mounts`. Each entry maps `host_path → container_path` with `read_only: true` rendering `:ro`. On Linux this is a literal `-v` flag. On Darwin, `SpawnConfig.mounts` flows through the same mount classifier as `profile.mounts`: directories staged + copied, regular files copy-from-parent-dir, Unix-socket sources rejected at launch with a clear error (VirtioFS does not pass socket operations). The launcher does not validate that `host_path` exists; podman fails at runtime if it does not.
-13. **Workspace `bin/` PATH prepend** — When `/workspace/bin` exists inside the container, both Linux and macOS entrypoints prepend it to `PATH` so consumer-supplied shims under the workspace's `bin/` resolve ahead of image-baked binaries with the same name. The check is directory existence, not per-binary; the consumer owns what it ships in `bin/`. When the directory is absent, `PATH` is unchanged. The contract is PATH ordering only — wrix does not create `/workspace/bin`, does not validate its contents, and does not allowlist individual shims.
-14. **In-container Nix** — a sandbox built from a `nix`-shipping profile lets the runtime user run both additive (`nix develop`, `nix build` of new closures) and store-mutating (replace, GC, delete of baked paths) Nix operations without permission or store-integrity failures. On the default boundary the runtime process is rootless container-root, which maps to the host user that owns the baked store, so it can mutate root-owned store paths — the `deletePath → fchmodat2(u+w)` primitive no longer hits `EPERM`. This spec owns that runtime identity and permissions boundary; `image-builder.md` § In-Container Nix Store Consistency owns the baked store/database invariant.
+   container at `/etc/wrix/keys/<name>` (and `/etc/wrix/keys/<name>-signing`
+   when a signing key is present). The `.pub` file is not mounted; callers can
+   derive it from the mounted private key on demand via `ssh-keygen -y`.
+   Host-source resolution and the env-first override (`WRIX_DEPLOY_KEY`,
+   `WRIX_SIGNING_KEY`) are owned by `security.md`.
+7. **MCP opt-in** — `mcp.<server>` enables a named server per `tmux-mcp.md` /
+   `playwright-mcp.md`. Wrix owns registry selection and the schema-v1 stdio
+   manifest; every agent receives its path through `WRIX_MCP_MANIFEST`.
+   `mcpRuntime = true` bakes every registered server and applies `WRIX_MCP`
+   selection before publishing that same manifest. Claude and Pi consume it
+   through their Wrix adapters, while an external direct runner consumes the
+   documented handoff itself. Profile output naming remains in `profiles.md`.
+8. **Agent runtime axis** — `agent` owns the build-time selector and runtime
+   meanings documented in _Agent runtime axis_. Selection is encoded in
+   immutable `ProfileConfig`, not caller env. `WRIX_AGENT` remains only the
+   launcher→entrypoint wire derived from that config. The entrypoint guards on
+   binary presence (`command -v`) and seeds/persists each agent's own config
+   home (claude `~/.claude`, pi `~/.pi/agent`). Agent selection adds only that
+   agent's required config: Claude images get Claude settings, Pi images get
+   non-secret Pi settings (`openai-codex`, `gpt-6.1-sol`, xhigh reasoning,
+   `defaultProjectTrust = "always"`, `tuiMode = "regular"`,
+   `editorPaddingX = 1`, `enableInstallTelemetry = false`, steering/follow-up
+   modes set to `"all"`, explicit `/workspace/.pi/agent/sessions` session dir)
+   plus a runtime `auth.json` mount when selected, and direct images get no
+   agent config. `agentPkg` overrides the selected agent package;
+   `agentSettings` merges into the selected agent's settings schema and is
+   rejected for direct. Pi does not import arbitrary files from
+   `/workspace/.pi/agent`; only the session directory and auth mount are wired.
+   Secrets are delivered through declared runtime environment sources or
+   credential-file mounts (owned by `security.md`). Physical agent-package
+   composition and exclusion of non-selected runtimes are owned by
+   `image-builder.md`; the resulting tier composes orthogonally with the
+   profile.
+9. **Launcher contract** — `wrix run` reads immutable Nix-generated
+   `ProfileConfig` JSON plus CLI/host-env runtime inputs; `wrix spawn` reads the
+   same `ProfileConfig` plus per-launch `SpawnConfig` JSON. Both share container
+   construction, including workspace service startup and endpoint injection when
+   services are enabled. Wrapper config-generation rules are owned by
+   _Architecture > `package`_; workspace service contracts are owned by
+   `services.md`.
+10. **Image source dispatch** — image install dispatches on the explicit source
+    kinds owned by `image-builder.md`, not filename or platform guessing. A
+    per-launch `image_source` override must carry a matching
+    `image_source_kind`; it may not silently inherit an incompatible kind from
+    `ProfileConfig`. The selected source's digest is derived or validated before
+    preflight.
+11. **Image retention** — runtime image cleanup is wrix-scoped and bounded: keep
+    the image selected for the current operation, images used by existing
+    containers, and eight shared cross-workspace MRU records (ref plus
+    digest/image ID when available) before pruning; prune wrix-managed images
+    outside the keep set; never automatically delete unlabelled `<none>:<none>`
+    images.
+12. **Per-launch mounts via SpawnConfig** — `wrix spawn`'s `SpawnConfig.mounts`
+    adds per-launch bind mounts on top of `profile.mounts` and `mkSandbox`'s
+    `mounts`. Each entry maps `host_path → container_path` with
+    `read_only: true` rendering `:ro`. On Linux this is a literal `-v` flag. On
+    Darwin, `SpawnConfig.mounts` flows through the same mount classifier as
+    `profile.mounts`: directories staged + copied, regular files
+    copy-from-parent-dir, Unix-socket sources rejected at launch with a clear
+    error (VirtioFS does not pass socket operations). The launcher does not
+    validate that `host_path` exists; podman fails at runtime if it does not.
+13. **Workspace `bin/` PATH prepend** — When `/workspace/bin` exists inside the
+    container, both Linux and macOS entrypoints prepend it to `PATH` so
+    consumer-supplied shims under the workspace's `bin/` resolve ahead of
+    image-baked binaries with the same name. The check is directory existence,
+    not per-binary; the consumer owns what it ships in `bin/`. When the
+    directory is absent, `PATH` is unchanged. The contract is PATH ordering only
+    — wrix does not create `/workspace/bin`, does not validate its contents, and
+    does not allowlist individual shims.
+14. **In-container Nix** — a sandbox built from a `nix`-shipping profile lets
+    the runtime user run both additive (`nix develop`, `nix build` of new
+    closures) and store-mutating (replace, GC, delete of baked paths) Nix
+    operations without permission or store-integrity failures. On the default
+    boundary the runtime process is rootless container-root, which maps to the
+    host user that owns the baked store, so it can mutate root-owned store paths
+    — the `deletePath → fchmodat2(u+w)` primitive no longer hits `EPERM`. This
+    spec owns that runtime identity and permissions boundary; `image-builder.md`
+    § In-Container Nix Store Consistency owns the baked store/database
+    invariant.
 
 ### Non-Functional
 
-1. **Rootless / no elevated privileges** — Linux runs rootless Podman; macOS runs the Apple `container` CLI as the calling user. No host capabilities are granted by default; `WRIX_UNSAFE_PODMAN_SOCKET` is an explicit unsafe opt-in outside the normal sandbox boundary.
-2. **Boundary class** — macOS is always microVM; Linux defaults to rootless container, opts into microVM with `WRIX_MICROVM=1` (see `specs/security.md`).
-3. **Network posture** — no inbound ports on either platform. In both `WRIX_NETWORK=open` and `WRIX_NETWORK=limit`, LAN/private/host-local/VPN/special outbound is blocked with exact DNS and wrix-owned endpoint exceptions only. `open` allows public-internet outbound; `limit` restricts public egress to the merged allowlist. Filtering is fail-closed and drops `NET_ADMIN` before workspace-controlled setup, agent execution, or exit logging.
-4. **Near-native performance** — minimal overhead beyond the container/microVM boundary cost; krun adds ~100MB per microVM.
+1. **Rootless / no elevated privileges** — Linux runs rootless Podman; macOS
+   runs the Apple `container` CLI as the calling user. No host capabilities are
+   granted by default; `WRIX_UNSAFE_PODMAN_SOCKET` is an explicit unsafe opt-in
+   outside the normal sandbox boundary.
+2. **Boundary class** — macOS is always microVM; Linux defaults to rootless
+   container, opts into microVM with `WRIX_MICROVM=1` (see `specs/security.md`).
+3. **Network posture** — no inbound ports on either platform. In both
+   `WRIX_NETWORK=open` and `WRIX_NETWORK=limit`,
+   LAN/private/host-local/VPN/special outbound is blocked with exact DNS and
+   wrix-owned endpoint exceptions only. `open` allows public-internet outbound;
+   `limit` restricts public egress to the merged allowlist. Filtering is
+   fail-closed and drops `NET_ADMIN` before workspace-controlled setup, agent
+   execution, or exit logging.
+4. **Near-native performance** — minimal overhead beyond the container/microVM
+   boundary cost; krun adds ~100MB per microVM.
 
 ## Out of Scope
 
 - Windows support
 - GPU passthrough
 - Inbound port forwarding
-- User-defined unsafe networking modes; wrix does not provide a LAN-open escape hatch
+- User-defined unsafe networking modes; wrix does not provide a LAN-open escape
+  hatch
 - Per-user multi-tenant sharing (sandboxes are single-user-per-host by design)

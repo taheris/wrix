@@ -4,7 +4,10 @@ Desktop notifications when Claude Code needs attention.
 
 ## Problem Statement
 
-When Claude Code stops and waits for input, users may not notice if they are working in another window, the terminal is in a background tab, or they have stepped away. Notifications must alert when the agent needs attention, suppress when the terminal is already focused, and traverse the container/host boundary.
+When Claude Code stops and waits for input, users may not notice if they are
+working in another window, the terminal is in a background tab, or they have
+stepped away. Notifications must alert when the agent needs attention, suppress
+when the terminal is already focused, and traverse the container/host boundary.
 
 ## Architecture
 
@@ -19,7 +22,11 @@ wrix-notify                      wrix-notifyd
     └─ macOS: TCP:5959 ───────────────►└─ terminal-notifier
 ```
 
-Two processes: `wrix-notify` is the in-container client invoked from a Claude Code Stop hook; `wrix-notifyd` is the host-side daemon that displays notifications via the platform's native bridge. Linux uses the mounted Unix socket; Darwin uses TCP as required by the Darwin mount contract in `sandbox.md`.
+Two processes: `wrix-notify` is the in-container client invoked from a Claude
+Code Stop hook; `wrix-notifyd` is the host-side daemon that displays
+notifications via the platform's native bridge. Linux uses the mounted Unix
+socket; Darwin uses TCP as required by the Darwin mount contract in
+`sandbox.md`.
 
 [cli.md § Verifier results and worker acceptance](cli.md#verifier-results-and-worker-acceptance)
 owns result reporting and sandbox-stage skip acceptance. A worker's platform or
@@ -34,12 +41,12 @@ Newline-delimited JSON, one envelope per notification:
 {"title": "Claude Code", "message": "Waiting", "sound": "Ping", "session_id": "0:1.0"}
 ```
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `title` | Yes | Notification title |
-| `message` | Yes | Notification body |
-| `sound` | No | macOS sound name |
-| `session_id` | No | tmux session for focus detection |
+| Field        | Required | Description                      |
+| ------------ | -------- | -------------------------------- |
+| `title`      | Yes      | Notification title               |
+| `message`    | Yes      | Notification body                |
+| `sound`      | No       | macOS sound name                 |
+| `session_id` | No       | tmux session for focus detection |
 
 ## Focus Detection
 
@@ -48,18 +55,18 @@ Newline-delimited JSON, one envelope per notification:
 3. Daemon checks whether the registered target is focused
 4. Notification is suppressed if focused
 
-| Platform | Focus Detection Method |
-|----------|----------------------|
+| Platform     | Focus Detection Method         |
+| ------------ | ------------------------------ |
 | Linux (niri) | Query window ID via compositor |
-| macOS | Check frontmost application |
+| macOS        | Check frontmost application    |
 
 ## Environment Variables
 
-| Variable | Description | Verification |
-|----------|-------------|--------------|
-| `WRIX_NOTIFY_ALWAYS=1` | Disable focus checking | [system](verify:notifications.focus-override) |
-| `WRIX_NOTIFY_VERBOSE=1` | Enable debug logging | [system](verify:notifications.verbose-logging) |
-| `WRIX_NOTIFY_TCP=host:port` | Override TCP endpoint | [system](verify:notifications.client-tcp-endpoint-override) |
+| Variable                    | Description            | Verification                                                |
+| --------------------------- | ---------------------- | ----------------------------------------------------------- |
+| `WRIX_NOTIFY_ALWAYS=1`      | Disable focus checking | [system](verify:notifications.focus-override)               |
+| `WRIX_NOTIFY_VERBOSE=1`     | Enable debug logging   | [system](verify:notifications.verbose-logging)              |
+| `WRIX_NOTIFY_TCP=host:port` | Override TCP endpoint  | [system](verify:notifications.client-tcp-endpoint-override) |
 
 ## Claude Code Hook Configuration
 
@@ -79,59 +86,84 @@ Newline-delimited JSON, one envelope per notification:
 
 ## Security
 
-The daemon's macOS TCP transport binds to the vmnet gateway (192.168.64.1:5959), reachable only from containers on the vmnet bridge. There is no authentication on the notification protocol; the worst-case abuse is unwanted desktop notification spam, since notifications are cosmetic and cannot execute code. Linux uses a Unix socket mounted into the container — filesystem permissions on the socket provide access control.
+The daemon's macOS TCP transport binds to the vmnet gateway (192.168.64.1:5959),
+reachable only from containers on the vmnet bridge. There is no authentication
+on the notification protocol; the worst-case abuse is unwanted desktop
+notification spam, since notifications are cosmetic and cannot execute code.
+Linux uses a Unix socket mounted into the container — filesystem permissions on
+the socket provide access control.
 
 ## Success Criteria
 
-- On Linux, `wrix-notify` invoked through `wrix spawn` from inside a container reaches a running host daemon through the mounted Unix socket; skips with exit 77 when Podman is unavailable
+- On Linux, `wrix-notify` invoked through `wrix spawn` from inside a container
+  reaches a running host daemon through the mounted Unix socket; skips with exit
+  77 when Podman is unavailable
   [system](verify:notifications.container-transport-linux)
-- On Darwin, `wrix-notify` invoked through `wrix spawn` from inside a container reaches a running host daemon through TCP on the vmnet gateway; skips with exit 77 when Apple `container` is unavailable
+- On Darwin, `wrix-notify` invoked through `wrix spawn` from inside a container
+  reaches a running host daemon through TCP on the vmnet gateway; skips with
+  exit 77 when Apple `container` is unavailable
   [system](verify:notifications.container-transport-darwin)
 - `WRIX_NOTIFY_TCP=host:port` selects the client TCP endpoint
   [system](verify:notifications.client-tcp-endpoint-override)
-- `wrix-notify` sends exactly one JSON envelope containing title, message, optional sound, and `session_id`
+- `wrix-notify` sends exactly one JSON envelope containing title, message,
+  optional sound, and `session_id`
   [system](verify:notifications.client-envelope)
 - `wrix-notify` exits without waiting for an acknowledgement
   [system](verify:notifications.client-non-blocking)
-- A notification reaches the daemon's native bridge within one second of `wrix-notify` invocation
+- A notification reaches the daemon's native bridge within one second of
+  `wrix-notify` invocation
   [system](verify:notifications.daemon-dispatch-latency)
 - Claude Code settings invoke the `wrix-notify` command from a `Stop` hook
   [check](verify:notifications.claude-stop-hook-config)
-- The host daemon dispatches via native notification bridges and continues serving after client disconnects
+- The host daemon dispatches via native notification bridges and continues
+  serving after client disconnects
   [judge](../tests/judges/notifications.sh#test_native_dispatch_and_reliability)
-- Focus-aware suppression happens only when the daemon positively identifies the registered session target as focused
+- Focus-aware suppression happens only when the daemon positively identifies the
+  registered session target as focused
   [judge](../tests/judges/notifications.sh#test_focus_suppression)
-- Launchers register tmux session focus targets using the same session-file naming that the daemon reads
+- Launchers register tmux session focus targets using the same session-file
+  naming that the daemon reads
   [judge](../tests/judges/notifications.sh#test_session_registration)
-- macOS TCP listener binds to the vmnet gateway address (`192.168.64.1`); `0.0.0.0` is not used as a bind address
+- macOS TCP listener binds to the vmnet gateway address (`192.168.64.1`);
+  `0.0.0.0` is not used as a bind address
   [check](verify:notifications.macos-tcp-bind-address)
 
 ## Requirements
 
 ### Functional
 
-1. **Client command** — `wrix-notify <title> <message>` sends a notification envelope from inside the container.
+1. **Client command** — `wrix-notify <title> <message>` sends a notification
+   envelope from inside the container.
    [system](verify:notifications.client-envelope)
-2. **Host daemon** — `wrix-notifyd` receives envelopes and dispatches via the platform-native notification bridge.
+2. **Host daemon** — `wrix-notifyd` receives envelopes and dispatches via the
+   platform-native notification bridge.
    [judge](../tests/judges/notifications.sh#test_native_dispatch_and_reliability)
-3. **Linux transport** — Linux uses a Unix socket bind-mounted into the container at `/run/wrix/notify.sock`.
+3. **Linux transport** — Linux uses a Unix socket bind-mounted into the
+   container at `/run/wrix/notify.sock`.
    [system](verify:notifications.container-transport-linux)
-4. **Darwin transport** — macOS uses TCP to the vmnet gateway (5959), consistent with the Darwin mount contract in `sandbox.md`.
+4. **Darwin transport** — macOS uses TCP to the vmnet gateway (5959), consistent
+   with the Darwin mount contract in `sandbox.md`.
    [system](verify:notifications.container-transport-darwin)
-5. **Focus-aware suppression** — when the registered tmux session's window is focused, the daemon discards the notification before dispatch.
+5. **Focus-aware suppression** — when the registered tmux session's window is
+   focused, the daemon discards the notification before dispatch.
    [judge](../tests/judges/notifications.sh#test_focus_suppression)
-6. **Session tracking** — the launcher registers `(session_id, window_id)` on Linux or `(session_id, terminal_app)` on macOS at container start so focus detection has a target.
+6. **Session tracking** — the launcher registers `(session_id, window_id)` on
+   Linux or `(session_id, terminal_app)` on macOS at container start so focus
+   detection has a target.
    [judge](../tests/judges/notifications.sh#test_session_registration)
-7. **Sound support** — clients may pass an optional `sound` field consumed by `terminal-notifier` on macOS.
+7. **Sound support** — clients may pass an optional `sound` field consumed by
+   `terminal-notifier` on macOS.
    [system](verify:notifications.container-transport-darwin)
 
 ### Non-Functional
 
-1. **Low latency** — notifications appear within one second of `wrix-notify` invocation.
-   [system](verify:notifications.daemon-dispatch-latency)
-2. **Reliable** — daemon survives client disconnects and accepts new connections without restart.
+1. **Low latency** — notifications appear within one second of `wrix-notify`
+   invocation. [system](verify:notifications.daemon-dispatch-latency)
+2. **Reliable** — daemon survives client disconnects and accepts new connections
+   without restart.
    [judge](../tests/judges/notifications.sh#test_native_dispatch_and_reliability)
-3. **Non-blocking client** — `wrix-notify` exits immediately after writing the envelope, with no acknowledgement round-trip.
+3. **Non-blocking client** — `wrix-notify` exits immediately after writing the
+   envelope, with no acknowledgement round-trip.
    [system](verify:notifications.client-non-blocking)
 
 ## Out of Scope

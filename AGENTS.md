@@ -19,8 +19,8 @@ bd close <id>
 bd dep add <issue> <depends-on>
 ```
 
-Flow: ready → claim → implement → close. Priorities: 0-4. Types: `task`,
-`bug`, `feature`, `epic`.
+Flow: ready → claim → implement → close. Priorities: 0-4. Types: `task`, `bug`,
+`feature`, `epic`.
 
 ## Workspaces
 
