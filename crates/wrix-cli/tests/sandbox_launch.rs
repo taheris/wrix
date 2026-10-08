@@ -267,3 +267,163 @@ fn malformed_network_policy_fails_before_subprocesses_even_with_override() -> Te
     }
     Ok(())
 }
+
+#[cfg(target_os = "linux")]
+impl Fixture {
+    fn focus_spawn(&self, reply: &str) -> TestResult<Command> {
+        use std::os::unix::fs::PermissionsExt;
+        fs::remove_dir(self.workspace.join(".beads/dolt"))?;
+        let bin = self.root.path().join("bin");
+        fs::create_dir(&bin)?;
+        for (name, script) in [
+            (
+                "niri",
+                r#"#!/usr/bin/env bash
+set -euo pipefail
+[[ "$*" == 'msg -j focused-window' ]] || exit 91
+printf '%s\n' "$WRIX_TEST_FOCUS"
+"#,
+            ),
+            (
+                "tmux",
+                r#"#!/usr/bin/env bash
+set -euo pipefail
+[[ "$*" == 'display-message -p #{session_name}:#{window_index}.#{pane_index}' ]] || exit 91
+printf '%s\n' 'test:1.0'
+"#,
+            ),
+            (
+                "podman",
+                r#"#!/usr/bin/env bash
+set -euo pipefail
+case "$1 $2" in
+  'image inspect') printf '%s\n' "$WRIX_TEST_DIGEST" ;;
+  'images --format') ;;
+  "tag $WRIX_TEST_DIGEST") [[ "$3" == 'localhost/wrix-test:latest' ]] ;;
+  'run --rm')
+    cat "$XDG_RUNTIME_DIR"/wrix/sessions/*.json > "$WRIX_TEST_CAPTURE"
+    printf '%s\n' '{"type":"response","command":"get_state","success":true,"data":{}}'
+    ;;
+  *) printf 'unexpected podman arguments: %s\n' "$*" >&2; exit 91 ;;
+esac
+"#,
+            ),
+        ] {
+            let path = bin.join(name);
+            fs::write(&path, script)?;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
+        }
+        let deploy_key = self.root.path().join("deploy-key");
+        fs::write(&deploy_key, "fixture deploy key\n")?;
+        let spawn_config = self.root.path().join("spawn.json");
+        fs::write(
+            &spawn_config,
+            serde_json::to_vec(&json!({
+                "workspace": self.workspace,
+                "env": [], "agent_args": [], "mounts": []
+            }))?,
+        )?;
+        let path = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        )))?;
+        let mut command = Command::new(env!("CARGO_BIN_EXE_wrix"));
+        command
+            .arg("--profile-config")
+            .arg(&self.profile)
+            .args(["spawn", "--spawn-config"])
+            .arg(spawn_config)
+            .arg("--stdio")
+            .env("PATH", path)
+            .env("HOME", self.root.path().join("home"))
+            .env("XDG_RUNTIME_DIR", self.root.path().join("runtime"))
+            .env("TMUX", "fixture")
+            .env("NO_COLOR", "1")
+            .env("WRIX_TEST_FOCUS", reply)
+            .env("WRIX_TEST_DIGEST", format!("sha256:{}", "a".repeat(64)))
+            .env("WRIX_TEST_CAPTURE", self.root.path().join("session.json"))
+            .env("WRIX_IMAGE_KEEP_FILE", self.root.path().join("mru.json"))
+            .env("WRIX_GIT_SIGN", "0");
+        for name in [
+            "WRIX_NETWORK",
+            "WRIX_DRY_RUN",
+            "WRIX_DRY_RUN_SERVICES",
+            "WRIX_MICROVM",
+            "WRIX_UNSAFE_PODMAN_SOCKET",
+            "WRIX_DEPLOY_KEY",
+            "WRIX_SIGNING_KEY",
+        ] {
+            command.env_remove(name);
+        }
+        command.env("WRIX_DEPLOY_KEY", deploy_key);
+        Ok(command)
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn spawn_without_focused_window_keeps_stdout_clean_and_does_not_warn() -> TestResult {
+    let fixture = Fixture::new(None)?;
+    let output = fixture.focus_spawn("null")?.output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let response: Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(response["command"], "get_state");
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("focus target"));
+    let record: Value =
+        serde_json::from_slice(&fs::read(fixture.root.path().join("session.json"))?)?;
+    assert!(record["window_id"].is_null());
+    assert_eq!(record["session_id"], "test:1.0");
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn spawn_focus_warnings_go_to_stderr_without_corrupting_rpc_stdout() -> TestResult {
+    let fixture = Fixture::new(None)?;
+    let output = fixture.focus_spawn("not JSON")?.output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let response: Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(response["command"], "get_state");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("focus target returned invalid JSON"));
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn spawn_registers_focused_window_from_niri_reply() -> TestResult {
+    let fixture = Fixture::new(None)?;
+    let output = fixture.focus_spawn(r#"{"id":42}"#)?.output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let record: Value =
+        serde_json::from_slice(&fs::read(fixture.root.path().join("session.json"))?)?;
+    assert_eq!(record["window_id"], "42");
+    assert_eq!(record["session_id"], "test:1.0");
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn focus_fixtures_reject_unexpected_external_calls() -> TestResult {
+    let fixture = Fixture::new(None)?;
+    let _command = fixture.focus_spawn("null")?;
+    for name in ["niri", "tmux", "podman"] {
+        let output = Command::new(fixture.root.path().join("bin").join(name))
+            .args(["unexpected", "arguments"])
+            .env("WRIX_TEST_DIGEST", format!("sha256:{}", "a".repeat(64)))
+            .output()?;
+        assert_eq!(output.status.code(), Some(91), "{name}");
+        assert!(output.stdout.is_empty(), "{name}");
+    }
+    Ok(())
+}

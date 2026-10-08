@@ -2410,6 +2410,9 @@ fn focus_target(platform: Platform) -> Option<String> {
                     return None;
                 }
             };
+            if value.is_null() {
+                return None;
+            }
             match value.get("id") {
                 Some(Value::String(text)) => Some(text.clone()),
                 Some(Value::Number(number)) => Some(number.to_string()),

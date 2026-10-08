@@ -6,6 +6,7 @@ use std::{
 
 fn main() -> ExitCode {
     if let Err(error) = tracing_subscriber::fmt()
+        .with_writer(io::stderr)
         .with_max_level(tracing::Level::WARN)
         .with_target(false)
         .without_time()
