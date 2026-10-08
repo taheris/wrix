@@ -1,3 +1,5 @@
+pub mod remote;
+
 use std::fmt;
 
 use displaydoc::Display;

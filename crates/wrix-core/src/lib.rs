@@ -3,3 +3,4 @@ pub mod cache_key;
 pub mod deploy_key;
 pub mod git;
 pub mod path;
+pub mod repository_policy;
