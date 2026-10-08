@@ -1,6 +1,7 @@
 import re
 import subprocess
 import sys
+import tempfile
 import tomllib
 from pathlib import Path
 
@@ -24,7 +25,9 @@ DUPLICATED_TARGETS = (
     "verify:cli.shared-verifier-app",
     "verify:cli.verify-runner-batching",
 )
-SOURCE_ANNOTATION = re.compile(r"\[(?:test|judge)\??\]\(([^)]+)\)")
+SOURCE_ANNOTATION = re.compile(
+    r"\[(?:test|judge)(?P<pending>\?)?\]\((?P<target>[^)]+)\)"
+)
 VERIFY_ANNOTATION = re.compile(r"\[(?:check|system)\]\((verify:[^)]+)\)")
 TEST_RUNNER_COMMAND = "bash tests/loom-nextest-file-targets.sh '{paths}'"
 
@@ -63,34 +66,71 @@ def test_runner_policy_audit():
         require(runner_errors(broken, expected), f"missing {key} was not rejected")
 
 
-def file_selector_error(root, spec, target):
+def file_selector_error(root, spec, target, *, pending=False):
     path_text = re.split(r"#|::", target, maxsplit=1)[0]
     if "/" not in path_text:
         return None
     if path_text.startswith("crates/"):
         return f"{spec.relative_to(root)} target {target!r} is workspace-relative; file targets must be spec-relative"
     resolved = spec.parent / path_text
-    if not resolved.is_file():
+    if not pending and not resolved.is_file():
         return f"{spec.relative_to(root)} target {target!r} resolves to missing file {resolved}"
     return None
 
 
-def test_file_selectors(root):
-    synthetic_spec = root / "specs/synthetic.md"
-    require(
-        file_selector_error(
-            root,
-            synthetic_spec,
-            "crates/example/tests/sample.rs::test_name",
-        )
-        is not None,
-        "workspace-relative synthetic file selector was not rejected",
-    )
+def source_annotation_errors(root):
     for spec in sorted((root / "specs").glob("*.md")):
         for match in SOURCE_ANNOTATION.finditer(spec.read_text()):
-            target = match.group(1)
-            error = file_selector_error(root, spec, target)
-            require(error is None, error)
+            error = file_selector_error(
+                root, spec, match.group("target"), pending=bool(match.group("pending"))
+            )
+            if error is not None:
+                yield error
+
+
+def test_source_annotation_audit():
+    with tempfile.TemporaryDirectory(prefix="wrix-source-annotations-") as temp:
+        root = Path(temp)
+        spec = root / "specs/synthetic.md"
+        spec.parent.mkdir()
+        for name in ("crates/example/tests/present.rs", "tests/judges/present.sh"):
+            path = root / name
+            path.parent.mkdir(parents=True)
+            path.write_text("fixture source\n")
+        for tier, directory, suffix in (
+            ("test", "crates/example/tests", ".rs::test_name"),
+            ("judge", "tests/judges", ".sh#rubric"),
+            ("judge", "tests/judges", ".sh::rubric"),
+        ):
+            for marker in ("", "?"):
+                for name in ("present", "missing"):
+                    target = f"../{directory}/{name}{suffix}"
+                    spec.write_text(f"- Criterion [{tier}{marker}]({target})\n")
+                    errors = list(source_annotation_errors(root))
+                    if name == "missing" and not marker:
+                        require(
+                            len(errors) == 1 and "resolves to missing file" in errors[0],
+                            f"missing non-pending source was not rejected: {spec.read_text()}",
+                        )
+                    else:
+                        require(not errors, f"valid source annotation rejected: {errors}")
+                target = "crates/example/tests/present.rs::test_name"
+                spec.write_text(f"- Criterion [{tier}{marker}]({target})\n")
+                errors = list(source_annotation_errors(root))
+                require(
+                    len(errors) == 1 and "workspace-relative" in errors[0],
+                    f"workspace-relative source was not rejected: {spec.read_text()}",
+                )
+        spec.write_text("- Criterion [test?](module::planned_test)\n")
+        require(
+            not list(source_annotation_errors(root)),
+            "native symbol selector was treated as a file",
+        )
+
+
+def test_file_selectors(root):
+    for error in source_annotation_errors(root):
+        fail(error)
 
 
 def test_file_selector_adapter(root):
@@ -155,6 +195,7 @@ def main():
     runner = config.get("runner", {})
 
     test_runner_policy_audit()
+    test_source_annotation_audit()
     for tier in ("check", "system"):
         for name in ("verify", "test-ci"):
             expected = dict(EXPECTED)

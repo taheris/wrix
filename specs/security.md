@@ -389,7 +389,7 @@ section is a reference index only.
   launch input whose modification can change grants on subsequent launches; it
   does not describe key-delivery grants as an agent-resistant authorization
   boundary
-  [judge?](../tests/judges/security.sh#test_repository_git_policy_trust_boundary)
+  [judge?](../tests/judges/security-credentials.sh#test_repository_git_policy_trust_boundary)
 - Live Linux and Darwin sandbox launches expose exactly the granted private keys
   and corresponding child environment paths, including signing-only and no-key
   launches when host keys exist
@@ -471,7 +471,7 @@ section is a reference index only.
   focus identities, treat absent completion as unknown, and describe transcripts
   as non-exhaustive evidence without promising intermediate codemode outcomes,
   automatic recovery, or adversarial-agent detection
-  [judge?](../tests/judges/security.sh#test_execution_and_transcript_evidence_limits)
+  [judge?](../tests/judges/security-execution.sh#test_execution_and_transcript_evidence_limits)
 
 ## Requirements
 

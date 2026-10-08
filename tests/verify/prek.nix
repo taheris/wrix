@@ -35,6 +35,12 @@ in
   "prek.wrappers-on-devshell-path" =
     repoScript "tests/profiles/mkdevshell-prek.sh" "test_wrappers_exposed_and_on_devshell_path";
   "prek.config-stage-set" = repoScript "tests/prek/wrix-hook-stages.sh" "test_wrix_config_stage_set";
+  "prek.formatter-cache-independent" = ''
+    local root formatter
+    root="$(repo_root)"
+    formatter="$(build_flake_package formatter.${system})"
+    python3 "$root/tests/prek/treefmt-cache.py" "$root" "$formatter/bin/treefmt"
+  '';
   "prek.pre-push-checks-marker-valid" = wholeRepoScript "tests/prek/pre-push-checks-marker-valid.sh";
   "prek.pre-push-checks-marker-stale" = wholeRepoScript "tests/prek/pre-push-checks-marker-stale.sh";
   "prek.pre-push-checks-no-marker" = wholeRepoScript "tests/prek/pre-push-checks-no-marker.sh";

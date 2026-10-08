@@ -148,6 +148,11 @@ annotation whose target already resolves and passes is also a gate flag. The
 pending modifier never relaxes atomic acceptance: each Success Criteria bullet
 still carries exactly one annotation.
 
+For `[judge?]`, integrity resolution checks the rubric file's existence, not the
+presence of a function selected by `#name` or `::name`. A planned new rubric
+must therefore target a not-yet-existing file, with `?` removed when that file
+lands; a missing selector inside an existing file does not defer resolution.
+
 ### Stochastic annotation
 
 `[judge]` invokes an LLM to evaluate a claim that requires semantic judgement —

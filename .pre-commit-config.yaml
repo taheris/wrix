@@ -14,7 +14,7 @@ repos:
       # Fast pre-commit checks
       - id: treefmt
         name: treefmt
-        entry: treefmt --fail-on-change
+        entry: treefmt --no-cache --fail-on-change
         language: system
         pass_filenames: true
         stages: [pre-commit]

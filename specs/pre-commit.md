@@ -199,6 +199,9 @@ execution; worker acceptance cannot supply host coverage or a push marker.
 
 ## Success Criteria
 
+- The repository's formatter hook passes clean files and rejects files needing
+  formatting even when its evaluation cache cannot be opened
+  [system](verify:prek.formatter-cache-independent)
 - The real bundle derivation builder assembles the complete bundle without root
   write privileges, including when Nix inputs are read-only
   [test](../crates/wrix-cli/tests/prek_bundle_build.rs::real_bundle_builder_works_without_root_write_privileges)
