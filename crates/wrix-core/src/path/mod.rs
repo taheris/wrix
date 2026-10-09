@@ -61,6 +61,11 @@ impl Workspace {
         self.canonical_path.as_path()
     }
 
+    /// Nearest repository containing this workspace, including independent nested clones.
+    pub fn repository_root(&self) -> Option<PathBuf> {
+        repository_root(&self.canonical_path)
+    }
+
     pub fn repository_name(&self) -> Option<&OsStr> {
         self.canonical_path.file_name()
     }
@@ -250,6 +255,32 @@ mod test {
     use std::{fs, path::Path};
 
     use super::{Workspace, WorkspaceHash, sanitize_container_component};
+
+    #[test]
+    fn repository_root_selects_nearest_clone_without_service_control_identity() {
+        let root = tempfile::tempdir().unwrap();
+        assert_eq!(
+            Workspace::from_path(root.path()).unwrap().repository_root(),
+            None
+        );
+        std::fs::create_dir(root.path().join(".git")).unwrap();
+        let nested = root.path().join(".loom/beads/task");
+        let subdirectory = nested.join("src");
+        std::fs::create_dir_all(&subdirectory).unwrap();
+        std::fs::write(nested.join(".git"), "gitdir: /external/gitdir\n").unwrap();
+        assert_eq!(
+            Workspace::from_path(&subdirectory)
+                .unwrap()
+                .repository_root(),
+            Some(nested.canonicalize().unwrap())
+        );
+        assert_eq!(
+            Workspace::from_service_path(&subdirectory)
+                .unwrap()
+                .canonical_path(),
+            root.path().canonicalize().unwrap()
+        );
+    }
 
     #[test]
     fn workspace_hash_is_sha256_of_identity_path() {

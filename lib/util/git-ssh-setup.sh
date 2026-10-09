@@ -5,8 +5,6 @@
 # semantics. Reads:
 #   WRIX_DEPLOY_KEY  — path to a passphrase-less ed25519 deploy key
 #   WRIX_SIGNING_KEY — path to an ed25519 key used for commit signing
-#   WRIX_GIT_SIGN    — set to "0" to disable auto-signing (default: on
-#                        when WRIX_SIGNING_KEY is set)
 #   GIT_AUTHOR_* / GIT_COMMITTER_* — preferred commit identity values
 #
 # Emits a pinned `GIT_SSH_COMMAND`, stores the same command in git's global
@@ -129,11 +127,7 @@ wrix_configure_git_signing() {
     rm -f "$pubkey_tmp"
   fi
 
-  if [[ "${WRIX_GIT_SIGN:-1}" = "0" ]]; then
-    git config --global --replace-all commit.gpgsign false
-  else
-    git config --global --replace-all commit.gpgsign true
-  fi
+  git config --global --replace-all commit.gpgsign true
 }
 
 wrix_configure_git_identity

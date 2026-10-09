@@ -78,13 +78,16 @@ if ! git cat-file -p HEAD | grep -q "^gpgsig"; then
 fi
 '
 
+jq '.git = {deploy: true, sign: true}' "$SPAWN_CONFIG" >"$SPAWN_CONFIG.grants"
+mv "$SPAWN_CONFIG.grants" "$SPAWN_CONFIG"
+
 test_nested_key_propagation() {
   local out="$TEST_TMP/nested-key.out"
   local err="$TEST_TMP/nested-key.err"
   local rc=0
 
   HOME="$HOME_DIR" XDG_CACHE_HOME="$XDG_CACHE_HOME" \
-    WRIX_DEPLOY_KEY="$HOST_DEPLOY_KEY" WRIX_SIGNING_KEY="$HOST_SIGNING_KEY" WRIX_GIT_SIGN=1 \
+    WRIX_DEPLOY_KEY="$HOST_DEPLOY_KEY" WRIX_SIGNING_KEY="$HOST_SIGNING_KEY" \
     wrix_run_spawn "$LAUNCHER" "$PROFILE_CONFIG" "$SPAWN_CONFIG" >"$out" 2>"$err" || rc=$?
 
   if [[ "$rc" -ne 0 ]]; then

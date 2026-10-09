@@ -20,6 +20,16 @@ case "${1:-} ${2:-}" in
   'image list' | 'list --all') printf '%s\n' '[]' ;;
   tag*) [[ "${2:-}" == "${WRIX_TEST_DIGEST:?}" ]] ;;
   'image tag') [[ "${3:-}" == "${WRIX_TEST_DIGEST:?}" ]] ;;
-  'run --rm') printf '%s\0' "$@" >"${WRIX_TEST_ARGV:?}" ;;
+  'run --rm')
+    printf '%s\0' "$@" >"${WRIX_TEST_ARGV:?}"
+    if [[ -n "${WRIX_TEST_KEYS:-}" ]]; then
+      mkdir -p "$WRIX_TEST_KEYS"
+      for arg in "$@"; do
+        if [[ "$arg" == *:/etc/wrix/keys:ro ]]; then
+          cp -R "${arg%:/etc/wrix/keys:ro}/." "$WRIX_TEST_KEYS/"
+        fi
+      done
+    fi
+    ;;
   *) printf 'unexpected runtime arguments: %s\n' "$*" >&2; exit 91 ;;
 esac

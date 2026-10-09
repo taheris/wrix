@@ -625,7 +625,7 @@ supplied; there is no implicit default image baked in.
   [test](../crates/wrix-sandbox/tests/launch.rs::spawn_waits_for_container_completion)
 - `SpawnConfig.git` parses independent boolean grants, preserving omission as
   inheritance and explicit false as an override rather than collapsing them
-  [test?](../crates/wrix-sandbox/tests/spawn_config.rs::git_grants_preserve_omission_and_explicit_false)
+  [test](../crates/wrix-sandbox/tests/spawn_config.rs::git_grants_preserve_omission_and_explicit_false)
 - A `SpawnConfig.image_source` override requires an explicit source kind
   [test](../crates/wrix-sandbox/tests/spawn_config.rs::image_source_override_requires_source_kind)
 - A `SpawnConfig.image_source_kind` override must be compatible with the current
@@ -665,7 +665,7 @@ supplied; there is no implicit default image baked in.
   independent Git grants from launch override, repository policy, then false,
   without treating key identity, host key presence, or `WRIX_GIT_SIGN` as a
   grant or policy override
-  [test?](../crates/wrix-sandbox/tests/launch.rs::git_grants_follow_override_repo_default_precedence)
+  [test](../crates/wrix-sandbox/tests/launch.rs::git_grants_follow_override_repo_default_precedence)
 - `wrix run` parses launcher options only before the workspace or `--`, uses CWD
   when the workspace is omitted, consumes the documented separator, and forwards
   the remaining agent arguments unchanged, including Wrix-looking option names
@@ -674,7 +674,7 @@ supplied; there is no implicit default image baked in.
 - Launch overrides reject conflicting flag pairs and malformed Git policy,
   including the unsupported `sign_commits` key, before services or credential
   staging
-  [test?](../crates/wrix-cli/tests/sandbox_launch.rs::invalid_git_policy_fails_before_side_effects)
+  [test](../crates/wrix-cli/tests/sandbox_launch.rs::invalid_git_policy_fails_before_side_effects)
 - Before exec'ing the selected agent, the entrypoint rejects a mismatch between
   the ProfileConfig-selected `WRIX_AGENT` and the image-declared
   `/etc/wrix/image-agent`, then verifies the agent's binary is present and fails
@@ -688,7 +688,7 @@ supplied; there is no implicit default image baked in.
   `/etc/wrix/keys/<name>` and `/etc/wrix/keys/<name>-signing`, respectively;
   child key environment variables point only at those mounted paths, and neither
   host-source paths nor `.pub` files are delivered
-  [test?](../crates/wrix-sandbox/tests/launch.rs::independent_git_grants_use_fixed_private_key_destinations)
+  [test](../crates/wrix-sandbox/tests/launch.rs::independent_git_grants_use_fixed_private_key_destinations)
 - `ProfileConfig.security.deploy_key` accepts only a validated, single-component
   deploy-key name; absolute paths, separators, whitespace, and dot traversal
   fail during config parsing before credential staging

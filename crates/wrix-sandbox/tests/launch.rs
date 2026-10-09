@@ -119,129 +119,274 @@ fn unsafe_podman_socket_opt_in_mounts_existing_socket() -> TestResult {
 }
 
 #[test]
-fn missing_key_env_paths_fail_before_container_start() -> TestResult {
-    let root = tempfile::Builder::new()
-        .prefix("missing-key-env")
-        .tempdir()?;
-    let workspace = root.path().join("workspace");
-    let profile_config = root.path().join("profile.json");
-    let key_dir = root.path().join("host-keys");
-    fs::create_dir_all(&workspace)?;
-    fs::create_dir_all(&key_dir)?;
-    common::write_profile_config(&profile_config, &deploy_key_fixture())?;
-
-    let missing_deploy = key_dir.join("missing-deploy");
-    let deploy_missing = run_launch(
-        root.path(),
-        "missing-deploy",
-        &profile_config,
-        &workspace,
-        vec![(
-            String::from("WRIX_DEPLOY_KEY"),
-            missing_deploy.as_os_str().to_os_string(),
-        )],
-    )?;
-    assert!(!deploy_missing.success);
-    assert!(deploy_missing.stderr.contains(&format!(
-        "WRIX_DEPLOY_KEY={}: file does not exist",
-        missing_deploy.display()
-    )));
-    assert_no_launch_plan(&deploy_missing.stdout);
-
-    let deploy_key = key_dir.join("repo-key");
-    fs::write(&deploy_key, "private key\n")?;
-    let missing_signing = key_dir.join("missing-signing");
-    let signing_missing = run_launch(
-        root.path(),
-        "missing-signing",
-        &profile_config,
-        &workspace,
-        vec![
-            (
-                String::from("WRIX_DEPLOY_KEY"),
-                deploy_key.as_os_str().to_os_string(),
-            ),
-            (
-                String::from("WRIX_SIGNING_KEY"),
-                missing_signing.as_os_str().to_os_string(),
-            ),
-        ],
-    )?;
-    assert!(!signing_missing.success);
-    assert!(signing_missing.stderr.contains(&format!(
-        "WRIX_SIGNING_KEY={}: file does not exist",
-        missing_signing.display()
-    )));
-    assert_no_launch_plan(&signing_missing.stdout);
-
+fn git_grants_follow_override_repo_default_precedence() -> TestResult {
+    for mode in [Command::Run, Command::Spawn] {
+        let fixture = GrantFixture::new()?;
+        fixture.init_repository()?;
+        for overrides in [None, Some(false), Some(true)] {
+            for sign_override in [None, Some(false), Some(true)] {
+                for (deploy, sign) in grant_combinations() {
+                    fs::write(
+                        fixture.workspace.join("wrix.toml"),
+                        format!(
+                            "[wrix.git]\ndeploy_key = 'repo-key'\ndeploy = {deploy}\nsign = {sign}\n"
+                        ),
+                    )?;
+                    let output = fixture.run(
+                        mode,
+                        GitGrants {
+                            deploy: overrides,
+                            sign: sign_override,
+                        },
+                        Vec::new(),
+                        true,
+                    )?;
+                    assert!(output.success, "{}", output.stderr);
+                    assert_key_environment(
+                        &output.stdout,
+                        overrides.unwrap_or(deploy),
+                        sign_override.unwrap_or(sign),
+                    );
+                }
+            }
+        }
+        fs::remove_file(fixture.workspace.join("wrix.toml"))?;
+        let output = fixture.run(mode, GitGrants::default(), Vec::new(), true)?;
+        assert!(output.success, "{}", output.stderr);
+        assert_key_environment(&output.stdout, false, false);
+    }
     Ok(())
 }
 
 #[test]
-fn spawn_requires_resolved_keys_but_run_allows_missing_keys() -> TestResult {
-    let root = tempfile::Builder::new().prefix("spawn-keys").tempdir()?;
-    let workspace = root.path().join("workspace");
-    let profile_config = root.path().join("profile.json");
-    let spawn_config = root.path().join("spawn.json");
-    fs::create_dir_all(&workspace)?;
-    common::write_profile_config(&profile_config, &deploy_key_fixture())?;
-    write_spawn_config(&spawn_config, &workspace)?;
+fn git_key_identity_uses_the_selected_repository_before_profile() -> TestResult {
+    for mode in [Command::Run, Command::Spawn] {
+        let mut fixture = GrantFixture::new()?;
+        fixture.init_repository()?;
+        common::write_profile_config(
+            &fixture.profile,
+            &ProfileFixture {
+                deploy_key: Some(String::from("profile-key")),
+                ..ProfileFixture::default()
+            },
+        )?;
+        fs::write(
+            fixture.workspace.join("wrix.toml"),
+            "[wrix.git]\ndeploy_key = 'repo-key'\ndeploy = true\n",
+        )?;
+        fixture.workspace = fixture.workspace.join("src");
+        fs::create_dir(&fixture.workspace)?;
+        fs::write(
+            fixture.workspace.join("wrix.toml"),
+            "ignored non-root policy",
+        )?;
+        let output = fixture.run(mode, GitGrants::default(), Vec::new(), true)?;
+        assert!(output.success, "{}", output.stderr);
+        assert_key_environment(&output.stdout, true, false);
 
-    let run = run_launch(
-        root.path(),
-        "run-without-keys",
-        &profile_config,
-        &workspace,
-        Vec::new(),
-    )?;
-    assert!(run.success, "{}", run.stderr);
-    assert!(!run.stdout.contains("ENV=WRIX_DEPLOY_KEY="));
-    assert!(!run.stdout.contains("ENV=WRIX_SIGNING_KEY="));
+        fixture.workspace = fixture
+            .workspace
+            .parent()
+            .ok_or("repository root missing")?
+            .join(".loom/integration");
+        fs::create_dir_all(&fixture.workspace)?;
+        fixture.init_repository()?;
+        fs::write(
+            fixture.workspace.join("wrix.toml"),
+            "[wrix.git]\ndeploy_key = 'repo-key'\nsign = true\n",
+        )?;
+        let output = fixture.run(mode, GitGrants::default(), Vec::new(), true)?;
+        assert!(output.success, "{}", output.stderr);
+        assert_key_environment(&output.stdout, false, true);
+    }
+    Ok(())
+}
 
-    let missing_deploy = run_spawn_launch(
-        root.path(),
-        "spawn-missing-deploy",
-        &profile_config,
-        &spawn_config,
-        Vec::new(),
-    )?;
-    assert!(!missing_deploy.success);
-    assert!(
-        missing_deploy
-            .stderr
-            .contains("wrix spawn: no deploy key resolved")
-    );
-    assert!(missing_deploy.stderr.contains("repo-key"));
-    assert_no_launch_plan(&missing_deploy.stdout);
+#[test]
+fn git_key_grants_are_independent_and_ambient_sources_do_not_grant() -> TestResult {
+    for mode in [Command::Run, Command::Spawn] {
+        let fixture = GrantFixture::new()?;
+        fs::write(
+            fixture.workspace.join("wrix.toml"),
+            "invalid policy outside a repository",
+        )?;
+        for ambient_valid in [false, true] {
+            let ambient = fixture.pointer_environment(ambient_valid, ambient_valid);
+            let output = fixture.run(mode, GitGrants::default(), ambient, true)?;
+            assert!(output.success, "{}", output.stderr);
+            assert_key_environment(&output.stdout, false, false);
+        }
+        for (deploy, sign) in grant_combinations() {
+            for invalid_ungranted in [false, true] {
+                for retired_sign in ["0", "1"] {
+                    let mut environment = fixture.pointer_environment(
+                        deploy || !invalid_ungranted,
+                        sign || !invalid_ungranted,
+                    );
+                    environment.push((String::from("WRIX_GIT_SIGN"), OsString::from(retired_sign)));
+                    let output = fixture.run(
+                        mode,
+                        GitGrants {
+                            deploy: Some(deploy),
+                            sign: Some(sign),
+                        },
+                        environment,
+                        true,
+                    )?;
+                    assert!(output.success, "{}", output.stderr);
+                    assert_key_environment(&output.stdout, deploy, sign);
+                    assert!(!output.stdout.contains("WRIX_GIT_SIGN="));
+                    assert!(!output.stdout.contains("host-source"));
+                }
+            }
+        }
+        fs::remove_dir_all(fixture.root.path().join("home/.ssh"))?;
+        let output = fixture.run(mode, GitGrants::default(), Vec::new(), true)?;
+        assert!(output.success, "{}", output.stderr);
+        assert_key_environment(&output.stdout, false, false);
+    }
+    Ok(())
+}
 
-    let key_dir = root.path().join("home/.ssh/deploy_keys");
-    fs::create_dir_all(&key_dir)?;
-    fs::write(key_dir.join("repo-key"), "private key\n")?;
-    let missing_signing = run_spawn_launch(
-        root.path(),
-        "spawn-missing-signing",
-        &profile_config,
-        &spawn_config,
-        Vec::new(),
-    )?;
-    assert!(!missing_signing.success);
-    assert!(
-        missing_signing
-            .stderr
-            .contains("wrix spawn: no signing key resolved")
-    );
-    assert!(missing_signing.stderr.contains("repo-key-signing"));
-    assert_no_launch_plan(&missing_signing.stdout);
+#[test]
+fn granted_git_keys_are_required_before_startup() -> TestResult {
+    for mode in [Command::Run, Command::Spawn] {
+        for (deploy, sign) in [(true, false), (false, true), (true, true)] {
+            for (name, granted, variable, key) in [
+                ("deploy", deploy, "WRIX_DEPLOY_KEY", "repo-key"),
+                ("signing", sign, "WRIX_SIGNING_KEY", "repo-key-signing"),
+            ] {
+                if !granted {
+                    continue;
+                }
+                for explicit in [false, true] {
+                    let fixture = GrantFixture::new()?;
+                    fs::create_dir_all(fixture.workspace.join(".beads/dolt"))?;
+                    let environment = if explicit {
+                        fixture.pointer_environment(name != "deploy", name != "signing")
+                    } else {
+                        fs::remove_file(
+                            fixture.root.path().join("home/.ssh/deploy_keys").join(key),
+                        )?;
+                        Vec::new()
+                    };
+                    let output = fixture.run(
+                        mode,
+                        GitGrants {
+                            deploy: Some(deploy),
+                            sign: Some(sign),
+                        },
+                        environment,
+                        false,
+                    )?;
+                    assert!(!output.success);
+                    if explicit {
+                        assert!(output.stderr.contains(variable), "{}", output.stderr);
+                        assert!(
+                            output.stderr.contains("missing-host-source"),
+                            "{}",
+                            output.stderr
+                        );
+                    } else {
+                        assert!(
+                            output
+                                .stderr
+                                .contains(&format!("granted {name} key unresolved")),
+                            "{}",
+                            output.stderr
+                        );
+                        assert!(output.stderr.contains(key), "{}", output.stderr);
+                    }
+                    assert_no_launch_plan(&output.stdout);
+                    assert!(!fixture.root.path().join("argv").exists());
+                    assert!(!fixture.root.path().join("cache/wrix").exists());
+                    assert!(!fixture.workspace.join(".wrix").exists());
+                }
+            }
+        }
+    }
+    Ok(())
+}
 
-    let signing_disabled = run_spawn_launch(
-        root.path(),
-        "spawn-signing-disabled",
-        &profile_config,
-        &spawn_config,
-        vec![(String::from("WRIX_GIT_SIGN"), OsString::from("0"))],
-    )?;
-    assert!(signing_disabled.success, "{}", signing_disabled.stderr);
-
+#[test]
+fn independent_git_grants_use_fixed_private_key_destinations() -> TestResult {
+    for mode in [Command::Run, Command::Spawn] {
+        for (deploy, sign) in grant_combinations() {
+            let fixture = GrantFixture::new()?;
+            let output = fixture.run(
+                mode,
+                GitGrants {
+                    deploy: Some(deploy),
+                    sign: Some(sign),
+                },
+                fixture.pointer_environment(true, true),
+                false,
+            )?;
+            assert!(output.success, "{}", output.stderr);
+            let argv = fixture.argv()?;
+            let env = argv
+                .iter()
+                .filter_map(|arg| arg.strip_prefix("WRIX_"))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                env.iter()
+                    .filter(|arg| arg.starts_with("DEPLOY_KEY="))
+                    .copied()
+                    .collect::<Vec<_>>(),
+                if deploy {
+                    vec!["DEPLOY_KEY=/etc/wrix/keys/repo-key"]
+                } else {
+                    vec![]
+                }
+            );
+            assert_eq!(
+                env.iter()
+                    .filter(|arg| arg.starts_with("SIGNING_KEY="))
+                    .copied()
+                    .collect::<Vec<_>>(),
+                if sign {
+                    vec!["SIGNING_KEY=/etc/wrix/keys/repo-key-signing"]
+                } else {
+                    vec![]
+                }
+            );
+            assert!(!env.iter().any(|arg| arg.starts_with("GIT_SIGN=")));
+            assert!(
+                !argv
+                    .iter()
+                    .any(|arg| arg.contains("host-source") || arg.contains(".pub"))
+            );
+            assert_eq!(
+                argv.iter()
+                    .filter(|arg| arg.ends_with(":/etc/wrix/keys:ro"))
+                    .count(),
+                usize::from(deploy || sign)
+            );
+            let captured = fixture.root.path().join("keys");
+            let mut names = fs::read_dir(&captured)?
+                .map(|entry| entry.map(|entry| entry.file_name()))
+                .collect::<Result<Vec<_>, _>>()?;
+            names.sort();
+            let mut expected = Vec::new();
+            if deploy {
+                expected.push(OsString::from("repo-key"));
+                assert_eq!(fs::read(captured.join("repo-key"))?, b"deploy fixture\n");
+            }
+            if sign {
+                expected.push(OsString::from("repo-key-signing"));
+                assert_eq!(
+                    fs::read(captured.join("repo-key-signing"))?,
+                    b"signing fixture\n"
+                );
+            }
+            assert_eq!(names, expected);
+            for arg in &argv {
+                if let Some(source) = arg.strip_suffix(":/etc/wrix/keys:ro") {
+                    assert!(!Path::new(source).exists());
+                }
+            }
+        }
+    }
     Ok(())
 }
 
@@ -331,6 +476,12 @@ fn deploy_key_mount_uses_container_key_dir_without_public_key() -> TestResult {
     let key_path = key_dir.join("repo-key");
     fs::create_dir_all(&workspace)?;
     fs::create_dir_all(&key_dir)?;
+    let status = std::process::Command::new("git")
+        .args(["init", "--quiet"])
+        .arg(&workspace)
+        .status()?;
+    assert!(status.success());
+    fs::write(workspace.join("wrix.toml"), "[wrix.git]\ndeploy = true\n")?;
     fs::write(&key_path, "private key\n")?;
     fs::write(key_dir.join("repo-key.pub"), "public key\n")?;
     common::write_profile_config(
@@ -361,6 +512,49 @@ fn deploy_key_mount_uses_container_key_dir_without_public_key() -> TestResult {
     assert!(!run.stdout.contains("repo-key.pub"));
     assert!(!run.stdout.contains(&key_path.display().to_string()));
 
+    Ok(())
+}
+
+#[test]
+fn retired_sign_environment_does_not_change_bootstrap_signing() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let signing = root.path().join("signing-key");
+    let output = std::process::Command::new("ssh-keygen")
+        .args(["-q", "-t", "ed25519", "-N", "", "-f"])
+        .arg(&signing)
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for retired_sign in ["0", "1"] {
+        let home = root.path().join(format!("home-{retired_sign}"));
+        fs::create_dir(&home)?;
+        let helper = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib/util/git-ssh-setup.sh");
+        let output = std::process::Command::new("bash")
+            .args([
+                "-c",
+                "set -euo pipefail; source \"$1\"; git config --global --get commit.gpgsign",
+                "bootstrap-test",
+            ])
+            .arg(helper)
+            .env("HOME", home)
+            .env("WRIX_SIGNING_KEY", &signing)
+            .env_remove("WRIX_DEPLOY_KEY")
+            .env("WRIX_GIT_SIGN", retired_sign)
+            .env("GIT_AUTHOR_NAME", "Wrix Test")
+            .env("GIT_AUTHOR_EMAIL", "wrix@example.test")
+            .env_remove("GIT_CONFIG_GLOBAL")
+            .env_remove("GIT_CONFIG_COUNT")
+            .output()?;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8(output.stdout)?.trim(), "true");
+    }
     Ok(())
 }
 
@@ -938,6 +1132,208 @@ fn deploy_key_fixture() -> ProfileFixture {
     ProfileFixture {
         deploy_key: Some(String::from("repo-key")),
         ..ProfileFixture::default()
+    }
+}
+
+fn assert_key_environment(output: &str, deploy: bool, sign: bool) {
+    for (name, granted, path) in [
+        ("WRIX_DEPLOY_KEY", deploy, "/etc/wrix/keys/repo-key"),
+        ("WRIX_SIGNING_KEY", sign, "/etc/wrix/keys/repo-key-signing"),
+    ] {
+        let actual = output
+            .lines()
+            .filter(|line| line.starts_with(&format!("ENV={name}=")))
+            .collect::<Vec<_>>();
+        let expected = if granted {
+            vec![format!("ENV={name}={path}")]
+        } else {
+            Vec::new()
+        };
+        assert_eq!(actual, expected, "{output}");
+    }
+}
+
+const fn grant_combinations() -> [(bool, bool); 4] {
+    [(false, false), (true, false), (false, true), (true, true)]
+}
+
+#[derive(Clone, Copy, Default)]
+struct GitGrants {
+    deploy: Option<bool>,
+    sign: Option<bool>,
+}
+
+struct GrantFixture {
+    root: tempfile::TempDir,
+    workspace: PathBuf,
+    profile: PathBuf,
+}
+
+impl GrantFixture {
+    fn new() -> TestResult<Self> {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir()?;
+        let workspace = root.path().join("workspace");
+        let profile = root.path().join("profile.json");
+        let bin = root.path().join("bin");
+        let key_dir = root.path().join("home/.ssh/deploy_keys");
+        for directory in [&workspace, &bin, &key_dir] {
+            fs::create_dir_all(directory)?;
+        }
+        for (name, contents) in [
+            ("repo-key", "deploy fixture\n"),
+            ("repo-key-signing", "signing fixture\n"),
+        ] {
+            fs::write(key_dir.join(name), contents)?;
+            fs::write(root.path().join(format!("host-source-{name}")), contents)?;
+            fs::write(
+                root.path().join(format!("host-source-{name}.pub")),
+                "not private\n",
+            )?;
+        }
+        for name in ["podman", "container", "route"] {
+            let path = bin.join(name);
+            fs::write(
+                &path,
+                include_str!("../../wrix-cli/tests/fixtures/launch-runtime.sh"),
+            )?;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
+        }
+        common::write_profile_config(&profile, &deploy_key_fixture())?;
+        Ok(Self {
+            root,
+            workspace,
+            profile,
+        })
+    }
+
+    fn init_repository(&self) -> TestResult {
+        let output = std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .arg(&self.workspace)
+            .output()?;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Ok(())
+    }
+
+    fn pointer_environment(&self, deploy_valid: bool, sign_valid: bool) -> Vec<(String, OsString)> {
+        [
+            ("WRIX_DEPLOY_KEY", "repo-key", deploy_valid),
+            ("WRIX_SIGNING_KEY", "repo-key-signing", sign_valid),
+        ]
+        .into_iter()
+        .map(|(variable, name, valid)| {
+            let prefix = if valid {
+                "host-source"
+            } else {
+                "missing-host-source"
+            };
+            (
+                variable.to_owned(),
+                self.root
+                    .path()
+                    .join(format!("{prefix}-{name}"))
+                    .into_os_string(),
+            )
+        })
+        .chain([(String::from("WRIX_GIT_SIGN"), OsString::from("1"))])
+        .collect()
+    }
+
+    fn run(
+        &self,
+        mode: Command,
+        grants: GitGrants,
+        environment: Vec<(String, OsString)>,
+        dry_run: bool,
+    ) -> TestResult<common::ChildRun> {
+        let mut args = Vec::new();
+        match mode {
+            Command::Run => {
+                if let Some(deploy) = grants.deploy {
+                    args.push(
+                        if deploy {
+                            "--git-deploy"
+                        } else {
+                            "--no-git-deploy"
+                        }
+                        .to_owned(),
+                    );
+                }
+                if let Some(sign) = grants.sign {
+                    args.push(if sign { "--git-sign" } else { "--no-git-sign" }.to_owned());
+                }
+                args.push(self.workspace.display().to_string());
+            }
+            Command::Spawn => {
+                let config = self.root.path().join("spawn.json");
+                let mut git = serde_json::Map::new();
+                if let Some(deploy) = grants.deploy {
+                    git.insert("deploy".to_owned(), json!(deploy));
+                }
+                if let Some(sign) = grants.sign {
+                    git.insert("sign".to_owned(), json!(sign));
+                }
+                fs::write(
+                    &config,
+                    serde_json::to_vec(&json!({
+                        "workspace": self.workspace, "git": git,
+                        "env": [["WRIX_DEPLOY_KEY", "/must/not/forward"], ["WRIX_SIGNING_KEY", "/must/not/forward"], ["WRIX_GIT_SIGN", "1"]],
+                        "agent_args": [], "mounts": []
+                    }))?,
+                )?;
+                args.extend([String::from("--spawn-config"), config.display().to_string()]);
+            }
+        }
+        let path = std::env::join_paths(std::iter::once(self.root.path().join("bin")).chain(
+            std::env::split_paths(&std::env::var_os("PATH").ok_or("PATH missing")?),
+        ))?;
+        let mut env = vec![
+            (String::from("PATH"), path),
+            (
+                String::from("WRIX_IMAGE_KEEP_FILE"),
+                self.root.path().join("mru.json").into_os_string(),
+            ),
+            (
+                String::from("WRIX_TEST_DIGEST"),
+                OsString::from(format!("sha256:{}", "a".repeat(64))),
+            ),
+            (
+                String::from("WRIX_TEST_ARGV"),
+                self.root.path().join("argv").into_os_string(),
+            ),
+            (
+                String::from("WRIX_TEST_KEYS"),
+                self.root.path().join("keys").into_os_string(),
+            ),
+        ];
+        env.extend(environment);
+        common::run_child(
+            "launch_child",
+            self.root.path(),
+            "grant",
+            ChildSpec {
+                command: mode,
+                profile_config: Some(self.profile.clone()),
+                args,
+                env,
+                dry_run,
+            },
+        )
+    }
+
+    fn argv(&self) -> TestResult<Vec<String>> {
+        let bytes = fs::read(self.root.path().join("argv"))?;
+        bytes
+            .strip_suffix(&[0])
+            .ok_or("missing argv NUL")?
+            .split(|byte| *byte == 0)
+            .map(|arg| String::from_utf8(arg.to_vec()).map_err(Into::into))
+            .collect()
     }
 }
 

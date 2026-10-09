@@ -64,6 +64,62 @@ fn documented_spawn_config_fields_render_into_launch_plan() -> TestResult {
 }
 
 #[test]
+fn git_grants_preserve_omission_and_explicit_false() -> TestResult {
+    let fixture = SpawnFixture::new("spawn-git-grants")?;
+    for deploy in [None, Some(false), Some(true)] {
+        for sign in [None, Some(false), Some(true)] {
+            let mut git = serde_json::Map::new();
+            if let Some(deploy) = deploy {
+                git.insert("deploy".to_owned(), json!(deploy));
+            }
+            if let Some(sign) = sign {
+                git.insert("sign".to_owned(), json!(sign));
+            }
+            let config = fixture.write("grants", &json!({
+                "workspace": path_text(&fixture.workspace), "env": [], "agent_args": [], "git": git
+            }))?;
+            let output = fixture.run("grants", &config)?;
+            assert!(output.success, "{}", output.stderr);
+            assert_spawn_git_overrides(&output.stdout, deploy, sign);
+        }
+    }
+    let config = fixture.write(
+        "omitted",
+        &json!({
+            "workspace": path_text(&fixture.workspace), "env": [], "agent_args": []
+        }),
+    )?;
+    let output = fixture.run("omitted", &config)?;
+    assert!(output.success, "{}", output.stderr);
+    assert_spawn_git_overrides(&output.stdout, None, None);
+    for git in [
+        json!(null),
+        json!(false),
+        json!([]),
+        json!("true"),
+        json!({"deploy": null}),
+        json!({"sign": null}),
+        json!({"deploy": "true"}),
+        json!({"sign": 1}),
+        json!({"deploy": []}),
+        json!({"sign": {}}),
+        json!({"sign_commits": true}),
+    ] {
+        let config = fixture.write(
+            "invalid-grant",
+            &json!({
+                "workspace": path_text(&fixture.workspace), "env": [], "agent_args": [], "git": git
+            }),
+        )?;
+        let output = fixture.run("invalid-grant", &config)?;
+        assert!(!output.success, "accepted {git}");
+        assert!(output.stderr.contains("invalid SpawnConfig schema"));
+        assert_eq!(output.stdout, "");
+    }
+    Ok(())
+}
+
+#[test]
 fn runtime_shim_image_inspection_returns_identifiers_not_references() -> TestResult {
     let root = tempfile::tempdir()?;
     let runtime = write_runtime_shims(root.path())?;
@@ -476,6 +532,20 @@ fn write_executable(path: &std::path::Path, content: &str) -> TestResult {
     permissions.set_mode(0o755);
     fs::set_permissions(path, permissions)?;
     Ok(())
+}
+
+fn assert_spawn_git_overrides(output: &str, deploy: Option<bool>, sign: Option<bool>) {
+    for (name, value) in [("GIT_DEPLOY_OVERRIDE", deploy), ("GIT_SIGN_OVERRIDE", sign)] {
+        let actual = output
+            .lines()
+            .filter(|line| line.starts_with(name))
+            .collect::<Vec<_>>();
+        let expected = value
+            .map(|value| format!("{name}={value}"))
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
 }
 
 fn spawn_mount_lines(output: &str) -> Vec<&str> {

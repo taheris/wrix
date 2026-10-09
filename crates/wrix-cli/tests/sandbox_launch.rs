@@ -69,6 +69,13 @@ impl Fixture {
 
     fn capture_runtime(&self) -> TestResult<Command> {
         use std::os::unix::fs::PermissionsExt;
+        let key_dir = self.root.path().join("home/.ssh/deploy_keys");
+        fs::create_dir_all(&key_dir)?;
+        fs::write(key_dir.join("repo-key"), "fixture deploy key\n")?;
+        fs::write(key_dir.join("repo-key-signing"), "fixture signing key\n")?;
+        let mut profile: Value = serde_json::from_slice(&fs::read(&self.profile)?)?;
+        profile["security"] = json!({"deploy_key": "repo-key"});
+        fs::write(&self.profile, serde_json::to_vec(&profile)?)?;
         fs::remove_dir(self.workspace.join(".beads/dolt"))?;
         fs::create_dir(self.root.path().join("selected-workspace"))?;
         let bin = self.root.path().join("bin");
@@ -296,6 +303,70 @@ fn run_launch_options_stop_before_agent_arguments() -> TestResult {
 }
 
 #[test]
+fn invalid_git_policy_fails_before_side_effects() -> TestResult {
+    for policy in [
+        "[wrix.git",
+        "[wrix.git]\ndeploy = 'true'\n",
+        "[wrix.git]\nsign = 1\n",
+        "[wrix.git]\nsign_commits = true\n",
+        "[wrix.git]\ndeploy_key = '../escape'\n",
+    ] {
+        for mode in ["run", "spawn"] {
+            let fixture = Fixture::new(None)?;
+            fs::create_dir(fixture.workspace.join(".git"))?;
+            fs::write(fixture.workspace.join("wrix.toml"), policy)?;
+            let mut command = Command::new(env!("CARGO_BIN_EXE_wrix"));
+            command.arg("--profile-config").arg(&fixture.profile);
+            if mode == "run" {
+                command
+                    .args(["run", "--no-git-deploy", "--no-git-sign"])
+                    .arg(&fixture.workspace);
+            } else {
+                let spawn = fixture.root.path().join("spawn.json");
+                fs::write(
+                    &spawn,
+                    serde_json::to_vec(&json!({
+                        "workspace": fixture.workspace, "env": [], "agent_args": [],
+                        "git": {"deploy": false, "sign": false}
+                    }))?,
+                )?;
+                command.args(["spawn", "--spawn-config"]).arg(spawn);
+            }
+            fixture.forbid_subprocesses(&mut command)?;
+            let output = command
+                .env("HOME", fixture.root.path().join("home"))
+                .env("XDG_CACHE_HOME", fixture.root.path().join("cache"))
+                .env("WRIX_DEPLOY_KEY", "/invalid-ungranted")
+                .env("WRIX_SIGNING_KEY", "/invalid-ungranted")
+                .output()?;
+            assert!(!output.status.success(), "accepted {policy}");
+            let stderr = String::from_utf8(output.stderr)?;
+            assert!(
+                stderr.contains("repository policy") && stderr.contains("wrix.toml"),
+                "{stderr}"
+            );
+            assert!(!fixture.root.path().join("calls").exists(), "{stderr}");
+            assert!(!fixture.root.path().join("cache").exists());
+            assert!(!fixture.workspace.join(".wrix").exists());
+        }
+    }
+    for (positive, negative) in [
+        ("--git-deploy", "--no-git-deploy"),
+        ("--git-sign", "--no-git-sign"),
+    ] {
+        for pair in [[positive, negative], [negative, positive]] {
+            let fixture = Fixture::new(None)?;
+            let mut command = fixture.run_command();
+            fixture.forbid_subprocesses(&mut command)?;
+            let output = command.args(pair).arg(&fixture.workspace).output()?;
+            assert!(!output.status.success());
+            assert!(!fixture.root.path().join("calls").exists());
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn run_without_workspace_requires_separator_before_agent_flags() -> TestResult {
     for flag in ["--stdio", "--profile-config", "--agent-option"] {
         let fixture = Fixture::new(None)?;
@@ -411,6 +482,24 @@ fn launch_runtime_fixture_conforms_to_inspection_capture_and_failure_contract() 
             .output()?;
         assert_eq!(output.status.code(), Some(91));
         assert!(String::from_utf8_lossy(&output.stderr).contains("unexpected runtime arguments"));
+    }
+    let keys = fixture.root.path().join("fixture-keys");
+    fs::create_dir(&keys)?;
+    fs::write(keys.join("repo-key-signing"), "signing-only fixture")?;
+    for name in ["podman", "container"] {
+        let captured = fixture.root.path().join(format!("{name}-keys"));
+        let output = Command::new(fixture.root.path().join("bin").join(name))
+            .args(["run", "--rm", "-v"])
+            .arg(format!("{}:/etc/wrix/keys:ro", keys.display()))
+            .env("WRIX_TEST_ARGV", fixture.root.path().join("argv"))
+            .env("WRIX_TEST_KEYS", &captured)
+            .output()?;
+        assert!(output.status.success());
+        assert_eq!(fs::read_dir(&captured)?.count(), 1);
+        assert_eq!(
+            fs::read_to_string(captured.join("repo-key-signing"))?,
+            "signing-only fixture"
+        );
     }
     let output = Command::new(fixture.root.path().join("bin/route"))
         .args(["-n", "get", "default"])

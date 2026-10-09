@@ -380,11 +380,11 @@ section is a reference index only.
   a valid fallback exists; with no explicit source, a missing fallback also
   fails. Both failures name the unresolved key before services or containers
   start, identically for run and spawn
-  [test?](../crates/wrix-sandbox/tests/launch.rs::granted_git_keys_are_required_before_startup)
+  [test](../crates/wrix-sandbox/tests/launch.rs::granted_git_keys_are_required_before_startup)
 - With no grants, both launch modes succeed without Git keys and do not resolve
   or stage ambient key sources; all four deploy/sign combinations deliver
   exactly the granted keys independently
-  [test?](../crates/wrix-sandbox/tests/launch.rs::git_key_grants_are_independent_and_ambient_sources_do_not_grant)
+  [test](../crates/wrix-sandbox/tests/launch.rs::git_key_grants_are_independent_and_ambient_sources_do_not_grant)
 - Security documentation identifies repository Git policy as trusted, mutable
   launch input whose modification can change grants on subsequent launches; it
   does not describe key-delivery grants as an agent-resistant authorization

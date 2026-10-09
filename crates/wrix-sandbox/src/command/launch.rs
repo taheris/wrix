@@ -20,6 +20,7 @@ use wrix_core::{
     cache_key::{CachePublicKey, ParseError as CachePublicKeyParseError},
     deploy_key::{Name as KeyName, ParseError as KeyNameParseError},
     path::Workspace,
+    repository_policy,
 };
 
 use crate::image::{
@@ -27,7 +28,7 @@ use crate::image::{
 };
 
 use super::config::{
-    AgentKind, EnvName, MountMode, NetworkMode, Platform, ProfileConfig, ProfileMount,
+    AgentKind, EnvName, GitGrants, MountMode, NetworkMode, Platform, ProfileConfig, ProfileMount,
     RuntimeSecretPolicy, Security, SpawnConfig, SpawnMount, is_known_credential_env,
 };
 
@@ -88,14 +89,18 @@ pub enum LaunchError {
     MountSourceMissing { path: String },
     /// Unix-socket mount source rejected: {socket} -> {dest}
     SocketMountRejected { socket: String, dest: String },
-    /// WRIX_DEPLOY_KEY={path}: file does not exist
-    DeployKeyMissing { path: String },
-    /// WRIX_SIGNING_KEY={path}: file does not exist
-    SigningKeyMissing { path: String },
-    /// wrix spawn: no deploy key resolved — set WRIX_DEPLOY_KEY to an existing file, or place one at {path}
-    SpawnDeployKeyMissing { path: String },
-    /// wrix spawn: no signing key resolved — set WRIX_SIGNING_KEY to an existing file, place one at {path}, or set WRIX_GIT_SIGN=0 to disable commit signing
-    SpawnSigningKeyMissing { path: String },
+    /// WRIX_DEPLOY_KEY={path}: file does not exist (granted deploy key {name})
+    DeployKeyMissing { path: String, name: KeyName },
+    /// WRIX_SIGNING_KEY={path}: file does not exist (granted signing key {name}-signing)
+    SigningKeyMissing { path: String, name: KeyName },
+    /// granted deploy key unresolved — set WRIX_DEPLOY_KEY to an existing file, or place one at {path}
+    GrantedDeployKeyMissing { path: String },
+    /// granted signing key unresolved — set WRIX_SIGNING_KEY to an existing file, or place one at {path}
+    GrantedSigningKeyMissing { path: String },
+    /// {source}
+    RepositoryPolicy {
+        source: repository_policy::ReadError,
+    },
     /// required runtime secret {name} is not set in the host environment or SpawnConfig.env
     RequiredRuntimeSecretMissing { name: EnvName },
     /// runtime secret {name} is not valid Unicode in the host environment
@@ -192,12 +197,13 @@ fn complete_with_cleanup<T>(
 pub fn execute(request: &Request, stdout: &mut impl Write) -> Result<ExitCode, LaunchError> {
     let network_mode = NetworkMode::from_env(request.profile_config.network.default_mode)?;
     let dry_run = env_flag("WRIX_DRY_RUN");
+    let credential_sources = CredentialSources::resolve(request)?;
     let services = if !dry_run || env_flag("WRIX_DRY_RUN_SERVICES") {
         ServicesState::load(request)?
     } else {
         ServicesState::default()
     };
-    let plan = Plan::new(request, services, network_mode)?;
+    let plan = Plan::new(request, services, network_mode, credential_sources)?;
     if dry_run {
         plan.write_dry_run(stdout)?;
         return Ok(ExitCode::SUCCESS);
@@ -218,6 +224,7 @@ struct Plan<'a> {
     runtime_passthrough_env: Vec<(String, String)>,
     spawn_mounts: Vec<RenderedMount>,
     services: ServicesState,
+    credential_sources: Option<CredentialSources>,
     host_podman_socket: Option<HostPodmanSocket>,
     network_mode: NetworkMode,
     git_identity: GitIdentity,
@@ -633,6 +640,7 @@ impl<'a> Plan<'a> {
         request: &'a Request,
         services: ServicesState,
         network_mode: NetworkMode,
+        credential_sources: Option<CredentialSources>,
     ) -> Result<Self, LaunchError> {
         let profile = &request.profile_config;
         let source = match &request.kind {
@@ -682,6 +690,7 @@ impl<'a> Plan<'a> {
                     .config
                     .env
                     .iter()
+                    .filter(|(name, _)| !is_git_key_environment(name.as_str()))
                     .map(|(name, value)| (name.as_str().to_owned(), value.clone()))
                     .collect(),
                 spawn
@@ -720,6 +729,7 @@ impl<'a> Plan<'a> {
             runtime_passthrough_env,
             spawn_mounts,
             services,
+            credential_sources,
             host_podman_socket,
             network_mode,
             git_identity: GitIdentity::load(),
@@ -730,12 +740,7 @@ impl<'a> Plan<'a> {
 
     fn write_dry_run(&self, stdout: &mut impl Write) -> Result<(), LaunchError> {
         Staging::with(|staging| {
-            let credentials = if self.spawn() {
-                self.credential_sources()?;
-                None
-            } else {
-                self.credentials(staging)?
-            };
+            let credentials = self.credentials(staging)?;
             let pi_auth = self.pi_auth()?;
 
             writeln!(stdout, "SUBCOMMAND={}", self.subcommand())?;
@@ -756,13 +761,18 @@ impl<'a> Plan<'a> {
                 self.request.profile_config.profile.name
             )?;
             writeln!(stdout, "WORKSPACE={}", self.workspace.display())?;
-            if let Kind::Run(run) = &self.request.kind {
-                if let Some(deploy) = run.git_deploy {
-                    writeln!(stdout, "GIT_DEPLOY_OVERRIDE={deploy}")?;
-                }
-                if let Some(sign) = run.git_sign {
-                    writeln!(stdout, "GIT_SIGN_OVERRIDE={sign}")?;
-                }
+            let overrides = match &self.request.kind {
+                Kind::Run(run) => GitGrants {
+                    deploy: run.git_deploy,
+                    sign: run.git_sign,
+                },
+                Kind::Spawn(spawn) => spawn.config.git,
+            };
+            if let Some(deploy) = overrides.deploy {
+                writeln!(stdout, "GIT_DEPLOY_OVERRIDE={deploy}")?;
+            }
+            if let Some(sign) = overrides.sign {
+                writeln!(stdout, "GIT_SIGN_OVERRIDE={sign}")?;
             }
             writeln!(
                 stdout,
@@ -1158,58 +1168,11 @@ impl<'a> Plan<'a> {
         Ok(())
     }
 
-    fn credential_sources(&self) -> Result<Option<CredentialSources>, LaunchError> {
-        let name = deploy_key_name(
-            &self.workspace,
-            self.request.profile_config.security.deploy_key.as_ref(),
-        )?;
-        let deploy = resolve_key("WRIX_DEPLOY_KEY", name.as_str(), false)?;
-        let signing_name = format!("{name}-signing");
-        let signing = resolve_key("WRIX_SIGNING_KEY", &signing_name, true)?;
-        if self.spawn() {
-            if deploy.is_none() {
-                return Err(LaunchError::SpawnDeployKeyMissing {
-                    path: default_key_path(name.as_str()).display().to_string(),
-                });
-            }
-            if env::var("WRIX_GIT_SIGN").unwrap_or_else(|_| String::from("1")) != "0"
-                && signing.is_none()
-            {
-                return Err(LaunchError::SpawnSigningKeyMissing {
-                    path: default_key_path(&signing_name).display().to_string(),
-                });
-            }
-        }
-        let Some(deploy) = deploy else {
-            return Ok(None);
-        };
-        Ok(Some(CredentialSources {
-            deploy,
-            signing,
-            name,
-        }))
-    }
-
     fn credentials(&self, staging: &Staging) -> Result<Option<Credentials>, LaunchError> {
-        let Some(sources) = self.credential_sources()? else {
-            return Ok(None);
-        };
-        let key_root = staging.root.join("deploy_keys");
-        fs::create_dir_all(&key_root)?;
-        let deploy_target = key_root.join(sources.name.as_str());
-        fs::copy(&sources.deploy, &deploy_target)?;
-        let signing_target = if let Some(path) = sources.signing {
-            let target = key_root.join(format!("{}-signing", sources.name));
-            fs::copy(path, &target)?;
-            Some(target)
-        } else {
-            None
-        };
-        Ok(Some(Credentials {
-            deploy: deploy_target,
-            signing: signing_target,
-            name: sources.name,
-        }))
+        self.credential_sources
+            .as_ref()
+            .map(|sources| sources.stage(staging))
+            .transpose()
     }
 
     fn pi_auth(&self) -> Result<Option<PiAuth>, LaunchError> {
@@ -1244,6 +1207,7 @@ impl<'a> Plan<'a> {
             .profile
             .env
             .iter()
+            .filter(|(name, _)| !is_git_key_environment(name.as_str()))
             .map(|(key, value)| (key.as_str().to_owned(), value.clone()))
             .collect::<Vec<_>>();
         pairs.extend(self.runtime_passthrough_env.iter().cloned());
@@ -1280,9 +1244,6 @@ impl<'a> Plan<'a> {
         pairs.extend(self.launcher_identity_env_pairs());
         if let Some(pair) = notification_env(Platform::CURRENT) {
             pairs.push(pair);
-        }
-        if let Ok(value) = env::var("WRIX_GIT_SIGN") {
-            pairs.push((String::from("WRIX_GIT_SIGN"), value));
         }
         pairs.retain(|(name, _)| name != "WRIX_FOCUS_TARGET");
         if let Some(target) = &self.focus_target {
@@ -1773,25 +1734,83 @@ impl ServicesState {
 }
 
 struct CredentialSources {
-    deploy: PathBuf,
+    deploy: Option<PathBuf>,
     signing: Option<PathBuf>,
     name: KeyName,
 }
 
+impl CredentialSources {
+    fn resolve(request: &Request) -> Result<Option<Self>, LaunchError> {
+        let (workspace, overrides) = match &request.kind {
+            Kind::Run(run) => (
+                run.workspace.as_path(),
+                GitGrants {
+                    deploy: run.git_deploy,
+                    sign: run.git_sign,
+                },
+            ),
+            Kind::Spawn(spawn) => (Path::new(&spawn.config.workspace), spawn.config.git),
+        };
+        let repository_root = Workspace::from_path(workspace)?.repository_root();
+        let policy = repository_root
+            .as_deref()
+            .map(repository_policy::read)
+            .transpose()
+            .map_err(|source| LaunchError::RepositoryPolicy { source })?
+            .unwrap_or_default();
+        let deploy = overrides.deploy.or(policy.git.deploy).unwrap_or(false);
+        let sign = overrides.sign.or(policy.git.sign).unwrap_or(false);
+        if !deploy && !sign {
+            return Ok(None);
+        }
+        let name = deploy_key_name(
+            repository_root.as_deref().unwrap_or(workspace),
+            policy
+                .git
+                .deploy_key
+                .as_ref()
+                .or(request.profile_config.security.deploy_key.as_ref()),
+        )?;
+        Ok(Some(Self {
+            deploy: deploy
+                .then(|| resolve_key(KeyKind::Deploy, &name))
+                .transpose()?,
+            signing: sign
+                .then(|| resolve_key(KeyKind::Signing, &name))
+                .transpose()?,
+            name,
+        }))
+    }
+
+    fn stage(&self, staging: &Staging) -> Result<Credentials, LaunchError> {
+        let root = staging.root.join("deploy_keys");
+        fs::create_dir_all(&root)?;
+        if let Some(path) = &self.deploy {
+            fs::copy(path, root.join(self.name.as_str()))?;
+        }
+        if let Some(path) = &self.signing {
+            fs::copy(path, root.join(format!("{}-signing", self.name)))?;
+        }
+        Ok(Credentials {
+            root,
+            deploy: self.deploy.is_some(),
+            signing: self.signing.is_some(),
+            name: self.name.clone(),
+        })
+    }
+}
+
 struct Credentials {
-    deploy: PathBuf,
-    signing: Option<PathBuf>,
+    root: PathBuf,
+    deploy: bool,
+    signing: bool,
     name: KeyName,
 }
 
 impl Credentials {
     fn mount(&self) -> RenderedMount {
-        let host = self
-            .deploy
-            .parent()
-            .map_or_else(|| self.deploy.clone(), Path::to_path_buf);
         RenderedMount {
-            host: host.display().to_string(),
+            host: self.root.display().to_string(),
             container: String::from("/etc/wrix/keys"),
             mode: MountMode::Ro,
             optional: false,
@@ -1800,17 +1819,27 @@ impl Credentials {
 }
 
 fn credential_env_pairs(credentials: &Credentials) -> Vec<(String, String)> {
-    let mut pairs = vec![(
-        String::from("WRIX_DEPLOY_KEY"),
-        format!("/etc/wrix/keys/{}", credentials.name),
-    )];
-    if credentials.signing.is_some() {
+    let mut pairs = Vec::new();
+    if credentials.deploy {
+        pairs.push((
+            String::from("WRIX_DEPLOY_KEY"),
+            format!("/etc/wrix/keys/{}", credentials.name),
+        ));
+    }
+    if credentials.signing {
         pairs.push((
             String::from("WRIX_SIGNING_KEY"),
             format!("/etc/wrix/keys/{}-signing", credentials.name),
         ));
     }
     pairs
+}
+
+fn is_git_key_environment(name: &str) -> bool {
+    matches!(
+        name,
+        "WRIX_DEPLOY_KEY" | "WRIX_SIGNING_KEY" | "WRIX_GIT_SIGN"
+    )
 }
 
 struct Staging {
@@ -2225,6 +2254,9 @@ fn resolve_runtime_secret_env(
 ) -> Result<Vec<(String, String)>, LaunchError> {
     let mut resolved = Vec::new();
     for (name, policy) in &security.runtime_secrets {
+        if is_git_key_environment(name.as_str()) {
+            continue;
+        }
         if spawn_env.iter().any(|(key, _value)| key == name.as_str()) {
             continue;
         }
@@ -2636,21 +2668,48 @@ fn first_host_label(value: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn resolve_key(env_name: &str, name: &str, signing: bool) -> Result<Option<PathBuf>, LaunchError> {
+#[derive(Clone, Copy)]
+enum KeyKind {
+    Deploy,
+    Signing,
+}
+
+fn resolve_key(kind: KeyKind, name: &KeyName) -> Result<PathBuf, LaunchError> {
+    let env_name = match kind {
+        KeyKind::Deploy => "WRIX_DEPLOY_KEY",
+        KeyKind::Signing => "WRIX_SIGNING_KEY",
+    };
     if let Some(value) = env::var_os(env_name) {
         let path = PathBuf::from(value);
         if path.is_file() {
-            return Ok(Some(path));
+            return Ok(path);
         }
-        let path_text = path.display().to_string();
-        return if signing {
-            Err(LaunchError::SigningKeyMissing { path: path_text })
-        } else {
-            Err(LaunchError::DeployKeyMissing { path: path_text })
-        };
+        let path = path.display().to_string();
+        return Err(match kind {
+            KeyKind::Deploy => LaunchError::DeployKeyMissing {
+                path,
+                name: name.clone(),
+            },
+            KeyKind::Signing => LaunchError::SigningKeyMissing {
+                path,
+                name: name.clone(),
+            },
+        });
     }
-    let path = default_key_path(name);
-    Ok(path.is_file().then_some(path))
+    let filename = match kind {
+        KeyKind::Deploy => name.to_string(),
+        KeyKind::Signing => format!("{name}-signing"),
+    };
+    let path = default_key_path(&filename);
+    if path.is_file() {
+        Ok(path)
+    } else {
+        let path = path.display().to_string();
+        Err(match kind {
+            KeyKind::Deploy => LaunchError::GrantedDeployKeyMissing { path },
+            KeyKind::Signing => LaunchError::GrantedSigningKeyMissing { path },
+        })
+    }
 }
 
 fn default_key_path(name: &str) -> PathBuf {

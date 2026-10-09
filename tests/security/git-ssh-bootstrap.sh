@@ -362,6 +362,8 @@ wrix_make_ed25519_key "$HOST_SIGNING_KEY" "git-ssh-bootstrap-signing"
 write_probe "$WORKSPACE/bootstrap-probe.sh"
 wrix_write_profile_config "$PROFILE_CONFIG" "$IMAGE_REF" "$IMAGE_SOURCE" claude
 wrix_write_spawn_config "$SPAWN_CONFIG" "$WORKSPACE" bash /workspace/bootstrap-probe.sh
+jq '.git = {deploy: true, sign: true}' "$SPAWN_CONFIG" >"$SPAWN_CONFIG.grants"
+mv "$SPAWN_CONFIG.grants" "$SPAWN_CONFIG"
 
 test_fresh_container_git_ssh_bootstrap() {
   local out="$TEST_TMP/bootstrap.out"
@@ -370,7 +372,7 @@ test_fresh_container_git_ssh_bootstrap() {
 
   HOME="$HOME_DIR" XDG_CACHE_HOME="$XDG_CACHE_HOME" \
     GIT_AUTHOR_NAME="Smoke Author" GIT_AUTHOR_EMAIL="smoke@example.test" \
-    WRIX_DEPLOY_KEY="$HOST_DEPLOY_KEY" WRIX_SIGNING_KEY="$HOST_SIGNING_KEY" WRIX_GIT_SIGN=1 \
+    WRIX_DEPLOY_KEY="$HOST_DEPLOY_KEY" WRIX_SIGNING_KEY="$HOST_SIGNING_KEY" \
     wrix_run_spawn "$LAUNCHER" "$PROFILE_CONFIG" "$SPAWN_CONFIG" >"$out" 2>"$err" || rc=$?
 
   if [[ "$rc" -ne 0 ]]; then
@@ -547,10 +549,12 @@ test_host_container_and_loom_helper() {
 
   write_parity_container_probe "$repo/container-parity-probe.sh" || { fail "failed to write container parity probe"; return; }
   wrix_write_spawn_config "$parity_spawn" "$workspace" bash /workspace/container-parity-probe.sh
+  jq '.git = {deploy: true, sign: true}' "$parity_spawn" >"$parity_spawn.grants"
+  mv "$parity_spawn.grants" "$parity_spawn"
   rc=0
   HOME="$home" XDG_CACHE_HOME="$XDG_CACHE_HOME" \
     GIT_AUTHOR_NAME="Wrix Parity" GIT_AUTHOR_EMAIL="parity@example.invalid" \
-    WRIX_DEPLOY_KEY="$env_deploy" WRIX_SIGNING_KEY="$env_signing" WRIX_GIT_SIGN=1 \
+    WRIX_DEPLOY_KEY="$env_deploy" WRIX_SIGNING_KEY="$env_signing" \
     wrix_run_spawn "$LAUNCHER" "$PROFILE_CONFIG" "$parity_spawn" >"$out" 2>"$err" || rc=$?
   if [[ "$rc" -ne 0 ]]; then
     fail "container did not use initialized repo Git helper/signing config"

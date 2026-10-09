@@ -121,8 +121,8 @@ consumer's discretion:
 | `packages.profile-images`           | Built-in Pi manifest mapping profile → Pi → matching raw launcher, profile config, and image metadata                                                                                                                                                                       |
 
 The launcher exposes two subcommands sharing the same Rust-owned container
-construction (mounts, env passthrough, deploy key, service startup, network
-firewall policy):
+construction (mounts, env passthrough, independent Git key grants, service
+startup, network firewall policy):
 
 - `wrix run [DIR] [AGENT_ARGS…]` — interactive (TTY). Reads immutable
   image/profile/agent defaults from `ProfileConfig` JSON and runtime inputs from
@@ -132,6 +132,16 @@ firewall policy):
   mounts, and agent args from JSON `SpawnConfig`. `--stdio` adds `WRIX_STDIO=1`
   so the selected agent uses its stdio protocol
   (`claude --input-format stream-json`, `pi --mode rpc`).
+
+Each launch reads the selected workspace repository's current `wrix.toml`.
+Deploy and signing grants resolve independently from invocation override,
+repository policy, then false; outside a repository, the policy tier is absent.
+Profiles select key identity, not permission. Only granted keys are resolved,
+before services or credential staging: an explicit host pointer is the sole
+candidate, otherwise the selected managed-key fallback is required. Ambient keys
+and `WRIX_GIT_SIGN` do not grant credentials. Only granted private files are
+staged read-only under `/etc/wrix/keys`, with child key environment values
+pointing at those container destinations, never the host sources.
 
 See [specs/sandbox.md](../specs/sandbox.md) and
 [specs/profiles.md](../specs/profiles.md) for the full launcher and manifest

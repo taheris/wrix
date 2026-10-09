@@ -263,7 +263,33 @@ pub struct SpawnConfig {
     pub workspace: String,
     pub env: Vec<(EnvName, String)>,
     pub agent_args: Vec<String>,
+    pub git: GitGrants,
     pub mounts: Vec<SpawnMount>,
+}
+
+/// Independent invocation overrides; omission inherits repository policy.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct GitGrants {
+    #[serde(default, deserialize_with = "deserialize_grant")]
+    pub deploy: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_grant")]
+    pub sign: Option<bool>,
+}
+
+fn deserialize_grant<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    bool::deserialize(deserializer).map(Some)
+}
+
+fn deserialize_git_grants<'de, D>(deserializer: D) -> Result<GitGrants, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let fields = serde_json::Map::<String, Value>::deserialize(deserializer)?;
+    serde_json::from_value(Value::Object(fields)).map_err(de::Error::custom)
 }
 
 #[derive(Debug, Deserialize)]
@@ -274,6 +300,8 @@ struct RawSpawnConfig {
     workspace: String,
     env: Vec<(EnvName, String)>,
     agent_args: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_git_grants")]
+    git: GitGrants,
     #[serde(default)]
     mounts: Vec<SpawnMount>,
     #[serde(flatten)]
@@ -345,7 +373,7 @@ pub enum ConfigError {
         path: String,
         source: serde_json::Error,
     },
-    /// invalid SpawnConfig schema: expected workspace string, optional image_ref/image_source/image_source_kind strings, env [key,value] string pairs, agent_args strings, and mounts with host_path/container_path/read_only
+    /// invalid SpawnConfig schema: expected workspace string, optional image_ref/image_source/image_source_kind strings, env [key,value] string pairs, agent_args strings, git with independent boolean deploy/sign overrides, and mounts with host_path/container_path/read_only
     InvalidSpawnConfigSchema,
     /// SpawnConfig cannot change the ProfileConfig agent/profile/image-agent field: {field}
     SpawnConfigProfileOverride { field: String },
@@ -581,6 +609,7 @@ fn parse_spawn_value(value: Value, platform: Platform) -> Result<SpawnConfig, Co
         workspace: spawn.workspace,
         env: spawn.env,
         agent_args: spawn.agent_args,
+        git: spawn.git,
         mounts: spawn.mounts,
     })
 }
@@ -790,6 +819,35 @@ mod test {
             assert_eq!(config.network.default_mode, super::NetworkMode::Limit);
             assert!(config.services.nix_cache.enabled);
         }
+    }
+
+    #[test]
+    fn spawn_git_grants_parse_independent_optional_booleans() {
+        for deploy in [None, Some(false), Some(true)] {
+            for sign in [None, Some(false), Some(true)] {
+                let mut value =
+                    json!({"workspace": "/workspace", "env": [], "agent_args": [], "git": {}});
+                if let Some(deploy) = deploy {
+                    value["git"]["deploy"] = json!(deploy);
+                }
+                if let Some(sign) = sign {
+                    value["git"]["sign"] = json!(sign);
+                }
+                assert_eq!(
+                    parse_spawn_value(value, Platform::Linux).unwrap().git,
+                    super::GitGrants { deploy, sign }
+                );
+            }
+        }
+        assert_eq!(
+            parse_spawn_value(
+                json!({"workspace": "/workspace", "env": [], "agent_args": []}),
+                Platform::Linux
+            )
+            .unwrap()
+            .git,
+            super::GitGrants::default()
+        );
     }
 
     #[test]
