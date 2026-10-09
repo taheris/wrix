@@ -622,7 +622,7 @@ supplied; there is no implicit default image baked in.
 - With or without `--stdio`, `wrix spawn` runs without a TTY or detachment,
   waits for the container command to finish, and returns its observed exit
   status; `--stdio` enables stdin rather than changing the lifecycle
-  [test?](../crates/wrix-sandbox/tests/launch.rs::spawn_waits_for_container_completion)
+  [test](../crates/wrix-sandbox/tests/launch.rs::spawn_waits_for_container_completion)
 - `SpawnConfig.git` parses independent boolean grants, preserving omission as
   inheritance and explicit false as an override rather than collapsing them
   [test?](../crates/wrix-sandbox/tests/spawn_config.rs::git_grants_preserve_omission_and_explicit_false)

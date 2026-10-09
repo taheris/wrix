@@ -1,3 +1,6 @@
+#[path = "../../wrix-sandbox/tests/common/lifecycle/mod.rs"]
+mod lifecycle;
+
 use std::{fs, path::PathBuf, process::Command};
 
 use serde_json::{Value, json};
@@ -119,6 +122,26 @@ impl Fixture {
         command.env("PATH", bin);
         Ok(())
     }
+}
+
+#[test]
+fn spawn_waits_for_container_completion() -> TestResult {
+    for stdio in [false, true] {
+        for exit_code in [0, 37] {
+            let fixture = lifecycle::Fixture::new()?;
+            let mut command = Command::new(env!("CARGO_BIN_EXE_wrix"));
+            command
+                .arg("--profile-config")
+                .arg(&fixture.profile)
+                .args(["spawn", "--spawn-config"])
+                .arg(&fixture.spawn);
+            if stdio {
+                command.arg("--stdio");
+            }
+            fixture.assert_foreground(command, stdio, exit_code)?;
+        }
+    }
+    Ok(())
 }
 
 #[test]

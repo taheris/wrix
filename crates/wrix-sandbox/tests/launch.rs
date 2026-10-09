@@ -1,4 +1,6 @@
 mod common;
+#[path = "common/lifecycle/mod.rs"]
+mod lifecycle;
 
 use std::{
     collections::BTreeMap,
@@ -783,6 +785,44 @@ fn profile_mounts_expand_only_home_and_user_variables() -> TestResult {
     assert!(!run.stdout.contains("$HOME"));
     assert!(!run.stdout.contains("$USER"));
     Ok(())
+}
+
+#[test]
+fn spawn_waits_for_container_completion() -> TestResult {
+    for stdio in [false, true] {
+        for exit_code in [0, 37] {
+            let fixture = lifecycle::Fixture::new()?;
+            let mut child = std::process::Command::new(std::env::current_exe()?);
+            child.args(["spawn_lifecycle_child", "--exact", "--ignored"]);
+            fixture.assert_foreground(child, stdio, exit_code)?;
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "child process dispatches the real launcher with isolated environment"]
+fn spawn_lifecycle_child() -> TestResult {
+    let profile =
+        PathBuf::from(std::env::var_os("WRIX_TEST_PROFILE_CONFIG").ok_or("profile missing")?);
+    let spawn = std::env::var("WRIX_TEST_SPAWN_CONFIG")?;
+    let mut args = vec![String::from("--spawn-config"), spawn];
+    if std::env::var("WRIX_TEST_STDIO")? == "1" {
+        args.push(String::from("--stdio"));
+    }
+    let code = wrix_sandbox::command::run(
+        Command::Spawn,
+        Some(profile),
+        &args,
+        &mut std::io::stdout(),
+        &mut std::io::stderr(),
+    )?;
+    for value in 0..=u8::MAX {
+        if code == std::process::ExitCode::from(value) {
+            std::process::exit(i32::from(value));
+        }
+    }
+    Err("launcher returned an unsupported exit code".into())
 }
 
 #[test]
