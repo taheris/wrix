@@ -778,9 +778,10 @@ supplied; there is no implicit default image baked in.
   propagates protocol/transport failures and cancellation rather than reporting
   success or replaying side-effecting calls through a Wrix client
   [system](verify:sandbox.pi-mcp-errors-cancellation)
-- Native Pi owns selected stdio-server shutdown, including child processes; Wrix
-  images contain no custom Pi MCP protocol client
+- Native Pi owns selected stdio-server shutdown, including child processes
   [system](verify:sandbox.pi-mcp-lifecycle)
+- Wrix images contain no custom Pi MCP protocol client
+  [system](test-ci:test-pi-mcp-image-wiring)
 - On Darwin, the runtime image installer converts the Darwin source kind defined
   by `image-builder.md` to a temporary OCI archive before invoking
   `container image load --input <oci-archive>`, then removes the temporary

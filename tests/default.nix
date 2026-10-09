@@ -137,6 +137,8 @@ let
     serviceCli = wrix.rustPackage.wrix;
   };
 
+  piMcpTests = import ./sandbox/pi-mcp-native.nix { inherit pkgs wrix src; };
+
   # Profile-image runtime checks share a craneLib + linux-package set with
   # the standalone tests below. They verify the per-profile sandbox images
   # contain the expected agent runtime binary.
@@ -220,7 +222,7 @@ let
     // prePushSmokeTests
     // tmuxMcpTests
     // (import ./sandbox/pi-settings.nix { inherit pkgs wrix; })
-    // (import ./sandbox/pi-mcp-native.nix { inherit pkgs wrix src; })
+    // piMcpTests.checks
     // {
       builder-vmnet-route = builderRouteTest;
       image-assembly-native = sandboxImageChecks.imageAssemblyNativeCheck;
@@ -337,6 +339,7 @@ let
     );
 
   ciApps = loomTests.ciApps ++ [
+    (mkCiApp piMcpTests.imageWiring "test-pi-mcp-image-wiring")
     (mkCiApp sandboxImageChecks.imageInstallRealSkopeoTest "test-image-install-real-skopeo")
     (mkCiApp sandboxImageChecks.imageInstallDigestSkipTest "test-image-install-digest-skip")
     (mkCiApp sandboxImageChecks.digestMatchesStoredIdTest "test-image-digest-matches-stored-id")

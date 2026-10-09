@@ -109,7 +109,7 @@ in
   '';
 
   "sandbox.pi-mcp-lifecycle" = ''
-    nix build --no-link ".#checks.${system}.pi-mcp-native" ".#checks.${system}.pi-mcp-image-wiring"
+    nix build --no-link ".#checks.${system}.pi-mcp-native"
   '';
 
   "sandbox.network-fail-closed" = live (network "test_fail_closed");

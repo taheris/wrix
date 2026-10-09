@@ -52,31 +52,34 @@ let
       '';
 in
 {
-  mcp-manifest-handoff =
-    assert explicit.schema == 1 && explicit.runtime_selection == false;
-    assert explicit == parsedManifest "claude" false;
-    assert explicit == parsedManifest "direct" false;
-    assert runtime.schema == 1 && runtime.runtime_selection == true;
-    assert runtime == parsedManifest "claude" true;
-    assert runtime == parsedManifest "direct" true;
-    assert builtins.elem (builtins.head explicit.servers) runtime.servers;
-    nativeCheck;
-  pi-mcp-native = nativeCheck;
-  pi-mcp-image-wiring =
-    pkgs.runCommand "test-pi-mcp-image-wiring"
-      {
-        nativeBuildInputs = [
-          pkgs.gnutar
-          pkgs.findutils
-        ];
-      }
-      ''
-        set -euo pipefail
-        mkdir image
-        tar -xf ${customLayer}/layer.tar -C image ./etc/wrix/pi-agent ./etc/wrix/mcp-available.json
-        [[ "$(find image/etc/wrix/pi-agent/extensions -mindepth 1 -printf '%f')" == wrix-notify.ts ]]
-        [[ -f image/etc/wrix/pi-agent/settings.json ]]
-        [[ -f image/etc/wrix/mcp-available.json ]]
-        touch "$out"
-      '';
+  checks = {
+    mcp-manifest-handoff =
+      assert explicit.schema == 1 && explicit.runtime_selection == false;
+      assert explicit == parsedManifest "claude" false;
+      assert explicit == parsedManifest "direct" false;
+      assert runtime.schema == 1 && runtime.runtime_selection == true;
+      assert runtime == parsedManifest "claude" true;
+      assert runtime == parsedManifest "direct" true;
+      assert builtins.elem (builtins.head explicit.servers) runtime.servers;
+      nativeCheck;
+    pi-mcp-native = nativeCheck;
+  };
+  imageWiring = pkgs.writeShellApplication {
+    name = "test-pi-mcp-image-wiring";
+    runtimeInputs = [
+      pkgs.gnutar
+      pkgs.findutils
+      pkgs.coreutils
+    ];
+    text = ''
+      set -euo pipefail
+      image_dir=$(mktemp -d)
+      trap 'rm -rf "$image_dir"' EXIT
+      tar -xf ${customLayer}/layer.tar -C "$image_dir" ./etc/wrix/pi-agent ./etc/wrix/mcp-available.json
+      [[ "$(find "$image_dir/etc/wrix/pi-agent/extensions" -mindepth 1 -printf '%f')" == wrix-notify.ts ]]
+      [[ -f "$image_dir/etc/wrix/pi-agent/settings.json" ]]
+      [[ -f "$image_dir/etc/wrix/mcp-available.json" ]]
+      echo "PASS: baked Pi configuration retains notifications and contains no custom MCP extension"
+    '';
+  };
 }
