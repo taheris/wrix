@@ -24,14 +24,6 @@ require_command() {
   fi
 }
 
-entrypoint_agent() {
-  if [[ -f /etc/wrix/image-agent ]]; then
-    tr -d '\n' </etc/wrix/image-agent
-  else
-    printf 'direct\n'
-  fi
-}
-
 assert_path_exists() {
   local path="$1"
   if [[ ! -e "$path" ]]; then
@@ -155,13 +147,17 @@ rewrite_entrypoint_workspace() {
   local source_path="$1"
   local workspace="$2"
   local dest_path="$3"
-  python3 - "$source_path" "$workspace" "$dest_path" <<'PY'
+  python3 - "$source_path" "$workspace" "$dest_path" "${WRIX_TEST_COMMAND_RUNNER:?run through verify:beads.no-embedded-fallback}" <<'PY'
 from pathlib import Path
 import shlex
 import sys
 source = Path(sys.argv[1])
 workspace = Path(sys.argv[2])
 dest = Path(sys.argv[3])
+image_agent = workspace / 'image-agent'
+image_agent.write_text('direct\n', encoding='utf-8')
+direct_executable = workspace / 'direct-executable'
+direct_executable.write_text(sys.argv[4] + '\n', encoding='utf-8')
 setup = workspace / 'git-ssh-setup.sh'
 setup.write_text('#!/usr/bin/env bash\nset -euo pipefail\n', encoding='utf-8')
 setup.chmod(0o755)
@@ -187,6 +183,9 @@ ready_helper.write_text(
     encoding='utf-8',
 )
 text = source.read_text(encoding='utf-8').replace('/workspace', str(workspace))
+text = text.replace('/etc/wrix/image-agent', str(image_agent))
+text = text.replace('/etc/wrix/direct-executable', str(direct_executable))
+text = text.replace('/home/wrix', str(workspace / 'home'))
 text = text.replace('. /network-ready.sh', f'. {shlex.quote(str(ready_helper))}')
 beads_helper = source.parent.parent.parent / 'beads/sandbox.sh'
 text = text.replace('. /beads-sandbox.sh', f'. {shlex.quote(str(beads_helper))}')
@@ -222,9 +221,7 @@ run_entrypoint_command() {
   local xdg_config_home="$home_dir/.config"
   local xdg_cache_home="$home_dir/.cache"
   local xdg_state_home="$home_dir/.local/state"
-  local agent
   local -a endpoint_env
-  agent="$(entrypoint_agent)"
   endpoint_env=(
     -u BEADS_DOLT_SERVER_HOST
     -u BEADS_DOLT_SERVER_PORT
@@ -248,7 +245,7 @@ run_entrypoint_command() {
     XDG_CACHE_HOME="$xdg_cache_home" \
     XDG_STATE_HOME="$xdg_state_home" \
     HOST_UID="$(id -u)" \
-    WRIX_AGENT="$agent" \
+    WRIX_AGENT=direct \
     WRIX_FIREWALL_BACKEND=iptables \
     WRIX_NETWORK=open \
     PATH="$workspace/bin:$PATH" \
@@ -297,7 +294,7 @@ assert_darwin_does_not_import_jsonl() {
   if ! run_entrypoint "$entrypoint" "$workspace" "$stdout_path" "$stderr_path"; then
     fail "darwin entrypoint failed for non-Dolt beads config: $(<"$stderr_path")"
   fi
-  assert_contains "darwin command override" "$(<"$stdout_path")" "ok"
+  assert_contains "darwin fixture runner" "$(<"$stdout_path")" "ok"
   assert_path_absent "$bd_log"
 }
 

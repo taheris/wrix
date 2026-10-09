@@ -86,7 +86,7 @@ let
     };
     baseDirect = mkTestImage {
       agent = "direct";
-      agentPkg = linuxPkgs.hello;
+      agentPkg = import ./sandbox/fixtures/command-runner.nix { pkgs = linuxPkgs; };
     };
     basePi = mkTestImage {
       agent = "pi";

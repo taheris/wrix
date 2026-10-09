@@ -76,7 +76,7 @@ agent_binary() {
   case "$agent" in
     claude) printf '%s\n' "claude" ;;
     pi) printf '%s\n' "pi" ;;
-    direct) printf '%s\n' "loom-direct-runner" ;;
+    direct) printf '%s\n' "test-agent-probe" ;;
     *)
       printf 'unknown agent: %s\n' "$agent" >&2
       return 64

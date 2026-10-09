@@ -81,6 +81,13 @@ let
       ;
     serviceCli = serviceCliStub;
   };
+  consumerAgent = import ./fixtures/consumer-agent.nix { inherit pkgs; };
+  commandRunner = import ./fixtures/command-runner.nix { inherit pkgs; };
+  consumerImage =
+    (sandboxLib.mkSandbox {
+      agent = "direct";
+      agentPkg = consumerAgent;
+    }).image;
   inherit (sandboxLib) serviceImage;
   sandbox = sandboxLib.mkSandbox { profile = sandboxLib.profiles.base; };
   wrix = sandbox.package;
@@ -176,8 +183,9 @@ in
         mkdir "$out"
       '';
 
-  entrypoint-agent-dispatch =
-    runCommandLocal "smoke-entrypoint-agent-dispatch"
+  entrypoint-declared-runner =
+    assert consumerImage.directExecutable == "${consumerAgent}/bin/${consumerAgent.meta.mainProgram}";
+    runCommandLocal "smoke-entrypoint-declared-runner"
       {
         nativeBuildInputs = [
           bash
@@ -186,7 +194,10 @@ in
       }
       ''
         set -euo pipefail
-        REPO_ROOT=${../..} bash ${./entrypoint-contract.sh} test_agent_dispatch_both_entrypoints
+        export WRIX_TEST_COMMAND_RUNNER=${commandRunner}/bin/${commandRunner.meta.mainProgram}
+        export WRIX_TEST_CONSUMER_EXECUTABLE=${consumerImage.directExecutable}
+        export WRIX_TEST_CONSUMER_METADATA=${consumerImage.directExecutableFile}
+        REPO_ROOT=${../..} bash ${./entrypoint-contract.sh} test_entrypoint_declared_runner
         mkdir "$out"
       '';
 

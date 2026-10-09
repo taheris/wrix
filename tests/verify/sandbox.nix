@@ -29,7 +29,9 @@ let
 
 in
 {
-  "sandbox.agent-binary-guard" = linuxLive (sandboxScriptAll "agent-binary-guard");
+  "sandbox.agent-binary-guard" = ''
+    nix build --no-link ".#checks.${system}.entrypoint-declared-runner"
+  '';
 
   "sandbox.agent-config-homes" = entrypoint "test_agent_config_homes_both_entrypoints";
 
@@ -43,7 +45,9 @@ in
 
   "sandbox.darwin-network-bootstrap" = darwinLive (sandboxScriptAll "darwin-network-bootstrap");
 
-  "sandbox.entrypoint-agent-dispatch" = entrypoint "test_agent_dispatch_both_entrypoints";
+  "sandbox.entrypoint-declared-runner" = ''
+    nix build --no-link ".#checks.${system}.entrypoint-declared-runner"
+  '';
 
   "sandbox.entrypoint-requires-bootstrap" = entrypoint "test_entrypoints_require_network_bootstrap";
 

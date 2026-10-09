@@ -3,9 +3,9 @@
 Wrix is a secure sandbox for running AI coding agents in isolated containers. It
 provides container isolation on Linux (Podman) and macOS (Apple container CLI),
 with built-in support for Pi and [Claude Code](https://claude.ai/code) (from
-nixpkgs) and a direct agent slot for external orchestrators such as
-[Loom](https://github.com/taheris/loom), plus tooling for notifications, remote
-Nix builds, and integration hooks.
+nixpkgs) and a direct agent slot for consumer-supplied runners, including
+external orchestrators such as [Loom](https://github.com/taheris/loom), plus
+tooling for notifications, remote Nix builds, and integration hooks.
 
 ## Design Principles
 
@@ -124,7 +124,7 @@ The launcher exposes two subcommands sharing the same Rust-owned container
 construction (mounts, env passthrough, deploy key, service startup, network
 firewall policy):
 
-- `wrix run [DIR] [CMD…]` — interactive (TTY). Reads immutable
+- `wrix run [DIR] [AGENT_ARGS…]` — interactive (TTY). Reads immutable
   image/profile/agent defaults from `ProfileConfig` JSON and runtime inputs from
   CLI/env.
 - `wrix spawn --spawn-config <file> [--stdio]` — programmatic dispatch. Reads
@@ -161,9 +161,9 @@ and Pi variants remain available, including their `-mcp` launchers.
 `packages.default` is the Rust Pi sandbox with `wrix-run` as its main program.
 The image declares its baked variant in `/etc/wrix/image-agent`; before exec,
 the entrypoint rejects a `ProfileConfig`/image mismatch, then verifies the
-selected agent's binary is present (`command -v`) and fails loudly when it is
-absent from the image — e.g. `WRIX_AGENT=pi` against a claude image on the
-raw-launcher path — rather than emitting a bare `command not found`.
+selected executable is available and fails loudly when it is absent from the
+image, rather than emitting a bare `command not found`. When the internal
+`WRIX_AGENT` wire is absent, dispatch uses the image-declared variant.
 
 ### Pi settings and tools
 
@@ -196,11 +196,15 @@ the whole host or workspace Pi home.
 
 `mkSandbox { agent = "direct"; agentPkg = ...; }` is the integration seam for
 external orchestrators. The consumer provides a Linux package with an explicit
-`meta.mainProgram` and owns its stdio protocol. Direct accepts omitted or empty
-`agentSettings`, but rejects nonempty settings. Wrix ships no placeholder or
-built-in direct image family; consumers also create matching manifests with
-`mkProfileImages`. See [Loom's flake](https://github.com/taheris/loom) for the
-canonical wiring.
+`meta.mainProgram` and owns its stdio protocol. The image bakes
+`${agentPkg}/bin/${agentPkg.meta.mainProgram}` into
+`/etc/wrix/direct-executable`; both entrypoints run that absolute path, not a
+caller-selected executable or a same-named PATH shim. Agent arguments, stdin,
+stdout, stderr, and exit status reach the consumer runner unchanged. Direct
+accepts omitted or empty `agentSettings`, but rejects nonempty settings. Wrix
+ships no placeholder or built-in direct image family; consumers also create
+matching manifests with `mkProfileImages`. See
+[Loom's flake](https://github.com/taheris/loom) for the canonical wiring.
 
 ## Security Model
 

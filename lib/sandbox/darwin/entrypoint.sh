@@ -383,20 +383,6 @@ if [[ -f /workspace/.pre-commit-config.yaml ]] \
   unset _wrix_hooks_current
 fi
 
-# WRIX_AGENT selects the agent runtime. 'direct' is the default base image;
-# 'claude' and 'pi' are explicit agent overlays. Each agent seeds its own config
-# home below (claude ~/.claude, pi ~/.pi/agent); direct has none.
-WRIX_AGENT="${WRIX_AGENT:-direct}"
-case "$WRIX_AGENT" in
-  claude) WRIX_AGENT_BIN=claude ;;
-  pi) WRIX_AGENT_BIN=pi ;;
-  direct) WRIX_AGENT_BIN=loom-direct-runner ;;
-  *)
-    echo "Error: unknown WRIX_AGENT: $WRIX_AGENT (expected 'claude', 'pi', or 'direct')" >&2
-    exit 1
-    ;;
-esac
-
 IMAGE_AGENT_FILE="/etc/wrix/image-agent"
 if [[ -f "$IMAGE_AGENT_FILE" ]]; then
   IMAGE_AGENT="$(<"$IMAGE_AGENT_FILE")"
@@ -404,20 +390,42 @@ else
   IMAGE_AGENT=""
 fi
 case "$IMAGE_AGENT" in
-  ""|claude|pi|direct) ;;
+  claude|pi|direct) ;;
   *)
     echo "Error: image declares unknown agent in $IMAGE_AGENT_FILE: $IMAGE_AGENT (expected 'claude', 'pi', or 'direct')" >&2
     exit 1
     ;;
 esac
-if [[ -n "$IMAGE_AGENT" && "$IMAGE_AGENT" != "$WRIX_AGENT" ]]; then
+WRIX_AGENT="${WRIX_AGENT:-$IMAGE_AGENT}"
+case "$WRIX_AGENT" in
+  claude|pi|direct) ;;
+  *)
+    echo "Error: unknown WRIX_AGENT: $WRIX_AGENT (expected 'claude', 'pi', or 'direct')" >&2
+    exit 1
+    ;;
+esac
+if [[ "$IMAGE_AGENT" != "$WRIX_AGENT" ]]; then
   echo "Error: ProfileConfig selected WRIX_AGENT=$WRIX_AGENT, but this image was built for agent=$IMAGE_AGENT; use the matching profile_config for the selected image/agent variant" >&2
   exit 1
 fi
 
-# A command override ($# > 0) execs "$@" instead of the agent, so the
-# binary-presence guard applies only to agent-exec runs.
-if [[ $# -eq 0 ]] && ! command -v "$WRIX_AGENT_BIN" >/dev/null 2>&1; then
+case "$WRIX_AGENT" in
+  claude) WRIX_AGENT_BIN=claude ;;
+  pi) WRIX_AGENT_BIN=pi ;;
+  direct)
+    DIRECT_EXECUTABLE_FILE="/etc/wrix/direct-executable"
+    if [[ ! -r "$DIRECT_EXECUTABLE_FILE" ]]; then
+      echo "Error: direct executable metadata is missing from this image; rebuild the image" >&2
+      exit 1
+    fi
+    WRIX_AGENT_BIN="$(<"$DIRECT_EXECUTABLE_FILE")"
+    if [[ "$WRIX_AGENT_BIN" != /* || ! -f "$WRIX_AGENT_BIN" || ! -x "$WRIX_AGENT_BIN" ]]; then
+      echo "Error: WRIX_AGENT=direct selects '$WRIX_AGENT_BIN', but that executable is not present or executable in this image" >&2
+      exit 1
+    fi
+    ;;
+esac
+if ! command -v "$WRIX_AGENT_BIN" >/dev/null 2>&1; then
   echo "Error: WRIX_AGENT=$WRIX_AGENT selects '$WRIX_AGENT_BIN', but that binary is not present in this image" >&2
   exit 1
 fi
@@ -506,24 +514,12 @@ run_without_net_admin() {
 # so VirtioFS root-owned files appear as HOST_UID — proper UID mapping)
 # Run without exec so session log can be written after exit
 MAIN_EXIT=0
-if [[ $# -gt 0 ]]; then
-  # Command override: run the specified command instead of the selected agent.
+if [[ "$WRIX_AGENT" = "pi" ]] && [[ "${WRIX_STDIO:-}" = "1" ]]; then
   run_without_net_admin unshare --user --map-user="$HOST_UID" --map-group="$HOST_UID" -- \
-    "$@" || MAIN_EXIT=$?
-elif [[ "$WRIX_AGENT" = "pi" ]] && [[ "${WRIX_STDIO:-}" = "1" ]]; then
-  # Pi RPC mode: pi listens on stdin/stdout for JSONL commands.
-  # Loom drives the session from the host via piped stdio.
+    "$WRIX_AGENT_BIN" --mode rpc "$@" || MAIN_EXIT=$?
+elif [[ "$WRIX_AGENT" = "pi" || "$WRIX_AGENT" = "direct" ]]; then
   run_without_net_admin unshare --user --map-user="$HOST_UID" --map-group="$HOST_UID" -- \
-    pi --mode rpc || MAIN_EXIT=$?
-elif [[ "$WRIX_AGENT" = "pi" ]]; then
-  run_without_net_admin unshare --user --map-user="$HOST_UID" --map-group="$HOST_UID" -- \
-    pi || MAIN_EXIT=$?
-elif [[ "$WRIX_AGENT" = "direct" ]]; then
-  # Direct mode: loom-direct-runner listens on stdin/stdout for JSONL
-  # commands and drives a loom-llm Conversation with the six sandbox-aware
-  # tools. Loom drives the session from the host via piped stdio.
-  run_without_net_admin unshare --user --map-user="$HOST_UID" --map-group="$HOST_UID" -- \
-    loom-direct-runner || MAIN_EXIT=$?
+    "$WRIX_AGENT_BIN" "$@" || MAIN_EXIT=$?
 elif [[ "$WRIX_AGENT" = "claude" ]] && [[ "${WRIX_STDIO:-}" = "1" ]]; then
   # Claude stream-json mode: loom drives the session from the host via piped
   # stdio. Symmetric to the pi branch above. Canonical claude args live here
@@ -535,7 +531,7 @@ elif [[ "$WRIX_AGENT" = "claude" ]] && [[ "${WRIX_STDIO:-}" = "1" ]]; then
       --verbose \
       --input-format stream-json \
       --output-format stream-json \
-      || MAIN_EXIT=$?
+      "$@" || MAIN_EXIT=$?
 else
   # Interactive Claude accepts an optional mounted prompt and project context.
   SYSTEM_PROMPT=""
@@ -554,7 +550,7 @@ $(cat /workspace/docs/README.md)"
     CLAUDE_PROMPT_ARGS=(--append-system-prompt "$SYSTEM_PROMPT")
   fi
   run_without_net_admin unshare --user --map-user="$HOST_UID" --map-group="$HOST_UID" -- \
-    claude --dangerously-skip-permissions "${CLAUDE_PROMPT_ARGS[@]}" || MAIN_EXIT=$?
+    claude --dangerously-skip-permissions "${CLAUDE_PROMPT_ARGS[@]}" "$@" || MAIN_EXIT=$?
 fi
 
 FILE_SYNC_EXIT=0

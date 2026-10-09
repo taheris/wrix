@@ -51,7 +51,7 @@ entrypoint_source() {
 agent_binary() {
   local agent="$1"
   case "$agent" in
-    direct) printf '%s\n' "loom-direct-runner" ;;
+    direct) printf '%s\n' "consumer-agent" ;;
     claude) printf '%s\n' "claude" ;;
     pi) printf '%s\n' "pi" ;;
     *) fail "unknown agent: $agent" ;;
@@ -140,6 +140,24 @@ fi
 exec "$@"
 EOF
   chmod +x "$bin_dir/unshare"
+
+  write_bash_fixture "$bin_dir/fixture-agent" <<'EOF'
+set -euo pipefail
+case "${WRIX_AGENT:-direct}" in
+  pi) [[ "${1:-}" != --mode ]] || shift 2 ;;
+  claude)
+    if [[ "${1:-}" == --dangerously-skip-permissions ]]; then
+      if [[ "${WRIX_STDIO:-}" == 1 ]]; then shift 7; else shift; fi
+    fi
+    ;;
+esac
+if [[ "$#" -gt 0 ]]; then
+  exec "$@"
+fi
+EOF
+  chmod +x "$bin_dir/fixture-agent"
+  ln -sf fixture-agent "$bin_dir/pi"
+  ln -sf fixture-agent "$bin_dir/claude"
 }
 
 test_runtime_fixtures_do_not_need_env_or_path() {
@@ -152,7 +170,21 @@ test_runtime_fixtures_do_not_need_env_or_path() {
   PATH="" WRIX_FAKE_BD_LOG="$log" WRIX_FAKE_BD_STATE="$state" \
     BEADS_DOLT_AUTO_START=0 BD_IMPORT_AUTO=false \
     "$tools/bd" --readonly sql 'SELECT 1' || return "$?"
-  PATH="" "$tools/unshare" -- "$BASH" -c 'printf "PASS: hermetic runtime fixtures\\n"'
+  PATH="" "$tools/unshare" -- "$BASH" -c 'printf "PASS: hermetic runtime fixtures\\n"' || return "$?"
+  local agent output status
+  local -a flags
+  for agent in direct pi claude; do
+    flags=()
+    case "$agent" in
+      pi) flags=(--mode rpc) ;;
+      claude) flags=(--dangerously-skip-permissions --print --verbose --input-format stream-json --output-format stream-json) ;;
+    esac
+    status=0
+    # shellcheck disable=SC2016 # The fixture's child shell expands its argument.
+    output=$(WRIX_AGENT="$agent" WRIX_STDIO=1 "$tools/fixture-agent" "${flags[@]}" \
+      "$BASH" -c 'printf "fixture reply:%s" "$1"; exit 23' probe 'two words') || status=$?
+    [[ "$status" == 23 && "$output" == 'fixture reply:two words' ]] || return 1
+  done
 }
 
 rewrite_entrypoint() {
@@ -206,7 +238,11 @@ prepare_wrix_etc() {
   printf 'wrix:x:1000:1000:Wrix Sandbox:/home/wrix:/bin/bash\n' >"$(dirname "$etc_wrix")/passwd"
   printf 'wrix:x:1000:\n' >"$(dirname "$etc_wrix")/group"
   : >"$(dirname "$etc_wrix")/nix/nix.conf"
-  printf '%s\n' "$agent" >"$etc_wrix/image-agent"
+  printf '%s\n' "${WRIX_TEST_IMAGE_AGENT:-$agent}" >"$etc_wrix/image-agent"
+  printf '%s\n' "${WRIX_TEST_DIRECT_EXECUTABLE-$(dirname "$(dirname "$etc_wrix")")/tools/fixture-agent}" >"$etc_wrix/direct-executable"
+  if [[ -n "${WRIX_TEST_DIRECT_METADATA:-}" ]]; then
+    cp "$WRIX_TEST_DIRECT_METADATA" "$etc_wrix/direct-executable"
+  fi
   printf '{}\n' >"$etc_wrix/claude-config.json"
   printf '{}\n' >"$etc_wrix/claude-settings.json"
   printf '{}\n' >"$etc_wrix/pi-agent/settings.json"
@@ -259,13 +295,22 @@ run_entrypoint() {
   mkdir -p "$case_dir" "$home_dir" "$workspace/.claude" "$workspace/.wrix/log"
   write_fake_runtime_tools "$tool_dir"
   prepare_wrix_etc "$etc_wrix" "$agent"
+  if [[ "$agent" == direct && -x "$workspace/bin/consumer-agent" && ! -v WRIX_TEST_DIRECT_EXECUTABLE && -z "${WRIX_TEST_DIRECT_METADATA:-}" ]]; then
+    printf '%s\n' "$workspace/bin/consumer-agent" >"$etc_wrix/direct-executable"
+  fi
+  if [[ "${WRIX_TEST_MISSING_DIRECT_METADATA:-0}" == 1 ]]; then
+    rm "$etc_wrix/direct-executable"
+  fi
+  if [[ "${WRIX_TEST_MISSING_NATIVE_AGENT:-0}" == 1 || "${WRIX_TEST_REAL_NATIVE_AGENT:-0}" == 1 ]]; then
+    rm "$tool_dir/$agent"
+  fi
   rewrite_entrypoint "$platform" "$workspace" "$etc_wrix" "$entrypoint" "$home_dir"
 
   env \
     HOME="$home_dir" \
     HOST_UID="$(id -u)" \
-    PATH="$tool_dir:$PATH" \
-    WRIX_AGENT="$agent" \
+    PATH="$tool_dir:${WRIX_TEST_RUNTIME_PATH-$PATH}" \
+    WRIX_AGENT="${WRIX_TEST_SELECTED_AGENT-$agent}" \
     WRIX_FIREWALL_BACKEND=iptables \
     WRIX_MCP="${WRIX_TEST_MCP_SELECTION:-}" \
     WRIX_MCP_TMUX_AUDIT="${WRIX_TEST_MCP_TMUX_AUDIT:-}" \
@@ -313,41 +358,208 @@ EOF
   printf 'PASS: both entrypoints prepend workspace/bin before command execution\n' >&2
 }
 
-test_agent_dispatch_both_entrypoints() {
-  require_command jq
-  local platform agent
-  for platform in linux darwin; do
-    for agent in direct claude pi; do
-      local workspace="$TEST_TMP/agent-$platform-$agent/workspace"
-      local stdout_path="$TEST_TMP/agent-$platform-$agent.out"
-      local stderr_path="$TEST_TMP/agent-$platform-$agent.err"
-      local binary output
-      binary="$(agent_binary "$agent")"
-      mkdir -p "$workspace/bin"
-      write_bash_fixture "$workspace/bin/$binary" <<EOF
-set -euo pipefail
-printf 'AGENT_DISPATCH=%s\n' '$agent'
-printf 'AGENT_ARGS=%s\n' "\$*"
-EOF
-      chmod +x "$workspace/bin/$binary"
+assert_consumer_reply() {
+  local stdout_path="$1" stderr_path="$2" status="$3"
+  [[ "$status" == 23 ]] || { fail "consumer exit status: $status"; return 1; }
+  jq -e '. == ["two words", "", "$(exit 98)", "--help"]' <(head -1 "$stdout_path") >/dev/null || return 1
+  [[ "$(tail -1 "$stdout_path")" == 'reply:request with spaces' ]] || return 1
+  assert_output_contains 'consumer stderr' "$(<"$stderr_path")" 'consumer stderr'
+}
 
-      if ! run_entrypoint "$platform" "$agent" "$stdout_path" "$stderr_path" "$workspace"; then
-        fail "$platform $agent entrypoint failed: $(<"$stderr_path")"
-        return 1
-      fi
-      output="$(<"$stdout_path")"
-      assert_output_contains "$platform $agent dispatch" "$output" "AGENT_DISPATCH=$agent" || return 1
-      case "$agent" in
-        claude) assert_output_contains "$platform claude args" "$output" "--input-format stream-json" || return 1 ;;
-        pi) assert_output_contains "$platform pi args" "$output" "--mode rpc" || return 1 ;;
-        direct) assert_output_contains "$platform direct args" "$output" "AGENT_ARGS=" || return 1 ;;
-      esac
+test_consumer_package_stdio_contract() {
+  local runner="${WRIX_TEST_CONSUMER_EXECUTABLE:?}" status=0
+  local stdout_path="$TEST_TMP/consumer.out" stderr_path="$TEST_TMP/consumer.err"
+  # shellcheck disable=SC2016 # Preserve the literal shell-looking agent argument.
+  printf 'request with spaces\n' | "$runner" 'two words' '' '$(exit 98)' --help \
+    >"$stdout_path" 2>"$stderr_path" || status=$?
+  assert_consumer_reply "$stdout_path" "$stderr_path" "$status"
+}
+
+test_command_runner_package_contract() {
+  local runner="${WRIX_TEST_COMMAND_RUNNER:?}" status=0
+  local stdout_path="$TEST_TMP/command-runner.out" stderr_path="$TEST_TMP/command-runner.err"
+  local workspace="$TEST_TMP/command-runner/workspace"
+  mkdir -p "$workspace/bin"
+  # shellcheck disable=SC2016 # Preserve the literal shell-looking agent argument.
+  printf 'request with spaces\n' | "$runner" "${WRIX_TEST_CONSUMER_EXECUTABLE:?}" \
+    'two words' '' '$(exit 98)' --help >"$stdout_path" 2>"$stderr_path" || status=$?
+  assert_consumer_reply "$stdout_path" "$stderr_path" "$status" || return 1
+  ln -s "$WRIX_TEST_CONSUMER_EXECUTABLE" "$workspace/bin/test-agent-probe"
+  status=0
+  printf 'request with spaces\n' | WRIX_TEST_PROBE_WORKSPACE="$workspace" "$runner" \
+    >"$stdout_path" 2>"$stderr_path" || status=$?
+  [[ "$status" == 23 ]] || return 1
+  jq -e '. == []' <(head -1 "$stdout_path") >/dev/null || return 1
+  [[ "$(tail -1 "$stdout_path")" == 'reply:request with spaces' ]] || return 1
+  assert_output_contains 'command runner stderr' "$(<"$stderr_path")" 'consumer stderr'
+}
+
+test_declared_direct_runner_preserves_argv_stdio_both() {
+  require_command jq
+  local platform stdio selected status workspace stdout_path stderr_path
+  for platform in linux darwin; do
+    for stdio in 0 1; do
+      workspace="$TEST_TMP/declared-$platform-$stdio/workspace"
+      stdout_path="$TEST_TMP/declared-$platform-$stdio.out"
+      stderr_path="$TEST_TMP/declared-$platform-$stdio.err"
+      mkdir -p "$workspace/bin"
+      write_bash_fixture "$workspace/bin/consumer-agent" <<< $'set -euo pipefail\nexit 98'
+      chmod +x "$workspace/bin/consumer-agent"
+      status=0
+      selected=direct
+      if [[ "$stdio" == 0 ]]; then selected=""; fi
+      # shellcheck disable=SC2016 # Preserve the literal shell-looking agent argument.
+      printf 'request with spaces\n' | WRIX_TEST_STDIO="$stdio" WRIX_TEST_SELECTED_AGENT="$selected" \
+        WRIX_AGENT_BIN="$workspace/bin/consumer-agent" DIRECT_EXECUTABLE_FILE="$workspace/bin/consumer-agent" \
+        WRIX_TEST_DIRECT_METADATA="${WRIX_TEST_CONSUMER_METADATA:?}" \
+        run_entrypoint "$platform" direct "$stdout_path" "$stderr_path" "$workspace" \
+        'two words' '' '$(exit 98)' --help || status=$?
+      assert_consumer_reply "$stdout_path" "$stderr_path" "$status" || return 1
+      jq -e '.exit_code == 23' "$workspace/.wrix/log/"*.json >/dev/null || return 1
     done
   done
-  printf 'PASS: both entrypoints dispatch WRIX_AGENT to direct, claude, and pi binaries\n' >&2
+  printf 'PASS: both entrypoints execute the declared package path, not PATH/env overrides, preserving argv/stdio/status\n' >&2
+}
+
+test_direct_executable_guard_both_entrypoints() {
+  local platform failure workspace stdout_path stderr_path executable
+  for platform in linux darwin; do
+    for failure in absent nonexecutable relative empty; do
+      workspace="$TEST_TMP/missing-$platform-$failure/workspace"
+      stdout_path="$TEST_TMP/missing-$platform-$failure.out"
+      stderr_path="$TEST_TMP/missing-$platform-$failure.err"
+      mkdir -p "$workspace"
+      executable="$workspace/missing-consumer"
+      case "$failure" in
+        nonexecutable) printf 'not executable\n' >"$executable" ;;
+        relative) executable=fixture-agent ;;
+        empty) executable="" ;;
+      esac
+      if WRIX_TEST_DIRECT_EXECUTABLE="$executable" \
+        run_entrypoint "$platform" direct "$stdout_path" "$stderr_path" "$workspace" \
+        "$BASH" -c 'printf AGENT_RAN'; then
+        fail "$platform accepted a $failure direct executable"
+        return 1
+      fi
+      [[ ! -s "$stdout_path" ]] || { fail "$platform bypassed the guard with argv"; return 1; }
+      assert_output_contains "$platform executable diagnostic" "$(<"$stderr_path")" "$executable" || return 1
+      assert_output_contains "$platform executable diagnostic" "$(<"$stderr_path")" 'not present or executable' || return 1
+    done
+  done
+}
+
+test_direct_metadata_missing_blocks_agent_both_entrypoints() {
+  local platform workspace stdout_path stderr_path
+  for platform in linux darwin; do
+    workspace="$TEST_TMP/missing-metadata-$platform/workspace"
+    stdout_path="$TEST_TMP/missing-metadata-$platform.out"
+    stderr_path="$TEST_TMP/missing-metadata-$platform.err"
+    if WRIX_TEST_MISSING_DIRECT_METADATA=1 \
+      run_entrypoint "$platform" direct "$stdout_path" "$stderr_path" "$workspace" \
+      "$BASH" -c 'printf AGENT_RAN'; then
+      fail "$platform accepted missing direct metadata"
+      return 1
+    fi
+    [[ ! -s "$stdout_path" ]] || return 1
+    assert_output_contains "$platform missing metadata" "$(<"$stderr_path")" 'direct executable metadata is missing' || return 1
+  done
+}
+
+test_native_executable_missing_blocks_agent_both_entrypoints() {
+  local tools="$TEST_TMP/guard-runtime" platform agent tool workspace stdout_path stderr_path
+  mkdir -p "$tools"
+  for tool in bash date mkdir jq mktemp grep sed chmod mv; do
+    ln -s "$(command -v "$tool")" "$tools/$tool"
+  done
+  for platform in linux darwin; do
+    for agent in pi claude; do
+      workspace="$TEST_TMP/missing-native-$platform-$agent/workspace"
+      stdout_path="$TEST_TMP/missing-native-$platform-$agent.out"
+      stderr_path="$TEST_TMP/missing-native-$platform-$agent.err"
+      if WRIX_TEST_MISSING_NATIVE_AGENT=1 WRIX_TEST_RUNTIME_PATH="$tools" \
+        run_entrypoint "$platform" "$agent" "$stdout_path" "$stderr_path" "$workspace" \
+        "$BASH" -c 'printf AGENT_RAN'; then
+        fail "$platform accepted missing $agent"
+        return 1
+      fi
+      [[ ! -s "$stdout_path" ]] || return 1
+      assert_output_contains "$platform missing $agent" "$(<"$stderr_path")" "WRIX_AGENT=$agent selects '$agent', but that binary is not present" || return 1
+    done
+  done
+}
+
+test_immutable_agent_variant_guard_both_entrypoints() {
+  local platform image_agent agent workspace stdout_path stderr_path
+  for platform in linux darwin; do
+    for image_agent in direct pi claude; do
+      for agent in direct pi claude; do
+        [[ "$agent" != "$image_agent" ]] || continue
+        workspace="$TEST_TMP/variant-$platform-$image_agent-$agent/workspace"
+        stdout_path="$TEST_TMP/variant-$platform-$image_agent-$agent.out"
+        stderr_path="$TEST_TMP/variant-$platform-$image_agent-$agent.err"
+        if WRIX_TEST_IMAGE_AGENT="$image_agent" WRIX_TEST_SELECTED_AGENT="$agent" \
+          WRIX_TEST_DIRECT_EXECUTABLE="$workspace/missing-consumer" \
+          run_entrypoint "$platform" "$agent" "$stdout_path" "$stderr_path" "$workspace" \
+          "$BASH" -c 'printf AGENT_RAN'; then
+          fail "$platform accepted an immutable agent mismatch"
+          return 1
+        fi
+        [[ ! -s "$stdout_path" ]] || return 1
+        assert_output_contains "$platform mismatch" "$(<"$stderr_path")" "ProfileConfig selected WRIX_AGENT=$agent" || return 1
+        assert_output_contains "$platform mismatch" "$(<"$stderr_path")" "built for agent=$image_agent" || return 1
+      done
+    done
+  done
+}
+
+test_entrypoint_declared_runner() {
+  test_consumer_package_stdio_contract || return 1
+  test_command_runner_package_contract || return 1
+  test_declared_direct_runner_preserves_argv_stdio_both || return 1
+  test_direct_executable_guard_both_entrypoints || return 1
+  test_direct_metadata_missing_blocks_agent_both_entrypoints || return 1
+  test_native_executable_missing_blocks_agent_both_entrypoints || return 1
+  test_immutable_agent_variant_guard_both_entrypoints || return 1
+  test_selected_native_agents_receive_argv_both_entrypoints || return 1
   test_interactive_claude_without_prompt_mount_both_entrypoints || return 1
   test_interactive_claude_mounted_prompt_both_entrypoints || return 1
-  test_interactive_claude_invalid_prompt_blocks_agent_both_entrypoints || return 1
+  test_interactive_claude_invalid_prompt_blocks_agent_both_entrypoints
+}
+
+test_selected_native_agents_receive_argv_both_entrypoints() {
+  require_command jq
+  local platform agent stdio selected expected workspace stdout_path stderr_path binary
+  for platform in linux darwin; do
+    for agent in claude pi; do
+      for stdio in 0 1; do
+        workspace="$TEST_TMP/agent-$platform-$agent-$stdio/workspace"
+        stdout_path="$TEST_TMP/agent-$platform-$agent-$stdio.out"
+        stderr_path="$TEST_TMP/agent-$platform-$agent-$stdio.err"
+        binary="$(agent_binary "$agent")"
+        mkdir -p "$workspace/bin"
+        write_bash_fixture "$workspace/bin/$binary" <<EOF
+set -euo pipefail
+jq -nc --args '\$ARGS.positional' -- "\$@"
+EOF
+        chmod +x "$workspace/bin/$binary"
+        selected="$agent"
+        if [[ "$stdio" == 0 ]]; then selected=""; fi
+        if ! WRIX_TEST_STDIO="$stdio" WRIX_TEST_SELECTED_AGENT="$selected" \
+          run_entrypoint "$platform" "$agent" "$stdout_path" "$stderr_path" "$workspace" 'two words' '' --help; then
+          fail "$platform $agent entrypoint failed: $(<"$stderr_path")"
+          return 1
+        fi
+        case "$agent:$stdio" in
+          claude:1) expected='["--dangerously-skip-permissions","--print","--verbose","--input-format","stream-json","--output-format","stream-json","two words","","--help"]' ;;
+          claude:0) expected='["--dangerously-skip-permissions","two words","","--help"]' ;;
+          pi:1) expected='["--mode","rpc","two words","","--help"]' ;;
+          pi:0) expected='["two words","","--help"]' ;;
+        esac
+        jq -e --argjson expected "$expected" '. == $expected' "$stdout_path" >/dev/null || return 1
+      done
+    done
+  done
+  printf 'PASS: selected Pi/Claude receive argv in interactive and stdio modes on both platforms\n' >&2
 }
 
 write_claude_argv_probe() {
@@ -642,10 +854,10 @@ test_runtime_mcp_registration_is_discovered_by_selected_claude() {
   local stderr_path="$TEST_TMP/runtime-mcp-live.err"
   local output
 
-  if ! WRIX_TEST_MCP_RUNTIME=1 \
+  if ! WRIX_TEST_MCP_RUNTIME=1 WRIX_TEST_REAL_NATIVE_AGENT=1 WRIX_TEST_STDIO=0 \
     WRIX_TEST_MCP_SELECTION=tmux \
     run_entrypoint linux claude "$stdout_path" "$stderr_path" "$workspace" \
-    claude mcp get tmux; then
+    mcp get tmux; then
     fail "selected Claude runtime MCP health check failed: $(<"$stderr_path")"
     return 1
   fi
@@ -787,7 +999,7 @@ test_darwin_file_mount_modes_sync_only_writable_files() {
   printf 'private\n' >"$sibling"
 
   export WRIX_FILE_MOUNTS="$read_only_source:$read_only_dest:ro,$writable_source:$writable_dest:rw"
-  # shellcheck disable=SC2016 # The command override expands its positional arguments.
+  # shellcheck disable=SC2016 # The fixture runner expands its positional arguments.
   run_entrypoint darwin direct "$stdout_path" "$stderr_path" "$workspace" \
     /bin/bash -c '
       set -euo pipefail
@@ -869,8 +1081,8 @@ test_stale_beads_endpoint_blocks_agent_both() {
     printf '%s\n' '{"backend":"dolt","dolt_mode":"server"}' >"$workspace/.beads/metadata.json"
     printf 'sync.mode: dolt-native\n' >"$workspace/.beads/config.yaml"
     printf 'set -euo pipefail\ntouch %q\n' "$workspace/agent-ran" \
-      | write_bash_fixture "$workspace/bin/loom-direct-runner"
-    chmod +x "$workspace/bin/loom-direct-runner"
+      | write_bash_fixture "$workspace/bin/consumer-agent"
+    chmod +x "$workspace/bin/consumer-agent"
     export BEADS_DOLT_SERVER_HOST=192.0.2.10 BEADS_DOLT_SERVER_PORT=24470
     export WRIX_FAKE_BD_UNREACHABLE=1 WRIX_FAKE_BD_LOG="$workspace.bd-log" WRIX_FAKE_BD_STATE="$workspace.bd-state"
     if run_entrypoint "$platform" direct "$stdout_path" "$stderr_path" "$workspace"; then
@@ -995,7 +1207,14 @@ test_same_second_audit_indexes_both_entrypoints() {
 ALL_TESTS=(
   test_runtime_fixtures_do_not_need_env_or_path
   test_workspace_bin_path_prepend_both
-  test_agent_dispatch_both_entrypoints
+  test_selected_native_agents_receive_argv_both_entrypoints
+  test_direct_executable_guard_both_entrypoints
+  test_direct_metadata_missing_blocks_agent_both_entrypoints
+  test_native_executable_missing_blocks_agent_both_entrypoints
+  test_immutable_agent_variant_guard_both_entrypoints
+  test_interactive_claude_without_prompt_mount_both_entrypoints
+  test_interactive_claude_mounted_prompt_both_entrypoints
+  test_interactive_claude_invalid_prompt_blocks_agent_both_entrypoints
   test_agent_config_homes_both_entrypoints
   test_deploy_key_public_derivation_both_entrypoints
   test_runtime_mcp_registration_uses_claude_user_config_both_entrypoints

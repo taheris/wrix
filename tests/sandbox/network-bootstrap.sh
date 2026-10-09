@@ -32,6 +32,7 @@ prepare_case() {
   local root="$1" agent="$2" tool real
   mkdir -p "$root"/{tools,home,run,etc/wrix/pi-agent,workspace/bin,lib,tmp}
   printf '%s\n' "$agent" >"$root/etc/wrix/image-agent"
+  printf '%s\n' "$root/workspace/bin/probe" >"$root/etc/wrix/direct-executable"
   printf '{}\n' >"$root/etc/wrix/claude-config.json"
   printf '{}\n' >"$root/etc/wrix/claude-settings.json"
   printf '{}\n' >"$root/etc/wrix/pi-agent/settings.json"
@@ -133,7 +134,7 @@ printf 'agent\n' >>"$root/events"
 exit "\${WRIX_TEST_AGENT_EXIT:-0}"
 EOF
   chmod +x "$root/workspace/bin/probe"
-  for tool in claude pi loom-direct-runner; do
+  for tool in claude pi; do
     ln -s probe "$root/workspace/bin/$tool"
   done
 }
@@ -189,7 +190,7 @@ test_policy_and_argv() {
         root="$TEST_TMP/$backend-$mode-$boundary"
         prepare_case "$root" direct
         # shellcheck disable=SC2016 # The command substitution must remain a literal argument.
-        run_case "$root" direct "$boundary" "$backend" "$mode" probe alpha 'two words' '$(exit 98)' || fail "bootstrap failed: $(<"$root/stderr")"
+        run_case "$root" direct "$boundary" "$backend" "$mode" alpha 'two words' '$(exit 98)' || fail "bootstrap failed: $(<"$root/stderr")"
         # shellcheck disable=SC2016
         diff -u <(printf '%s\n' alpha 'two words' '$(exit 98)') "$root/argv"
         [[ ! -e "$root/privileged" && ! -e "$root/poison" ]] || fail 'privilege or tool boundary violated'

@@ -20,7 +20,7 @@ let
   imageClock = linuxPkgs.lib.hiPrio (mkClock linuxPkgs);
   collisionSandbox = wrix.mkSandbox {
     agent = "direct";
-    agentPkg = linuxPkgs.hello;
+    agentPkg = import ../sandbox/fixtures/command-runner.nix { pkgs = linuxPkgs; };
     packages = [ imageClock ];
   };
 in

@@ -2,6 +2,7 @@
 
 let
   inherit (pkgs.lib) escapeShellArg;
+  commandRunner = import ../sandbox/fixtures/command-runner.nix { inherit pkgs; };
 
   serviceScript = script: function: ''
     run_repo_script ${escapeShellArg "tests/services/${script}.sh"} ${escapeShellArg function}
@@ -11,8 +12,10 @@ let
   '';
 in
 {
-  "beads.no-embedded-fallback" =
-    serviceScript "dolt-cli" "test_entrypoints_reject_embedded_dolt_and_jsonl_fallback";
+  "beads.no-embedded-fallback" = ''
+    export WRIX_TEST_COMMAND_RUNNER=${commandRunner}/bin/${commandRunner.meta.mainProgram}
+    ${serviceScript "dolt-cli" "test_entrypoints_reject_embedded_dolt_and_jsonl_fallback"}
+  '';
 
   "beads.darwin-remote-remap" = sandboxScript "entrypoint-contract" "test_darwin_bd_remote_remap";
 

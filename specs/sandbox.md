@@ -660,7 +660,7 @@ supplied; there is no implicit default image baked in.
 - Both entrypoints execute the selected Pi, Claude, or declared direct
   executable; a non-Loom-named direct runner receives the original arguments and
   bidirectional stdio, and a missing direct executable fails clearly
-  [system?](verify:sandbox.entrypoint-declared-runner)
+  [system](verify:sandbox.entrypoint-declared-runner)
 - Both launch modes read current repository policy on each launch and resolve
   independent Git grants from launch override, repository policy, then false,
   without treating key identity, host key presence, or `WRIX_GIT_SIGN` as a

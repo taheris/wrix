@@ -29,12 +29,9 @@
   piSettings ? { },
   mcpServerConfigs ? { },
   mcpRuntime ? false,
-  # Agent runtime axis. Callers must choose explicitly. "claude" adds
-  # claude-code; "pi" adds pi-coding-agent; "direct" adds the direct-runner
-  # binary. The resolved package is supplied as `agentPkg`.
+  # Explicit runtime variant; agentPkg supplies its resolved package.
   agent,
-  # Linux-built package whose `bin/` directory contains the selected agent
-  # binary (`claude`, `pi`, or `loom-direct-runner`).
+  # Linux-built package containing claude, pi, or the declared direct executable.
   agentPkg,
   # Use buildLayeredImage (tar in store) instead of streamLayeredImage (script).
   # Required on Darwin where the stream script's Linux Python shebang won't execute.
@@ -131,6 +128,14 @@ let
     }
     .${agent}
       or (throw "lib/sandbox/image.nix: unknown agent '${agent}' (expected 'claude', 'pi', or 'direct')");
+
+  directExecutable =
+    if agent == "direct" then "${agentPkgResolved}/bin/${agentPkgResolved.meta.mainProgram}" else null;
+  directExecutableFile =
+    if agent == "direct" then
+      imageBuilderPkgs.writeText "wrix-direct-executable" (directExecutable + "\n")
+    else
+      null;
 
   agentImageName = "wrix-agent-${agent}-${profile.name}";
 
@@ -310,6 +315,9 @@ let
 
       mkdir -p etc/wrix
       printf '%s\n' '${agent}' > etc/wrix/image-agent
+      ${optionalString (agent == "direct") ''
+        cp ${directExecutableFile} etc/wrix/direct-executable
+      ''}
       ${imageBuilderPkgs.bash}/bin/bash ${./install-known-hosts.sh} ${knownHosts}/known_hosts .
       echo "127.0.0.1 localhost" > etc/hosts
 
@@ -496,6 +504,8 @@ rawImage
   inherit
     claudeConfigJson
     claudeSettingsJson
+    directExecutable
+    directExecutableFile
     materializedRoots
     mcpAvailableJson
     piSettingsJson

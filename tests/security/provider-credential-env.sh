@@ -37,7 +37,7 @@ fail() {
 write_provider_probe() {
   local workspace="$1"
   local stub_dir="$workspace/bin"
-  local stub_path="$stub_dir/loom-direct-runner"
+  local stub_path="$stub_dir/test-agent-probe"
 
   mkdir -p "$stub_dir"
   cat >"$stub_path" <<'EOF'
@@ -65,7 +65,7 @@ assert_provider_observation() {
     --arg openai "$OPENAI_CANARY" \
     --arg anthropic "$ANTHROPIC_CANARY" \
     '.agent == "direct"
-      and .binary == "loom-direct-runner"
+      and .binary == "test-agent-probe"
       and .openai == $openai
       and .anthropic == $anthropic' \
     "$observation" >/dev/null; then
@@ -82,7 +82,7 @@ test_provider_probe_contract() {
     WRIX_PROVIDER_PROBE_WORKSPACE="$workspace" \
     OPENAI_API_KEY="$OPENAI_CANARY" \
     ANTHROPIC_API_KEY="$ANTHROPIC_CANARY" \
-    "$workspace/bin/loom-direct-runner"
+    "$workspace/bin/test-agent-probe"
   assert_provider_observation "$workspace/.wrix/provider-env.json"
 }
 
