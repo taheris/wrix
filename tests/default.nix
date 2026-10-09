@@ -63,7 +63,11 @@ let
   # changes while every base-layer blob remains identical. The
   # image-install-delta-bounded verifier installs both and asserts
   # the platform store only takes on bytes for the changed top layer.
-  auditClock = import ./security/audit-clock.nix { inherit pkgs linuxPkgs wrix; };
+  executionSandbox = wrix.mkSandbox {
+    agent = "direct";
+    agentPkg = import ./sandbox/fixtures/command-runner.nix { pkgs = linuxPkgs; };
+  };
+  executionFixtureRunner = import ./sandbox/fixtures/command-runner.nix { inherit pkgs; };
 
   mkTestImage =
     args:
@@ -77,12 +81,7 @@ let
     );
 
   testImages = {
-    auditCollision = auditClock.image;
-    gitCredentials =
-      (wrix.mkSandbox {
-        agent = "direct";
-        agentPkg = import ./sandbox/fixtures/command-runner.nix { pkgs = linuxPkgs; };
-      }).image;
+    gitCredentials = executionSandbox.image;
     base = mkTestImage { };
     basePerturbed = mkTestImage {
       claudeConfig = {
@@ -232,7 +231,20 @@ let
         inherit (wrix) rustPackage;
       };
       image-assembly-native = sandboxImageChecks.imageAssemblyNativeCheck;
-      audit-start-clock = auditClock.check;
+      execution-fixtures =
+        pkgs.runCommandLocal "execution-fixture-conformance"
+          {
+            nativeBuildInputs = [
+              bash
+              coreutils
+              pkgs.python3
+            ];
+          }
+          ''
+            set -euo pipefail
+            ${pkgs.python3}/bin/python3 ${./security}/test_execution_lifecycle.py fixtures ${executionFixtureRunner}/bin/test-command-runner
+            touch "$out"
+          '';
       entrypoint-hook-failures =
         pkgs.runCommandLocal "entrypoint-hook-failures"
           {
@@ -402,7 +414,7 @@ let
     (mkCiApp testBeadsLiveSystem "test-beads-live-system")
     (mkServiceCiApp testServicesDevshellStartIndependent "test-services-devshell-start-independent")
     (mkServiceCiApp testServicesLimitModeCacheEndpoint "test-services-limit-mode-cache-endpoint")
-    (mkLiveCiApp testSecurityAuditTrailAnchor "test-security-audit-trail-anchor")
+    (mkLiveCiApp testSecurityExecutionMetadataLifecycle "test-security-execution-metadata-lifecycle")
     (mkLiveCiApp testSecurityGitSshBootstrap "test-security-explicit-git-ssh-bootstrap")
     (mkLiveCiApp testSecurityHostContainerLoomGitHelper "test-security-host-container-loom-git-helper")
     ((mkCiApp testImageGitHelperParity "test-image-git-helper-parity") // { platforms = linux; })
@@ -796,12 +808,12 @@ let
   securityCiEnvironment = ''
     export PATH="${securityCiPath}:$PATH"
   '';
-  testSecurityAuditTrailAnchor = mkRepoScriptCiApp {
-    name = "test-security-audit-trail-anchor";
-    script = "tests/security/audit-trail-anchor.sh";
+  testSecurityExecutionMetadataLifecycle = mkRepoScriptCiApp {
+    name = "test-security-execution-metadata-lifecycle";
+    script = "tests/security/execution-metadata-lifecycle.sh";
     args = [ ];
     environment = securityCiEnvironment + ''
-      export WRIX_TEST_AUDIT_COLLISION_IMAGE_ATTR="legacyPackages.${system}.testFixtures.auditCollision.source"
+      export PATH="${pkgs.python3}/bin:$PATH"
     '';
   };
   testSecurityGitSshBootstrap = mkRepoScriptCiApp {
@@ -874,7 +886,7 @@ let
 in
 {
   # Checks for `nix flake check`
-  inherit checks;
+  inherit checks executionSandbox;
 
   # App for `nix run .#test` — fast checks (~10s)
   app = {

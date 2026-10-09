@@ -422,7 +422,7 @@ section is a reference index only.
 - Live packaged launches retain an incomplete record after an abruptly killed
   launcher and complete records for observed startup failures and normal exits;
   agent-specific conversation information cannot leak between executions
-  [system?](test-ci:test-security-execution-metadata-lifecycle)
+  [system](test-ci:test-security-execution-metadata-lifecycle)
 - Explicit, default-off component diagnostics remain separate from the agent
   transcript and execution-metadata index: they are not automatically enabled,
   indexed, synthesized, or aggregated as authoritative Wrix audit content, and
@@ -471,7 +471,7 @@ section is a reference index only.
   focus identities, treat absent completion as unknown, and describe transcripts
   as non-exhaustive evidence without promising intermediate codemode outcomes,
   automatic recovery, or adversarial-agent detection
-  [judge?](../tests/judges/security-execution.sh#test_execution_and_transcript_evidence_limits)
+  [judge](../tests/judges/security-execution.sh#test_execution_and_transcript_evidence_limits)
 
 ## Requirements
 

@@ -241,10 +241,14 @@ The host launcher establishes a secret-free execution index in `.wrix/log/`
 before services or container setup, then atomically adds observed completion to
 the original record. Execution, optional agent conversation, and notification
 focus identities are separate. Status fields describe the foreground runtime
-command, not an independently observed agent process. An incomplete record means
-completion is unknown; Wrix does not poll, recover, or infer conversation IDs
-from shared history. Agent transcripts and codemode summaries are non-exhaustive
-evidence, not an adversarial-agent audit or a power-loss durability guarantee.
+command, not an independently observed agent process. A completed record can
+represent success or failure; an incomplete record means completion is unknown,
+not that the container is running or stopped. Wrix does not poll, automatically
+recover work, reconcile records in a daemon, or infer conversation IDs from
+shared history. Agent transcripts and codemode summaries are non-exhaustive:
+missing content does not prove an action did not occur, and intermediate tool
+results or side effects may be absent. These artifacts do not provide
+adversarial-agent detection or a power-loss durability guarantee.
 
 ### MicroVM Boundary (Linux)
 
@@ -303,10 +307,25 @@ artefacts:
 
 ```text
 .wrix/
-├── log/             # Host-owned execution metadata indexes
+├── log/             # One host-owned JSON record per execution attempt
 ├── push-verified    # Touched by lib/prek/hooks/pre-push on green nix flake check
 └── dolt.sock        # Linux Dolt socket when used
 ```
+
+Execution records are not conversations or terminal focus targets. The host
+creates an incomplete record before services/container setup and atomically
+completes that same file only for an observed outcome. Abrupt host-launcher
+termination can leave the original record incomplete permanently. Optional
+conversation identity stays null without attributable runtime reporting;
+`focus_target` is only an opaque notification-routing target.
+
+Agent transcripts live separately: Claude under `.claude/`, Pi under
+`.pi/agent/sessions/`, and direct runners wherever their consumer persists them
+(or nowhere). Known metadata session roots use container-absolute paths:
+`/workspace/...` maps to the selected host workspace. Neither transcripts nor
+operator-enabled component diagnostics are aggregated into `.wrix/log/`.
+Diagnostics remain explicit and default-off; their component owns the contract,
+and the enabling operator owns destination access, retention, and deletion.
 
 Durable service/cache state, signing keys, publish manifests, endpoint metadata,
 and bulky binary-cache contents live outside the worktree under the
