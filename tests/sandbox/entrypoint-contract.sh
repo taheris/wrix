@@ -217,7 +217,9 @@ rewrite_entrypoint() {
     -e "s|/run/wrix-network-ready|$ready_file|g" \
     "$REPO_ROOT/lib/sandbox/network-ready.sh" >"$ready_helper"
   chmod +x "$setup_path"
-  sed -e "s|/etc/wrix/|$etc_wrix/|g" "$REPO_ROOT/lib/sandbox/mcp-manifest.sh" >"$mcp_helper"
+  sed -e "s|/etc/wrix/|$etc_wrix/|g" \
+    -e "s|/tmp/wrix-mcp-manifest.json|$workspace/selected-mcp.json|g" \
+    "$REPO_ROOT/lib/sandbox/mcp-manifest.sh" >"$mcp_helper"
   sed \
     -e "s|/workspace|$workspace|g" \
     -e "s|/home/wrix|$home_dir|g" \
@@ -246,35 +248,7 @@ prepare_wrix_etc() {
   printf '{}\n' >"$etc_wrix/claude-config.json"
   printf '{}\n' >"$etc_wrix/claude-settings.json"
   printf '{}\n' >"$etc_wrix/pi-agent/settings.json"
-  if [[ "${WRIX_TEST_MCP_RUNTIME:-0}" == "1" ]]; then
-    local tmux_config='{"command":"tmux-mcp","args":[],"env":{}}'
-    local runtime_selection="${WRIX_TEST_MCP_RUNTIME_SELECTION:-true}"
-    if [[ -n "${WRIX_TEST_MCP_CONFIG:-}" ]]; then
-      tmux_config=$(jq -ec '
-        if has("servers") then
-          .servers[] | select(.name == "tmux") | del(.name)
-        else
-          .mcpServers.tmux
-        end
-      ' "$WRIX_TEST_MCP_CONFIG")
-    fi
-    jq -n \
-      --argjson runtimeSelection "$runtime_selection" \
-      --argjson tmux "$tmux_config" \
-      '{
-        schema: 1,
-        runtime_selection: $runtimeSelection,
-        servers:
-          if $runtimeSelection then
-            [
-              ({ name: "tmux" } + $tmux),
-              { name: "unselected", command: "unselected-mcp", args: [], env: {} }
-            ]
-          else
-            [({ name: "tmux" } + $tmux)]
-          end
-      }' >"$etc_wrix/mcp-available.json"
-  fi
+
 }
 
 run_entrypoint() {
@@ -312,9 +286,6 @@ run_entrypoint() {
     PATH="$tool_dir:${WRIX_TEST_RUNTIME_PATH-$PATH}" \
     WRIX_AGENT="${WRIX_TEST_SELECTED_AGENT-$agent}" \
     WRIX_FIREWALL_BACKEND=iptables \
-    WRIX_MCP="${WRIX_TEST_MCP_SELECTION:-}" \
-    WRIX_MCP_TMUX_AUDIT="${WRIX_TEST_MCP_TMUX_AUDIT:-}" \
-    WRIX_MCP_TMUX_AUDIT_FULL="${WRIX_TEST_MCP_TMUX_AUDIT_FULL:-}" \
     WRIX_NETWORK=open \
     WRIX_STDIO="${WRIX_TEST_STDIO:-1}" \
     bash "$entrypoint" "$@" >"$stdout_path" 2>"$stderr_path"
@@ -760,115 +731,6 @@ test_deploy_key_public_derivation_both_entrypoints() {
   printf 'PASS: both entrypoints can derive the unmounted deploy public key\n' >&2
 }
 
-test_runtime_mcp_registration_uses_claude_user_config_both_entrypoints() {
-  require_command jq
-  local platform agent canonical_manifest=""
-  for platform in linux darwin; do
-    for agent in direct claude pi; do
-      local workspace="$TEST_TMP/runtime-mcp-$platform-$agent/workspace"
-      local stdout_path="$TEST_TMP/runtime-mcp-$platform-$agent.out"
-      local stderr_path="$TEST_TMP/runtime-mcp-$platform-$agent.err"
-      local case_dir home_dir manifest
-      case_dir="$TEST_TMP/$platform-$agent-$(basename "$stdout_path" .out)"
-      home_dir="$case_dir/home"
-
-      # shellcheck disable=SC2016 # The entrypoint's inner shell expands the manifest path.
-      if ! WRIX_TEST_MCP_RUNTIME=1 \
-        WRIX_TEST_MCP_SELECTION=tmux \
-        WRIX_TEST_MCP_TMUX_AUDIT=/workspace/.debug-audit.log \
-        WRIX_TEST_MCP_TMUX_AUDIT_FULL=/workspace/.debug-audit \
-        run_entrypoint "$platform" "$agent" "$stdout_path" "$stderr_path" "$workspace" \
-        bash -c 'cat "$WRIX_MCP_MANIFEST"'; then
-        fail "$platform $agent runtime MCP entrypoint failed: $(<"$stderr_path")"
-        return 1
-      fi
-      if ! jq -e '
-        .schema == 1
-        and (.servers | length) == 1
-        and .servers[0].name == "tmux"
-        and .servers[0].command == "tmux-mcp"
-        and .servers[0].args == []
-        and .servers[0].env.TMUX_DEBUG_AUDIT == "/workspace/.debug-audit.log"
-        and .servers[0].env.TMUX_DEBUG_AUDIT_FULL == "/workspace/.debug-audit"
-      ' "$stdout_path" >/dev/null; then
-        fail "$platform $agent did not receive the selected MCP manifest"
-        return 1
-      fi
-      manifest=$(jq -cS . "$stdout_path")
-      if [[ -z "$canonical_manifest" ]]; then
-        canonical_manifest="$manifest"
-      elif [[ "$manifest" != "$canonical_manifest" ]]; then
-        fail "$platform $agent MCP manifest differs across agent adapters"
-        return 1
-      fi
-
-      if [[ "$agent" == "claude" ]]; then
-        if ! jq -e '
-          .mcpServers.tmux.command == "tmux-mcp"
-          and .mcpServers.tmux.args == []
-          and .mcpServers.tmux.env.TMUX_DEBUG_AUDIT == "/workspace/.debug-audit.log"
-          and .mcpServers.unselected == null
-        ' "$home_dir/.claude.json" >/dev/null; then
-          fail "$platform runtime MCP registration missing from Claude user config"
-          return 1
-        fi
-        if ! jq -e 'has("mcpServers") | not' "$home_dir/.claude/settings.json" >/dev/null; then
-          fail "$platform runtime MCP registration leaked into Claude settings"
-          return 1
-        fi
-      fi
-    done
-  done
-
-  local explicit_workspace="$TEST_TMP/explicit-mcp/workspace"
-  local explicit_stdout="$TEST_TMP/explicit-mcp.out"
-  local explicit_stderr="$TEST_TMP/explicit-mcp.err"
-  local explicit_manifest
-  # shellcheck disable=SC2016 # The entrypoint's inner shell expands the manifest path.
-  if ! WRIX_TEST_MCP_RUNTIME=1 \
-    WRIX_TEST_MCP_RUNTIME_SELECTION=false \
-    WRIX_TEST_MCP_SELECTION=unselected \
-    WRIX_TEST_MCP_TMUX_AUDIT=/workspace/.debug-audit.log \
-    WRIX_TEST_MCP_TMUX_AUDIT_FULL=/workspace/.debug-audit \
-    run_entrypoint linux direct "$explicit_stdout" "$explicit_stderr" "$explicit_workspace" \
-    bash -c 'cat "$WRIX_MCP_MANIFEST"'; then
-    fail "explicit MCP entrypoint failed: $(<"$explicit_stderr")"
-    return 1
-  fi
-  explicit_manifest=$(jq -cS . "$explicit_stdout")
-  if [[ "$explicit_manifest" != "$canonical_manifest" ]]; then
-    fail "explicit and runtime MCP selection produced different manifests"
-    return 1
-  fi
-
-  printf 'PASS: explicit/runtime selection gives every agent one manifest and adapts Claude\n' >&2
-}
-
-test_runtime_mcp_registration_is_discovered_by_selected_claude() {
-  require_command claude
-  require_command jq
-  require_command tmux
-  require_command tmux-mcp
-  local workspace="$TEST_TMP/runtime-mcp-live/workspace"
-  local stdout_path="$TEST_TMP/runtime-mcp-live.out"
-  local stderr_path="$TEST_TMP/runtime-mcp-live.err"
-  local output
-
-  if ! WRIX_TEST_MCP_RUNTIME=1 WRIX_TEST_REAL_NATIVE_AGENT=1 WRIX_TEST_STDIO=0 \
-    WRIX_TEST_MCP_SELECTION=tmux \
-    run_entrypoint linux claude "$stdout_path" "$stderr_path" "$workspace" \
-    mcp get tmux; then
-    fail "selected Claude runtime MCP health check failed: $(<"$stderr_path")"
-    return 1
-  fi
-  output="$(<"$stdout_path")$(<"$stderr_path")"
-  if [[ "$output" != *"tmux:"* || "$output" != *"Connected"* ]]; then
-    fail "selected Claude did not connect to the runtime tmux MCP server: $output"
-    return 1
-  fi
-  printf 'PASS: selected Claude discovers the runtime tmux MCP registration\n' >&2
-}
-
 run_core_hooks_path_case() {
   local platform="$1"
   local git_layout="${2:-directory}"
@@ -1217,7 +1079,6 @@ ALL_TESTS=(
   test_interactive_claude_invalid_prompt_blocks_agent_both_entrypoints
   test_agent_config_homes_both_entrypoints
   test_deploy_key_public_derivation_both_entrypoints
-  test_runtime_mcp_registration_uses_claude_user_config_both_entrypoints
   test_linux_core_hooks_path
   test_darwin_core_hooks_path
   test_linked_worktree_core_hooks_path_both
@@ -1241,6 +1102,10 @@ run_all() {
   done
   [[ "$failed" -eq 0 ]]
 }
+
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+  return 0
+fi
 
 if [[ "$#" -eq 0 ]]; then
   run_all

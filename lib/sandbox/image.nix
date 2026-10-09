@@ -356,13 +356,10 @@ let
       ${optionalString (agent == "pi") ''
         mkdir -p etc/wrix/pi-agent/extensions
         cp ${piSettingsJson} etc/wrix/pi-agent/settings.json
-        cp ${./pi-mcp-extension.ts} etc/wrix/pi-agent/extensions/wrix-mcp.ts
         cp -rL ${piNotify}/. etc/wrix/pi-agent/
       ''}
 
-      ${optionalString (mcpServerConfigs != { }) ''
-        cp ${mcpAvailableJson} etc/wrix/mcp-available.json
-      ''}
+      cp ${mcpAvailableJson} etc/wrix/mcp-available.json
 
       # Register the materialized on-disk closure in the nix db. includeNixDB
       # covers only the leaf's own `contents`; the fromImage tiers' materialized

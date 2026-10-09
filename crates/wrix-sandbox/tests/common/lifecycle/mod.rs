@@ -165,6 +165,26 @@ impl Fixture {
         Ok(())
     }
 
+    pub fn launched_argv(
+        &self,
+        mut command: Command,
+        environment: &[(&str, &str)],
+    ) -> TestResult<Vec<String>> {
+        self.configure(&mut command, 0)?;
+        command.envs(environment.iter().copied());
+        let mut child = Process::spawn(&mut command)?;
+        let mut control = self.accept(&mut child)?;
+        assert_eq!(
+            control.receive()?,
+            format!("ready {}", runtime_name(native_runtime()))
+        );
+        let argv = self.argv()?;
+        control.send(Request::Release)?;
+        assert_eq!(control.receive()?, "finished 0");
+        assert!(child.finish()?.success(), "{}", self.diagnostics()?);
+        Ok(argv)
+    }
+
     fn accept(&self, child: &mut Process) -> TestResult<Control> {
         let deadline = Instant::now() + PROCESS_TIMEOUT;
         loop {

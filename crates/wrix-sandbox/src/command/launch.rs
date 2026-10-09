@@ -2243,12 +2243,7 @@ fn resolve_runtime_secret_env(
 }
 
 fn resolve_runtime_passthrough_env() -> Result<Vec<(String, String)>, LaunchError> {
-    const PASSTHROUGH: [&str; 4] = [
-        "WRIX_MCP",
-        "WRIX_MCP_TMUX_AUDIT",
-        "WRIX_MCP_TMUX_AUDIT_FULL",
-        "WRIX_VERBOSE",
-    ];
+    const PASSTHROUGH: [&str; 2] = ["WRIX_MCP", "WRIX_VERBOSE"];
     let mut resolved = Vec::new();
     for name in PASSTHROUGH {
         match env::var(name) {

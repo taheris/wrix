@@ -758,29 +758,29 @@ supplied; there is no implicit default image baked in.
   content-digest IDs, without treating opaque runtime IDs as digest evidence
   [test](../crates/wrix-sandbox/src/image.rs::apple_content_digest_accepts_prefixed_bare_and_id_fallback_variants)
 - Runtime MCP selection reaches the container through `WRIX_MCP`
-  [test?](../crates/wrix-sandbox/tests/launch.rs::runtime_mcp_selection_reaches_entrypoint)
+  [test](../crates/wrix-sandbox/tests/launch.rs::runtime_mcp_selection_reaches_entrypoint)
 - Explicit and runtime selection publish the same schema-v1 manifest for all
   agent kinds, preserve server command/arguments/environment mapping in native
   Claude and Pi configuration, and hand the manifest unchanged to direct runners
-  [system?](verify:sandbox.mcp-manifest-handoff)
+  [system](verify:sandbox.mcp-manifest-handoff)
 - Packaged Pi receives only the selected Wrix-managed entries, including
   none/all and unknown-name handling, uses native names and codemode exposure,
   replaces stale generated configuration on launch, leaves host configuration
   untouched, and independently honors native trusted-project MCP precedence
-  [system?](verify:sandbox.pi-mcp-selection)
+  [system](verify:sandbox.pi-mcp-selection)
 - Packaged Pi codemode receives structured MCP results without Wrix flattening
   or size-dependent shape changes; large results remain available to scripts
   under Pi's native result contract
-  [system?](verify:sandbox.pi-mcp-structured-results)
+  [system](verify:sandbox.pi-mcp-structured-results)
 - Packaged Pi can forward an MCP image block from a codemode call to its result
-  without converting the image to prose [system?](verify:sandbox.pi-mcp-images)
+  without converting the image to prose [system](verify:sandbox.pi-mcp-images)
 - Packaged Pi preserves MCP tool errors as `isError` results in codemode and
   propagates protocol/transport failures and cancellation rather than reporting
   success or replaying side-effecting calls through a Wrix client
-  [system?](verify:sandbox.pi-mcp-errors-cancellation)
+  [system](verify:sandbox.pi-mcp-errors-cancellation)
 - Native Pi owns selected stdio-server shutdown, including child processes; Wrix
   images contain no custom Pi MCP protocol client
-  [system?](verify:sandbox.pi-mcp-lifecycle)
+  [system](verify:sandbox.pi-mcp-lifecycle)
 - On Darwin, the runtime image installer converts the Darwin source kind defined
   by `image-builder.md` to a temporary OCI archive before invoking
   `container image load --input <oci-archive>`, then removes the temporary

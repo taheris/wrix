@@ -470,43 +470,80 @@ fn required_runtime_secret_fails_before_container_start() -> TestResult {
 }
 
 #[test]
-fn runtime_mcp_host_configuration_reaches_entrypoint() -> TestResult {
-    let root = tempfile::Builder::new()
-        .prefix("runtime-mcp-env")
-        .tempdir()?;
-    let workspace = root.path().join("workspace");
-    let profile_config = root.path().join("profile.json");
-    fs::create_dir_all(&workspace)?;
-    common::write_profile_config(&profile_config, &ProfileFixture::default())?;
+fn runtime_mcp_selection_reaches_entrypoint() -> TestResult {
+    for command in [Command::Run, Command::Spawn] {
+        for selection in [None, Some(""), Some("all"), Some("alpha,beta")] {
+            let fixture = lifecycle::Fixture::new()?;
+            let mut child = std::process::Command::new(std::env::current_exe()?);
+            child.args(["mcp_selection_child", "--exact", "--ignored"]);
+            let mut environment = vec![
+                (
+                    "WRIX_TEST_LAUNCH_KIND",
+                    if command == Command::Run {
+                        "run"
+                    } else {
+                        "spawn"
+                    },
+                ),
+                ("WRIX_MCP_TMUX_AUDIT", "/retired/audit.jsonl"),
+                ("WRIX_MCP_TMUX_AUDIT_FULL", "/retired/audit"),
+            ];
+            if command == Command::Spawn {
+                let mut config: serde_json::Value =
+                    serde_json::from_slice(&fs::read(&fixture.spawn)?)?;
+                config["env"] =
+                    selection.map_or_else(|| json!([]), |value| json!([["WRIX_MCP", value]]));
+                fs::write(&fixture.spawn, serde_json::to_vec(&config)?)?;
+                environment.push(("WRIX_MCP", "host-not-selected"));
+            } else if let Some(selection) = selection {
+                environment.push(("WRIX_MCP", selection));
+            }
+            let argv = fixture.launched_argv(child, &environment)?;
+            let forwarded: Vec<_> = argv
+                .iter()
+                .filter(|arg| arg.starts_with("WRIX_MCP="))
+                .collect();
+            assert_eq!(
+                forwarded,
+                selection
+                    .map(|value| format!("WRIX_MCP={value}"))
+                    .iter()
+                    .collect::<Vec<_>>()
+            );
+            assert!(!argv.iter().any(|arg| arg.starts_with("WRIX_MCP_TMUX_")));
+        }
+    }
+    Ok(())
+}
 
-    let run = run_launch(
-        root.path(),
-        "runtime-mcp-env",
-        &profile_config,
-        &workspace,
-        vec![
-            (String::from("WRIX_MCP"), OsString::from("tmux")),
-            (
-                String::from("WRIX_MCP_TMUX_AUDIT"),
-                OsString::from("/workspace/audit.jsonl"),
-            ),
-            (
-                String::from("WRIX_MCP_TMUX_AUDIT_FULL"),
-                OsString::from("/workspace/audit"),
-            ),
-        ],
+#[test]
+#[ignore = "child process dispatches the production launcher with runtime MCP inputs"]
+fn mcp_selection_child() -> TestResult {
+    let profile =
+        PathBuf::from(std::env::var_os("WRIX_TEST_PROFILE_CONFIG").ok_or("profile missing")?);
+    let spawn = std::env::var("WRIX_TEST_SPAWN_CONFIG")?;
+    let command =
+        Command::parse(&std::env::var("WRIX_TEST_LAUNCH_KIND")?).ok_or("command missing")?;
+    let args = match command {
+        Command::Spawn => vec![String::from("--spawn-config"), spawn],
+        Command::Run => {
+            let config: serde_json::Value = serde_json::from_slice(&fs::read(spawn)?)?;
+            vec![
+                config["workspace"]
+                    .as_str()
+                    .ok_or("workspace missing")?
+                    .to_owned(),
+            ]
+        }
+    };
+    let code = wrix_sandbox::command::run(
+        command,
+        Some(profile),
+        &args,
+        &mut std::io::stdout(),
+        &mut std::io::stderr(),
     )?;
-
-    assert!(run.success, "{}", run.stderr);
-    assert!(run.stdout.contains("ENV=WRIX_MCP=tmux"));
-    assert!(
-        run.stdout
-            .contains("ENV=WRIX_MCP_TMUX_AUDIT=/workspace/audit.jsonl")
-    );
-    assert!(
-        run.stdout
-            .contains("ENV=WRIX_MCP_TMUX_AUDIT_FULL=/workspace/audit")
-    );
+    assert_eq!(code, std::process::ExitCode::SUCCESS);
     Ok(())
 }
 

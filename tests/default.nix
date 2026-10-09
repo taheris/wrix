@@ -220,6 +220,7 @@ let
     // prePushSmokeTests
     // tmuxMcpTests
     // (import ./sandbox/pi-settings.nix { inherit pkgs wrix; })
+    // (import ./sandbox/pi-mcp-native.nix { inherit pkgs wrix src; })
     // {
       builder-vmnet-route = builderRouteTest;
       image-assembly-native = sandboxImageChecks.imageAssemblyNativeCheck;

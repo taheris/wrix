@@ -145,6 +145,57 @@ fn spawn_waits_for_container_completion() -> TestResult {
 }
 
 #[test]
+fn runtime_mcp_selection_reaches_entrypoint() -> TestResult {
+    use wrix_sandbox::command::Command as LaunchCommand;
+
+    for kind in [LaunchCommand::Run, LaunchCommand::Spawn] {
+        for selection in [None, Some(""), Some("all"), Some("alpha,beta")] {
+            let fixture = lifecycle::Fixture::new()?;
+            let mut command = Command::new(env!("CARGO_BIN_EXE_wrix"));
+            command.arg("--profile-config").arg(&fixture.profile);
+            let mut environment = vec![
+                ("WRIX_MCP_TMUX_AUDIT", "/retired/audit.jsonl"),
+                ("WRIX_MCP_TMUX_AUDIT_FULL", "/retired/audit"),
+            ];
+            let mut config: Value = serde_json::from_slice(&fs::read(&fixture.spawn)?)?;
+            match kind {
+                LaunchCommand::Run => {
+                    command
+                        .arg("run")
+                        .arg(config["workspace"].as_str().ok_or("workspace missing")?);
+                    if let Some(selection) = selection {
+                        environment.push(("WRIX_MCP", selection));
+                    }
+                }
+                LaunchCommand::Spawn => {
+                    config["env"] =
+                        selection.map_or_else(|| json!([]), |value| json!([["WRIX_MCP", value]]));
+                    fs::write(&fixture.spawn, serde_json::to_vec(&config)?)?;
+                    command
+                        .args(["spawn", "--spawn-config"])
+                        .arg(&fixture.spawn);
+                    environment.push(("WRIX_MCP", "host-not-selected"));
+                }
+            }
+            let argv = fixture.launched_argv(command, &environment)?;
+            let forwarded: Vec<_> = argv
+                .iter()
+                .filter(|arg| arg.starts_with("WRIX_MCP="))
+                .collect();
+            assert_eq!(
+                forwarded,
+                selection
+                    .map(|value| format!("WRIX_MCP={value}"))
+                    .iter()
+                    .collect::<Vec<_>>()
+            );
+            assert!(!argv.iter().any(|arg| arg.starts_with("WRIX_MCP_TMUX_")));
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn run_launch_options_stop_before_agent_arguments() -> TestResult {
     let literal_args = [
         "--git-deploy",

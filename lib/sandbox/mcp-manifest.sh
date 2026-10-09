@@ -4,9 +4,7 @@ set -euo pipefail
 wrix_prepare_mcp_manifest() {
   local available_manifest="/etc/wrix/mcp-available.json"
   local selected_manifest="/tmp/wrix-mcp-manifest.json"
-  local selection="${WRIX_MCP:-all}"
-  local audit="${WRIX_MCP_TMUX_AUDIT:-}"
-  local audit_full="${WRIX_MCP_TMUX_AUDIT_FULL:-}"
+  local selection="${WRIX_MCP-all}"
 
   if [[ ! -f "$available_manifest" ]]; then
     unset WRIX_MCP_MANIFEST
@@ -15,8 +13,6 @@ wrix_prepare_mcp_manifest() {
 
   if ! jq \
     --arg selection "$selection" \
-    --arg audit "$audit" \
-    --arg auditFull "$audit_full" \
     '
       def selected_names:
         $selection
@@ -24,18 +20,6 @@ wrix_prepare_mcp_manifest() {
         | map(gsub("^\\s+|\\s+$"; ""))
         | map(select(length > 0))
         | unique;
-      def with_runtime_overrides:
-        map(
-          if .name == "tmux" then
-            .env = (
-              .env
-              + (if $audit == "" then {} else { TMUX_DEBUG_AUDIT: $audit } end)
-              + (if $auditFull == "" then {} else { TMUX_DEBUG_AUDIT_FULL: $auditFull } end)
-            )
-          else
-            .
-          end
-        );
       .servers as $available
       | if .runtime_selection then
           (if $selection == "all" then [$available[].name] else selected_names end) as $selected
@@ -46,11 +30,11 @@ wrix_prepare_mcp_manifest() {
             else
               {
                 schema: 1,
-                servers: ($available | map(select(.name as $name | $selected | index($name))) | with_runtime_overrides)
+                servers: ($available | map(select(.name as $name | $selected | index($name))))
               }
             end
         else
-          { schema: 1, servers: ($available | with_runtime_overrides) }
+          { schema: 1, servers: $available }
         end
     ' \
     "$available_manifest" >"$selected_manifest"; then
@@ -61,4 +45,23 @@ wrix_prepare_mcp_manifest() {
 
   chmod 0600 "$selected_manifest"
   export WRIX_MCP_MANIFEST="$selected_manifest"
+}
+
+wrix_configure_pi_mcp() {
+  local config_dir="$HOME/.pi/agent"
+  local config_tmp
+  mkdir -p "$config_dir"
+  config_tmp=$(mktemp "$config_dir/mcp.json.XXXXXX")
+  if [[ -n "${WRIX_MCP_MANIFEST:-}" ]]; then
+    if ! jq '{mcpServers: (.servers | map({key: .name, value: {
+      command: .command, args: .args, env: .env, exposure: "codemode"
+    }}) | from_entries)}' "$WRIX_MCP_MANIFEST" >"$config_tmp"; then
+      rm -f "$config_tmp"
+      return 1
+    fi
+  else
+    printf '{"mcpServers":{}}\n' >"$config_tmp"
+  fi
+  chmod 0600 "$config_tmp"
+  mv -f "$config_tmp" "$config_dir/mcp.json"
 }

@@ -88,9 +88,28 @@ in
 
   "sandbox.mksandbox-api" = sandboxScriptAll "mksandbox-api";
 
-  "sandbox.mcp-agent-adapters" = ''
-    export PATH="${import ../../lib/sandbox/pi.nix { inherit pkgs; }}/bin:$PATH"
-    ${sandboxScriptAll "mcp-agent-adapters"}
+  "sandbox.mcp-manifest-handoff" = ''
+    nix build --no-link ".#checks.${system}.mcp-manifest-handoff"
+  '';
+
+  "sandbox.pi-mcp-selection" = ''
+    nix build --no-link ".#checks.${system}.pi-mcp-native"
+  '';
+
+  "sandbox.pi-mcp-structured-results" = ''
+    nix build --no-link ".#checks.${system}.pi-mcp-native"
+  '';
+
+  "sandbox.pi-mcp-images" = ''
+    nix build --no-link ".#checks.${system}.pi-mcp-native"
+  '';
+
+  "sandbox.pi-mcp-errors-cancellation" = ''
+    nix build --no-link ".#checks.${system}.pi-mcp-native"
+  '';
+
+  "sandbox.pi-mcp-lifecycle" = ''
+    nix build --no-link ".#checks.${system}.pi-mcp-native" ".#checks.${system}.pi-mcp-image-wiring"
   '';
 
   "sandbox.network-fail-closed" = live (network "test_fail_closed");

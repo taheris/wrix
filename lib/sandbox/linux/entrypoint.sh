@@ -331,11 +331,9 @@ if [[ "$WRIX_AGENT" = "claude" ]]; then
       | map({ key: .name, value: { command: .command, args: .args, env: .env } })
       | from_entries
     ' "$WRIX_MCP_MANIFEST")
-    if [[ "$mcp_servers" != "{}" ]]; then
-      jq --argjson servers "$mcp_servers" '.mcpServers = $servers' \
-        "$HOME/.claude.json" > "$HOME/.claude.json.tmp"
-      mv "$HOME/.claude.json.tmp" "$HOME/.claude.json"
-    fi
+    jq --argjson servers "$mcp_servers" '.mcpServers = $servers' \
+      "$HOME/.claude.json" > "$HOME/.claude.json.tmp"
+    mv "$HOME/.claude.json.tmp" "$HOME/.claude.json"
   fi
 
   # Seed project-level settings if missing, then sync env vars from image
@@ -364,6 +362,7 @@ elif [[ "$WRIX_AGENT" = "pi" ]]; then
   if [[ -d /etc/wrix/pi-agent ]]; then
     cp -rn /etc/wrix/pi-agent/. "$HOME/.pi/agent/"
   fi
+  wrix_configure_pi_mcp
   if [[ -n "${WRIX_PI_AUTH_JSON:-}" ]]; then
     if [[ ! -f "$WRIX_PI_AUTH_JSON" || -L "$WRIX_PI_AUTH_JSON" ]]; then
       echo "Error: WRIX_PI_AUTH_JSON=$WRIX_PI_AUTH_JSON is not mounted" >&2
