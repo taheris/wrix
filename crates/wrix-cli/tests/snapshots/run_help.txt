@@ -1,0 +1,16 @@
+Run an interactive sandbox.
+
+Usage: wrix [--profile-config <file>] run [LAUNCH_OPTIONS] [DIR] [--] [AGENT_ARGS ...]
+
+DIR defaults to CWD; without DIR, use -- before agent arguments.
+Launcher options stop at DIR or --; after DIR, one optional -- is consumed.
+Remaining arguments are passed unchanged to the agent, including --help.
+Omitted Git options inherit repository policy, defaulting independently to false.
+
+Options:
+  --profile-config <file>  Read launcher defaults from <file> before run (required).
+  --git-deploy             Grant the deploy key for this launch; conflicts with --no-git-deploy.
+  --no-git-deploy          Deny the deploy key for this launch; conflicts with --git-deploy.
+  --git-sign               Grant the signing key for this launch; conflicts with --no-git-sign.
+  --no-git-sign            Deny the signing key for this launch; conflicts with --git-sign.
+  -h, --help               Print launcher help before DIR or --.

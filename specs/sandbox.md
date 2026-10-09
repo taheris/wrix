@@ -670,7 +670,7 @@ supplied; there is no implicit default image baked in.
   when the workspace is omitted, consumes the documented separator, and forwards
   the remaining agent arguments unchanged, including Wrix-looking option names
   and agent `--help`
-  [test?](../crates/wrix-cli/tests/sandbox_launch.rs::run_launch_options_stop_before_agent_arguments)
+  [test](../crates/wrix-cli/tests/sandbox_launch.rs::run_launch_options_stop_before_agent_arguments)
 - Launch overrides reject conflicting flag pairs and malformed Git policy,
   including the unsupported `sign_commits` key, before services or credential
   staging

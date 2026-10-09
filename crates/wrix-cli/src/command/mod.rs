@@ -67,11 +67,13 @@ enum Invocation {
 }
 
 fn parse_root(args: &[String]) -> Result<RootInvocation, clap::Error> {
-    let matches = root_command()
-        .try_get_matches_from(std::iter::once("wrix").chain(args.iter().map(String::as_str)))?;
+    let (root_args, run_args) = split_run_arguments(args);
+    let matches = root_command().try_get_matches_from(
+        std::iter::once("wrix").chain(root_args.iter().map(String::as_str)),
+    )?;
     let profile_config = matches.get_one::<String>(PROFILE_CONFIG).map(PathBuf::from);
     let invocation = match matches.subcommand() {
-        Some(("run", matches)) => Some(Invocation::Run(passthrough_values(matches))),
+        Some(("run", _matches)) => Some(Invocation::Run(run_args.to_vec())),
         Some(("spawn", matches)) => Some(Invocation::Spawn(passthrough_values(matches))),
         Some(("service", matches)) => Some(Invocation::Service(passthrough_values(matches))),
         Some(("beads", matches)) => Some(Invocation::Beads(passthrough_values(matches))),
@@ -83,6 +85,24 @@ fn parse_root(args: &[String]) -> Result<RootInvocation, clap::Error> {
         profile_config,
         invocation,
     })
+}
+
+/// Root parsing ends at `run`; its entire tail belongs to the sandbox parser.
+fn split_run_arguments(args: &[String]) -> (&[String], &[String]) {
+    let mut index = 0;
+    while let Some(arg) = args.get(index) {
+        match arg.as_str() {
+            "--profile-config" => index += 2,
+            "--" => break,
+            option if option.starts_with('-') => index += 1,
+            _ => break,
+        }
+    }
+    if args.get(index).is_some_and(|arg| arg == "run") {
+        args.split_at(index + 1)
+    } else {
+        (args, &[])
+    }
 }
 
 fn render_clap_error(
@@ -114,17 +134,8 @@ fn run_sandbox(
     stdout: &mut impl Write,
     stderr: &mut impl Write,
 ) -> io::Result<ExitCode> {
-    let help_requested = match command {
-        wrix_sandbox::command::Command::Run => args.first().is_some_and(|arg| is_help(arg)),
-        wrix_sandbox::command::Command::Spawn => requests_help(args),
-    };
-    if help_requested {
-        match command {
-            wrix_sandbox::command::Command::Run => wrix_sandbox::command::write_run_help(stdout)?,
-            wrix_sandbox::command::Command::Spawn => {
-                wrix_sandbox::command::write_spawn_help(stdout)?;
-            }
-        }
+    if command == wrix_sandbox::command::Command::Spawn && requests_help(args) {
+        wrix_sandbox::command::write_spawn_help(stdout)?;
         return Ok(ExitCode::SUCCESS);
     }
     wrix_sandbox::command::run(command, profile_config, args, stdout, stderr)
@@ -285,11 +296,13 @@ fn root_command() -> ClapCommand {
                 .num_args(1)
                 .help("Read launcher defaults for run, spawn, and init from <file>."),
         )
-        .subcommand(passthrough_command(
-            "run",
-            "Run an interactive sandbox.",
-            wrix_sandbox::command::RUN_HELP,
-        ))
+        .subcommand(
+            ClapCommand::new("run")
+                .about("Run an interactive sandbox.")
+                .override_help(wrix_sandbox::command::RUN_HELP)
+                .disable_help_flag(true)
+                .disable_help_subcommand(true),
+        )
         .subcommand(passthrough_command(
             "spawn",
             "Spawn a programmatic sandbox.",
@@ -343,7 +356,39 @@ fn help_arg() -> Arg {
 mod test {
     use std::process::ExitCode;
 
-    use super::run;
+    use super::{Invocation, parse_root, run};
+
+    #[test]
+    fn root_parser_keeps_run_tail_outside_global_parsing() {
+        for profile_args in [
+            vec!["--profile-config", "run"],
+            vec!["--profile-config=run"],
+        ] {
+            let mut args: Vec<String> = profile_args.iter().map(|arg| (*arg).to_owned()).collect();
+            args.push(String::from("run"));
+            let tail = [
+                "--git-sign",
+                "--",
+                "--profile-config",
+                "agent.json",
+                "--help",
+                "",
+            ];
+            args.extend(tail.iter().map(|arg| (*arg).to_owned()));
+            let parsed = parse_root(&args).unwrap();
+            assert_eq!(parsed.profile_config, Some(std::path::PathBuf::from("run")));
+            let Some(Invocation::Run(agent_args)) = parsed.invocation else {
+                panic!("expected run invocation");
+            };
+            assert_eq!(agent_args, tail);
+        }
+    }
+
+    #[test]
+    fn root_parser_still_validates_options_before_run() {
+        let args = ["--unknown", "run", "/workspace", "--help"].map(String::from);
+        assert!(parse_root(&args).is_err());
+    }
 
     #[test]
     fn service_help_lists_public_groups() {

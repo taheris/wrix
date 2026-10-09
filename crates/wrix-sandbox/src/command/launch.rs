@@ -45,6 +45,8 @@ pub enum Kind {
 pub struct Run {
     pub workspace: PathBuf,
     pub agent_args: Vec<String>,
+    pub git_deploy: Option<bool>,
+    pub git_sign: Option<bool>,
 }
 
 pub struct Spawn {
@@ -754,6 +756,14 @@ impl<'a> Plan<'a> {
                 self.request.profile_config.profile.name
             )?;
             writeln!(stdout, "WORKSPACE={}", self.workspace.display())?;
+            if let Kind::Run(run) = &self.request.kind {
+                if let Some(deploy) = run.git_deploy {
+                    writeln!(stdout, "GIT_DEPLOY_OVERRIDE={deploy}")?;
+                }
+                if let Some(sign) = run.git_sign {
+                    writeln!(stdout, "GIT_SIGN_OVERRIDE={sign}")?;
+                }
+            }
             writeln!(
                 stdout,
                 "IMAGE_OVERRIDE_REF={}",

@@ -41,6 +41,17 @@ fn root_and_subcommand_help() -> TestResult {
         "Usage: wrix [--profile-config <file>] run",
     );
 
+    assert_eq!(run.stdout, include_str!("snapshots/run_help.txt"));
+    for args in [
+        vec!["help", "run"],
+        vec!["run", "--git-sign", "--help"],
+        vec!["run", "--no-git-deploy", "-h"],
+    ] {
+        let result = run_wrix(&args)?;
+        assert_success_with_clean_stderr(&result);
+        assert_eq!(result.stdout, run.stdout);
+    }
+
     let spawn = run_wrix(&["spawn", "--help"])?;
     assert_success_with_clean_stderr(&spawn);
     assert_contains(
@@ -100,7 +111,14 @@ fn public_flags_have_descriptions() -> TestResult {
         (
             "run",
             vec!["run", "--help"],
-            vec!["--profile-config <file>", "-h, --help"],
+            vec![
+                "--profile-config <file>",
+                "--git-deploy",
+                "--no-git-deploy",
+                "--git-sign",
+                "--no-git-sign",
+                "-h, --help",
+            ],
         ),
         (
             "spawn",

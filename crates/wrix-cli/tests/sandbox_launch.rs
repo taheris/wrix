@@ -46,18 +46,59 @@ impl Fixture {
     }
 
     fn command(&self) -> Command {
+        let mut command = self.run_command();
+        command.arg(&self.workspace).arg("true");
+        command
+    }
+
+    fn run_command(&self) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_wrix"));
         command
             .arg("--profile-config")
             .arg(&self.profile)
             .arg("run")
-            .arg(&self.workspace)
-            .arg("true")
             .env("HOME", self.root.path().join("home"))
             .env_remove("WRIX_NETWORK")
             .env_remove("WRIX_DRY_RUN")
             .env_remove("WRIX_DRY_RUN_SERVICES");
         command
+    }
+
+    fn capture_runtime(&self) -> TestResult<Command> {
+        use std::os::unix::fs::PermissionsExt;
+        fs::remove_dir(self.workspace.join(".beads/dolt"))?;
+        fs::create_dir(self.root.path().join("selected-workspace"))?;
+        let bin = self.root.path().join("bin");
+        fs::create_dir(&bin)?;
+        for name in ["podman", "container", "route"] {
+            let path = bin.join(name);
+            fs::write(&path, include_str!("fixtures/launch-runtime.sh"))?;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
+        }
+        let path = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        )))?;
+        let mut command = self.run_command();
+        command
+            .current_dir(&self.workspace)
+            .env("PATH", path)
+            .env("XDG_RUNTIME_DIR", self.root.path().join("runtime"))
+            .env("XDG_CACHE_HOME", self.root.path().join("cache"))
+            .env("WRIX_IMAGE_KEEP_FILE", self.root.path().join("mru.json"))
+            .env("WRIX_TEST_DIGEST", format!("sha256:{}", "a".repeat(64)))
+            .env("WRIX_TEST_ARGV", self.root.path().join("argv"));
+        for name in [
+            "WRIX_MICROVM",
+            "WRIX_UNSAFE_PODMAN_SOCKET",
+            "WRIX_DEPLOY_KEY",
+            "WRIX_SIGNING_KEY",
+            "WRIX_GIT_SIGN",
+            "WRIX_FOCUS_TARGET",
+            "TMUX",
+        ] {
+            command.env_remove(name);
+        }
+        Ok(command)
     }
 
     fn forbid_subprocesses(&self, command: &mut Command) -> TestResult {
@@ -78,6 +119,231 @@ impl Fixture {
         command.env("PATH", bin);
         Ok(())
     }
+}
+
+#[test]
+fn run_launch_options_stop_before_agent_arguments() -> TestResult {
+    let literal_args = [
+        "--git-deploy",
+        "--no-git-deploy",
+        "--git-sign",
+        "--no-git-sign",
+        "--profile-config",
+        "/missing/agent-profile.json",
+        "--spawn-config",
+        "--stdio",
+        "--help",
+        "-h",
+        "help",
+        "",
+        "two words",
+        "line\nbreak",
+        "é",
+        "--",
+    ];
+    for prefix in [
+        vec![],
+        vec!["--git-deploy"],
+        vec!["--no-git-deploy"],
+        vec!["--git-sign"],
+        vec!["--no-git-sign"],
+        vec!["--git-deploy", "--git-sign"],
+        vec!["--no-git-deploy", "--git-sign"],
+        vec!["--git-deploy", "--no-git-sign"],
+        vec!["--no-git-deploy", "--no-git-sign"],
+        vec!["--git-sign", "--git-sign"],
+    ] {
+        for (explicit_workspace, separator, agent_args) in [
+            (false, false, &[][..]),
+            (false, true, &[][..]),
+            (false, true, &literal_args[..]),
+            (false, true, &["--help"][..]),
+            (false, true, &["--"][..]),
+            (true, false, &[][..]),
+            (true, true, &[][..]),
+            (true, false, &literal_args[..]),
+            (true, true, &literal_args[..]),
+            (true, false, &["--help"][..]),
+            (true, true, &["--help"][..]),
+            (true, true, &["--"][..]),
+        ] {
+            let fixture = Fixture::new(None)?;
+            let mut command = fixture.capture_runtime()?;
+            command.args(&prefix);
+            let workspace = if explicit_workspace {
+                let selected = fixture.root.path().join("selected-workspace");
+                command.arg(&selected);
+                selected
+            } else {
+                fixture.workspace.clone()
+            };
+            if separator {
+                command.arg("--");
+            }
+            let output = command.args(agent_args).output()?;
+            assert!(
+                output.status.success(),
+                "{prefix:?}, workspace={explicit_workspace}, separator={separator}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(output.stdout, Vec::<u8>::new());
+            let argv = read_runtime_argv(&fixture)?;
+            assert_eq!(argv.first().map(String::as_str), Some("run"));
+            let image = argv
+                .iter()
+                .position(|arg| arg == "localhost/wrix-test:latest")
+                .ok_or("runtime image argument missing")?;
+            assert_eq!(&argv[image + 1..], agent_args);
+            assert!(argv[..image].windows(2).any(|pair| {
+                pair[0] == "-v" && pair[1] == format!("{}:/workspace", workspace.display())
+            }));
+        }
+    }
+    for (positive, negative) in [
+        ("--git-deploy", "--no-git-deploy"),
+        ("--git-sign", "--no-git-sign"),
+    ] {
+        for pair in [[positive, negative], [negative, positive]] {
+            let fixture = Fixture::new(None)?;
+            let mut command = fixture.run_command();
+            fixture.forbid_subprocesses(&mut command)?;
+            let output = command.args(pair).args(["--", "--help"]).output()?;
+            assert!(!output.status.success(), "accepted {pair:?}");
+            assert_eq!(output.stdout, Vec::<u8>::new());
+            let stderr = String::from_utf8(output.stderr)?;
+            assert!(
+                stderr.contains(positive) && stderr.contains(negative),
+                "{stderr}"
+            );
+            assert!(!fixture.root.path().join("calls").exists());
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn run_without_workspace_requires_separator_before_agent_flags() -> TestResult {
+    for flag in ["--stdio", "--profile-config", "--agent-option"] {
+        let fixture = Fixture::new(None)?;
+        let mut command = fixture.run_command();
+        fixture.forbid_subprocesses(&mut command)?;
+        let output = command.arg(flag).output()?;
+        assert!(!output.status.success());
+        let stderr = String::from_utf8(output.stderr)?;
+        assert!(
+            stderr.contains(flag) && stderr.contains("use --"),
+            "{stderr}"
+        );
+        assert!(!fixture.root.path().join("calls").exists());
+    }
+    Ok(())
+}
+
+#[test]
+fn run_preserves_independent_optional_git_overrides_in_launch_plan() -> TestResult {
+    for (flags, deploy, sign) in [
+        (vec![], None, None),
+        (vec!["--git-deploy"], Some(true), None),
+        (vec!["--no-git-deploy"], Some(false), None),
+        (vec!["--git-sign"], None, Some(true)),
+        (vec!["--no-git-sign"], None, Some(false)),
+        (
+            vec!["--git-deploy", "--no-git-sign"],
+            Some(true),
+            Some(false),
+        ),
+        (
+            vec!["--no-git-deploy", "--git-sign"],
+            Some(false),
+            Some(true),
+        ),
+    ] {
+        let fixture = Fixture::new(None)?;
+        let mut command = fixture.capture_runtime()?;
+        let output = command.args(flags).env("WRIX_DRY_RUN", "1").output()?;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout)?;
+        for (name, expected) in [("GIT_DEPLOY_OVERRIDE", deploy), ("GIT_SIGN_OVERRIDE", sign)] {
+            let records: Vec<_> = stdout
+                .lines()
+                .filter(|line| line.starts_with(name))
+                .collect();
+            let expected: Vec<_> = expected
+                .into_iter()
+                .map(|value| format!("{name}={value}"))
+                .collect();
+            assert_eq!(records, expected);
+        }
+        assert!(!fixture.root.path().join("argv").exists());
+    }
+    Ok(())
+}
+
+fn read_runtime_argv(fixture: &Fixture) -> TestResult<Vec<String>> {
+    let bytes = fs::read(fixture.root.path().join("argv"))?;
+    let data = bytes
+        .strip_suffix(&[0])
+        .ok_or("argv capture lacks trailing NUL")?;
+    data.split(|byte| *byte == 0)
+        .map(|arg| String::from_utf8(arg.to_vec()).map_err(Into::into))
+        .collect()
+}
+
+#[test]
+fn launch_runtime_fixture_conforms_to_inspection_capture_and_failure_contract() -> TestResult {
+    let fixture = Fixture::new(None)?;
+    let _command = fixture.capture_runtime()?;
+    let digest = format!("sha256:{}", "a".repeat(64));
+    for name in ["podman", "container"] {
+        let program = fixture.root.path().join("bin").join(name);
+        let mut inspect = Command::new(&program);
+        inspect.args(["image", "inspect"]);
+        if name == "podman" {
+            inspect.args(["--format", "{{.Digest}}"]);
+        }
+        let output = inspect
+            .arg("localhost/wrix-test:latest")
+            .env("WRIX_TEST_DIGEST", &digest)
+            .output()?;
+        assert!(output.status.success());
+        if name == "podman" {
+            assert_eq!(String::from_utf8(output.stdout)?.trim(), digest);
+        } else {
+            let value: Value = serde_json::from_slice(&output.stdout)?;
+            assert_eq!(value[0]["digest"], digest);
+            assert_eq!(value[0]["id"], digest);
+        }
+        let args = [
+            "run",
+            "--rm",
+            "localhost/wrix-test:latest",
+            "",
+            "line\nbreak",
+            "--help",
+        ];
+        let output = Command::new(&program)
+            .args(args)
+            .env("WRIX_TEST_ARGV", fixture.root.path().join("argv"))
+            .output()?;
+        assert!(output.status.success());
+        assert_eq!(output.stdout, Vec::<u8>::new());
+        assert_eq!(read_runtime_argv(&fixture)?, args);
+        let output = Command::new(&program)
+            .args(["unexpected", "arguments"])
+            .output()?;
+        assert_eq!(output.status.code(), Some(91));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("unexpected runtime arguments"));
+    }
+    let output = Command::new(fixture.root.path().join("bin/route"))
+        .args(["-n", "get", "default"])
+        .output()?;
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8(output.stdout)?.trim(), "interface: en0");
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
