@@ -45,8 +45,8 @@ PROFILE_CONFIG=$(nix eval --raw --no-warn-dirty .#test-tmux-sandbox.profileConfi
 mkdir -p "$TEST_TMP/home" "$TEST_TMP/cache"
 
 wait_for() {
-  local attempt
-  for ((attempt = 0; attempt < ${WAIT_ATTEMPTS:-50}; attempt++)); do
+  local attempt limit="${WAIT_ATTEMPTS:-50}"
+  for ((attempt = 0; attempt < limit; attempt++)); do
     if "$@"; then return 0; fi
     sleep 0.1
   done
