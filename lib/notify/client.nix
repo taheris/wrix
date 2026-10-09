@@ -29,8 +29,9 @@ pkgs.writeShellScriptBin "wrix-notify" ''
   }
 
   payload=$(${pkgs.jq}/bin/jq -cn --arg t "$title" --arg m "$message" --arg s "$sound" \
-    --arg sid "''${WRIX_SESSION_ID:-}" \
-    '{title: $t, message: $m, sound: $s, session_id: $sid}')
+    --arg target "''${WRIX_FOCUS_TARGET:-}" \
+    '{title: $t, message: $m, sound: $s} +
+      (if $target == "" then {} else {focus_target: $target} end)')
 
   send_tcp() {
     local tcp_host="$1"

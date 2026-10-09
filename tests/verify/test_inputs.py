@@ -11,7 +11,7 @@ import unittest
 
 VERIFY, CI, LOOM, SOURCE, NIXPKGS, SYSTEM = sys.argv[1:]
 KNOWN = "devshell.no-prek-install"
-OPAQUE = "notifications.client-envelope"
+OPAQUE = "notifications.focus-target-envelope"
 CI_KNOWN = "test-linux-builder-source-kind-load-transport"
 CI_OPAQUE = "test-security-audit-trail-anchor"
 GIT_ENV = subprocess.check_output(["git", "rev-parse", "--local-env-vars"], text=True).splitlines()

@@ -3,7 +3,7 @@ mod pi_auth;
 use pi_auth::Storage as PiAuth;
 
 use std::{
-    env, fmt, fs, io,
+    env, fs, io,
     io::Write,
     net::Ipv4Addr,
     num::NonZeroU16,
@@ -131,10 +131,12 @@ pub enum LaunchError {
         operation: Box<LaunchError>,
         cleanup: io::Error,
     },
-    /// notification session registration count overflowed
-    SessionRegistrationOverflow,
-    /// invalid notification session registration JSON at {path}: {source}
-    SessionRegistrationJson {
+    /// invalid notification focus target
+    InvalidFocusTarget,
+    /// notification focus registration count overflowed
+    FocusRegistrationOverflow,
+    /// invalid notification focus registration JSON at {path}: {source}
+    FocusRegistrationJson {
         path: String,
         source: serde_json::Error,
     },
@@ -217,7 +219,8 @@ struct Plan<'a> {
     host_podman_socket: Option<HostPodmanSocket>,
     network_mode: NetworkMode,
     git_identity: GitIdentity,
-    session_id: Option<SessionId>,
+    focus_target: Option<FocusTarget>,
+    host_tmux_target: Option<FocusTarget>,
 }
 
 const DARWIN_NOTIFY_TCP_ENDPOINT: &str = "192.168.64.1:5959";
@@ -332,16 +335,23 @@ struct ImageSource {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
-struct SessionId(String);
+struct FocusTarget(String);
 
 #[derive(Debug, Display, Error)]
-enum SessionIdParseError {
-    /// invalid tmux session identifier: {value}
-    Invalid { value: String },
+enum FocusTargetParseError {
+    /// invalid notification focus target
+    Invalid,
 }
 
-impl SessionId {
-    fn parse(value: &str) -> Result<Self, SessionIdParseError> {
+impl FocusTarget {
+    fn parse(value: &str) -> Result<Self, FocusTargetParseError> {
+        if value.is_empty() || value.contains('\0') {
+            return Err(FocusTargetParseError::Invalid);
+        }
+        Ok(Self(value.to_owned()))
+    }
+
+    fn parse_tmux(value: &str) -> Result<Self, FocusTargetParseError> {
         let valid = value.rsplit_once(':').is_some_and(|(session, target)| {
             !session.is_empty()
                 && !session.chars().any(char::is_control)
@@ -353,11 +363,9 @@ impl SessionId {
                 })
         });
         if !valid {
-            return Err(SessionIdParseError::Invalid {
-                value: value.to_owned(),
-            });
+            return Err(FocusTargetParseError::Invalid);
         }
-        Ok(Self(value.to_owned()))
+        Self::parse(value)
     }
 
     fn as_str(&self) -> &str {
@@ -367,10 +375,10 @@ impl SessionId {
     fn file_name(&self) -> String {
         let safe_id = self
             .0
-            .chars()
-            .map(|character| {
-                if character.is_ascii_alphanumeric() || matches!(character, '_' | '-') {
-                    character
+            .bytes()
+            .map(|byte| {
+                if byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-') {
+                    char::from(byte)
                 } else {
                     '-'
                 }
@@ -380,13 +388,7 @@ impl SessionId {
     }
 }
 
-impl fmt::Display for SessionId {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0)
-    }
-}
-
-impl<'de> Deserialize<'de> for SessionId {
+impl<'de> Deserialize<'de> for FocusTarget {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -397,8 +399,10 @@ impl<'de> Deserialize<'de> for SessionId {
 }
 
 #[derive(Deserialize, Serialize)]
-struct SessionRecord {
-    session_id: SessionId,
+struct FocusRecord {
+    focus_target: FocusTarget,
+    #[serde(default)]
+    tmux_target: Option<FocusTarget>,
     #[serde(default)]
     window_id: Option<String>,
     #[serde(default)]
@@ -407,14 +411,20 @@ struct SessionRecord {
     registration_count: u64,
 }
 
-impl SessionRecord {
-    fn new(session_id: &SessionId, platform: Platform, focus: Option<String>) -> Self {
+impl FocusRecord {
+    fn new(
+        target: &FocusTarget,
+        tmux_target: Option<&FocusTarget>,
+        platform: Platform,
+        focus: Option<String>,
+    ) -> Self {
         let (window_id, terminal_app) = match platform {
             Platform::Linux => (focus, None),
             Platform::Darwin => (None, focus),
         };
         Self {
-            session_id: session_id.clone(),
+            focus_target: target.clone(),
+            tmux_target: tmux_target.cloned(),
             window_id,
             terminal_app,
             registration_count: 1,
@@ -429,7 +439,7 @@ impl SessionRecord {
         self.registration_count = self
             .registration_count
             .checked_add(1)
-            .ok_or(LaunchError::SessionRegistrationOverflow)?;
+            .ok_or(LaunchError::FocusRegistrationOverflow)?;
         match (platform, focus) {
             (Platform::Linux, Some(window_id)) => self.window_id = Some(window_id),
             (Platform::Darwin, Some(terminal_app)) => self.terminal_app = Some(terminal_app),
@@ -443,90 +453,90 @@ const fn initial_registration_count() -> u64 {
     1
 }
 
-enum SessionRegistration {
+enum FocusRegistration {
     Absent,
-    Active { path: PathBuf, id: SessionId },
+    Active { path: PathBuf, target: FocusTarget },
 }
 
-impl SessionRegistration {
-    fn create(session_id: Option<&SessionId>, platform: Platform) -> Result<Self, LaunchError> {
-        Self::create_in(session_id, platform, &session_directory(platform))
+impl FocusRegistration {
+    fn create(
+        target: Option<&FocusTarget>,
+        tmux_target: Option<&FocusTarget>,
+        platform: Platform,
+    ) -> Result<Self, LaunchError> {
+        Self::create_in(target, tmux_target, platform, &session_directory(platform))
     }
 
     fn create_in(
-        session_id: Option<&SessionId>,
+        target: Option<&FocusTarget>,
+        tmux_target: Option<&FocusTarget>,
         platform: Platform,
         directory: &Path,
     ) -> Result<Self, LaunchError> {
-        let Some(session_id) = session_id else {
+        let Some(target) = target else {
             return Ok(Self::Absent);
         };
         fs::create_dir_all(directory)?;
-        let path = directory.join(session_id.file_name());
-        let focus = focus_target(platform);
-        with_session_lock(&path, || {
+        let path = directory.join(target.file_name());
+        let focus = terminal_focus(platform);
+        with_focus_lock(&path, || {
             let record = if path.try_exists()? {
-                match read_session_record(&path) {
-                    Ok(mut record) if &record.session_id == session_id => {
+                match read_focus_record(&path) {
+                    Ok(mut record) if &record.focus_target == target => {
                         record.add_registration(platform, focus)?;
                         record
                     }
-                    Ok(record) => {
+                    Ok(_) => {
                         tracing::warn!(
                             path = %path.display(),
-                            registered_session_id = %record.session_id,
-                            session_id = %session_id,
-                            "replacing colliding notification session registration"
+                            "replacing colliding notification focus registration"
                         );
-                        SessionRecord::new(session_id, platform, focus)
+                        FocusRecord::new(target, tmux_target, platform, focus)
                     }
-                    Err(LaunchError::SessionRegistrationJson { source, .. }) => {
+                    Err(LaunchError::FocusRegistrationJson { source, .. }) => {
                         tracing::warn!(
                             path = %path.display(),
                             error = %source,
-                            "replacing malformed notification session registration"
+                            "replacing malformed notification focus registration"
                         );
-                        SessionRecord::new(session_id, platform, focus)
+                        FocusRecord::new(target, tmux_target, platform, focus)
                     }
                     Err(error) => return Err(error),
                 }
             } else {
-                SessionRecord::new(session_id, platform, focus)
+                FocusRecord::new(target, tmux_target, platform, focus)
             };
-            write_session_record(&path, &record)
+            write_focus_record(&path, &record)
         })?;
         Ok(Self::Active {
             path,
-            id: session_id.clone(),
+            target: target.clone(),
         })
     }
 
     fn remove(self) -> Result<(), LaunchError> {
-        let Self::Active { path, id } = self else {
+        let Self::Active { path, target } = self else {
             return Ok(());
         };
-        with_session_lock(&path, || {
+        with_focus_lock(&path, || {
             if !path.try_exists()? {
                 tracing::warn!(
                     path = %path.display(),
-                    session_id = %id,
-                    "notification session registration disappeared before cleanup"
+                    "notification focus registration disappeared before cleanup"
                 );
                 return Ok(());
             }
-            let mut record = read_session_record(&path)?;
-            if record.session_id != id {
+            let mut record = read_focus_record(&path)?;
+            if record.focus_target != target {
                 tracing::warn!(
                     path = %path.display(),
-                    registered_session_id = %record.session_id,
-                    session_id = %id,
-                    "notification session registration changed before cleanup"
+                    "notification focus registration changed before cleanup"
                 );
                 return Ok(());
             }
             if record.registration_count > 1 {
                 record.registration_count -= 1;
-                write_session_record(&path, &record)
+                write_focus_record(&path, &record)
             } else {
                 fs::remove_file(&path).map_err(LaunchError::from)
             }
@@ -534,17 +544,17 @@ impl SessionRegistration {
     }
 }
 
-fn read_session_record(path: &Path) -> Result<SessionRecord, LaunchError> {
+fn read_focus_record(path: &Path) -> Result<FocusRecord, LaunchError> {
     let content = fs::read(path)?;
-    serde_json::from_slice(&content).map_err(|source| LaunchError::SessionRegistrationJson {
+    serde_json::from_slice(&content).map_err(|source| LaunchError::FocusRegistrationJson {
         path: path.display().to_string(),
         source,
     })
 }
 
-fn write_session_record(path: &Path, record: &SessionRecord) -> Result<(), LaunchError> {
+fn write_focus_record(path: &Path, record: &FocusRecord) -> Result<(), LaunchError> {
     let content =
-        serde_json::to_vec(record).map_err(|source| LaunchError::SessionRegistrationJson {
+        serde_json::to_vec(record).map_err(|source| LaunchError::FocusRegistrationJson {
             path: path.display().to_string(),
             source,
         })?;
@@ -554,7 +564,7 @@ fn write_session_record(path: &Path, record: &SessionRecord) -> Result<(), Launc
     Ok(())
 }
 
-fn with_session_lock<T>(
+fn with_focus_lock<T>(
     path: &Path,
     operation: impl FnOnce() -> Result<T, LaunchError>,
 ) -> Result<T, LaunchError> {
@@ -692,6 +702,9 @@ impl<'a> Plan<'a> {
             None
         };
 
+        let host_tmux_target = tmux_focus_target();
+        let focus_target = resolve_focus_target(&spawn_env, host_tmux_target.as_ref())?;
+
         Ok(Self {
             request,
             workspace,
@@ -708,7 +721,8 @@ impl<'a> Plan<'a> {
             host_podman_socket,
             network_mode,
             git_identity: GitIdentity::load(),
-            session_id: tmux_session_id(),
+            focus_target,
+            host_tmux_target,
         })
     }
 
@@ -823,8 +837,11 @@ impl<'a> Plan<'a> {
     }
 
     fn launch(&self) -> Result<ExitCode, LaunchError> {
-        let registration =
-            SessionRegistration::create(self.session_id.as_ref(), Platform::CURRENT)?;
+        let registration = FocusRegistration::create(
+            self.focus_target.as_ref(),
+            self.host_tmux_target.as_ref(),
+            Platform::CURRENT,
+        )?;
         let result = match Platform::CURRENT {
             Platform::Linux => self.launch_linux(),
             Platform::Darwin => self.launch_darwin(),
@@ -1257,10 +1274,11 @@ impl<'a> Plan<'a> {
         if let Ok(value) = env::var("WRIX_GIT_SIGN") {
             pairs.push((String::from("WRIX_GIT_SIGN"), value));
         }
-        if let Some(session_id) = &self.session_id {
+        pairs.retain(|(name, _)| name != "WRIX_FOCUS_TARGET");
+        if let Some(target) = &self.focus_target {
             pairs.push((
-                String::from("WRIX_SESSION_ID"),
-                session_id.as_str().to_owned(),
+                String::from("WRIX_FOCUS_TARGET"),
+                target.as_str().to_owned(),
             ));
         }
         if let Some(cache) = &self.services.project_cache {
@@ -2331,7 +2349,37 @@ fn podman_runtime_dir() -> Result<PathBuf, LaunchError> {
     Ok(PathBuf::from(format!("/run/user/{}", current_uid()?)))
 }
 
-fn tmux_session_id() -> Option<SessionId> {
+fn resolve_focus_target(
+    spawn_env: &[(String, String)],
+    host_tmux_target: Option<&FocusTarget>,
+) -> Result<Option<FocusTarget>, LaunchError> {
+    let explicit = if let Some((_, value)) = spawn_env
+        .iter()
+        .rev()
+        .find(|(name, _)| name == "WRIX_FOCUS_TARGET")
+    {
+        Some(value.clone())
+    } else {
+        match env::var("WRIX_FOCUS_TARGET") {
+            Ok(value) => Some(value),
+            Err(env::VarError::NotPresent) => None,
+            Err(env::VarError::NotUnicode(_)) => {
+                return Err(LaunchError::RuntimeEnvironmentNotUnicode {
+                    name: "WRIX_FOCUS_TARGET",
+                });
+            }
+        }
+    };
+    match explicit {
+        Some(value) if value.is_empty() => Ok(None),
+        Some(value) => FocusTarget::parse(&value)
+            .map(Some)
+            .map_err(|_| LaunchError::InvalidFocusTarget),
+        None => Ok(host_tmux_target.cloned()),
+    }
+}
+
+fn tmux_focus_target() -> Option<FocusTarget> {
     env::var_os("TMUX")?;
     let output = match run_output(
         "tmux",
@@ -2343,7 +2391,7 @@ fn tmux_session_id() -> Option<SessionId> {
     ) {
         Ok(output) => output,
         Err(error) => {
-            tracing::warn!(error = %error, "could not query tmux session");
+            tracing::warn!(program = "tmux", error = %error, "could not query host tmux focus target");
             return None;
         }
     };
@@ -2351,15 +2399,22 @@ fn tmux_session_id() -> Option<SessionId> {
         tracing::warn!(
             status = ?output.status.code(),
             stderr = %String::from_utf8_lossy(&output.stderr),
-            "tmux session query failed"
+            "host tmux focus query failed"
         );
         return None;
     }
-    let value = trim_stdout(&output.stdout);
-    match SessionId::parse(&value) {
-        Ok(session_id) => Some(session_id),
+    let value = match std::str::from_utf8(&output.stdout) {
+        Ok(value) => value,
         Err(error) => {
-            tracing::warn!(error = %error, "tmux returned an invalid session identifier");
+            tracing::warn!(program = "tmux", error = %error, "host tmux focus target is not valid UTF-8");
+            return None;
+        }
+    };
+    let value = value.strip_suffix('\n').unwrap_or(value);
+    match FocusTarget::parse_tmux(value) {
+        Ok(target) => Some(target),
+        Err(error) => {
+            tracing::warn!(program = "tmux", error = %error, "tmux returned an invalid focus target");
             None
         }
     }
@@ -2374,7 +2429,7 @@ fn session_directory(platform: Platform) -> PathBuf {
         .join("wrix/sessions")
 }
 
-fn focus_target(platform: Platform) -> Option<String> {
+fn terminal_focus(platform: Platform) -> Option<String> {
     let (program, args): (&str, &[&str]) = match platform {
         Platform::Linux => ("niri", &["msg", "-j", "focused-window"]),
         Platform::Darwin => (
@@ -2644,8 +2699,8 @@ mod test {
     use wrix_core::deploy_key::Name as KeyName;
 
     use super::{
-        DarwinMounts, DarwinNetwork, DarwinSplitRoute, HostPodmanSocket, LaunchError, NetworkMode,
-        RenderedMount, SessionId, SessionRegistration, Staging, darwin_split_routes,
+        DarwinMounts, DarwinNetwork, DarwinSplitRoute, FocusRegistration, FocusTarget,
+        HostPodmanSocket, LaunchError, NetworkMode, RenderedMount, Staging, darwin_split_routes,
         deploy_key_name, linux_podman_network, parse_darwin_network, route_interface,
         vmnet_interface,
     };
@@ -3015,26 +3070,46 @@ mod test {
     }
 
     #[test]
-    fn session_id_accepts_only_tmux_target_shape() {
-        assert!(SessionId::parse("main:2.1").is_ok());
-        assert!(SessionId::parse("space.name:with:colons:20.11").is_ok());
+    fn tmux_focus_target_accepts_only_host_pane_shape() {
+        assert!(FocusTarget::parse_tmux("main:2.1").is_ok());
+        assert!(FocusTarget::parse_tmux("space.name:with:colons:20.11").is_ok());
         for invalid in ["", "main", ":2.1", "main:x.1", "main:2.x", "main:2.1.0"] {
-            assert!(SessionId::parse(invalid).is_err(), "accepted {invalid}");
+            assert!(
+                FocusTarget::parse_tmux(invalid).is_err(),
+                "accepted {invalid}"
+            );
         }
     }
 
     #[test]
-    fn session_registration_uses_daemon_filename_and_removes_current_file() {
-        let root = scratch_dir("session-registration");
-        let session_id = SessionId::parse("main:2.1").unwrap();
+    fn opaque_focus_target_preserves_nonempty_input_and_byte_normalization() {
+        for value in ["host terminal", " host:2.1 ", "é/host\n", " "] {
+            assert_eq!(FocusTarget::parse(value).unwrap().as_str(), value);
+        }
+        for value in ["", "host\0target"] {
+            assert!(FocusTarget::parse(value).is_err());
+        }
+        assert_eq!(
+            FocusTarget::parse("é/host\n").unwrap().file_name(),
+            "---host-.json"
+        );
+    }
+
+    #[test]
+    fn focus_registration_uses_daemon_filename_and_removes_current_file() {
+        let root = scratch_dir("focus-registration");
+        let target = FocusTarget::parse("main:2.1").unwrap();
         let registration =
-            SessionRegistration::create_in(Some(&session_id), Platform::Linux, &root).unwrap();
+            FocusRegistration::create_in(Some(&target), Some(&target), Platform::Linux, &root)
+                .unwrap();
         let path = root.join("main-2-1.json");
         let value: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
 
         assert_eq!(
-            value.get("session_id").and_then(serde_json::Value::as_str),
+            value
+                .get("focus_target")
+                .and_then(serde_json::Value::as_str),
             Some("main:2.1")
         );
         assert!(value.get("window_id").is_some());
@@ -3043,13 +3118,15 @@ mod test {
     }
 
     #[test]
-    fn overlapping_session_registrations_remove_file_after_last_cleanup() {
-        let root = scratch_dir("overlapping-session-registration");
-        let session_id = SessionId::parse("main:2.1").unwrap();
+    fn overlapping_focus_registrations_remove_file_after_last_cleanup() {
+        let root = scratch_dir("overlapping-focus-registration");
+        let target = FocusTarget::parse("main:2.1").unwrap();
         let first =
-            SessionRegistration::create_in(Some(&session_id), Platform::Linux, &root).unwrap();
+            FocusRegistration::create_in(Some(&target), Some(&target), Platform::Linux, &root)
+                .unwrap();
         let second =
-            SessionRegistration::create_in(Some(&session_id), Platform::Linux, &root).unwrap();
+            FocusRegistration::create_in(Some(&target), Some(&target), Platform::Linux, &root)
+                .unwrap();
         let path = root.join("main-2-1.json");
 
         let value: serde_json::Value =

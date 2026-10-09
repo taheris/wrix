@@ -18,7 +18,7 @@ FOREIGN = (
     if PLATFORM.endswith("-linux")
     else "notifications.container-transport-linux"
 )
-PASS = "notifications.client-envelope"
+PASS = "notifications.focus-target-envelope"
 FAIL = "notifications.client-non-blocking"
 UNEXPECTED = "notifications.client-tcp-endpoint-override"
 EMPTY = {"platforms": [], "capabilities": []}
@@ -35,7 +35,7 @@ class VerifierResults(unittest.TestCase):
 set -euo pipefail
 printf '%s\\n' "$1" >>"$REPO_ROOT/calls"
 case "$1" in
-  test_client_envelope) printf 'fixture passed\\n' ;;
+  test_focus_target_envelope) printf 'fixture passed\\n' ;;
   test_client_non_blocking) printf 'fixture assertion failed\\n' >&2; false; printf 'concealed failure\\n' ;;
   test_client_tcp_endpoint_override) printf 'unreported fixture prerequisite\\n' >&2; exit 77 ;;
   *) printf 'preflight should not execute this fixture\\n' >&2; exit 24 ;;
@@ -65,7 +65,7 @@ esac
         result, records = self.run_targets(PASS, "verify:" + PASS)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual([record["target"] for record in records], [PASS, PASS])
-        self.assertEqual(self.calls.read_text().splitlines(), ["test_client_envelope"] * 2)
+        self.assertEqual(self.calls.read_text().splitlines(), ["test_focus_target_envelope"] * 2)
 
     def test_intermediate_assertion_failure_cannot_be_hidden_by_later_success(self):
         result, records = self.run_targets(FAIL, PASS)

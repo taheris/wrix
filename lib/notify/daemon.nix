@@ -100,9 +100,9 @@ let
     ${appCheckFn}
 
     check_terminal_focused() {
-      local session_id="$1"
+      local focus_target="$1"
       local safe_id
-      safe_id=$(printf '%s' "$session_id" | tr -c 'A-Za-z0-9_-' '-')
+      safe_id=$(printf '%s' "$focus_target" | LC_ALL=C tr -c 'A-Za-z0-9_-' '-')
       local session_file="$WRIX_SESSION_DIR/$safe_id.json"
 
       if [[ ! -f "$session_file" ]]; then
@@ -110,19 +110,29 @@ let
         return 1
       fi
 
+      if ! jq -e --arg target "$focus_target" '.focus_target == $target' "$session_file" >/dev/null; then
+        if [[ "$VERBOSE" == "1" ]]; then echo "notifyd: registration target mismatch" >&2; fi
+        return 1
+      fi
       if ! check_app_focused "$session_file"; then
         return 1
       fi
 
-      if command -v tmux >/dev/null 2>&1 && tmux list-sessions >/dev/null 2>&1; then
+      local tmux_target
+      tmux_target=$(jq -r '.tmux_target // ""' "$session_file")
+      if [[ -n "$tmux_target" ]]; then
+        if ! command -v tmux >/dev/null 2>&1; then
+          if [[ "$VERBOSE" == "1" ]]; then echo "notifyd: tmux unavailable for pane focus check" >&2; fi
+          return 1
+        fi
         local active_pane
-        if active_pane=$(tmux display-message -p '#{session_name}:#{window_index}.#{pane_index}' 2>/dev/null); then
-          if [[ "$VERBOSE" == "1" ]]; then echo "notifyd: pane session=$session_id active=$active_pane" >&2; fi
-          if [[ -n "$active_pane" && "$active_pane" != "$session_id" ]]; then
-            return 1
-          fi
-        else
+        if ! active_pane=$(tmux display-message -p '#{session_name}:#{window_index}.#{pane_index}' 2>/dev/null); then
           if [[ "$VERBOSE" == "1" ]]; then echo "notifyd: tmux active pane query failed" >&2; fi
+          return 1
+        fi
+        if [[ "$VERBOSE" == "1" ]]; then echo "notifyd: pane target=$tmux_target active=$active_pane" >&2; fi
+        if [[ -z "$active_pane" || "$active_pane" != "$tmux_target" ]]; then
+          return 1
         fi
       fi
 
@@ -133,10 +143,12 @@ let
       title=$(printf '%s\n' "$line" | jq -r '.title // "Claude Code"')
       msg=$(printf '%s\n' "$line" | jq -r '.message // ""')
       ${if isDarwin then ''sound=$(printf '%s\n' "$line" | jq -r '.sound // ""')'' else ""}
-      session_id=$(printf '%s\n' "$line" | jq -r '.session_id // ""')
+      # Preserve trailing newlines in opaque targets across shell substitution.
+      focus_target=$(printf '%s\n' "$line" | jq -r '(.focus_target // "") + "."')
+      focus_target="''${focus_target%.}"
 
-      if [[ "''${WRIX_NOTIFY_ALWAYS:-}" != "1" && -n "$session_id" ]]; then
-        if check_terminal_focused "$session_id"; then
+      if [[ "''${WRIX_NOTIFY_ALWAYS:-}" != "1" && -n "$focus_target" ]]; then
+        if check_terminal_focused "$focus_target"; then
           if [[ "$VERBOSE" == "1" ]]; then echo "notifyd: suppressed (terminal focused)" >&2; fi
           continue
         fi

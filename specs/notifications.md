@@ -88,7 +88,7 @@ work, but failures are reported through diagnostics rather than hidden.
   `focus_target` copied from nonempty `WRIX_FOCUS_TARGET`; an unset or empty
   variable omits the field without preventing delivery, and neither
   `WRIX_SESSION_ID` nor a `session_id` wire alias is used
-  [system?](verify:notifications.focus-target-envelope)
+  [system](verify:notifications.focus-target-envelope)
 - The client exits without waiting for an acknowledgement
   [system](verify:notifications.client-non-blocking)
 - A notification reaches the daemon's native bridge within one second of client
@@ -109,7 +109,7 @@ work, but failures are reported through diagnostics rather than hidden.
 - Launcher registration, the exported `WRIX_FOCUS_TARGET`, and daemon lookup
   agree on the opaque host target, suppress only positively focused targets, and
   never substitute an execution ID, agent conversation ID, or in-container
-  debugging pane ID [system?](verify:notifications.focus-target-registration)
+  debugging pane ID [system](verify:notifications.focus-target-registration)
 - `WRIX_NOTIFY_ALWAYS=1` disables focus checking
   [system](verify:notifications.focus-override)
 - `WRIX_NOTIFY_VERBOSE=1` enables diagnostic logging

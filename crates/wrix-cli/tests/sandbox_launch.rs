@@ -294,19 +294,7 @@ printf '%s\n' 'test:1.0'
             ),
             (
                 "podman",
-                r#"#!/usr/bin/env bash
-set -euo pipefail
-case "$1 $2" in
-  'image inspect') printf '%s\n' "$WRIX_TEST_DIGEST" ;;
-  'images --format') ;;
-  "tag $WRIX_TEST_DIGEST") [[ "$3" == 'localhost/wrix-test:latest' ]] ;;
-  'run --rm')
-    cat "$XDG_RUNTIME_DIR"/wrix/sessions/*.json > "$WRIX_TEST_CAPTURE"
-    printf '%s\n' '{"type":"response","command":"get_state","success":true,"data":{}}'
-    ;;
-  *) printf 'unexpected podman arguments: %s\n' "$*" >&2; exit 91 ;;
-esac
-"#,
+                include_str!("../../../tests/standalone/notify-runtime.sh"),
             ),
         ] {
             let path = bin.join(name);
@@ -341,6 +329,15 @@ esac
             .env("WRIX_TEST_FOCUS", reply)
             .env("WRIX_TEST_DIGEST", format!("sha256:{}", "a".repeat(64)))
             .env("WRIX_TEST_CAPTURE", self.root.path().join("session.json"))
+            .env(
+                "WRIX_NOTIFY_TEST_ENV_CAPTURE",
+                self.root.path().join("env.json"),
+            )
+            .env(
+                "WRIX_NOTIFY_TEST_SESSION_DIR",
+                self.root.path().join("runtime/wrix/sessions"),
+            )
+            .env("WRIX_NOTIFY_TEST_CLIENT", "0")
             .env("WRIX_IMAGE_KEEP_FILE", self.root.path().join("mru.json"))
             .env("WRIX_GIT_SIGN", "0");
         for name in [
@@ -351,6 +348,8 @@ esac
             "WRIX_UNSAFE_PODMAN_SOCKET",
             "WRIX_DEPLOY_KEY",
             "WRIX_SIGNING_KEY",
+            "WRIX_FOCUS_TARGET",
+            "WRIX_SESSION_ID",
         ] {
             command.env_remove(name);
         }
@@ -375,7 +374,8 @@ fn spawn_without_focused_window_keeps_stdout_clean_and_does_not_warn() -> TestRe
     let record: Value =
         serde_json::from_slice(&fs::read(fixture.root.path().join("session.json"))?)?;
     assert!(record["window_id"].is_null());
-    assert_eq!(record["session_id"], "test:1.0");
+    assert_eq!(record["focus_target"], "test:1.0");
+    assert!(record.get("session_id").is_none());
     Ok(())
 }
 
@@ -408,7 +408,118 @@ fn spawn_registers_focused_window_from_niri_reply() -> TestResult {
     let record: Value =
         serde_json::from_slice(&fs::read(fixture.root.path().join("session.json"))?)?;
     assert_eq!(record["window_id"], "42");
-    assert_eq!(record["session_id"], "test:1.0");
+    assert_eq!(record["focus_target"], "test:1.0");
+    assert_eq!(record["tmux_target"], "test:1.0");
+    assert!(record.get("session_id").is_none());
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn launcher_focus_handoff_is_opaque_optional_and_not_an_identity_alias() -> TestResult {
+    for mode in ["run", "spawn"] {
+        for target in [None, Some(""), Some(" host/é:opaque\n")] {
+            let fixture = Fixture::new(None)?;
+            let base = fixture.focus_spawn(r#"{"id":42}"#)?;
+            let mut command = Command::new(base.get_program());
+            command.envs(
+                base.get_envs()
+                    .filter_map(|(name, value)| value.map(|value| (name, value))),
+            );
+            for (name, value) in base.get_envs() {
+                if value.is_none() {
+                    command.env_remove(name);
+                }
+            }
+            command.args(["--profile-config"]).arg(&fixture.profile);
+            if mode == "run" {
+                command.arg("run").arg(&fixture.workspace).arg("true");
+            } else {
+                command
+                    .args(["spawn", "--spawn-config"])
+                    .arg(fixture.root.path().join("spawn.json"));
+            }
+            command
+                .env_remove("TMUX")
+                .env("WRIX_SESSION_ID", "legacy:9.9")
+                .env("PI_SESSION_ID", "conversation:9.9")
+                .env("WRIX_EXECUTION_ID", "execution:9.9");
+            if let Some(target) = target {
+                command.env("WRIX_FOCUS_TARGET", target);
+            }
+            let output = command.output()?;
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let pairs: Vec<String> =
+                serde_json::from_slice(&fs::read(fixture.root.path().join("env.json"))?)?;
+            assert!(
+                !pairs
+                    .iter()
+                    .any(|pair| pair.starts_with("WRIX_SESSION_ID="))
+            );
+            let focus_pairs: Vec<_> = pairs
+                .iter()
+                .filter(|pair| pair.starts_with("WRIX_FOCUS_TARGET="))
+                .collect();
+            let record: Value =
+                serde_json::from_slice(&fs::read(fixture.root.path().join("session.json"))?)?;
+            if let Some(target) = target.filter(|target| !target.is_empty()) {
+                assert_eq!(focus_pairs, [&format!("WRIX_FOCUS_TARGET={target}")]);
+                assert_eq!(record["focus_target"], target);
+                assert!(record["tmux_target"].is_null());
+            } else {
+                assert_eq!(focus_pairs, Vec::<&String>::new());
+                assert!(record.is_null());
+            }
+            let directory = fixture.root.path().join("runtime/wrix/sessions");
+            if directory.exists() {
+                assert!(fs::read_dir(directory)?.all(|entry| {
+                    entry
+                        .unwrap()
+                        .path()
+                        .extension()
+                        .is_none_or(|ext| ext != "json")
+                }));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn spawn_focus_override_registers_routing_separately_from_host_tmux() -> TestResult {
+    for target in ["opaque host", ""] {
+        let fixture = Fixture::new(None)?;
+        let mut command = fixture.focus_spawn(r#"{"id":42}"#)?;
+        fs::write(
+            fixture.root.path().join("spawn.json"),
+            serde_json::to_vec(&json!({
+                "workspace": fixture.workspace,
+                "env": [["WRIX_FOCUS_TARGET", target]],
+                "agent_args": []
+            }))?,
+        )?;
+        let output = command
+            .env("WRIX_FOCUS_TARGET", "ambient overridden target")
+            .output()?;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let record: Value =
+            serde_json::from_slice(&fs::read(fixture.root.path().join("session.json"))?)?;
+        if target.is_empty() {
+            assert!(record.is_null());
+        } else {
+            assert_eq!(record["focus_target"], target);
+            assert_eq!(record["tmux_target"], "test:1.0");
+        }
+    }
     Ok(())
 }
 

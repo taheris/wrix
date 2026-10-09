@@ -72,7 +72,7 @@ older runtime.
 ```bash
 nix build .#checks.x86_64-linux.verifier-inputs
 nix run .#verify -- cli.shared-verifier-app prek.ci-platform-policy prek.ci-batching
-nix run .#verify -- --print-inputs devshell.no-prek-install notifications.client-envelope
+nix run .#verify -- --print-inputs devshell.no-prek-install notifications.focus-target-envelope
 nix run .#test-ci -- --print-inputs test-linux-builder-sshd-hardening test-security-audit-trail-anchor
 ```
 

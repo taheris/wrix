@@ -9,6 +9,7 @@ let
       fixture.client
       fixture.daemon
       pkgs.netcat
+      pkgs.python3
       pkgs.socat
     ]
     ++ optionals pkgs.stdenv.hostPlatform.isLinux [
@@ -39,7 +40,12 @@ in
 {
   "notifications.claude-stop-hook-config" = nixEval "notifications.claude-stop-hook-config";
 
-  "notifications.client-envelope" = notifyTest "test_client_envelope";
+  "notifications.focus-target-envelope" = notifyTest "test_focus_target_envelope";
+
+  "notifications.focus-target-registration" = ''
+    export PATH="${notifyPath}:$PATH"
+    run_repo_script_with_wrix "tests/standalone/notify-test.sh" "test_focus_target_registration"
+  '';
 
   "notifications.client-non-blocking" = notifyTest "test_client_non_blocking";
 
