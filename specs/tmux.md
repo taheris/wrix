@@ -36,16 +36,15 @@ replacement or automatic process recovery is promised.
 - A packaged sandbox supports a detached development server across independent
   shell calls, a request from another process, and capture of the server output
   through native tmux without any MCP server
-  [system?](test-ci:test-tmux-cli-workflow)
+  [system](test-ci:test-tmux-cli-workflow)
 - The documented workflow preserves an immediately exited command's output and
   exit status for later inspection, while distinguishing running panes
-  [system?](test-ci:test-tmux-cli-exited-process)
+  [system](test-ci:test-tmux-cli-exited-process)
 - Explicit native cleanup removes only the caller's selected session, leaving an
-  unrelated tmux session intact
-  [system?](test-ci:test-tmux-cli-targeted-cleanup)
+  unrelated tmux session intact [system](test-ci:test-tmux-cli-targeted-cleanup)
 - Stopping a sandbox terminates its surviving tmux processes without affecting
   an unrelated sandbox's processes
-  [system?](test-ci:test-tmux-cli-container-cleanup)
+  [system](test-ci:test-tmux-cli-container-cleanup)
 - Wrix exposes no tmux MCP package or registry entry, rejects `mcp.tmux` at Nix
   evaluation, and provides no tmux MCP diagnostic options, environment
   forwarding, or replacement process wrapper
