@@ -242,7 +242,6 @@ let
             touch "$out"
           '';
       pi-auth-storage = import ./security/pi-auth.nix { inherit pkgs; };
-      pi-default-model = import ./sandbox/pi-default-model.nix { inherit pkgs wrix; };
       profile-images-launcher = import ./profiles/manifest.nix { inherit pkgs wrix; };
       verifier-inputs = import ./lib/inputs-test.nix { inherit pkgs; };
     }

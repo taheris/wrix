@@ -101,15 +101,12 @@ in
 
   "sandbox.nix-store-verify-clean" = linuxLive (sandboxScriptAll "nix-store-verify-clean");
 
-  "sandbox.pi-default-model" = ''
-    nix build --no-link ".#checks.${system}.pi-default-model"
+  "sandbox.pi-settings-precedence" = ''
+    nix build --no-link ".#checks.${system}.pi-settings-precedence"
   '';
 
-  "sandbox.pi-tui-mode" = ''
-    nix build --no-link \
-      ".#checks.${system}.pi-tui-mode-default" \
-      ".#checks.${system}.pi-tui-mode-inherited" \
-      ".#checks.${system}.pi-tui-mode-override"
+  "sandbox.pi-codemode-tools" = ''
+    nix build --no-link ".#checks.${system}.pi-codemode-tools"
   '';
 
   "sandbox.platform-dispatch" = platform "test_platform_dispatch_current_system";

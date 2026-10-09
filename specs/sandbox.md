@@ -705,11 +705,11 @@ supplied; there is no implicit default image baked in.
 - Pi settings delivery preserves unspecified defaults and applies explicit
   consumer model, display, and tool-setting overrides without requiring any
   particular model ID or cosmetic value
-  [check?](verify:sandbox.pi-settings-precedence)
+  [check](verify:sandbox.pi-settings-precedence)
 - Packaged Pi exposes additive codemode alongside read, Bash, edit, and write
   with no MCP servers configured, executes a built-in-tool script successfully,
   and honors an explicit consumer override disabling codemode
-  [system?](verify:sandbox.pi-codemode-tools)
+  [system](verify:sandbox.pi-codemode-tools)
 - When `/workspace/bin` exists inside the container, it appears first on `PATH`,
   so a consumer-supplied shim at `/workspace/bin/<name>` resolves ahead of a
   same-named binary baked into the image

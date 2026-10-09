@@ -27,6 +27,7 @@ let
     isDerivation
     makeBinPath
     optionals
+    recursiveUpdate
     ;
 
   isDarwin = elem system [ "aarch64-darwin" ];
@@ -239,6 +240,8 @@ let
     defaultProvider = "openai-codex";
     defaultModel = "gpt-6.1-sol";
     defaultThinkingLevel = "xhigh";
+    defaultTools = [ "+codemode" ];
+    codemode.mode = "on";
     defaultProjectTrust = "always";
     tuiMode = "regular";
     editorPaddingX = 1;
@@ -420,7 +423,7 @@ let
             { }
         );
 
-      finalPiSettings = basePiSettings // (if agent == "pi" then agentSettings else { });
+      finalPiSettings = recursiveUpdate basePiSettings (if agent == "pi" then agentSettings else { });
 
       launcher = if isLinux || isDarwin then serviceCli else throw "Unsupported system: ${system}";
       launcherRuntimePath = makeBinPath (

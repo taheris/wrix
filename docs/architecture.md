@@ -165,6 +165,33 @@ selected agent's binary is present (`command -v`) and fails loudly when it is
 absent from the image — e.g. `WRIX_AGENT=pi` against a claude image on the
 raw-launcher path — rather than emitting a bare `command not found`.
 
+### Pi settings and tools
+
+Pi images seed native `~/.pi/agent/settings.json`; consumer `agentSettings`
+recursively overrides specified values while retaining unspecified defaults. The
+shipped provider, model, reasoning, and display values are preferences, not
+fixed sandbox contracts. Project trust defaults to `always` inside the sandbox,
+and install telemetry is disabled independently of update checking.
+
+`defaultTools = [ "+codemode" ]` enables Pi's built-in codemode alongside direct
+read, Bash, edit, and write tools, even without MCP servers.
+`codemode.mode = "on"` keeps those tools declared to the model. Pi owns script
+execution and tool composition; Wrix adds no interpreter or runtime/profile API.
+Consumers can use native settings to change tool selection or presentation, for
+example:
+
+```nix
+agentSettings = {
+  defaultTools = [ "-codemode" ]; # Keep direct built-ins, disable codemode.
+  tuiMode = "fullscreen";
+};
+```
+
+Pi sessions use the explicit `/workspace/.pi/agent/sessions` location. Its auth
+storage remains isolated in the selected native config home, with only the
+launcher-selected credential file mounted. Wrix neither imports nor copies back
+the whole host or workspace Pi home.
+
 ### Direct mode (orchestrator integration)
 
 `mkSandbox { agent = "direct"; agentPkg = ...; }` is the integration seam for
