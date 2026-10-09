@@ -78,6 +78,11 @@ let
 
   testImages = {
     auditCollision = auditClock.image;
+    gitCredentials =
+      (wrix.mkSandbox {
+        agent = "direct";
+        agentPkg = import ./sandbox/fixtures/command-runner.nix { pkgs = linuxPkgs; };
+      }).image;
     base = mkTestImage { };
     basePerturbed = mkTestImage {
       claudeConfig = {
@@ -393,10 +398,12 @@ let
     (mkServiceCiApp testServicesDevshellStartIndependent "test-services-devshell-start-independent")
     (mkServiceCiApp testServicesLimitModeCacheEndpoint "test-services-limit-mode-cache-endpoint")
     (mkLiveCiApp testSecurityAuditTrailAnchor "test-security-audit-trail-anchor")
-    (mkLiveCiApp testSecurityGitSshBootstrap "test-security-git-ssh-bootstrap")
+    (mkLiveCiApp testSecurityGitSshBootstrap "test-security-explicit-git-ssh-bootstrap")
     (mkLiveCiApp testSecurityHostContainerLoomGitHelper "test-security-host-container-loom-git-helper")
     ((mkCiApp testImageGitHelperParity "test-image-git-helper-parity") // { platforms = linux; })
-    (mkLiveCiApp testSecurityNestedKeyPropagation "test-security-nested-key-propagation")
+    (mkLiveCiApp testSecurityNestedKeyPropagation "test-security-explicit-nested-key-grants")
+    (mkLiveCiApp testSecurityGitGrantIsolation "test-security-git-grant-isolation")
+    (mkLiveCiApp testSecuritySessionLocalSigning "test-security-session-local-signing")
     (mkLiveCiApp testSecurityPiAuthIsolation "test-security-pi-auth-isolation")
     (
       (mkLiveCiApp testSecurityProviderCredentialEnv "test-security-provider-credential-env")
@@ -753,9 +760,10 @@ let
       pkgs.findutils
       pkgs.openssh
     ]
-    ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+    ++ optionals pkgs.stdenv.hostPlatform.isLinux [
       pkgs.podman
       pkgs.skopeo
+      pkgs.util-linux
     ]
   );
   securityCiEnvironment = ''
@@ -770,9 +778,9 @@ let
     '';
   };
   testSecurityGitSshBootstrap = mkRepoScriptCiApp {
-    name = "test-security-git-ssh-bootstrap";
+    name = "test-security-explicit-git-ssh-bootstrap";
     script = "tests/security/git-ssh-bootstrap.sh";
-    args = [ "test_fresh_container_git_ssh_bootstrap" ];
+    args = [ "test_explicit_git_ssh_bootstrap" ];
     environment = securityCiEnvironment;
   };
   testSecurityHostContainerLoomGitHelper = mkRepoScriptCiApp {
@@ -796,9 +804,21 @@ let
       ''
   );
   testSecurityNestedKeyPropagation = mkRepoScriptCiApp {
-    name = "test-security-nested-key-propagation";
+    name = "test-security-explicit-nested-key-grants";
     script = "tests/security/nested-key-propagation.sh";
     args = [ ];
+    environment = securityCiEnvironment;
+  };
+  testSecurityGitGrantIsolation = mkRepoScriptCiApp {
+    name = "test-security-git-grant-isolation";
+    script = "tests/security/git-grants.sh";
+    args = [ "test_git_grant_isolation" ];
+    environment = securityCiEnvironment;
+  };
+  testSecuritySessionLocalSigning = mkRepoScriptCiApp {
+    name = "test-security-session-local-signing";
+    script = "tests/security/git-grants.sh";
+    args = [ "test_session_local_signing" ];
     environment = securityCiEnvironment;
   };
   testSecurityPiAuthIsolation = mkRepoScriptCiApp {

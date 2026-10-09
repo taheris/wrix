@@ -360,13 +360,13 @@ section is a reference index only.
   files at the sandbox-owned in-container destinations, and `git commit` in the
   child produces a commit whose `git cat-file -p HEAD` output contains a
   non-empty `gpgsig` field.
-  [system?](test-ci:test-security-explicit-nested-key-grants)
+  [system](test-ci:test-security-explicit-nested-key-grants)
 - A fresh spawned sandbox with both Git grants explicitly enabled configures
   `user.name` / `user.email`, installs pinned GitHub host keys at
   `/etc/ssh/ssh_known_hosts`, uses the mounted deploy key with strict host-key
   checking for GitHub SSH, makes an empty signed commit, and verifies that
   commit as a good SSH signature without manual `ssh-keyscan` or `git config`.
-  [system?](test-ci:test-security-explicit-git-ssh-bootstrap)
+  [system](test-ci:test-security-explicit-git-ssh-bootstrap)
 - Wrix-initialized host Git, container Git, and Loom's independent
   `.loom/integration` clone all use context-resolved repo deploy/signing keys,
   strict pinned GitHub host-key verification, and no ambient user SSH
@@ -389,15 +389,15 @@ section is a reference index only.
   launch input whose modification can change grants on subsequent launches; it
   does not describe key-delivery grants as an agent-resistant authorization
   boundary
-  [judge?](../tests/judges/security-credentials.sh#test_repository_git_policy_trust_boundary)
+  [judge](../tests/judges/security-credentials.sh#test_repository_git_policy_trust_boundary)
 - Live Linux and Darwin sandbox launches expose exactly the granted private keys
   and corresponding child environment paths, including signing-only and no-key
   launches when host keys exist
-  [system?](test-ci:test-security-git-grant-isolation)
+  [system](test-ci:test-security-git-grant-isolation)
 - Effective sandbox signing policy overrides mounted host signing settings for
   container Git only, permits unsigned commits with sign disabled, and leaves
   shared repository config unchanged
-  [system?](test-ci:test-security-session-local-signing)
+  [system](test-ci:test-security-session-local-signing)
 - Each validated launch establishes one correctly typed execution record before
   any service/container startup, preserves optional issue and focus identities,
   and keeps concurrent same-second execution IDs and files distinct

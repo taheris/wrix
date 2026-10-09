@@ -351,6 +351,17 @@ fn independent_git_grants_use_fixed_private_key_destinations() -> TestResult {
                 }
             );
             assert!(!env.iter().any(|arg| arg.starts_with("GIT_SIGN=")));
+            assert_eq!(
+                env.iter()
+                    .filter(|arg| arg.starts_with("EFFECTIVE_GIT_SIGN="))
+                    .copied()
+                    .collect::<Vec<_>>(),
+                if sign {
+                    vec!["EFFECTIVE_GIT_SIGN=1"]
+                } else {
+                    vec!["EFFECTIVE_GIT_SIGN=0"]
+                }
+            );
             assert!(
                 !argv
                     .iter()
@@ -535,7 +546,7 @@ fn retired_sign_environment_does_not_change_bootstrap_signing() -> TestResult {
         let output = std::process::Command::new("bash")
             .args([
                 "-c",
-                "set -euo pipefail; source \"$1\"; git config --global --get commit.gpgsign",
+                "set -euo pipefail; source \"$1\" 1; git config --get commit.gpgsign",
                 "bootstrap-test",
             ])
             .arg(helper)
@@ -1136,6 +1147,10 @@ fn deploy_key_fixture() -> ProfileFixture {
 }
 
 fn assert_key_environment(output: &str, deploy: bool, sign: bool) {
+    assert!(
+        output.contains(&format!("ENV=WRIX_EFFECTIVE_GIT_SIGN={}\n", u8::from(sign))),
+        "{output}"
+    );
     for (name, granted, path) in [
         ("WRIX_DEPLOY_KEY", deploy, "/etc/wrix/keys/repo-key"),
         ("WRIX_SIGNING_KEY", sign, "/etc/wrix/keys/repo-key-signing"),
@@ -1200,6 +1215,9 @@ impl GrantFixture {
             fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
         }
         common::write_profile_config(&profile, &deploy_key_fixture())?;
+        let mut config: serde_json::Value = serde_json::from_slice(&fs::read(&profile)?)?;
+        config["profile"]["env"]["WRIX_EFFECTIVE_GIT_SIGN"] = json!("1");
+        fs::write(&profile, serde_json::to_vec(&config)?)?;
         Ok(Self {
             root,
             workspace,
@@ -1240,7 +1258,10 @@ impl GrantFixture {
                     .into_os_string(),
             )
         })
-        .chain([(String::from("WRIX_GIT_SIGN"), OsString::from("1"))])
+        .chain([
+            (String::from("WRIX_GIT_SIGN"), OsString::from("1")),
+            (String::from("WRIX_EFFECTIVE_GIT_SIGN"), OsString::from("1")),
+        ])
         .collect()
     }
 
@@ -1282,7 +1303,7 @@ impl GrantFixture {
                     &config,
                     serde_json::to_vec(&json!({
                         "workspace": self.workspace, "git": git,
-                        "env": [["WRIX_DEPLOY_KEY", "/must/not/forward"], ["WRIX_SIGNING_KEY", "/must/not/forward"], ["WRIX_GIT_SIGN", "1"]],
+                        "env": [["WRIX_DEPLOY_KEY", "/must/not/forward"], ["WRIX_SIGNING_KEY", "/must/not/forward"], ["WRIX_GIT_SIGN", "1"], ["WRIX_EFFECTIVE_GIT_SIGN", "1"]],
                         "agent_args": [], "mounts": []
                     }))?,
                 )?;

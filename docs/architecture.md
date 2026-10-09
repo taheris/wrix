@@ -226,6 +226,15 @@ isolation (LAN/private/host-local/VPN egress blocked), and capabilities
 **Not protected by default**: Public-internet egress in `WRIX_NETWORK=open`; use
 `WRIX_NETWORK=limit` to restrict public egress to the merged allowlist.
 
+Repository Git policy is trusted, mutable launch input, not an agent-resistant
+authorization store. Workspace writers can edit `wrix.toml` to change inherited
+grants on later launches; explicit invocation overrides still win. Grants govern
+only Wrix-managed key delivery. Absence of these keys does not imply a read-only
+workspace, no network access, or absence of separately delivered provider
+credentials. Container Git applies the effective sign grant through an
+execution-local override, leaving shared repository Git config and concurrent
+host signing policy unchanged.
+
 ### MicroVM Boundary (Linux)
 
 On Linux with KVM, containers can optionally run inside a

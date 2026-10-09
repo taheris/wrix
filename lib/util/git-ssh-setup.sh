@@ -1,16 +1,10 @@
 # shellcheck shell=bash
-# Git/SSH setup shared across all sandbox containers.
-#
-# Sourced (not executed). Caller is responsible for `set -euo pipefail`
-# semantics. Reads:
-#   WRIX_DEPLOY_KEY  — path to a passphrase-less ed25519 deploy key
-#   WRIX_SIGNING_KEY — path to an ed25519 key used for commit signing
-#   GIT_AUTHOR_* / GIT_COMMITTER_* — preferred commit identity values
-#
-# Emits a pinned `GIT_SSH_COMMAND`, stores the same command in git's global
-# `core.sshCommand`, configures global commit identity, and configures SSH
-# signing when a signing key is provided. Safe to source multiple times and
-# safe to source when no keys are present.
+set -euo pipefail
+
+# Source with the launcher's effective sign grant (0 or 1).
+# Only container-local Git defaults are changed; repository config is untouched.
+# WRIX_DEPLOY_KEY and WRIX_SIGNING_KEY name independently granted private files.
+# GIT_AUTHOR_* / GIT_COMMITTER_* supply the preferred commit identity.
 
 wrix_git_global_value() {
   local key="$1"
@@ -72,8 +66,12 @@ write_wrix_ssh_config() {
 Host github.com
   IdentityFile $WRIX_DEPLOY_KEY
   IdentitiesOnly yes
+  IdentityFile none
+  IdentityAgent none
+  BatchMode yes
   StrictHostKeyChecking yes
   UserKnownHostsFile /etc/ssh/ssh_known_hosts
+  GlobalKnownHostsFile /dev/null
 SSHEOF
   chmod 600 "$ssh_home/.ssh/config"
 }
@@ -126,25 +124,54 @@ wrix_configure_git_signing() {
   else
     rm -f "$pubkey_tmp"
   fi
-
-  git config --global --replace-all commit.gpgsign true
 }
 
-wrix_configure_git_identity
-
-if [[ -n "${WRIX_DEPLOY_KEY:-}" ]] && [[ -f "$WRIX_DEPLOY_KEY" ]]; then
-  printf -v WRIX_DEPLOY_KEY_SSH_ARG '%q' "$WRIX_DEPLOY_KEY"
-  export GIT_SSH_COMMAND="ssh -i $WRIX_DEPLOY_KEY_SSH_ARG -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/etc/ssh/ssh_known_hosts"
+wrix_configure_git_deploy() {
+  local key_arg effective_home
+  printf -v key_arg '%q' "$WRIX_DEPLOY_KEY"
+  export GIT_SSH_COMMAND="ssh -F /dev/null -i $key_arg -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none -o IdentityFile=none -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/etc/ssh/ssh_known_hosts -o GlobalKnownHostsFile=/dev/null"
   git config --global --replace-all core.sshCommand "$GIT_SSH_COMMAND"
 
-  WRIX_EFFECTIVE_HOME=$(wrix_effective_user_home)
+  effective_home=$(wrix_effective_user_home)
   write_wrix_ssh_config "$HOME"
-  if [[ -n "$WRIX_EFFECTIVE_HOME" && "$WRIX_EFFECTIVE_HOME" != "$HOME" ]]; then
-    write_wrix_ssh_config "$WRIX_EFFECTIVE_HOME"
+  if [[ -n "$effective_home" && "$effective_home" != "$HOME" ]]; then
+    write_wrix_ssh_config "$effective_home"
   fi
-  unset WRIX_EFFECTIVE_HOME
-fi
+}
 
-if [[ -n "${WRIX_SIGNING_KEY:-}" ]] && [[ -f "$WRIX_SIGNING_KEY" ]]; then
-  wrix_configure_git_signing
-fi
+wrix_override_git_signing() {
+  local sign="$1"
+  local count="${GIT_CONFIG_COUNT:-0}"
+  [[ "$count" =~ ^[0-9]+$ ]] || {
+    echo 'wrix: invalid Git command-scope configuration count' >&2
+    return 1
+  }
+  count=$((10#$count))
+  printf -v "GIT_CONFIG_KEY_$count" '%s' commit.gpgsign
+  printf -v "GIT_CONFIG_VALUE_$count" '%s' "$sign"
+  export "GIT_CONFIG_KEY_$count" "GIT_CONFIG_VALUE_$count"
+  export GIT_CONFIG_COUNT=$((count + 1))
+}
+
+wrix_configure_git_session() {
+  local grant="$1" sign
+  case "$grant" in
+    0) sign=false ;;
+    1) sign=true ;;
+    *) echo 'wrix: invalid effective Git signing grant' >&2; return 1 ;;
+  esac
+  wrix_configure_git_identity
+  if [[ -n "${WRIX_DEPLOY_KEY:-}" && -f "$WRIX_DEPLOY_KEY" ]]; then
+    wrix_configure_git_deploy
+  fi
+  if [[ "$grant" == 1 ]]; then
+    [[ -n "${WRIX_SIGNING_KEY:-}" && -f "$WRIX_SIGNING_KEY" ]] || {
+      echo 'wrix: effective signing grant requires the mounted signing key' >&2
+      return 1
+    }
+    wrix_configure_git_signing
+  fi
+  wrix_override_git_signing "$sign"
+}
+
+wrix_configure_git_session "${1:?effective Git signing grant required}"

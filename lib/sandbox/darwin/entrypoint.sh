@@ -258,7 +258,7 @@ fi
 
 # Git/SSH setup — shared with Linux entrypoint
 # shellcheck source=/dev/null
-. /git-ssh-setup.sh
+. /git-ssh-setup.sh "${WRIX_EFFECTIVE_GIT_SIGN:-0}"
 
 cd /workspace
 

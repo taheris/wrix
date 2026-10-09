@@ -216,9 +216,17 @@ case "${GIT_SSH_COMMAND:-}" in
   *) fail_probe "unexpected GIT_SSH_COMMAND: ${GIT_SSH_COMMAND:-}" ;;
 esac
 
+for option in '-F /dev/null' 'BatchMode=yes' 'IdentityAgent=none' 'IdentityFile=none' 'GlobalKnownHostsFile=/dev/null'; do
+  [[ "$ssh_command" == *"$option"* ]] || fail_probe "core.sshCommand lacks $option"
+done
+ssh_config=$(ssh -G github.com)
+[[ "$ssh_config" == *"identityagent none"* ]] || fail_probe "SSH compatibility config permits an agent identity"
+[[ "$ssh_config" == *"identityfile $WRIX_DEPLOY_KEY"* ]] || fail_probe "SSH compatibility config lacks the granted deploy key"
+
 assert_eq "gpg.format" "$(git config --global --get gpg.format)" "ssh"
 assert_eq "user.signingkey" "$(git config --global --get user.signingkey)" "$WRIX_SIGNING_KEY"
-assert_eq "commit.gpgsign" "$(git config --global --get commit.gpgsign)" "true"
+assert_eq "commit.gpgsign" "$(git config --get commit.gpgsign)" "true"
+assert_eq "commit.gpgsign scope" "$(git config --show-scope --get commit.gpgsign)" $'command\ttrue'
 allowed_signers=$(git config --global --get gpg.ssh.allowedSignersFile)
 [[ -f "$allowed_signers" ]] || fail_probe "allowed_signers is missing"
 grep -q '^smoke@example.test ' "$allowed_signers" || fail_probe "allowed_signers lacks smoke@example.test"
@@ -345,7 +353,7 @@ PROBE
 }
 
 LAUNCHER=$(wrix_build_live_launcher)
-IMAGE_SOURCE=$(wrix_realize_test_image_source claude)
+IMAGE_SOURCE=$(nix build --no-link --print-out-paths --no-warn-dirty .#test-image-git-credentials.source)
 IMAGE_REF=$(wrix_live_image_ref "git-ssh-bootstrap-$$")
 wrix_remove_image_ref "$IMAGE_REF"
 PROFILE_CONFIG="$TEST_TMP/profile.json"
@@ -360,12 +368,12 @@ mkdir -p "$WORKSPACE" "$HOME_DIR" "$XDG_CACHE_HOME" "$HOST_KEY_DIR"
 wrix_make_ed25519_key "$HOST_DEPLOY_KEY" "git-ssh-bootstrap-deploy"
 wrix_make_ed25519_key "$HOST_SIGNING_KEY" "git-ssh-bootstrap-signing"
 write_probe "$WORKSPACE/bootstrap-probe.sh"
-wrix_write_profile_config "$PROFILE_CONFIG" "$IMAGE_REF" "$IMAGE_SOURCE" claude
+wrix_write_profile_config "$PROFILE_CONFIG" "$IMAGE_REF" "$IMAGE_SOURCE" direct
 wrix_write_spawn_config "$SPAWN_CONFIG" "$WORKSPACE" bash /workspace/bootstrap-probe.sh
 jq '.git = {deploy: true, sign: true}' "$SPAWN_CONFIG" >"$SPAWN_CONFIG.grants"
 mv "$SPAWN_CONFIG.grants" "$SPAWN_CONFIG"
 
-test_fresh_container_git_ssh_bootstrap() {
+test_explicit_git_ssh_bootstrap() {
   local out="$TEST_TMP/bootstrap.out"
   local err="$TEST_TMP/bootstrap.err"
   local rc=0
@@ -571,7 +579,7 @@ test_host_container_and_loom_helper() {
 }
 
 ALL_TESTS=(
-  test_fresh_container_git_ssh_bootstrap
+  test_explicit_git_ssh_bootstrap
   test_host_container_and_loom_helper
 )
 

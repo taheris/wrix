@@ -129,7 +129,7 @@ fi
 cd /workspace
 
 # shellcheck source=/dev/null
-. /git-ssh-setup.sh
+. /git-ssh-setup.sh "${WRIX_EFFECTIVE_GIT_SIGN:-0}"
 
 # The process runs as rootless container-root mapped to the invoking host user
 # (default boundary) or host-user->root (krun). Either way paths under

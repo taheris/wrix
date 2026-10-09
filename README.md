@@ -83,18 +83,18 @@ profile-only shells. See [specs/profiles.md](specs/profiles.md) for the
 
 ### mkSandbox Options
 
-| Option          | Type                               | Description                                                                  |
-| --------------- | ---------------------------------- | ---------------------------------------------------------------------------- |
-| `profile`       | profile attrset                    | Base environment (`profiles.{base,rust,python}`)                             |
-| `packages`      | list of packages                   | Additional Nix packages to include                                           |
-| `env`           | attrset of strings                 | Environment variables                                                        |
-| `mounts`        | list of `{ source, dest, mode }`   | Host paths to mount into the container                                       |
-| `agent`         | `"direct"` \| `"claude"` \| `"pi"` | Agent runtime baked into the image (default `"pi"`)                          |
-| `agentPkg`      | Linux derivation or `null`         | Selected-agent override; required with `meta.mainProgram` for direct         |
-| `agentSettings` | attrset                            | Settings for the selected agent (`claude` or `pi`)                           |
-| `deployKey`     | string                             | SSH key name for git push (provision with `wrix init --deploy --key <name>`) |
-| `mcp`           | attrset of server configs          | Baked-in MCP servers (e.g. `{ tmux = { }; }`)                                |
-| `mcpRuntime`    | bool                               | Include all MCP servers, select at runtime via `WRIX_MCP`                    |
+| Option          | Type                               | Description                                                                                 |
+| --------------- | ---------------------------------- | ------------------------------------------------------------------------------------------- |
+| `profile`       | profile attrset                    | Base environment (`profiles.{base,rust,python}`)                                            |
+| `packages`      | list of packages                   | Additional Nix packages to include                                                          |
+| `env`           | attrset of strings                 | Environment variables                                                                       |
+| `mounts`        | list of `{ source, dest, mode }`   | Host paths to mount into the container                                                      |
+| `agent`         | `"direct"` \| `"claude"` \| `"pi"` | Agent runtime baked into the image (default `"pi"`)                                         |
+| `agentPkg`      | Linux derivation or `null`         | Selected-agent override; required with `meta.mainProgram` for direct                        |
+| `agentSettings` | attrset                            | Settings for the selected agent (`claude` or `pi`)                                          |
+| `deployKey`     | string                             | Git key identity, not a credential grant (provision with `wrix init --deploy --key <name>`) |
+| `mcp`           | attrset of server configs          | Baked-in MCP servers (e.g. `{ tmux = { }; }`)                                               |
+| `mcpRuntime`    | bool                               | Include all MCP servers, select at runtime via `WRIX_MCP`                                   |
 
 See [specs/sandbox.md](specs/sandbox.md) for full details.
 
@@ -105,6 +105,34 @@ key and enable signing. Provisioning does not enable sandbox credential grants.
 Matching keys are reused; `--force` permits replacing conflicting material. See
 [repository initialization](specs/cli.md#wrix-init) for prerequisites and
 options.
+
+### Sandbox Git grants
+
+Sandbox launches default to no Wrix deploy or signing keys. Grant them
+independently with `wrix run --git-deploy --git-sign /repo`, or with
+`SpawnConfig.git = { "deploy": true, "sign": true }`. Repository defaults can be
+set in `wrix.toml`:
+
+```toml
+[wrix.git]
+deploy = true
+sign = true
+```
+
+Invocation overrides take precedence: `--no-git-deploy` / `--no-git-sign`, or
+explicit `false` in `SpawnConfig.git`, remove the respective grant. Host key
+files and `WRIX_DEPLOY_KEY` / `WRIX_SIGNING_KEY` source pointers do not grant
+credentials; `WRIX_GIT_SIGN` has no effect. Container signing follows the
+resolved grant without rewriting shared repository Git config, so host sessions
+retain their own signing policy.
+
+**Trust boundary:** writable repository policy is trusted, mutable launch input,
+not an agent-resistant authorization store. A workspace writer can change
+inherited grants for later launches. These grants control only Wrix-managed key
+delivery: absent keys do not imply a read-only workspace or no network access.
+Provider credentials, explicitly declared mounts, and public-internet access
+remain governed by their separate policies. A deploy key conveys its actual
+repository permissions, not a restricted publishing transaction.
 
 ## Profiles
 

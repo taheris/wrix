@@ -799,6 +799,8 @@ impl<'a> Plan<'a> {
                     writeln!(stdout, "ENV={key}={value}")?;
                 }
             }
+            let (key, value) = self.effective_sign_env_pair();
+            writeln!(stdout, "ENV={key}={value}")?;
             for (key, value) in self.launcher_identity_env_pairs() {
                 writeln!(stdout, "ENV={key}={value}")?;
             }
@@ -1285,7 +1287,20 @@ impl<'a> Plan<'a> {
         if let Some(credentials) = credentials {
             pairs.extend(credential_env_pairs(credentials));
         }
+        pairs.retain(|(name, _)| name != "WRIX_EFFECTIVE_GIT_SIGN");
+        pairs.push(self.effective_sign_env_pair());
         pairs
+    }
+
+    fn effective_sign_env_pair(&self) -> (String, String) {
+        let sign = self
+            .credential_sources
+            .as_ref()
+            .is_some_and(|sources| sources.signing.is_some());
+        (
+            String::from("WRIX_EFFECTIVE_GIT_SIGN"),
+            u8::from(sign).to_string(),
+        )
     }
 
     fn dry_run_env_value<'b>(&self, name: &str, value: &'b str) -> &'b str {
@@ -1838,7 +1853,7 @@ fn credential_env_pairs(credentials: &Credentials) -> Vec<(String, String)> {
 fn is_git_key_environment(name: &str) -> bool {
     matches!(
         name,
-        "WRIX_DEPLOY_KEY" | "WRIX_SIGNING_KEY" | "WRIX_GIT_SIGN"
+        "WRIX_DEPLOY_KEY" | "WRIX_SIGNING_KEY" | "WRIX_GIT_SIGN" | "WRIX_EFFECTIVE_GIT_SIGN"
     )
 }
 

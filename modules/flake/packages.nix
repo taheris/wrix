@@ -121,6 +121,7 @@ _:
         // imageOverlays
         // {
           inherit (pkgs) beads;
+          test-image-git-credentials = test.testImages.gitCredentials;
 
           default = sandboxOverlays.sandbox-rust-pi;
           nodejs = linuxPkgs.nodejs_22;

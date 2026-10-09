@@ -32,7 +32,7 @@ fail() {
 }
 
 LAUNCHER=$(wrix_build_live_launcher)
-IMAGE_SOURCE=$(wrix_realize_test_image_source claude)
+IMAGE_SOURCE=$(nix build --no-link --print-out-paths --no-warn-dirty .#test-image-git-credentials.source)
 IMAGE_REF=$(wrix_live_image_ref "nested-key-$$")
 PROFILE_CONFIG="$TEST_TMP/profile.json"
 SPAWN_CONFIG="$TEST_TMP/spawn.json"
@@ -45,9 +45,9 @@ HOST_SIGNING_KEY="$HOST_KEY_DIR/myrepo-signing"
 mkdir -p "$WORKSPACE" "$HOME_DIR" "$XDG_CACHE_HOME" "$HOST_KEY_DIR"
 wrix_make_ed25519_key "$HOST_DEPLOY_KEY" "nested-key-test"
 wrix_make_ed25519_key "$HOST_SIGNING_KEY" "nested-key-signing-test"
-wrix_write_profile_config "$PROFILE_CONFIG" "$IMAGE_REF" "$IMAGE_SOURCE" claude
+wrix_write_profile_config "$PROFILE_CONFIG" "$IMAGE_REF" "$IMAGE_SOURCE" direct
 # shellcheck disable=SC2016
-wrix_write_spawn_config "$SPAWN_CONFIG" "$WORKSPACE" bash -lc '
+wrix_write_spawn_config "$SPAWN_CONFIG" "$WORKSPACE" bash -c '
 set -euo pipefail
 
 fail_probe() {
@@ -81,7 +81,7 @@ fi
 jq '.git = {deploy: true, sign: true}' "$SPAWN_CONFIG" >"$SPAWN_CONFIG.grants"
 mv "$SPAWN_CONFIG.grants" "$SPAWN_CONFIG"
 
-test_nested_key_propagation() {
+test_explicit_nested_key_grants() {
   local out="$TEST_TMP/nested-key.out"
   local err="$TEST_TMP/nested-key.err"
   local rc=0
@@ -99,7 +99,7 @@ test_nested_key_propagation() {
   pass "live child container sees fixed key destinations and signs commits"
 }
 
-test_nested_key_propagation
+test_explicit_nested_key_grants
 
 echo
 echo "Results: $PASSED passed, $FAILED failed"
