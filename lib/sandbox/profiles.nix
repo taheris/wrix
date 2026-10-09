@@ -205,7 +205,7 @@ let
   defaultHostToolchain = mkRustToolchain hostFenixPkgs hostFenixPkgs.stable.defaultToolchain;
 
   # crane.mkLib is bound to hostPkgs so buildPackage produces host-platform
-  # binaries (the devshell + `nix build .#tmux-mcp` path). The in-image build
+  # binaries (the devshell + `nix build .#wrix` path). The in-image build
   # uses a separate profile instance constructed with hostPkgs = pkgs; see
   # lib/sandbox/default.nix.
   mkCraneLib = toolchain: (crane.mkLib hostPkgs).overrideToolchain (_: toolchain);

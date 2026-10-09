@@ -6,7 +6,6 @@ members = [
   "crates/wrix-core",
   "crates/wrix-sandbox",
   "crates/wrix-service",
-  "lib/mcp/tmux/tmux-mcp",
 ]
 resolver = "3"
 
@@ -30,7 +29,6 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 serde_yaml_ng = "0.10.0"
 sha2 = "0.10.9"
-signal-hook = "0.3.18"
 tempfile = "3.27.0"
 thiserror = "2.0.17"
 time = { version = "0.3.55", features = ["formatting"] }

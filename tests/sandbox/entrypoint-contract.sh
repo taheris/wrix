@@ -248,7 +248,9 @@ prepare_wrix_etc() {
   printf '{}\n' >"$etc_wrix/claude-config.json"
   printf '{}\n' >"$etc_wrix/claude-settings.json"
   printf '{}\n' >"$etc_wrix/pi-agent/settings.json"
-
+  if [[ -n "${WRIX_TEST_MCP_AVAILABLE:-}" ]]; then
+    cp "$WRIX_TEST_MCP_AVAILABLE" "$etc_wrix/mcp-available.json"
+  fi
 }
 
 run_entrypoint() {
@@ -993,6 +995,33 @@ test_entrypoints_require_network_bootstrap() {
     done
   done
   printf 'PASS: both entrypoints reject unsafe startup before setup or exit logging\n' >&2
+}
+
+test_retired_tmux_selection_rejected() {
+  require_command jq
+  local platform selection workspace stdout_path stderr_path status
+  : "${WRIX_TEST_MCP_AVAILABLE:?generated runtime-selection manifest required}"
+  jq -e '.runtime_selection and ([.servers[].name] == ["playwright"])' "$WRIX_TEST_MCP_AVAILABLE" >/dev/null
+  for platform in linux darwin; do
+    for selection in tmux playwright ''; do
+      workspace="$TEST_TMP/retired-$platform-${selection:-empty}/workspace"
+      stdout_path="$TEST_TMP/retired-$platform-${selection:-empty}.out"
+      stderr_path="$TEST_TMP/retired-$platform-${selection:-empty}.err"
+      mkdir -p "$workspace"
+      status=0
+      WRIX_MCP="$selection" run_entrypoint "$platform" direct "$stdout_path" "$stderr_path" "$workspace" \
+        touch "$workspace/agent-ran" || status=$?
+      if [[ "$selection" == tmux ]]; then
+        [[ "$status" == 1 && ! -e "$workspace/agent-ran" && ! -e "$workspace/selected-mcp.json" ]] || return 1
+        assert_output_contains "$platform retired selection" "$(<"$stderr_path")" 'WRIX_MCP selects unknown servers: tmux' || return 1
+      else
+        [[ "$status" == 0 && -e "$workspace/agent-ran" ]] || return 1
+        jq -e --arg selection "$selection" \
+          '[.servers[].name] == (if $selection == "" then [] else [$selection] end)' \
+          "$workspace/selected-mcp.json" >/dev/null || return 1
+      fi
+    done
+  done
 }
 
 ALL_TESTS=(

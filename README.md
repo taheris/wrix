@@ -93,7 +93,7 @@ profile-only shells. See [specs/profiles.md](specs/profiles.md) for the
 | `agentPkg`      | Linux derivation or `null`         | Selected-agent override; required with `meta.mainProgram` for direct                        |
 | `agentSettings` | attrset                            | Settings for the selected agent (`claude` or `pi`)                                          |
 | `deployKey`     | string                             | Git key identity, not a credential grant (provision with `wrix init --deploy --key <name>`) |
-| `mcp`           | attrset of server configs          | Baked-in MCP servers (e.g. `{ tmux = { }; }`)                                               |
+| `mcp`           | attrset of server configs          | Baked-in MCP servers (e.g. `{ playwright = { }; }`)                                         |
 | `mcpRuntime`    | bool                               | Include all MCP servers, select at runtime via `WRIX_MCP`                                   |
 
 See [specs/sandbox.md](specs/sandbox.md) for full details.
@@ -180,14 +180,21 @@ passthrough, and deploy key):
 ```bash
 nix run github:taheris/wrix#sandbox-pi-mcp         # base + all MCP servers
 nix run github:taheris/wrix#sandbox-rust-pi-mcp    # rust + all MCP servers
-WRIX_MCP=tmux nix run .#sandbox-pi-mcp             # select specific servers
+WRIX_MCP=playwright nix run .#sandbox-pi-mcp       # select specific servers
 ```
 
-Available: [tmux](specs/tmux-mcp.md) (pane management for debugging),
-[playwright](specs/playwright-mcp.md) (browser automation). In flakes:
-`mcp.tmux = { }` or `mcpRuntime = true`. Wrix adapts the selected
+Available: [playwright](specs/playwright-mcp.md) (browser automation). In
+flakes: `mcp.playwright = { }` or `mcpRuntime = true`. Wrix adapts the selected
 `WRIX_MCP_MANIFEST` for Claude and Pi; external direct runners consume that same
 manifest handoff.
+
+## Terminal debugging
+
+Every profile includes upstream tmux; no MCP selection is needed. Read the
+[native workflow guide](docs/tmux.md), also shipped at `/etc/wrix/tmux.md`
+inside each sandbox. Use a private socket and caller-owned sessions for servers
+that survive independent shell calls; container shutdown is the final cleanup
+boundary. Captured scrollback is finite, not a durable application log.
 
 ## Notifications
 

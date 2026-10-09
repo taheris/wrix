@@ -122,6 +122,7 @@ _:
         // {
           inherit (pkgs) beads;
           test-image-git-credentials = test.testImages.gitCredentials;
+          test-tmux-sandbox = test.tmuxTests.sandbox.package;
 
           default = sandboxOverlays.sandbox-rust-pi;
           nodejs = linuxPkgs.nodejs_22;
@@ -141,7 +142,6 @@ _:
             { }
         )
         // {
-          tmux-mcp = wrix.tmuxMcpPackage.bin;
           wrix = wrix.rustPackage.wrix;
           wrix-cache-hook = wrix.rustPackage.cacheHook;
           wrix-cache-publish = wrix.rustPackage.cachePublish;

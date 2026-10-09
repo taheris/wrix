@@ -529,15 +529,15 @@ in
       sandboxWithMcp = sandboxLib.mkSandbox {
         profile = sandboxLib.profiles.base;
         mcp = {
-          tmux = { };
+          playwright = { };
         };
       };
 
-      sandboxWithMcpAudit = sandboxLib.mkSandbox {
+      sandboxWithMcpOptions = sandboxLib.mkSandbox {
         profile = sandboxLib.profiles.base;
         mcp = {
-          tmux = {
-            audit = "/workspace/.debug-audit.log";
+          playwright = {
+            headless = true;
           };
         };
       };
@@ -548,7 +548,7 @@ in
 
       # Force evaluation of profile attrsets (cheap, no image build)
       checks = builtins.seq sandboxWithMcp.profile (
-        builtins.seq sandboxWithMcpAudit.profile (builtins.seq sandboxNoMcp.profile true)
+        builtins.seq sandboxWithMcpOptions.profile (builtins.seq sandboxNoMcp.profile true)
       );
     in
     assert checks;

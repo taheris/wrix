@@ -11,14 +11,8 @@
 let
   inherit (pkgs.lib) escapeShellArg;
 
-  imageProfiles = import ../../../lib/sandbox/profiles.nix {
-    pkgs = linuxPkgs;
-    hostPkgs = linuxPkgs;
-    inherit crane fenix treefmt;
-  };
   registry = import ../../../lib/mcp {
     pkgs = linuxPkgs;
-    rustProfile = imageProfiles.rust;
   };
   server = registry.playwright;
   sandboxLib = import ../../../lib/sandbox {

@@ -147,10 +147,7 @@ let
       seq staticEnvValidation (seq hostEnvValidation (profile // { inherit runtimeSecrets; }))
     );
 
-  # Separate profile instance whose buildPackage targets the image platform
-  # (linuxPkgs). Used to construct the in-image MCP server binaries that get
-  # baked into sandbox images; profilesModule.rust's buildPackage is host-platform
-  # and would ship a non-runnable binary into a Linux image on Darwin hosts.
+  # In-image Rust binaries must target Linux even on Darwin hosts.
   imageProfilesModule = import ./profiles.nix {
     pkgs = linuxPkgs;
     hostPkgs = linuxPkgs;
@@ -160,7 +157,6 @@ let
   # MCP server registry (uses Linux packages for server binaries)
   mcpRegistry = import ../mcp {
     pkgs = linuxPkgs;
-    rustProfile = imageProfilesModule.rust;
   };
 
   imageRustCli = import ../services/rust.nix {

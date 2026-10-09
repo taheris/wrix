@@ -49,15 +49,15 @@ replacement or automatic process recovery is promised.
 - Wrix exposes no tmux MCP package or registry entry, rejects `mcp.tmux` at Nix
   evaluation, and provides no tmux MCP diagnostic options, environment
   forwarding, or replacement process wrapper
-  [check?](verify:tmux.native-only-surface)
+  [check](verify:tmux.native-only-surface)
 - Runtime selection of the unregistered `tmux` MCP server fails startup rather
   than silently selecting a replacement
-  [system?](verify:tmux.retired-selection-rejected)
+  [system](verify:tmux.retired-selection-rejected)
 - Shipped agent guidance concisely covers workflow-local socket selection,
   create/list, literal text versus special keys, capture, exited-process
   inspection, and targeted cleanup, while distinguishing finite scrollback from
   durable application logs
-  [judge?](../tests/judges/tmux.sh#test_native_workflow_guidance)
+  [judge](../tests/judges/tmux.sh#test_native_workflow_guidance)
 
 ## Requirements
 

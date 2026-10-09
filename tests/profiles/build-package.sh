@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Verify the seven [verify] hash invariants of profiles.rust.buildPackage:
+# Verify the six hash invariants of profiles.rust.buildPackage:
 #
 #   1. test_build_package_exposed
 #      buildPackage exists and returns { bin, clippy, nextest, cargoArtifacts }.
@@ -14,12 +14,9 @@
 #   6. test_build_package_toolchain_alignment
 #      Cargo selects profile.toolchain for bin/clippy/nextest on both
 #      profiles.rust and rustProfile { toolchain; sha256; }.
-#   7. test_consumer_boundary
-#      The tmux-mcp consumer calls profile.buildPackage, the flake package
-#      output is a runnable derivation, and ciChecks expose clippy/nextest.
 #
 # Usage:
-#   tests/profiles/build-package.sh                    # run all 7 tests
+#   tests/profiles/build-package.sh                    # run all 6 tests
 #   tests/profiles/build-package.sh test_<name>        # run a single test
 
 set -euo pipefail
@@ -329,59 +326,6 @@ test_build_package_toolchain_alignment() {
   done
 }
 
-# ============================================================================
-# 7. Rust package consumer boundary
-# ============================================================================
-test_consumer_boundary() {
-  local result
-  if ! result=$(nix eval --json --impure --no-warn-dirty --expr "
-    let
-      system = builtins.currentSystem;
-      flake = builtins.getFlake \"git+file://$REPO_ROOT\";
-      pkgs = flake.inputs.nixpkgs.legacyPackages.\${system};
-      profile = flake.legacyPackages.\${system}.lib.profiles.rust;
-      expected = profile.buildPackage {
-        src = flake.outPath;
-        cargoLock = builtins.path {
-          path = flake.outPath + \"/Cargo.lock\";
-          name = \"Cargo.lock\";
-        };
-        cargoExtraArgs = \"-p tmux-mcp\";
-        buildInputs = [ pkgs.tmux ];
-        propagatedBuildInputs = [ pkgs.tmux ];
-        meta = {
-          description = \"MCP server providing tmux pane management for AI-assisted debugging\";
-          mainProgram = \"tmux-mcp\";
-        };
-      };
-      ciChecks = flake.legacyPackages.\${system}.ciChecks;
-      package = flake.packages.\${system}.tmux-mcp;
-    in {
-      packageMatchesBin = package.drvPath == expected.bin.drvPath;
-      packageMainProgram = package.meta.mainProgram or null;
-      clippyMatches = ciChecks.tmux-mcp-clippy.drvPath == expected.clippy.drvPath;
-      nextestMatches = ciChecks.tmux-mcp-nextest.drvPath == expected.nextest.drvPath;
-      checksIndependent =
-        expected.clippy.drvPath != expected.bin.drvPath
-        && expected.nextest.drvPath != expected.bin.drvPath;
-    }
-  "); then
-    echo "FAIL: nix eval tmux-mcp consumer wiring failed" >&2
-    return 1
-  fi
-
-  if ! jq -e '
-    .packageMatchesBin and
-    .packageMainProgram == "tmux-mcp" and
-    .clippyMatches and
-    .nextestMatches and
-    .checksIndependent
-  ' <<<"$result" >/dev/null; then
-    echo "FAIL: live tmux-mcp outputs do not match the Rust profile buildPackage outputs" >&2
-    return 1
-  fi
-}
-
 # ----------------------------------------------------------------------------
 
 ALL_TESTS=(
@@ -391,7 +335,6 @@ ALL_TESTS=(
   test_workspace_edit_skips_cargo_artifacts
   test_extra_srcs_scoped_to_lint_test
   test_build_package_toolchain_alignment
-  test_consumer_boundary
 )
 
 run_all() {

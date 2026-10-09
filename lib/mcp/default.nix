@@ -7,23 +7,16 @@
 #
 # Usage:
 #   mcpRegistry = import ./mcp { inherit pkgs; };
-#   serverDef = mcpRegistry.tmux;
-#   config = serverDef.mkServerConfig { audit = "/path/to/audit.log"; };
+#   serverDef = mcpRegistry.playwright;
+#   config = serverDef.mkServerConfig { };
 #
 # This registry is used by mkSandbox to look up enabled MCP servers
 # and merge their packages and configs.
 #
-# Spec: specs/tmux-mcp.md
-{
-  pkgs,
-  rustProfile,
-}:
+# Spec: specs/playwright-mcp.md
+{ pkgs }:
 
 {
-  # tmux: MCP server for tmux pane management
-  # Provides tools for AI-assisted debugging (create_pane, send_keys, capture_pane, etc.)
-  tmux = import ./tmux { inherit pkgs rustProfile; };
-
   # playwright: MCP server for browser automation
   # Provides tools for AI-assisted frontend development (screenshots, navigation, interaction, etc.)
   playwright = import ./playwright { inherit pkgs; };

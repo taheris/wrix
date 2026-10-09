@@ -7,6 +7,6 @@ test_agent_transcript_audit_fit() {
 }
 
 test_scoped_component_diagnostics_policy() {
-  judge_files "specs/security.md" "specs/tmux-mcp.md" "lib/mcp/tmux/default.nix" "lib/mcp/tmux/tmux-mcp/src/audit/mod.rs"
-  judge_criterion "The security and tmux-mcp contracts consistently preserve the .wrix/log session index plus any runtime-provided agent transcript as Wrix's authoritative security audit surface while allowing only explicit, default-off component diagnostics. PASS only if Wrix does not automatically enable, index, synthesize, or aggregate the diagnostics; tmux-mcp owns configuration, format, and emission; the enabling operator owns the destination, access control, retention, and deletion; and the tmux contract discloses that unredacted commands, keystrokes, and optional full captures may contain credentials or other secrets."
+  judge_files "specs/security.md" "docs/architecture.md"
+  judge_criterion "Component diagnostics supplement debugging, not authoritative Wrix execution or transcript evidence. PASS only if they are explicit and default-off; Wrix does not automatically enable, index, synthesize, or aggregate them into its security audit surface; each component owns its configuration, format, emission, and disclosure of secret-bearing content; and the enabling operator owns the destination, access control, retention, and deletion. Do not require any particular component to provide diagnostics. Execution metadata and transcript limitations are evaluated separately."
 }

@@ -47,7 +47,7 @@ let
     (import ./sandbox.nix { inherit pkgs system; })
     (import ./security.nix { inherit pkgs system; })
     (import ./services.nix { inherit pkgs system; })
-    (import ./tmux-mcp.nix { inherit pkgs system; })
+    (import ./tmux.nix { inherit pkgs system; })
   ];
   registry = mapAttrs (_: entry: if builtins.isString entry then { script = entry; } else entry) (
     builtins.foldl' (acc: next: acc // next) { } domainRegistries

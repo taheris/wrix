@@ -67,11 +67,6 @@ let
       };
   };
 
-  tmuxMcp = import ./mcp/tmux/mcp-server.nix {
-    inherit pkgs;
-    rustProfile = sandbox.profiles.rust;
-  };
-
 in
 {
   inherit (devshell) mkDevShell;
@@ -81,5 +76,4 @@ in
   inherit beads serviceImage;
 
   rustPackage = rustCli;
-  tmuxMcpPackage = tmuxMcp;
 }

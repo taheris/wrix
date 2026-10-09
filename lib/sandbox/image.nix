@@ -360,6 +360,7 @@ let
       ''}
 
       cp ${mcpAvailableJson} etc/wrix/mcp-available.json
+      cp ${../../docs/tmux.md} etc/wrix/tmux.md
 
       # Register the materialized on-disk closure in the nix db. includeNixDB
       # covers only the leaf's own `contents`; the fromImage tiers' materialized

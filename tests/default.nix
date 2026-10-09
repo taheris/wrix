@@ -120,13 +120,12 @@ let
   # Darwin UID mapping tests (verify unshare-based VirtioFS ownership fix)
   darwinUidTests = import ./darwin/uid.nix { inherit pkgs treefmt; };
 
-  # tmux-mcp tests (Rust unit tests and shell script syntax)
-  tmuxMcpTests = import ./mcp/tmux/check.nix {
+  tmuxTests = import ./tmux {
     inherit
       pkgs
-      system
-      src
+      linuxPkgs
       wrix
+      src
       ;
   };
 
@@ -164,8 +163,6 @@ let
   };
 
   rustChecks = {
-    tmux-mcp-clippy = wrix.tmuxMcpPackage.clippy;
-    tmux-mcp-nextest = wrix.tmuxMcpPackage.nextest;
     wrix-rust-clippy = wrix.rustPackage.clippy;
     wrix-rust-nextest = wrix.rustPackage.nextest;
   };
@@ -225,7 +222,7 @@ let
     // readmeTest
     // utilityTests
     // prePushSmokeTests
-    // tmuxMcpTests
+    // tmuxTests.checks
     // (import ./sandbox/pi-settings.nix { inherit pkgs wrix; })
     // piMcpTests.checks
     // {
@@ -345,6 +342,10 @@ let
 
   ciApps = loomTests.ciApps ++ [
     (mkCiApp piMcpTests.imageWiring "test-pi-mcp-image-wiring")
+    (mkTmuxCiApp "workflow")
+    (mkTmuxCiApp "exited-process")
+    (mkTmuxCiApp "targeted-cleanup")
+    (mkTmuxCiApp "container-cleanup")
     (mkCiApp sandboxImageChecks.imageInstallRealSkopeoTest "test-image-install-real-skopeo")
     (mkCiApp sandboxImageChecks.imageInstallDigestSkipTest "test-image-install-digest-skip")
     (mkCiApp sandboxImageChecks.digestMatchesStoredIdTest "test-image-digest-matches-stored-id")
@@ -434,8 +435,6 @@ let
 
         ci_checks=(
           builder-keys-structure
-          tmux-mcp-clippy
-          tmux-mcp-nextest
           wrix-rust-clippy
           wrix-rust-nextest
           image-builds
@@ -644,6 +643,30 @@ let
       ${environment}
       exec ${bash}/bin/bash "$REPO_ROOT/${script}" ${concatStringsSep " " (map escapeShellArg args)}
     '';
+
+  mkTmuxCiApp =
+    suffix:
+    let
+      name = "test-tmux-cli-${suffix}";
+      package = mkRepoScriptCiApp {
+        inherit name;
+        script = "tests/tmux/workflow.sh";
+        args = [ "test_cli_${builtins.replaceStrings [ "-" ] [ "_" ] suffix}" ];
+        environment = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
+          export PATH="${
+            makeBinPath [
+              pkgs.podman
+              pkgs.openssh
+            ]
+          }:$PATH"
+        '';
+      };
+    in
+    (mkCiApp package name)
+    // {
+      platforms = linux;
+      capabilities = [ "container-runtime" ];
+    };
 
   testProfileImagesManifestShape = mkRepoScriptCiApp {
     name = "test-profile-images-manifest-shape";
@@ -1099,7 +1122,7 @@ in
     systemTests
     testCi
     testImages
-    tmuxMcpTests
+    tmuxTests
     verify
     ;
 }

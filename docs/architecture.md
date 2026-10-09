@@ -58,8 +58,7 @@ lib/
 │   └── builder/         # Static-busybox bootstrap entrypoint for the Linux builder
 ├── services/            # Per-workspace <repo>-service lifecycle, Dolt, and project Nix cache
 ├── mcp/                 # MCP server registry
-│   ├── default.nix      # Server registry: { tmux, playwright }
-│   ├── tmux/            # tmux MCP server
+│   ├── default.nix      # Server registry: { playwright }
 │   └── playwright/      # Playwright MCP server
 ├── prek/                # Pre-commit hook shims
 ├── builder/             # macOS-side CLI for the Linux remote builder
@@ -69,6 +68,7 @@ lib/
 docs/
 ├── README.md            # Project overview, terminology
 ├── architecture.md      # This file
+├── tmux.md              # Native terminal workflow (also /etc/wrix/tmux.md in images)
 ├── spec-conventions.md  # Spec-authoring conventions
 └── style-rules.md       # Code standards (SH-, NX-, DOC-, GIT-, TST-, RS-, COM-, CLI-)
 ```
@@ -291,7 +291,10 @@ and image blocks; Pi owns model-facing truncation and image forwarding.
 
 See [sandbox.md](../specs/sandbox.md) for selection and translation ownership,
 [playwright-mcp.md](../specs/playwright-mcp.md) for browser capabilities, and
-[tmux.md](../specs/tmux.md) for native terminal debugging.
+[native tmux guidance](tmux.md) for terminal debugging. The base profile
+includes upstream tmux; agents can read `/etc/wrix/tmux.md` without a source
+checkout. Callers select a private socket and own session cleanup; no MCP
+server, pane registry, or automatic conversation cleanup is involved.
 
 ## State Layout
 
