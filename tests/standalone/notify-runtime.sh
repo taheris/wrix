@@ -48,11 +48,15 @@ case "${1:-} ${2:-}" in
       wait_for_release "${WRIX_NOTIFY_TEST_RELEASE:?}"
     fi
     if [[ "${WRIX_NOTIFY_TEST_CLIENT:-0}" == "1" ]]; then
+      command=(wrix-notify "${WRIX_NOTIFY_TEST_TITLE:?}" 'Waiting for input' 'Ping')
+      if [[ -n "${WRIX_NOTIFY_TEST_PI_RUNNER:-}" ]]; then
+        command=(node "$WRIX_NOTIFY_TEST_PI_RUNNER" focus-worker)
+      fi
       # The external runtime boundary forwards only launcher env, not ambient host focus or tmux.
       env -u WRIX_FOCUS_TARGET -u WRIX_SESSION_ID -u TMUX "${pairs[@]}" \
         TMUX="in-container-debug-pane" PI_SESSION_ID="conversation:9.9" \
         WRIX_EXECUTION_ID="execution:9.9" WRIX_NOTIFY_TCP="${WRIX_NOTIFY_TEST_ENDPOINT:?}" \
-        wrix-notify "${WRIX_NOTIFY_TEST_TITLE:?}" 'Waiting for input' 'Ping'
+        "${command[@]}"
       if [[ -n "${WRIX_NOTIFY_TEST_FINISH:-}" ]]; then
         wait_for_release "$WRIX_NOTIFY_TEST_FINISH"
       fi

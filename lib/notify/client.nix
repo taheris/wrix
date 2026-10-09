@@ -39,7 +39,8 @@ pkgs.writeShellScriptBin "wrix-notify" ''
 
     log_verbose "using TCP to $tcp_host:$tcp_port"
     if ! printf '%s\n' "$payload" | ${pkgs.socat}/bin/socat -u - "TCP:$tcp_host:$tcp_port,connect-timeout=1" >/dev/null 2>/dev/null; then # best-effort: host notification daemon may be absent or disconnect early.
-      log_verbose "TCP send failed"
+      printf 'wrix-notify: TCP send failed\n' >&2
+      return 0
     fi
     log_verbose "sent via TCP"
   }
@@ -59,7 +60,7 @@ pkgs.writeShellScriptBin "wrix-notify" ''
     fi
 
     if [[ -z "$tcp_host" || -z "$tcp_port" || "$tcp_host" == "$tcp_endpoint" || ! "$tcp_port" =~ ^[0-9]+$ ]]; then
-      log_verbose "invalid TCP endpoint: $tcp_endpoint"
+      printf 'wrix-notify: invalid TCP endpoint: %s\n' "$tcp_endpoint" >&2
       exit 0
     fi
 
@@ -68,12 +69,13 @@ pkgs.writeShellScriptBin "wrix-notify" ''
   fi
 
   if [[ ! -S "$SOCKET" ]]; then
-    log_verbose "socket not found at $SOCKET"
+    printf 'wrix-notify: socket not found at %s\n' "$SOCKET" >&2
     exit 0
   fi
 
   if ! printf '%s\n' "$payload" | ${pkgs.socat}/bin/socat -u - "UNIX-CONNECT:$SOCKET" >/dev/null 2>/dev/null; then # best-effort: host notification daemon may be absent or disconnect early.
-    log_verbose "Unix socket send failed"
+    printf 'wrix-notify: Unix socket send failed\n' >&2
+    exit 0
   fi
   log_verbose "sent to $SOCKET"
   exit 0

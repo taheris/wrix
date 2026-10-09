@@ -4,6 +4,15 @@ let
   inherit (pkgs.lib) escapeShellArg makeBinPath optionals;
   inherit (import ../lib/verifier.nix) darwinLive linuxLive live;
   fixture = import ../standalone/notify-fixture.nix { inherit pkgs; };
+  pi = import ../../lib/sandbox/pi.nix { inherit pkgs; };
+  piNotify = import ../../lib/notify/pi.nix { inherit pkgs; };
+  piTestEnv = ''
+    export PATH="${pkgs.nodejs}/bin:${notifyPath}:$PATH"
+    export PI_TEST_BIN=${pi}/bin/pi
+    export PI_TEST_PACKAGE=${pi}/lib/node_modules/pi-monorepo
+    export PI_TEST_EXTENSION_PACKAGE=${piNotify}
+    export PI_TEST_SETTINGS="$(build_flake_package sandbox.image.piSettingsJson)"
+  '';
   notifyPath = makeBinPath (
     [
       fixture.client
@@ -45,6 +54,21 @@ in
   "notifications.focus-target-registration" = ''
     export PATH="${notifyPath}:$PATH"
     run_repo_script_with_wrix "tests/standalone/notify-test.sh" "test_focus_target_registration"
+  '';
+
+  "notifications.pi-settled" = ''
+    ${piTestEnv}
+    run_repo_script "tests/standalone/notify-test.sh" "test_pi_settled"
+  '';
+
+  "notifications.pi-focus-routing" = ''
+    ${piTestEnv}
+    run_repo_script_with_wrix "tests/standalone/notify-test.sh" "test_pi_focus_routing"
+  '';
+
+  "notifications.pi-notify-failure" = ''
+    ${piTestEnv}
+    run_repo_script "tests/standalone/notify-test.sh" "test_pi_notify_failure"
   '';
 
   "notifications.client-non-blocking" = notifyTest "test_client_non_blocking";

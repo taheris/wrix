@@ -53,6 +53,7 @@ let
   imageBuilderPkgs = if asTarball then hostPkgs else pkgs;
 
   notifyClient = import ../notify/client.nix { inherit pkgs; };
+  piNotify = import ../notify/pi.nix { inherit pkgs; };
 
   # Shared nixpkgs-pin-dependent bottom-of-closure. Chained under the
   # per-profile image via `fromImage` so it loads into the platform store once
@@ -356,6 +357,7 @@ let
         mkdir -p etc/wrix/pi-agent/extensions
         cp ${piSettingsJson} etc/wrix/pi-agent/settings.json
         cp ${./pi-mcp-extension.ts} etc/wrix/pi-agent/extensions/wrix-mcp.ts
+        cp -rL ${piNotify}/. etc/wrix/pi-agent/
       ''}
 
       ${optionalString (mcpServerConfigs != { }) ''

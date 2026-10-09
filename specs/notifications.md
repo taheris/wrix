@@ -97,13 +97,13 @@ work, but failures are reported through diagnostics rather than hidden.
   [check](verify:notifications.claude-stop-hook-config)
 - Packaged Pi emits one attention notification on settling, but none at an
   intermediate `agent_end` while recovery or queued work continues
-  [system?](verify:notifications.pi-settled)
+  [system](verify:notifications.pi-settled)
 - A Pi notification carries an agent-identifying title and the registered host
   focus target through the production client/daemon path
-  [system?](verify:notifications.pi-focus-routing)
+  [system](verify:notifications.pi-focus-routing)
 - Notification transport failures are diagnosed without stopping Pi's agent work
   or turning a completed turn into a failed turn
-  [system?](verify:notifications.pi-notify-failure)
+  [system](verify:notifications.pi-notify-failure)
 - Host native dispatch remains available after client disconnects
   [judge](../tests/judges/notifications.sh#test_native_dispatch_and_reliability)
 - Launcher registration, the exported `WRIX_FOCUS_TARGET`, and daemon lookup

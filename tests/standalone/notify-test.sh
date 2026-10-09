@@ -303,7 +303,8 @@ assert_native_dispatch() {
       ;;
     Darwin)
       if ! jq -se --arg title "$title" --arg message "$message" --arg sound "$sound" \
-        'length == 1 and .[0] == ["-title", $title, "-message", $message, "-sound", $sound]' \
+        'length == 1 and .[0] == (["-title", $title, "-message", $message] +
+          if $sound == "" then [] else ["-sound", $sound] end)' \
         "$capture" >/dev/null; then
         fail_with_output "wrix-notifyd did not dispatch the Darwin notification payload" "$capture"
       fi
@@ -795,6 +796,120 @@ assert_focus_runtime_fixture_conformance() {
   done
 }
 
+test_pi_settled() {
+  require_command node
+  local repo_root
+  repo_root=$(resolve_repo_root)
+  node --test --test-name-pattern='fixture conforms|settled' "$repo_root/tests/standalone/pi-notify-live.mjs"
+}
+
+test_pi_notify_failure() {
+  require_command node
+  local repo_root
+  repo_root=$(resolve_repo_root)
+  node --test --test-name-pattern='fixture conforms|unavailable transport' "$repo_root/tests/standalone/pi-notify-live.mjs"
+}
+
+test_pi_focus_routing() {
+  ensure_tmp
+  require_command node
+  require_command jq
+  require_command socat
+  require_command nc
+  [[ -x "${WRIX_TEST_WRIX_BIN:-}" ]] || fail "packaged launcher was not supplied"
+
+  local source_kind
+  case "$(uname -s)" in
+    Linux) source_kind="nix-descriptor" ;;
+    Darwin)
+      source_kind="docker-archive"
+      if ! ifconfig | grep 'inet 192.168.64.1 ' >/dev/null; then
+        skip "Darwin vmnet gateway is unavailable; no host daemon transport was tested"
+      fi
+      ;;
+    *) skip "unsupported notification platform" ;;
+  esac
+  local repo_root bin_dir target
+  repo_root=$(resolve_repo_root)
+  bin_dir="$TEST_TMP/host-bin"
+  target=$' host/é:terminal\n'
+  write_host_focus_commands "$bin_dir"
+  cp "$repo_root/tests/standalone/notify-runtime.sh" "$bin_dir/podman"
+  cp "$repo_root/tests/standalone/notify-runtime.sh" "$bin_dir/container"
+  chmod +x "$bin_dir/podman" "$bin_dir/container"
+  printf 'fixture key, not a credential\n' >"$TEST_TMP/deploy-key"
+  jq -n --arg source_kind "$source_kind" --arg digest "sha256:$(printf 'a%.0s' {1..64})" '{
+    schema: 1, system: "test", profile: {name: "base"}, agent: {kind: "pi"},
+    image: {ref: "localhost/wrix-test:latest", source: "/missing/image", source_kind: $source_kind, digest: $digest},
+    services: {nix_cache: {enable: false}}
+  }' >"$TEST_TMP/profile.json"
+
+  local case_name directory runtime_dir state capture daemon_log session_dir endpoint
+  local daemon_pid relay_pid launcher_pid port
+  for case_name in focused unfocused; do
+    directory="$TEST_TMP/pi-$case_name"
+    runtime_dir="$directory/runtime"
+    state="$directory/focus-state"
+    capture="$directory/dispatch.jsonl"
+    daemon_log="$directory/daemon.log"
+    mkdir -p "$state" "$directory/workspace" "$directory/home/.pi/agent"
+    printf '{}\n' >"$directory/home/.pi/agent/auth.json"
+    printf '{"id":42}\n' >"$state/window"
+    printf 'FocusedTerminal\n' >"$state/app"
+    printf 'host:2.1\n' >"$state/pane"
+    case "$(uname -s)" in
+      Linux) session_dir="$runtime_dir/wrix/sessions" ;;
+      Darwin) session_dir="$runtime_dir/data/wrix/sessions" ;;
+    esac
+    ln -s "$session_dir" "$directory/sessions"
+    jq -n --arg workspace "$directory/workspace" '{workspace: $workspace, env: [], agent_args: []}' >"$directory/spawn.json"
+    PATH="$bin_dir:$PATH" WRIX_NOTIFY_TEST_FOCUS_STATE="$state" start_notify_daemon \
+      "$runtime_dir" "$capture" "$daemon_log" 0 1 "" || fail_with_output "packaged daemon did not start" "$daemon_log"
+    daemon_pid="${BACKGROUND_PIDS[-1]}"
+    relay_pid=""
+    if [[ "$(uname -s)" == "Linux" ]]; then
+      port="$((42000 + (BASHPID % 20000)))"
+      start_client_daemon_relay "$runtime_dir" "$port" "$directory/relay.log" || fail "client relay did not start"
+      relay_pid="${BACKGROUND_PIDS[-1]}"
+      endpoint="127.0.0.1:$port"
+    else
+      endpoint="$DARWIN_GATEWAY:$TCP_PORT"
+    fi
+    (
+      unset WRIX_DRY_RUN WRIX_DRY_RUN_SERVICES WRIX_MICROVM WRIX_UNSAFE_PODMAN_SOCKET WRIX_SIGNING_KEY
+      WRIX_FOCUS_TARGET="$target" TMUX=host-terminal \
+        WRIX_NOTIFY_TEST_PI_RUNNER="$repo_root/tests/standalone/pi-notify-live.mjs" \
+        PI_TEST_FOCUS_CAPTURE="$directory/wire.jsonl" \
+        start_registered_launcher "$directory" spawn "$runtime_dir" "$state" "$bin_dir" "$endpoint" Pi
+      launcher_pid="${BACKGROUND_PIDS[-1]}"
+      wait_for_capture "$directory/record.json" || fail_with_output "Pi launcher did not register" "$directory/launch.log"
+      jq -e --arg target "$target" '.focus_target == $target and .tmux_target == "host:2.1"' \
+        "$directory/record.json" >/dev/null || fail "Pi launcher registered a different host target"
+      if [[ "$case_name" == "unfocused" ]]; then
+        printf '{"id":43}\n' >"$state/window"
+        printf 'OtherTerminal\n' >"$state/app"
+      fi
+      touch "$directory/release"
+      wait_for_capture "$directory/wire.jsonl" || fail_with_output "packaged Pi did not notify" "$directory/launch.log"
+      assert_single_json_envelope "$directory/wire.jsonl"
+      jq -e --arg target "$target" '.title == "Pi" and .message == "Waiting for input" and
+        .focus_target == $target and (has("session_id") | not)' "$directory/wire.jsonl" >/dev/null || fail "Pi client envelope lost host routing or agent title"
+      if [[ "$case_name" == "focused" ]]; then
+        wait_for_suppression_count "$daemon_log" 1 || fail_with_output "Pi registered focus did not suppress" "$daemon_log"
+        [[ ! -s "$capture" ]] || fail "focused Pi target dispatched"
+      else
+        wait_for_capture "$capture" || fail_with_output "Pi unfocused target did not dispatch" "$daemon_log"
+        assert_native_dispatch "$capture" Pi 'Waiting for input' ""
+      fi
+      touch "$directory/finish"
+      wait "$launcher_pid" || fail_with_output "Pi launch did not complete successfully" "$directory/launch.log"
+    )
+    stop_background_process "$daemon_pid"
+    if [[ -n "$relay_pid" ]]; then stop_background_process "$relay_pid"; fi
+  done
+  pass "actual packaged Pi routes settled attention through registered launcher/client/daemon (external runtime/OS, not container delivery)"
+}
+
 test_focus_target_registration() {
   ensure_tmp
   require_command jq
@@ -1071,6 +1186,9 @@ main() {
     --inside-container) test_container_payload_inside ;;
     test_focus_target_envelope) test_focus_target_envelope ;;
     test_focus_target_registration) test_focus_target_registration ;;
+    test_pi_settled) test_pi_settled ;;
+    test_pi_focus_routing) test_pi_focus_routing ;;
+    test_pi_notify_failure) test_pi_notify_failure ;;
     test_client_non_blocking) test_client_non_blocking ;;
     test_client_tcp_endpoint_override) test_client_tcp_endpoint_override ;;
     test_container_transport_darwin) test_container_transport_darwin ;;
