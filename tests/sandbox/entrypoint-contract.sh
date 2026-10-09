@@ -386,7 +386,10 @@ test_declared_direct_runner_preserves_argv_stdio_both() {
         run_entrypoint "$platform" direct "$stdout_path" "$stderr_path" "$workspace" \
         'two words' '' '$(exit 98)' --help || status=$?
       assert_consumer_reply "$stdout_path" "$stderr_path" "$status" || return 1
-      jq -e '.exit_code == 23' "$workspace/.wrix/log/"*.json >/dev/null || return 1
+      [[ -z "$(find "$workspace/.wrix/log" -type f -print)" ]] || {
+        fail "$platform guest wrote host-owned execution metadata"
+        return 1
+      }
     done
   done
   printf 'PASS: both entrypoints execute the declared package path, not PATH/env overrides, preserving argv/stdio/status\n' >&2
@@ -550,7 +553,6 @@ assert_interactive_claude_launch() {
   local stderr_path="$4"
   local expected_prompt="$5"
   local expected_args
-  local -a log_files
 
   if ! WRIX_TEST_STDIO=0 run_entrypoint "$platform" claude "$stdout_path" "$stderr_path" "$workspace"; then
     fail "$platform interactive Claude failed: $(<"$stderr_path")"
@@ -564,12 +566,10 @@ assert_interactive_claude_launch() {
     fail "$platform interactive Claude argv differs: $(<"$stdout_path")"
     return 1
   fi
-  mapfile -t log_files < <(find "$workspace/.wrix/log" -maxdepth 1 -name '*.json' -type f)
-  if [[ "${#log_files[@]}" -ne 1 ]] || ! jq -e --arg session_dir "$workspace/.claude" \
-    '.exit_code == 0 and .agent_session_dir == $session_dir' "${log_files[0]}" >/dev/null; then
-    fail "$platform interactive Claude did not write one successful audit index"
+  [[ -z "$(find "$workspace/.wrix/log" -type f -print)" ]] || {
+    fail "$platform guest wrote host-owned execution metadata"
     return 1
-  fi
+  }
 }
 
 test_interactive_claude_without_prompt_mount_both_entrypoints() {
@@ -993,77 +993,6 @@ test_entrypoints_require_network_bootstrap() {
     done
   done
   printf 'PASS: both entrypoints reject unsafe startup before setup or exit logging\n' >&2
-}
-
-test_same_second_audit_indexes_both_entrypoints() {
-  require_command jq
-  # shellcheck source=tests/security/audit-clock.sh
-  source "$REPO_ROOT/tests/security/audit-clock.sh"
-  local clock_date="${WRIX_TEST_AUDIT_CLOCK_DATE:?}" platform member workspace barrier case_dir tool_dir home_dir etc_wrix entrypoint
-  local first_pid second_pid ready_status first_status second_status
-  local -a pids log_files
-
-  for platform in linux darwin; do
-    workspace="$TEST_TMP/clock-$platform/workspace"
-    barrier="$workspace/.wrix/audit-start"
-    mkdir -p "$barrier"
-    AUDIT_CLOCK_BARRIERS+=("$barrier")
-    pids=()
-    for member in first second; do
-      case_dir="$TEST_TMP/clock-$platform-$member"
-      tool_dir="$case_dir/tools"
-      home_dir="$case_dir/home"
-      etc_wrix="$case_dir/etc/wrix"
-      entrypoint="$case_dir/entrypoint.sh"
-      mkdir -p "$home_dir"
-      write_fake_runtime_tools "$tool_dir"
-      prepare_wrix_etc "$etc_wrix" direct
-      rewrite_entrypoint "$platform" "$workspace" "$etc_wrix" "$entrypoint" "$home_dir"
-    done
-    for member in first second; do
-      case_dir="$TEST_TMP/clock-$platform-$member"
-      (
-        if [[ "$member" = second ]]; then sleep 1.2; fi
-        env HOME="$case_dir/home" HOST_UID="$(id -u)" \
-          PATH="$case_dir/tools:$(dirname "$clock_date"):$PATH" \
-          WRIX_AGENT=direct WRIX_FIREWALL_BACKEND=iptables WRIX_NETWORK=open \
-          WRIX_SESSION_ID="$platform-$member" \
-          WRIX_TEST_AUDIT_START_BARRIER="$barrier" WRIX_TEST_AUDIT_START_MEMBER="$member" \
-          bash "$case_dir/entrypoint.sh" true >"$case_dir.out" 2>"$case_dir.err"
-      ) &
-      pids+=("$!")
-      AUDIT_CLOCK_PIDS+=("$!")
-    done
-    first_pid="${pids[0]}"
-    second_pid="${pids[1]}"
-    ready_status=0
-    audit_wait_for_start_clocks "$barrier" "$first_pid" "$second_pid" || ready_status=$?
-    if [[ "$ready_status" -eq 0 ]]; then
-      audit_release_start_clocks "$barrier"
-    else
-      : >"$barrier/release"
-    fi
-    first_status=0
-    second_status=0
-    wait "$first_pid" || first_status=$?
-    wait "$second_pid" || second_status=$?
-    AUDIT_CLOCK_PIDS=()
-    if [[ "$ready_status" -ne 0 || "$first_status" -ne 0 || "$second_status" -ne 0 ]]; then
-      fail "$platform coordinated entrypoints failed ($ready_status, $first_status, $second_status)"
-      return 1
-    fi
-    mapfile -t log_files < <(find "$workspace/.wrix/log" -maxdepth 1 -name '*.json' -type f)
-    if [[ "${#log_files[@]}" -ne 2 ]] || ! jq -es --arg platform "$platform" '
-      length == 2
-      and ([.[].timestamp_start] | unique | length == 1)
-      and ([.[].wrix_session_id] | sort == [$platform + "-first", $platform + "-second"])
-      and all(.[]; .exit_code == 0)
-    ' "${log_files[@]}" >/dev/null; then
-      fail "$platform did not retain two distinct same-second audit indexes"
-      return 1
-    fi
-    printf 'PASS: %s delayed entrypoint starts retain two real same-second indexes\n' "$platform"
-  done
 }
 
 ALL_TESTS=(

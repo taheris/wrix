@@ -18,7 +18,7 @@ case "${1:-} ${2:-}" in
   'image list' | 'list --all') printf '%s\n' '[]' ;;
   tag*) [[ "${2:-}" == "${WRIX_TEST_DIGEST:?}" ]] ;;
   'image tag') [[ "${3:-}" == "${WRIX_TEST_DIGEST:?}" ]] ;;
-  'run --rm')
+  'run --rm' | 'service start')
     printf '%s\0' "$@" >"${WRIX_TEST_ARGV:?}"
     exec 3<>"/dev/tcp/127.0.0.1/${WRIX_TEST_CONTROL_PORT:?}"
     printf '%s\n' "ready $runtime" >&3
@@ -26,6 +26,10 @@ case "${1:-} ${2:-}" in
       case "$request" in
         probe) printf '%s\n' held >&3 ;;
         release)
+          if [[ "${WRIX_TEST_SIGNAL:-}" == TERM ]]; then
+            printf '%s\n' 'finished signal' >&3
+            kill -TERM "$$"
+          fi
           printf 'finished %s\n' "${WRIX_TEST_EXIT_CODE:?}" >&3
           exit "$WRIX_TEST_EXIT_CODE"
           ;;

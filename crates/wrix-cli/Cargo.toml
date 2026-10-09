@@ -23,5 +23,8 @@ wrix-core = { workspace = true }
 wrix-sandbox = { workspace = true }
 wrix-service = { workspace = true }
 
+[dev-dependencies]
+libc = { workspace = true }
+
 [lints]
 workspace = true

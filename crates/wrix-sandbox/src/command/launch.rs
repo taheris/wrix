@@ -1,3 +1,4 @@
+mod execution_metadata;
 mod pi_auth;
 
 use pi_auth::Storage as PiAuth;
@@ -8,7 +9,7 @@ use std::{
     net::Ipv4Addr,
     num::NonZeroU16,
     path::{Path, PathBuf},
-    process::{Command as ProcessCommand, ExitCode, Output, Stdio},
+    process::{Command as ProcessCommand, ExitCode, ExitStatus, Output, Stdio},
 };
 
 use displaydoc::Display;
@@ -159,6 +160,8 @@ pub enum LaunchError {
     DarwinVmnetRouteFailed { route: String, interface: String },
     /// {source}
     Image { source: image::Error },
+    /// {source}
+    Metadata { source: execution_metadata::Error },
 }
 
 impl From<io::Error> for LaunchError {
@@ -194,21 +197,45 @@ fn complete_with_cleanup<T>(
     }
 }
 
-pub fn execute(request: &Request, stdout: &mut impl Write) -> Result<ExitCode, LaunchError> {
+pub fn execute(
+    request: &Request,
+    stdout: &mut impl Write,
+    stderr: &mut impl Write,
+) -> Result<ExitCode, LaunchError> {
     let network_mode = NetworkMode::from_env(request.profile_config.network.default_mode)?;
     let dry_run = env_flag("WRIX_DRY_RUN");
     let credential_sources = CredentialSources::resolve(request)?;
-    let services = if !dry_run || env_flag("WRIX_DRY_RUN_SERVICES") {
-        ServicesState::load(request)?
-    } else {
-        ServicesState::default()
-    };
-    let plan = Plan::new(request, services, network_mode, credential_sources)?;
+    let plan = Plan::new(request, network_mode, credential_sources)?;
     if dry_run {
-        plan.write_dry_run(stdout)?;
+        let services = if env_flag("WRIX_DRY_RUN_SERVICES") {
+            ServicesState::load(request)?
+        } else {
+            ServicesState::default()
+        };
+        plan.write_dry_run(stdout, &services)?;
         return Ok(ExitCode::SUCCESS);
     }
-    plan.launch()
+    let journal = execution_metadata::Journal::create(
+        &plan.workspace,
+        &request.kind,
+        request.profile_config.agent.kind,
+        plan.focus_target.as_ref(),
+    )
+    .map_err(|source| LaunchError::Metadata { source })?;
+    let mut observed_status = None;
+    let result = ServicesState::load(request)
+        .and_then(|services| plan.launch(&services, &mut observed_status));
+    if let Err(error) = journal.complete(observed_status) {
+        tracing::warn!(workspace = %plan.workspace.display(), %error, "execution metadata remains incomplete");
+        if let Err(report_error) = writeln!(
+            stderr,
+            "wrix {}: completion metadata update failed: {error}",
+            plan.subcommand()
+        ) {
+            tracing::warn!(workspace = %plan.workspace.display(), %report_error, "could not write metadata diagnostic to stderr");
+        }
+    }
+    result
 }
 
 struct Plan<'a> {
@@ -223,7 +250,6 @@ struct Plan<'a> {
     runtime_secret_env: Vec<(String, String)>,
     runtime_passthrough_env: Vec<(String, String)>,
     spawn_mounts: Vec<RenderedMount>,
-    services: ServicesState,
     credential_sources: Option<CredentialSources>,
     host_podman_socket: Option<HostPodmanSocket>,
     network_mode: NetworkMode,
@@ -638,7 +664,6 @@ struct GitIdentity {
 impl<'a> Plan<'a> {
     fn new(
         request: &'a Request,
-        services: ServicesState,
         network_mode: NetworkMode,
         credential_sources: Option<CredentialSources>,
     ) -> Result<Self, LaunchError> {
@@ -728,7 +753,6 @@ impl<'a> Plan<'a> {
             runtime_secret_env,
             runtime_passthrough_env,
             spawn_mounts,
-            services,
             credential_sources,
             host_podman_socket,
             network_mode,
@@ -738,7 +762,11 @@ impl<'a> Plan<'a> {
         })
     }
 
-    fn write_dry_run(&self, stdout: &mut impl Write) -> Result<(), LaunchError> {
+    fn write_dry_run(
+        &self,
+        stdout: &mut impl Write,
+        services: &ServicesState,
+    ) -> Result<(), LaunchError> {
         Staging::with(|staging| {
             let credentials = self.credentials(staging)?;
             let pi_auth = self.pi_auth()?;
@@ -792,7 +820,7 @@ impl<'a> Plan<'a> {
             if Platform::CURRENT == Platform::Linux {
                 writeln!(stdout, "PODMAN_NETWORK={}", linux_podman_network())?;
             }
-            self.services.write_dry_run(stdout)?;
+            services.write_dry_run(stdout)?;
             if let Some(credentials) = &credentials {
                 writeln!(stdout, "MOUNT=-v {}", credentials.mount().podman_arg())?;
                 for (key, value) in credential_env_pairs(credentials) {
@@ -858,24 +886,32 @@ impl<'a> Plan<'a> {
         })
     }
 
-    fn launch(&self) -> Result<ExitCode, LaunchError> {
+    fn launch(
+        &self,
+        services: &ServicesState,
+        observed_status: &mut Option<ExitStatus>,
+    ) -> Result<ExitCode, LaunchError> {
         let registration = FocusRegistration::create(
             self.focus_target.as_ref(),
             self.host_tmux_target.as_ref(),
             Platform::CURRENT,
         )?;
         let result = match Platform::CURRENT {
-            Platform::Linux => self.launch_linux(),
-            Platform::Darwin => self.launch_darwin(),
+            Platform::Linux => self.launch_linux(services, observed_status),
+            Platform::Darwin => self.launch_darwin(services, observed_status),
         };
         complete_with_cleanup(result, registration.remove())
     }
 
-    fn launch_linux(&self) -> Result<ExitCode, LaunchError> {
+    fn launch_linux(
+        &self,
+        services: &ServicesState,
+        observed_status: &mut Option<ExitStatus>,
+    ) -> Result<ExitCode, LaunchError> {
         self.install_image(Runtime::Podman)?;
         self.remember_and_prune_images(Runtime::Podman)?;
         Staging::with(|staging| {
-            let mut volumes = self.linux_volumes(staging)?;
+            let mut volumes = self.linux_volumes(staging, services)?;
             let credentials = self.credentials(staging)?;
             if let Some(credentials) = &credentials {
                 volumes.push(credentials.mount());
@@ -952,6 +988,7 @@ impl<'a> Plan<'a> {
                 pi_auth
                     .is_some()
                     .then_some(pi_auth::CONTAINER_FILE.to_owned()),
+                services,
             ) {
                 command.arg("-e").arg(format!("{key}={value}"));
             }
@@ -977,11 +1014,17 @@ impl<'a> Plan<'a> {
                 .stdin(Stdio::inherit())
                 .stdout(Stdio::inherit())
                 .stderr(Stdio::inherit());
-            status_to_exit(command.status()?)
+            let status = command.status()?;
+            *observed_status = Some(status);
+            status_to_exit(status)
         })
     }
 
-    fn launch_darwin(&self) -> Result<ExitCode, LaunchError> {
+    fn launch_darwin(
+        &self,
+        services: &ServicesState,
+        observed_status: &mut Option<ExitStatus>,
+    ) -> Result<ExitCode, LaunchError> {
         let vpn_conflict = fix_darwin_vmnet_route()?;
         self.install_image(Runtime::Container)?;
         self.remember_and_prune_images(Runtime::Container)?;
@@ -1027,6 +1070,7 @@ impl<'a> Plan<'a> {
                 pi_auth
                     .is_some()
                     .then_some(pi_auth::CONTAINER_FILE.to_owned()),
+                services,
             ) {
                 command.arg("-e").arg(format!("{key}={value}"));
             }
@@ -1050,12 +1094,17 @@ impl<'a> Plan<'a> {
                 .stdout(Stdio::inherit())
                 .stderr(Stdio::inherit());
             let status = command.status()?;
+            *observed_status = Some(status);
             darwin_mounts.sync_files()?;
             status_to_exit(status)
         })
     }
 
-    fn linux_volumes(&self, staging: &Staging) -> Result<Vec<RenderedMount>, LaunchError> {
+    fn linux_volumes(
+        &self,
+        staging: &Staging,
+        services: &ServicesState,
+    ) -> Result<Vec<RenderedMount>, LaunchError> {
         let mut volumes = vec![RenderedMount {
             host: self.workspace.display().to_string(),
             container: String::from("/workspace"),
@@ -1065,7 +1114,7 @@ impl<'a> Plan<'a> {
         if let Some(notification) = linux_notification_socket_mount()? {
             volumes.push(notification);
         }
-        if let Some(beads) = &self.services.beads_socket
+        if let Some(beads) = &services.beads_socket
             && let Some(source) = &beads.mount_source
         {
             volumes.push(RenderedMount {
@@ -1202,6 +1251,7 @@ impl<'a> Plan<'a> {
         &self,
         credentials: Option<&Credentials>,
         pi_auth: Option<String>,
+        services: &ServicesState,
     ) -> Vec<(String, String)> {
         let mut pairs = self
             .request
@@ -1254,7 +1304,7 @@ impl<'a> Plan<'a> {
                 target.as_str().to_owned(),
             ));
         }
-        if let Some(cache) = &self.services.project_cache {
+        if let Some(cache) = &services.project_cache {
             pairs.push((
                 String::from("WRIX_PROJECT_CACHE_HOST"),
                 cache.host.to_string(),
@@ -1265,13 +1315,13 @@ impl<'a> Plan<'a> {
             ));
             pairs.push((String::from("NIX_CONFIG"), cache.nix_config.clone()));
         }
-        if let Some(beads) = &self.services.beads_socket {
+        if let Some(beads) = &services.beads_socket {
             pairs.push((
                 String::from("BEADS_DOLT_SERVER_SOCKET"),
                 beads.container_socket.clone(),
             ));
         }
-        if let Some(beads) = &self.services.beads_tcp {
+        if let Some(beads) = &services.beads_tcp {
             pairs.push((
                 String::from("BEADS_DOLT_SERVER_HOST"),
                 beads.host.to_string(),

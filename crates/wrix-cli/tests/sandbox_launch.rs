@@ -152,6 +152,47 @@ fn spawn_waits_for_container_completion() -> TestResult {
 }
 
 #[test]
+fn completion_metadata_diagnostics_preserve_cli_status() -> TestResult {
+    for mode in ["run", "spawn"] {
+        for exit_code in [0, 37] {
+            let fixture = lifecycle::Fixture::new()?;
+            let mut command = Command::new(env!("CARGO_BIN_EXE_wrix"));
+            command
+                .arg("--profile-config")
+                .arg(&fixture.profile)
+                .arg(mode);
+            if mode == "run" {
+                command.arg(fixture.workspace());
+            } else {
+                command.arg("--spawn-config").arg(&fixture.spawn);
+            }
+            fixture.configure(&mut command, exit_code)?;
+            let mut child = lifecycle::Process::spawn(&mut command)?;
+            let mut control = fixture.accept(&mut child)?;
+            assert!(control.receive()?.starts_with("ready "));
+            let log = fixture.workspace().join(".wrix/log");
+            let saved = fixture.workspace().join(".wrix/saved-log");
+            fs::rename(&log, &saved)?;
+            fs::write(&log, "completion-only obstruction")?;
+            control.send(lifecycle::Request::Release)?;
+            assert_eq!(control.receive()?, format!("finished {exit_code}"));
+            assert_eq!(child.finish()?.code(), Some(i32::from(exit_code)));
+            assert!(
+                fixture
+                    .diagnostics()?
+                    .contains("completion metadata update failed")
+            );
+            assert_eq!(fs::read_to_string(fixture.root().join("stdout"))?, "");
+            let entries = fs::read_dir(&saved)?.collect::<Result<Vec<_>, _>>()?;
+            assert_eq!(entries.len(), 1);
+            let value: Value = serde_json::from_slice(&fs::read(entries[0].path())?)?;
+            assert_eq!(value["state"], "incomplete");
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn runtime_mcp_selection_reaches_entrypoint() -> TestResult {
     use wrix_sandbox::command::Command as LaunchCommand;
 

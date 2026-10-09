@@ -19,101 +19,6 @@ fi
 # shellcheck source=/dev/null
 . /beads-sandbox.sh
 
-SESSION_START_EPOCH=$(date +%s)
-SESSION_START_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-SESSION_LOG_WRITTEN=0
-
-wrix_session_dir_for_agent() {
-  case "${WRIX_AGENT:-direct}" in
-    claude) printf '%s\n' "/workspace/.claude" ;;
-    pi) printf '%s\n' "/workspace/.pi/agent/sessions" ;;
-    direct) printf '%s\n' "/workspace" ;;
-    *) printf '%s\n' "/workspace" ;;
-  esac
-}
-
-wrix_bead_id() {
-  local spawn_config="${WRIX_SPAWN_CONFIG:-}"
-  if [[ -r "$spawn_config" ]]; then
-    jq -r '.bead_id | strings | select(length > 0)' "$spawn_config"
-  fi
-}
-
-write_session_log() {
-  local exit_code="$1"
-  if [[ "$SESSION_LOG_WRITTEN" -eq 1 ]]; then
-    return 0
-  fi
-  SESSION_LOG_WRITTEN=1
-
-  local end_epoch
-  end_epoch=$(date +%s)
-  local end_iso
-  end_iso=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  local duration=$((end_epoch - SESSION_START_EPOCH))
-  local bead_id
-  bead_id=$(wrix_bead_id)
-  local mode="interactive"
-  if [[ -n "$bead_id" || "${LOOM_MODE:-}" = "1" ]]; then
-    mode="loom"
-  fi
-
-  local claude_session_id=""
-  if [[ -f /workspace/.claude/history.jsonl ]]; then
-    # best-effort: unreadable or malformed history means the optional id stays empty.
-    if ! claude_session_id=$(tail -1 /workspace/.claude/history.jsonl 2>/dev/null \
-      | jq -r '.sessionId // empty' 2>/dev/null); then
-      claude_session_id=""
-    fi
-  fi
-
-  local agent_session_dir
-  agent_session_dir=$(wrix_session_dir_for_agent)
-  mkdir -p "$agent_session_dir" /workspace/.wrix/log
-  local log_file
-  log_file=$(mktemp --suffix=.json "/workspace/.wrix/log/${SESSION_START_ISO//[:.]/-}.XXXXXX")
-
-  jq -n \
-    --arg start "$SESSION_START_ISO" \
-    --arg end "$end_iso" \
-    --argjson duration "$duration" \
-    --argjson exit_code "$exit_code" \
-    --arg mode "$mode" \
-    --arg bead_id "$bead_id" \
-    --arg session_id "${WRIX_SESSION_ID:-}" \
-    --arg claude_session_id "$claude_session_id" \
-    --arg agent_session_dir "$agent_session_dir" \
-    '{
-      timestamp_start: $start,
-      timestamp_end: $end,
-      duration_seconds: $duration,
-      exit_code: $exit_code,
-      mode: $mode,
-      bead_id: (if $bead_id == "" then null else $bead_id end),
-      wrix_session_id: (if $session_id == "" then null else $session_id end),
-      claude_session_id: (if $claude_session_id == "" then null else $claude_session_id end),
-      agent_session_dir: $agent_session_dir
-    }' >"$log_file"
-}
-
-wrix_on_exit() {
-  local exit_code="$?"
-  local log_status=0
-  trap - EXIT HUP INT TERM
-  set +e
-  write_session_log "$exit_code"
-  log_status=$?
-  if [[ "$exit_code" -eq 0 && "$log_status" -ne 0 ]]; then
-    exit_code="$log_status"
-  fi
-  exit "$exit_code"
-}
-
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
-trap wrix_on_exit EXIT
-
 # The launcher always passes HOME=/home/wrix; default it so a bare
 # `podman run` of this entrypoint (tests, ad-hoc) still has a writable home —
 # git config below and the agent config seeding both need $HOME.
@@ -390,7 +295,7 @@ fi
 
 wrix_wait_for_beads_endpoint
 
-# Run main process (without exec, so EXIT trap can write session log)
+# Run the selected agent; execution metadata belongs to the host launcher.
 MAIN_EXIT=0
 if [[ "$WRIX_AGENT" = "pi" ]] && [[ "${WRIX_STDIO:-}" = "1" ]]; then
   "$WRIX_AGENT_BIN" --mode rpc "$@" || MAIN_EXIT=$?

@@ -401,24 +401,24 @@ section is a reference index only.
 - Each validated launch establishes one correctly typed execution record before
   any service/container startup, preserves optional issue and focus identities,
   and keeps concurrent same-second execution IDs and files distinct
-  [test?](../crates/wrix-sandbox/tests/execution_metadata.rs::launch_records_precede_work_and_do_not_collide)
+  [test](../crates/wrix-sandbox/tests/execution_metadata.rs::launch_records_precede_work_and_do_not_collide)
 - A record-creation failure prevents work; observed success, failure, or signal
   termination atomically completes the same record without inventing a
   conversation identity
-  [test?](../crates/wrix-sandbox/tests/execution_metadata.rs::observed_termination_updates_the_original_record)
+  [test](../crates/wrix-sandbox/tests/execution_metadata.rs::observed_termination_updates_the_original_record)
 - In both launch modes, a completion-update failure leaves the record incomplete
   and emits a stderr diagnostic without replacing the observed runtime status or
   the original pre-runtime launch failure
-  [test?](../crates/wrix-sandbox/tests/execution_metadata.rs::completion_update_errors_preserve_launch_outcome)
+  [test](../crates/wrix-sandbox/tests/execution_metadata.rs::completion_update_errors_preserve_launch_outcome)
 - Exit metadata records the foreground runtime command's observed exit code or
   signal without inferring agent status or decoding ordinary `128 + n` exit
   codes as signals; failures without a runtime status complete with null status
   fields rather than claiming success
-  [test?](../crates/wrix-sandbox/tests/execution_metadata.rs::metadata_status_tracks_the_container_runtime_command)
+  [test](../crates/wrix-sandbox/tests/execution_metadata.rs::metadata_status_tracks_the_container_runtime_command)
 - Known session roots are recorded as container-absolute paths for all agent
   kinds, with `/workspace` mapped to the selected host workspace; unavailable
   roots remain null rather than mixing host and container coordinates
-  [test?](../crates/wrix-sandbox/tests/execution_metadata.rs::session_roots_use_container_absolute_paths)
+  [test](../crates/wrix-sandbox/tests/execution_metadata.rs::session_roots_use_container_absolute_paths)
 - Live packaged launches retain an incomplete record after an abruptly killed
   launcher and complete records for observed startup failures and normal exits;
   agent-specific conversation information cannot leak between executions

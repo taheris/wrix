@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, fmt, fs, io, path::Path};
 
 use displaydoc::Display;
-use serde::{Deserialize, Deserializer, de};
+use serde::{Deserialize, Deserializer, Serialize, de};
 use serde_json::Value;
 use thiserror::Error;
 use wrix_core::deploy_key::{Name as KeyName, ParseError as KeyNameParseError};
@@ -36,7 +36,7 @@ impl Platform {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum AgentKind {
     Direct,
@@ -258,6 +258,7 @@ pub struct NixCacheService {
 
 #[derive(Clone, Debug)]
 pub struct SpawnConfig {
+    pub bead_id: Option<BeadId>,
     pub image_ref: Option<ImageRef>,
     pub image_source: Option<Source>,
     pub workspace: String,
@@ -292,8 +293,30 @@ where
     serde_json::from_value(Value::Object(fields)).map_err(de::Error::custom)
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(transparent)]
+pub struct BeadId(String);
+
+impl<'de> Deserialize<'de> for BeadId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        if value.is_empty()
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        {
+            return Err(de::Error::custom("invalid bead identifier"));
+        }
+        Ok(Self(value))
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct RawSpawnConfig {
+    bead_id: Option<BeadId>,
     image_ref: Option<ImageRef>,
     image_source: Option<String>,
     image_source_kind: Option<SourceKind>,
@@ -604,6 +627,7 @@ fn parse_spawn_value(value: Value, platform: Platform) -> Result<SpawnConfig, Co
         })
         .transpose()?;
     Ok(SpawnConfig {
+        bead_id: spawn.bead_id,
         image_ref: spawn.image_ref,
         image_source,
         workspace: spawn.workspace,

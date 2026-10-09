@@ -42,8 +42,6 @@ in
         set -euo pipefail
         export REPO_ROOT=${../..}
         ${pkgs.bash}/bin/bash "$REPO_ROOT/tests/security/audit-clock-test.sh" ${hostClock}/bin/date ${pkgs.coreutils}/bin/date
-        export WRIX_TEST_AUDIT_CLOCK_DATE=${hostClock}/bin/date
-        ${pkgs.bash}/bin/bash "$REPO_ROOT/tests/sandbox/entrypoint-contract.sh" test_same_second_audit_indexes_both_entrypoints
         touch "$out"
       '';
 }

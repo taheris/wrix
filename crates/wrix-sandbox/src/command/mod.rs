@@ -59,7 +59,7 @@ pub fn run(
             write_run_help(stdout)?;
             Ok(ExitCode::SUCCESS)
         }
-        Ok(Some(request)) => match launch::execute(&request, stdout) {
+        Ok(Some(request)) => match launch::execute(&request, stdout, stderr) {
             Ok(code) => Ok(code),
             Err(error) => {
                 writeln!(stderr, "wrix {}: {error}", command.as_str())?;

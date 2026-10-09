@@ -2,8 +2,11 @@ use std::{
     fs, io,
     io::{BufRead, BufReader, Write},
     net::{TcpListener, TcpStream},
-    os::unix::{fs::PermissionsExt, process::CommandExt},
-    path::PathBuf,
+    os::unix::{
+        fs::PermissionsExt,
+        process::{CommandExt, ExitStatusExt},
+    },
+    path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
     thread,
     time::{Duration, Instant},
@@ -38,7 +41,7 @@ impl Fixture {
         for dir in [&workspace, &bin, &root.path().join("home")] {
             fs::create_dir_all(dir)?;
         }
-        for name in ["podman", "container", "route"] {
+        for name in ["podman", "container", "route", "service"] {
             let path = bin.join(name);
             fs::write(&path, include_str!("../../fixtures/lifecycle-runtime.sh"))?;
             fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
@@ -78,8 +81,16 @@ impl Fixture {
         })
     }
 
+    pub fn root(&self) -> &Path {
+        self.root.path()
+    }
+
+    pub fn workspace(&self) -> PathBuf {
+        self.root.path().join("workspace")
+    }
+
     pub fn configure(&self, command: &mut Command, exit_code: u8) -> TestResult {
-        let path = std::env::join_paths(std::iter::once(self.root.path().join("bin")).chain(
+        let path = std::env::join_paths(std::iter::once(self.root().join("bin")).chain(
             std::env::split_paths(&std::env::var_os("PATH").ok_or("PATH is missing")?),
         ))?;
         command
@@ -100,6 +111,7 @@ impl Fixture {
             .env("WRIX_TEST_EXIT_CODE", exit_code.to_string())
             .env("WRIX_TEST_PROFILE_CONFIG", &self.profile)
             .env("WRIX_TEST_SPAWN_CONFIG", &self.spawn)
+            .env("WRIX_TEST_WORKSPACE", self.workspace())
             .env(
                 "WRIX_TEST_CONTROL_PORT",
                 self.listener.local_addr()?.port().to_string(),
@@ -185,7 +197,7 @@ impl Fixture {
         Ok(argv)
     }
 
-    fn accept(&self, child: &mut Process) -> TestResult<Control> {
+    pub fn accept(&self, child: &mut Process) -> TestResult<Control> {
         let deadline = Instant::now() + PROCESS_TIMEOUT;
         loop {
             match self.listener.accept() {
@@ -224,7 +236,7 @@ impl Fixture {
         }
     }
 
-    fn argv(&self) -> TestResult<Vec<String>> {
+    pub fn argv(&self) -> TestResult<Vec<String>> {
         let bytes = fs::read(self.root.path().join("argv"))?;
         bytes
             .strip_suffix(&[0])
@@ -234,18 +246,18 @@ impl Fixture {
             .collect()
     }
 
-    fn diagnostics(&self) -> TestResult<String> {
+    pub fn diagnostics(&self) -> TestResult<String> {
         Ok(fs::read_to_string(self.root.path().join("stderr"))?)
     }
 }
 
 #[derive(Clone, Copy)]
-enum Request {
+pub enum Request {
     Probe,
     Release,
 }
 
-struct Control(BufReader<TcpStream>);
+pub struct Control(BufReader<TcpStream>);
 
 impl Control {
     fn new(stream: TcpStream) -> TestResult<Self> {
@@ -254,7 +266,7 @@ impl Control {
         Ok(Self(BufReader::new(stream)))
     }
 
-    fn send(&mut self, request: Request) -> io::Result<()> {
+    pub fn send(&mut self, request: Request) -> io::Result<()> {
         let request = match request {
             Request::Probe => "probe",
             Request::Release => "release",
@@ -262,7 +274,7 @@ impl Control {
         writeln!(self.0.get_mut(), "{request}")
     }
 
-    fn receive(&mut self) -> TestResult<String> {
+    pub fn receive(&mut self) -> TestResult<String> {
         let mut line = String::new();
         if self.0.read_line(&mut line)? == 0 {
             return Err("runtime disconnected before acknowledgement".into());
@@ -271,20 +283,20 @@ impl Control {
     }
 }
 
-struct Process {
+pub struct Process {
     child: Child,
     finished: bool,
 }
 
 impl Process {
-    fn spawn(command: &mut Command) -> io::Result<Self> {
+    pub fn spawn(command: &mut Command) -> io::Result<Self> {
         Ok(Self {
             child: command.process_group(0).spawn()?,
             finished: false,
         })
     }
 
-    fn finish(&mut self) -> io::Result<ExitStatus> {
+    pub fn finish(&mut self) -> io::Result<ExitStatus> {
         let status = wait_bounded(&mut self.child)?;
         self.finished = true;
         Ok(status)
@@ -416,6 +428,39 @@ fn runtime_fixture_conforms_to_inspection_hold_release_and_status_contract() -> 
         fs::read_to_string(fixture.root.path().join("stdout"))?,
         "interface: en0\n"
     );
+    Ok(())
+}
+
+#[test]
+fn runtime_fixture_reports_actual_signals_and_service_failures() -> TestResult {
+    for name in ["podman", "container", "service"] {
+        let fixture = Fixture::new()?;
+        let mut command = Command::new(fixture.root().join("bin").join(name));
+        fixture.configure(&mut command, 37)?;
+        let signal = name != "service";
+        if signal {
+            command
+                .env("WRIX_TEST_SIGNAL", "TERM")
+                .args(["run", "--rm", IMAGE]);
+        } else {
+            command.args(["service", "start"]);
+        }
+        let mut child = Process::spawn(&mut command)?;
+        let mut control = fixture.accept(&mut child)?;
+        assert_eq!(control.receive()?, format!("ready {name}"));
+        control.send(Request::Release)?;
+        assert_eq!(
+            control.receive()?,
+            if signal {
+                "finished signal"
+            } else {
+                "finished 37"
+            }
+        );
+        let status = child.finish()?;
+        assert_eq!(status.signal(), signal.then_some(libc::SIGTERM));
+        assert_eq!(status.code(), (!signal).then_some(37));
+    }
     Ok(())
 }
 

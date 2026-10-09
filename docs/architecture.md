@@ -235,6 +235,17 @@ credentials. Container Git applies the effective sign grant through an
 execution-local override, leaving shared repository Git config and concurrent
 host signing policy unchanged.
 
+### Execution Evidence
+
+The host launcher establishes a secret-free execution index in `.wrix/log/`
+before services or container setup, then atomically adds observed completion to
+the original record. Execution, optional agent conversation, and notification
+focus identities are separate. Status fields describe the foreground runtime
+command, not an independently observed agent process. An incomplete record means
+completion is unknown; Wrix does not poll, recover, or infer conversation IDs
+from shared history. Agent transcripts and codemode summaries are non-exhaustive
+evidence, not an adversarial-agent audit or a power-loss durability guarantee.
+
 ### MicroVM Boundary (Linux)
 
 On Linux with KVM, containers can optionally run inside a
@@ -289,7 +300,7 @@ artefacts:
 
 ```text
 .wrix/
-├── log/             # Session metadata indexes
+├── log/             # Host-owned execution metadata indexes
 ├── push-verified    # Touched by lib/prek/hooks/pre-push on green nix flake check
 └── dolt.sock        # Linux Dolt socket when used
 ```

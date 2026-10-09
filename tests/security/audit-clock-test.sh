@@ -113,34 +113,13 @@ test_dead_launcher_is_a_readiness_failure() {
   grep -q 'launcher exited before both start clocks were ready' "$TEST_TMP/dead.err"
 }
 
-test_overwritten_metadata_is_a_collision_failure() {
-  local platform root output status
-
-  for platform in linux darwin; do
-    root="$TEST_TMP/mutation-$platform"
-    output="$TEST_TMP/mutation-$platform.log"
-    mkdir -p "$root"
-    cp -R "${REPO_ROOT:?}/lib" "$REPO_ROOT/tests" "$root/"
-    chmod -R u+w "$root"
-    sed -i 's|log_file=$(mktemp --suffix=.json "/workspace/.wrix/log/${SESSION_START_ISO//\[:.\]/-}.XXXXXX")|log_file="/workspace/.wrix/log/${SESSION_START_ISO//[:.]/-}.json"|' \
-      "$root/lib/sandbox/$platform/entrypoint.sh"
-    status=0
-    REPO_ROOT="$root" WRIX_TEST_AUDIT_CLOCK_DATE="$CLOCK_DATE" \
-      bash "$root/tests/sandbox/entrypoint-contract.sh" test_same_second_audit_indexes_both_entrypoints \
-      >"$output" 2>&1 || status=$?
-    [[ "$status" -ne 0 ]]
-    grep -q "$platform did not retain two distinct same-second audit indexes" "$output"
-  done
-}
-
 for test in \
   test_inactive_clock_preserves_arguments_and_errors \
   test_delayed_arrivals_record_the_real_same_second \
   test_later_clock_reads_do_not_wait_again \
   test_non_start_formats_do_not_enter_the_barrier \
   test_invalid_member_is_rejected_without_ready_state \
-  test_dead_launcher_is_a_readiness_failure \
-  test_overwritten_metadata_is_a_collision_failure; do
+  test_dead_launcher_is_a_readiness_failure; do
   "$test"
   printf 'PASS: %s\n' "$test"
 done
