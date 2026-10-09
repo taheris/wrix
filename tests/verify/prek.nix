@@ -16,8 +16,10 @@ in
     ${repoScript "tests/profiles/prek-hooks-bundle.sh" "test_bundle_contents"}
     ${repoScript "tests/profiles/prek-hooks-bundle.sh" "test_bundle_path_is_context_stable"}
   '';
-  "prek.shims-use-hook-impl" =
-    repoScript "tests/profiles/prek-hooks-bundle.sh" "test_shims_use_hook_impl";
+  "prek.shims-use-hook-impl" = ''
+    ${repoScript "tests/profiles/prek-hooks-bundle.sh" "test_shims_use_hook_impl"}
+    ${repoScript "tests/profiles/prek-hooks-bundle.sh" "test_prek_capture_fixture_conforms_to_packaged_runtime"}
+  '';
   "prek.shims-no-flock" = ''
     ${repoScript "tests/profiles/prek-hooks-bundle.sh" "test_shims_no_flock"}
     ${repoScript "tests/profiles/prek-hooks-bundle.sh" "test_shims_resolve_packaged_prek_at_runtime"}

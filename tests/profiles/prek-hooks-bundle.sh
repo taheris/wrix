@@ -11,12 +11,16 @@
 #     content-addressed Nix-store path.
 #
 #   test_shims_use_hook_impl
-#     The materialized pre-commit and pre-push shims invoke
-#     `prek hook-impl --hook-type=<stage>` rather than `prek run`.
+#     Real packaged pre-commit and pre-push shims dispatch hook-impl with the
+#     correct stage and preserve Git's argv and ordered ref transaction.
+#
+#   test_prek_capture_fixture_conforms_to_packaged_runtime
+#     The external prek recorder preserves real stage execution and failure
+#     status compared with the unwrapped packaged runtime.
 #
 #   test_shims_no_flock
 #     No materialized shim sources lock.sh, calls _prek_acquire_lock, or
-#     invokes flock; every shim invokes hook-impl.
+#     invokes flock.
 #
 #   test_shims_resolve_packaged_prek_at_runtime
 #     Every shim runs its configured stage when only the packaged `wrix-prek`
@@ -130,33 +134,115 @@ test_bundle_path_is_context_stable() {
 }
 
 # ============================================================================
-test_shims_use_hook_impl() {
-  local bundle
-  if ! bundle=$(require_bundle "$@"); then
-    echo "FAIL: nix build lib.prekHooks failed" >&2
-    return 1
-  fi
-
-  local failed=0
-  local hook
-  for hook in pre-commit pre-push; do
-    if [[ ! -f "$bundle/$hook" ]]; then
-      echo "FAIL: bundle missing shim: $hook" >&2
-      failed=$((failed + 1))
-      continue
-    fi
-    if grep -qE '^[[:space:]]*[^#].*\bprek run\b' "$bundle/$hook"; then
-      echo "FAIL: $hook invokes 'prek run' instead of hook-impl" >&2
-      failed=$((failed + 1))
-    fi
-    if ! grep -qE "hook-impl .*--hook-type=$hook( |$)" "$bundle/$hook"; then
-      echo "FAIL: $hook does not invoke 'prek hook-impl --hook-type=$hook'" >&2
-      failed=$((failed + 1))
-    fi
-  done
-
-  [[ "$failed" -eq 0 ]]
+capture_runner_path() {
+  WRIX_TEST_REPO="$REPO_ROOT" nix build --impure --no-link --print-out-paths --no-warn-dirty --expr '
+    let
+      root = builtins.toPath (builtins.getEnv "WRIX_TEST_REPO");
+      flake = builtins.getFlake ("git+file://" + toString root);
+      pkgs = import flake.inputs.nixpkgs { system = builtins.currentSystem; };
+    in import (root + "/tests/prek/capture-runtime.nix") { inherit pkgs; }
+  '
 }
+
+test_shims_use_hook_impl() (
+  set -euo pipefail
+  local bundle runner work repo head_sha zero_sha refs
+  bundle=$(require_bundle "$@")
+  runner="$(capture_runner_path)/bin/wrix-prek"
+  work=$(mktemp -d)
+  repo="$work/repo with spaces"
+  trap 'rm -rf "$work"' EXIT
+  local -x GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 WRIX_PREK_CONTEXT=host
+  local -x WRIX_TEST_PREK_ARGV="$work/argv" WRIX_TEST_PREK_STDIN="$work/stdin"
+  init_pre_push_probe_repo "$repo"
+  (cd "$repo" && "$runner" --bind)
+
+  (cd "$repo" && "$bundle/pre-commit" </dev/null)
+  printf '%s\0' hook-impl --hook-type=pre-commit --hook-dir "$bundle" --script-version 4 -- >"$work/expected-argv"
+  cmp "$work/expected-argv" "$WRIX_TEST_PREK_ARGV"
+  [[ ! -s "$WRIX_TEST_PREK_STDIN" ]]
+  rm "$WRIX_TEST_PREK_ARGV"
+
+  head_sha=$(git -C "$repo" rev-parse HEAD)
+  zero_sha=0000000000000000000000000000000000000000
+  refs="refs/heads/main $head_sha refs/heads/main $zero_sha"$'\n'"(delete) $zero_sha refs/heads/obsolete $head_sha"
+  run_pre_push_transaction "$bundle" "$repo" origin "$work/remote [mirror].git" "$refs"
+  printf '%s\0' hook-impl --hook-type=pre-push --hook-dir "$bundle" --script-version 4 -- \
+    origin "$work/remote [mirror].git" >"$work/expected-argv"
+  printf '%s\n' "$refs" >"$work/expected-stdin"
+  cmp "$work/expected-argv" "$WRIX_TEST_PREK_ARGV"
+  cmp "$work/expected-stdin" "$WRIX_TEST_PREK_STDIN"
+)
+
+test_prek_capture_fixture_conforms_to_packaged_runtime() (
+  set -euo pipefail
+  local bundle capture_runner real_runner work repo runner stage expected_status status
+  local head_sha zero_sha refs
+  bundle=$(require_bundle "$@")
+  capture_runner="$(capture_runner_path)/bin/wrix-prek"
+  real_runner=$(command -v wrix-prek)
+  work=$(mktemp -d)
+  repo="$work/repo"
+  trap 'rm -rf "$work"' EXIT
+  local -x GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 WRIX_PREK_CONTEXT=host
+  local -x WRIX_TEST_PREK_ARGV="$work/argv" WRIX_TEST_PREK_STDIN="$work/stdin"
+  init_pre_push_probe_repo "$repo"
+  cat >"$repo/.git/dispatch-probe" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\0' "$@" "${PRE_COMMIT_REMOTE_NAME-}" "${PRE_COMMIT_REMOTE_URL-}" \
+  "${PRE_COMMIT_FROM_REF-}" "${PRE_COMMIT_TO_REF-}" >.git/dispatch-observation
+exec .git/pre-push-probe
+SCRIPT
+  chmod +x "$repo/.git/dispatch-probe"
+  printf 'repos:\n  - repo: local\n    hooks:\n' >"$repo/.pre-commit-config.yaml"
+  for stage in pre-commit pre-push; do
+    cat >>"$repo/.pre-commit-config.yaml" <<YAML
+      - id: $stage-probe
+        name: $stage-probe
+        entry: .git/dispatch-probe $stage
+        language: system
+        stages: [$stage]
+        always_run: true
+        pass_filenames: false
+YAML
+  done
+  git -C "$repo" add .pre-commit-config.yaml
+  head_sha=$(git -C "$repo" rev-parse HEAD)
+  zero_sha=0000000000000000000000000000000000000000
+  refs="refs/heads/main $head_sha refs/heads/main $zero_sha"
+
+  for runner in "$real_runner" "$capture_runner"; do
+    (cd "$repo" && "$runner" --bind)
+    for stage in pre-commit pre-push; do
+      for expected_status in 0 1; do
+        rm -rf "$repo/.wrix"
+        rm -f "$repo/.git/pre-push-count" "$repo/.git/pre-push-fail" \
+          "$repo/.git/dispatch-observation" "$WRIX_TEST_PREK_ARGV"
+        if [[ "$expected_status" == 1 ]]; then
+          touch "$repo/.git/pre-push-fail"
+        fi
+        status=0
+        if [[ "$stage" == pre-push ]]; then
+          run_pre_push_transaction "$bundle" "$repo" origin "$work/remote [mirror].git" "$refs" >"$work/output" 2>&1 || status="$?"
+        else
+          (cd "$repo" && "$bundle/pre-commit" </dev/null) >"$work/output" 2>&1 || status="$?"
+        fi
+        if [[ "$status" != "$expected_status" ]]; then
+          echo "FAIL: $runner $stage returned $status, expected $expected_status" >&2
+          cat "$work/output" >&2
+          return 1
+        fi
+        [[ "$(<"$repo/.git/pre-push-count")" == 1 ]]
+        if [[ "$runner" == "$real_runner" ]]; then
+          cp "$repo/.git/dispatch-observation" "$work/$stage-$expected_status-observation"
+        else
+          cmp "$work/$stage-$expected_status-observation" "$repo/.git/dispatch-observation"
+        fi
+      done
+    done
+  done
+)
 
 # ============================================================================
 test_shims_no_flock() {
@@ -184,10 +270,6 @@ test_shims_no_flock() {
     fi
     if grep -qE '\bflock\b' "$bundle/$hook"; then
       echo "FAIL: $hook still invokes flock" >&2
-      failed=$((failed + 1))
-    fi
-    if ! grep -qE "hook-impl .*--hook-type=$hook( |$)" "$bundle/$hook"; then
-      echo "FAIL: $hook does not invoke 'prek hook-impl --hook-type=$hook'" >&2
       failed=$((failed + 1))
     fi
   done
@@ -722,6 +804,7 @@ ALL_TESTS=(
   test_bundle_contents
   test_bundle_path_is_context_stable
   test_shims_use_hook_impl
+  test_prek_capture_fixture_conforms_to_packaged_runtime
   test_shims_no_flock
   test_shims_resolve_packaged_prek_at_runtime
   test_pre_push_exact_transaction_stamp_written_and_consumed
@@ -742,7 +825,7 @@ run_all() {
   local fn
   for fn in "${ALL_TESTS[@]}"; do
     echo "=== $fn ==="
-    if "$fn" "$bundle"; then
+    if bash "$SCRIPT_DIR/prek-hooks-bundle.sh" "$fn" "$bundle"; then
       echo "PASS: $fn"
     else
       echo "FAIL: $fn"
@@ -763,5 +846,6 @@ else
     echo "Unknown function: $fn" >&2
     exit 1
   fi
-  "$fn"
+  shift
+  "$fn" "$@"
 fi
