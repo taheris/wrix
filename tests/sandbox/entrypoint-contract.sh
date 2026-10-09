@@ -266,7 +266,7 @@ run_entrypoint() {
   etc_wrix="$case_dir/etc/wrix"
   entrypoint="$case_dir/entrypoint.sh"
 
-  mkdir -p "$case_dir" "$home_dir" "$workspace/.claude" "$workspace/.wrix/log"
+  mkdir -p "$case_dir" "$home_dir" "$workspace/.wrix/log"
   write_fake_runtime_tools "$tool_dir"
   prepare_wrix_etc "$etc_wrix" "$agent"
   if [[ "$agent" == direct && -x "$workspace/bin/consumer-agent" && ! -v WRIX_TEST_DIRECT_EXECUTABLE && -z "${WRIX_TEST_DIRECT_METADATA:-}" ]]; then

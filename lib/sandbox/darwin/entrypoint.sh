@@ -362,6 +362,7 @@ if [[ "$WRIX_AGENT" = "claude" ]]; then
   fi
 
   # Write project-level settings only if missing (preserve user customizations)
+  mkdir -p /workspace/.claude
   if [[ ! -f /workspace/.claude/settings.json ]]; then
     cp /etc/wrix/claude-settings.json /workspace/.claude/settings.json
   fi
