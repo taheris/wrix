@@ -112,13 +112,13 @@ consumer's discretion:
 | Output                              | Role                                                                                                                                                                                                                                                                        |
 | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `packages.wrix`                     | Profile-agnostic Rust CLI; host-side `run`/`spawn`/`service`/`beads` orchestration                                                                                                                                                                                          |
-| `packages.image-<profile>`          | Per-profile OCI image source built with `agent = "direct"` (Linux `nix-descriptor`, Darwin `docker-archive`)                                                                                                                                                                |
+| `packages.image-<profile>`          | Per-profile OCI image source built with the default `agent = "pi"` (Linux `nix-descriptor`, Darwin `docker-archive`)                                                                                                                                                        |
 | `packages.image-<profile>-claude`   | Per-profile OCI image source built with `agent = "claude"` and the same platform source-kind rules                                                                                                                                                                          |
 | `packages.image-<profile>-pi`       | Per-profile OCI image source built with `agent = "pi"` and the same platform source-kind rules                                                                                                                                                                              |
-| `packages.sandbox-<profile>`        | Configured sandbox package with explicit `bin/wrix` plus `wrix-run` as `meta.mainProgram` — the user-facing `nix run .#sandbox-rust` target                                                                                                                                 |
+| `packages.sandbox-<profile>`        | Configured Pi sandbox package with explicit `bin/wrix` plus `wrix-run` as `meta.mainProgram` — the user-facing `nix run .#sandbox-rust` target                                                                                                                              |
 | `packages.sandbox-<profile>-claude` | Claude overlay with agent selection encoded in `ProfileConfig` and `wrix-run` as the runnable main program                                                                                                                                                                  |
 | `packages.sandbox-<profile>-pi`     | Pi overlay with agent selection encoded in `ProfileConfig` and `wrix-run` as the runnable main program. Pi images seed non-secret Codex subscription defaults; the launcher mounts Pi `auth.json` only for Pi runs. `packages.default` points at `packages.sandbox-rust-pi` |
-| `packages.profile-images`           | JSON manifest mapping profile → selected agent variant → profile config/image metadata, for orchestrators that look up images by profile name                                                                                                                               |
+| `packages.profile-images`           | Built-in Pi manifest mapping profile → Pi → matching raw launcher, profile config, and image metadata                                                                                                                                                                       |
 
 The launcher exposes two subcommands sharing the same Rust-owned container
 construction (mounts, env passthrough, deploy key, service startup, network
@@ -148,29 +148,32 @@ immutable `ProfileConfig` JSON. `WRIX_AGENT` remains only the internal
 build→entrypoint wire set by the Rust launcher from that config. Orchestrators
 supply a matching per-call `ProfileConfig` and image.
 
-| Value                | Behaviour                                                                                                                    |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `direct` _(default)_ | Execs `loom-direct-runner`. Built-in direct images carry a placeholder runner; consumers can supply their own direct runner. |
-| `claude`             | Interactive `claude` TTY, or `claude --print --input-format stream-json` when `WRIX_STDIO=1`                                 |
-| `pi`                 | Interactive `pi` TTY, or `pi --mode rpc` for JSONL RPC on stdio. Defaults to `linuxPkgs.pi-coding-agent`.                    |
+| Value            | Behaviour                                                                                                                 |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `direct`         | Requires an explicit consumer `agentPkg` with a nonempty, single-component `meta.mainProgram`; no built-in direct runner. |
+| `claude`         | Interactive `claude` TTY, or `claude --print --input-format stream-json` when `WRIX_STDIO=1`                              |
+| `pi` _(default)_ | Interactive `pi` TTY, or `pi --mode rpc` for JSONL RPC on stdio. Uses the packaged Pi coding agent.                       |
 
-Exactly one agent rides each image — a non-claude image carries no `claude-code`
-(`agent = "direct"` bakes neither `claude-code` nor `pi`). The default direct
-runtime is installed in `packages.image-<profile>`; `claude` and `pi` are
-exposed as agent overlay images. The image declares its baked variant in
-`/etc/wrix/image-agent`; before exec, the entrypoint rejects a
-`ProfileConfig`/image mismatch, then verifies the selected agent's binary is
-present (`command -v`) and fails loudly when it is absent from the image — e.g.
-`WRIX_AGENT=pi` against a claude image on the raw-launcher path — rather than
-emitting a bare `command not found`.
+Wrix automatically adds only the selected agent runtime; consumer dependency
+closures and profile additions remain intact. Pi is installed in
+`packages.image-<profile>` and the unsuffixed sandbox family. Explicit Claude
+and Pi variants remain available, including their `-mcp` launchers.
+`packages.default` is the Rust Pi sandbox with `wrix-run` as its main program.
+The image declares its baked variant in `/etc/wrix/image-agent`; before exec,
+the entrypoint rejects a `ProfileConfig`/image mismatch, then verifies the
+selected agent's binary is present (`command -v`) and fails loudly when it is
+absent from the image — e.g. `WRIX_AGENT=pi` against a claude image on the
+raw-launcher path — rather than emitting a bare `command not found`.
 
 ### Direct mode (orchestrator integration)
 
 `mkSandbox { agent = "direct"; agentPkg = ...; }` is the integration seam for
-external orchestrators. The orchestrator provides its own Linux binary (e.g.
-Loom's `loom-direct-runner`) and drives the container over JSONL stdio. Wrix
-doesn't ship its own runner — see
-[Loom's flake](https://github.com/taheris/loom) for the canonical wiring.
+external orchestrators. The consumer provides a Linux package with an explicit
+`meta.mainProgram` and owns its stdio protocol. Direct accepts omitted or empty
+`agentSettings`, but rejects nonempty settings. Wrix ships no placeholder or
+built-in direct image family; consumers also create matching manifests with
+`mkProfileImages`. See [Loom's flake](https://github.com/taheris/loom) for the
+canonical wiring.
 
 ## Security Model
 

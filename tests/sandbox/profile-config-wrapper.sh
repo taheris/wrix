@@ -165,7 +165,7 @@ test_profile_config_contains_launcher_contract_fields() {
     (.image.source | type == "string" and length > 0) and
     (.image.source_kind == $source_kind) and
     (.image.digest | type == "string" and startswith("sha256:")) and
-    (.agent.kind == "direct") and
+    (.agent.kind == "pi") and
     (.resources.memory_mb | type == "number") and
     (.resources.pids_limit | type == "number") and
     (.security.runtime_secrets == {

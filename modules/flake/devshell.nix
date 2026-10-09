@@ -19,7 +19,7 @@ _:
     {
       devShells.default = sandbox.devShell {
         env = {
-          LOOM_PROFILES_MANIFEST = "${config.packages.profile-images-pi}";
+          LOOM_PROFILES_MANIFEST = "${config.packages.profile-images}";
           WRIX_AGENT = "pi";
         };
 

@@ -44,7 +44,11 @@ test_manifest_shape() {
       let
         flake = builtins.getFlake \"$flake_url\";
         lib = flake.legacyPackages.${system}.lib;
-        rustImage = (lib.mkSandbox { profile = lib.profiles.rust; }).image;
+        rustImage = (lib.mkSandbox {
+          profile = lib.profiles.rust;
+          agent = \"direct\";
+          agentPkg = flake.inputs.nixpkgs.legacyPackages.${system}.hello;
+        }).image;
         rustPiImage = (lib.mkSandbox { profile = lib.profiles.rust; agent = \"pi\"; }).image;
       in lib.mkProfileImages {
         rust = rustImage;
@@ -73,7 +77,11 @@ test_manifest_shape() {
       let
         flake = builtins.getFlake \"$flake_url\";
         lib = flake.legacyPackages.${system}.lib;
-        rustImage = (lib.mkSandbox { profile = lib.profiles.rust; }).image;
+        rustImage = (lib.mkSandbox {
+          profile = lib.profiles.rust;
+          agent = \"direct\";
+          agentPkg = flake.inputs.nixpkgs.legacyPackages.${system}.hello;
+        }).image;
         rustPiImage = (lib.mkSandbox { profile = lib.profiles.rust; agent = \"pi\"; }).image;
       in {
         launcher = \"\${flake.packages.${system}.wrix}/bin/wrix\";
@@ -152,7 +160,6 @@ test_flake_outputs_present() {
 
     local outputs=(
         "profile-images"
-        "profile-images-pi"
         "wrix"
     )
 
@@ -244,7 +251,7 @@ test_runtime_manifest_retains_store_context() {
     if ! result=$(nix eval --json --impure --no-warn-dirty --expr "
       let
         flake = builtins.getFlake \"$flake_url\";
-        manifest = flake.packages.${system}.profile-images-pi.passthru.manifest;
+        manifest = flake.packages.${system}.profile-images.passthru.manifest;
         entryContext = entry: {
           source = builtins.hasContext entry.source;
           profile_config = builtins.hasContext entry.profile_config;
@@ -257,7 +264,7 @@ test_runtime_manifest_retains_store_context() {
         python = entryContext manifest.python.pi;
       }
     "); then
-        echo "nix eval of profile-images-pi context failed" >&2
+        echo "nix eval of profile-images context failed" >&2
         return 1
     fi
 
@@ -265,7 +272,7 @@ test_runtime_manifest_retains_store_context() {
       .runtimeJson == true and
       all([.base, .rust, .python][]; .source == true and .profile_config == true and .launcher == true)
     ' <<<"$result" >/dev/null; then
-        echo "packages.profile-images-pi runtime manifest lost Nix store context: $result" >&2
+        echo "packages.profile-images runtime manifest lost Nix store context: $result" >&2
         return 1
     fi
 }
@@ -283,7 +290,7 @@ test_eval_manifest_access_is_lightweight() {
     if ! result=$(nix eval --json --impure --no-warn-dirty --expr "
       let
         flake = builtins.getFlake \"$flake_url\";
-        manifest = flake.packages.${system}.profile-images-pi.passthru.manifest;
+        manifest = flake.packages.${system}.profile-images.passthru.manifest;
       in {
         baseSource = manifest.base.pi.source;
         rustSource = manifest.rust.pi.source;
@@ -291,7 +298,7 @@ test_eval_manifest_access_is_lightweight() {
         rustProfileConfig = manifest.rust.pi.profile_config;
       }
     "); then
-        echo "nix eval of profile-images-pi passthru manifest failed" >&2
+        echo "nix eval of profile-images passthru manifest failed" >&2
         return 1
     fi
 
@@ -301,7 +308,7 @@ test_eval_manifest_access_is_lightweight() {
       (.pythonSource | type == "string") and
       (.rustProfileConfig | type == "string")
     ' <<<"$result" >/dev/null; then
-        echo "packages.profile-images-pi passthru manifest did not expose expected JSON strings: $result" >&2
+        echo "packages.profile-images passthru manifest did not expose expected JSON strings: $result" >&2
         return 1
     fi
 }

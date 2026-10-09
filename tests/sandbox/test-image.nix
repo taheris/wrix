@@ -27,6 +27,7 @@
   claudeConfig ? { },
   shipNix ? false,
   agent ? "claude",
+  agentPkg ? null,
 }:
 
 let
@@ -44,14 +45,31 @@ let
       }
     else
       profiles.base;
-  inherit ((mkSandbox { profile = baseProfile; })) profile;
+  selectedAgentPkg =
+    if agentPkg != null then
+      agentPkg
+    else if agent == "direct" then
+      throw "test-image: direct requires an explicit agentPkg"
+    else if agent == "pi" then
+      import ../../lib/sandbox/pi.nix { pkgs = testPkgs; }
+    else
+      testPkgs.hello;
+  inherit
+    (
+      (mkSandbox {
+        profile = baseProfile;
+        inherit agent;
+        agentPkg = selectedAgentPkg;
+      })
+    )
+    profile
+    ;
 in
 import ../../lib/sandbox/image.nix {
   pkgs = testPkgs;
   inherit profile;
   inherit agent;
-  agentPkg =
-    if agent == "pi" then import ../../lib/sandbox/pi.nix { pkgs = testPkgs; } else testPkgs.hello;
+  agentPkg = selectedAgentPkg;
   entrypointSh = ../../lib/sandbox/linux/entrypoint.sh;
   # Mirror production (lib/sandbox/default.nix sets krunSupport = isLinux): bakes
   # /lib/libfakeuid.so + krun-relay for the krun microVM boundary. The default

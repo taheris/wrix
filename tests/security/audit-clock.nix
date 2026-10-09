@@ -20,6 +20,7 @@ let
   imageClock = linuxPkgs.lib.hiPrio (mkClock linuxPkgs);
   collisionSandbox = wrix.mkSandbox {
     agent = "direct";
+    agentPkg = linuxPkgs.hello;
     packages = [ imageClock ];
   };
 in

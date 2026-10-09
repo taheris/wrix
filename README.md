@@ -16,7 +16,7 @@ LAN/private/host-local/VPN/special ranges remain blocked. See the
 
 ```bash
 nix run github:taheris/wrix                      # rust profile, pi agent
-nix run github:taheris/wrix#sandbox-rust         # rust profile, direct base image
+nix run github:taheris/wrix#sandbox-rust         # rust profile, pi agent
 nix run github:taheris/wrix#sandbox-rust-pi      # rust profile, pi agent overlay
 nix run github:taheris/wrix#sandbox-rust-claude  # rust profile, claude overlay
 ```
@@ -25,16 +25,18 @@ nix run github:taheris/wrix#sandbox-rust-claude  # rust profile, claude overlay
 
 The agent binary baked into the image is selected **at build time** by
 `mkSandbox { agent = …; }`, surfaced as the `sandbox-<profile>[-<agent>]` flake
-output. Exactly one agent rides each image.
+output. Wrix automatically adds only the selected agent runtime.
 
-| Agent                | Runtime                                                 | How it talks to the host                                 |
-| -------------------- | ------------------------------------------------------- | -------------------------------------------------------- |
-| `direct` _(default)_ | Direct runner binary                                    | JSONL stdio; intended for orchestrators                  |
-| `claude`             | [Claude Code](https://claude.ai/code)                   | Interactive TTY, or stream-json via `WRIX_STDIO=1`       |
-| `pi`                 | [Pi coding agent](https://github.com/earendil-works/pi) | Interactive TTY, or JSONL RPC on stdio (`pi --mode rpc`) |
+| Agent            | Runtime                                                 | How it talks to the host                                 |
+| ---------------- | ------------------------------------------------------- | -------------------------------------------------------- |
+| `direct`         | Consumer-supplied runner binary                         | Consumer-defined stdio protocol                          |
+| `claude`         | [Claude Code](https://claude.ai/code)                   | Interactive TTY, or stream-json via `WRIX_STDIO=1`       |
+| `pi` _(default)_ | [Pi coding agent](https://github.com/earendil-works/pi) | Interactive TTY, or JSONL RPC on stdio (`pi --mode rpc`) |
 
-`packages.image-<profile>` ships the default direct runtime. Agent overlays are
-exposed as `packages.image-<profile>-claude` and `packages.image-<profile>-pi`.
+`packages.image-<profile>` ships Pi, matching the unsuffixed sandbox outputs.
+Explicit variants are `packages.image-<profile>-claude` and
+`packages.image-<profile>-pi`. `packages.profile-images` is the built-in Pi
+manifest; consumers create custom manifests with `mkProfileImages`.
 
 Pi images seed OpenAI Codex subscription defaults, high reasoning, trusted
 project fallback, regular terminal mode for tmux scrollback, and all-at-once
@@ -87,8 +89,8 @@ profile-only shells. See [specs/profiles.md](specs/profiles.md) for the
 | `packages`      | list of packages                   | Additional Nix packages to include                                           |
 | `env`           | attrset of strings                 | Environment variables                                                        |
 | `mounts`        | list of `{ source, dest, mode }`   | Host paths to mount into the container                                       |
-| `agent`         | `"direct"` \| `"claude"` \| `"pi"` | Agent runtime baked into the image (default `"direct"`)                      |
-| `agentPkg`      | Linux derivation or `null`         | Optional selected-agent package override                                     |
+| `agent`         | `"direct"` \| `"claude"` \| `"pi"` | Agent runtime baked into the image (default `"pi"`)                          |
+| `agentPkg`      | Linux derivation or `null`         | Selected-agent override; required with `meta.mainProgram` for direct         |
 | `agentSettings` | attrset                            | Settings for the selected agent (`claude` or `pi`)                           |
 | `deployKey`     | string                             | SSH key name for git push (provision with `wrix init --deploy --key <name>`) |
 | `mcp`           | attrset of server configs          | Baked-in MCP servers (e.g. `{ tmux = { }; }`)                                |
@@ -119,9 +121,9 @@ See [specs/profiles.md](specs/profiles.md) for the full schema and
 
 `agent = "direct"` is the integration seam for external orchestrators (e.g.
 [Loom](https://github.com/taheris/loom)) that drive the container themselves
-over JSONL stdio. The built-in direct image carries a placeholder runner so the
-default image family is buildable; production orchestrators should pass their
-own `agentPkg`:
+over their own stdio protocol. Direct requires an explicit Linux `agentPkg` with
+a nonempty, single-component `meta.mainProgram`. Wrix supplies no placeholder
+runner or built-in direct outputs:
 
 ```nix
 let

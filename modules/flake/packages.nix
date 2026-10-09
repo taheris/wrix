@@ -71,14 +71,13 @@ _:
           }
         );
 
-      mkImagePackages = agent: images: listToAttrs (map (mkImagePackage agent images) sandboxes);
-      mkImagePackage = agent: images: p: {
-        name = "image-${p.name}${if agent == "direct" then "" else "-${agent}"}";
+      mkImagePackages = suffix: images: listToAttrs (map (mkImagePackage suffix images) sandboxes);
+      mkImagePackage = suffix: images: p: {
+        name = "image-${p.name}${suffix}";
         value = images.${p.name}.source;
       };
 
-      profileImages = mkProfileImages "direct";
-      profilePiImages = mkProfileImages "pi";
+      profileImages = mkProfileImages "pi";
 
       mkProfileImages =
         agent:
@@ -89,11 +88,11 @@ _:
           }) sandboxes
         );
 
-      imagePkgs = mkImagePackages "direct" profileImages;
+      imagePkgs = mkImagePackages "" profileImages;
       imageOverlays = listToAttrs (
-        concatMap (agent: map (mkImagePackage agent (mkProfileImages agent)) sandboxes) agents
+        concatMap (agent: map (mkImagePackage "-${agent}" (mkProfileImages agent)) sandboxes) agents
       );
-      sandboxPkgs = listToAttrs (mkProfileVariants "" { }) // {
+      sandboxPkgs = listToAttrs (mkProfileVariants "" { agent = "pi"; }) // {
         debug =
           (wrix.mkSandbox {
             agent = "pi";
@@ -126,7 +125,6 @@ _:
           default = sandboxOverlays.sandbox-rust-pi;
           nodejs = linuxPkgs.nodejs_22;
           profile-images = wrix.mkProfileImages profileImages;
-          profile-images-pi = wrix.mkProfileImages profilePiImages;
         }
         // (
           # Test sandbox image (claude/beads stubbed out with `hello`);

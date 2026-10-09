@@ -16,6 +16,7 @@ let
     elem
     filter
     isAttrs
+    isString
     mapAttrs
     match
     seq
@@ -23,6 +24,7 @@ let
   inherit (pkgs.lib)
     concatStringsSep
     hasPrefix
+    isDerivation
     makeBinPath
     optionals
     ;
@@ -247,20 +249,26 @@ let
     transport = "websocket-cached";
   };
 
-  defaultDirectRunner = linuxPkgs.writeShellApplication {
-    name = "loom-direct-runner";
-    text = ''
-      echo "wrix: default direct runner is a placeholder; provide agentPkg for agent=direct" >&2
-      exit 64
-    '';
-  };
+  validateDirectPackage =
+    agentPkg:
+    let
+      mainProgram = agentPkg.meta.mainProgram or null;
+    in
+    if agentPkg == null || !isDerivation agentPkg then
+      throw "mkSandbox: agent='direct' requires an explicit agentPkg derivation"
+    else if
+      !isString mainProgram
+      || match "[^/[:space:]]+" mainProgram == null
+      || elem mainProgram [
+        "."
+        ".."
+      ]
+    then
+      throw "mkSandbox: agent='direct' requires a nonempty single-component agentPkg.meta.mainProgram"
+    else
+      agentPkg;
 
-  # Build the container image using Linux packages
-  # On Darwin, this will use a remote Linux builder if configured
-  #
-  # `agent = "pi"` defaults to nixpkgs' pi-coding-agent (a Linux-built package
-  # whose `bin/` contains the `pi` binary). Symmetric with `agent = "direct"`
-  # and `agentPkg`, both remain overrideable.
+  # Image runtime packages are Linux-native, including on Darwin hosts.
   mkImage =
     {
       profile,
@@ -356,7 +364,7 @@ let
       runtimeSecrets ? { },
       mcp ? { },
       mcpRuntime ? false,
-      agent ? "direct",
+      agent ? "pi",
       agentPkg ? null,
       agentSettings ? { },
     }:
@@ -369,13 +377,23 @@ let
         inherit mounts env runtimeSecrets;
       };
 
-      defaultAgentPkg =
-        {
-          direct = defaultDirectRunner;
-          claude = linuxPkgs.claude-code;
-          pi = import ./pi.nix { pkgs = linuxPkgs; };
-        }
-        .${agent} or (throw "mkSandbox: unknown agent '${agent}' (expected 'direct', 'claude', or 'pi')");
+      selectedAgentPkg =
+        if
+          !elem agent [
+            "direct"
+            "claude"
+            "pi"
+          ]
+        then
+          throw "mkSandbox: unknown agent '${agent}' (expected 'direct', 'claude', or 'pi')"
+        else if agent == "direct" then
+          validateDirectPackage agentPkg
+        else if agentPkg != null then
+          agentPkg
+        else if agent == "claude" then
+          linuxPkgs.claude-code
+        else
+          import ./pi.nix { pkgs = linuxPkgs; };
 
       _validateAgentSettings =
         if agent == "direct" && agentSettings != { } then
@@ -383,9 +401,7 @@ let
         else
           validateStaticEnv "agentSettings.env" finalProfile.runtimeSecrets (agentSettings.env or { });
 
-      finalAgentPkg = builtins.seq _validateAgentSettings (
-        if agentPkg == null then defaultAgentPkg else agentPkg
-      );
+      finalAgentPkg = seq _validateAgentSettings selectedAgentPkg;
 
       finalClaudeConfig = baseClaudeConfig;
 
@@ -560,7 +576,7 @@ let
           '';
 
     in
-    {
+    seq finalAgentPkg {
       inherit package launcher profileConfig;
       image = imageWithConfig;
       profile = finalProfile;

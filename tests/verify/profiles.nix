@@ -83,6 +83,9 @@ in
   "profiles.host-image-package-split" = profileComposition "test_host_packages_split";
   "profiles.image-flake-outputs" = profileImages "test_flake_outputs_present";
   "profiles.manifest-launcher" = flakeCheck "profile-images-launcher";
+  "profiles.pi-default-outputs" = nixEval "profiles.pi-default-outputs";
+  "profiles.pi-default-manifest" = nixEval "profiles.pi-default-manifest";
+  "sandbox.agent-default-and-direct-contract" = nixEval "sandbox.agent-default-and-direct-contract";
   "profiles.loom-source-only" = flakeCheck "loom-source-only";
   "profiles.loom-package-wiring" = flakeCheck "loom-package-wiring";
   "profiles.nested-derive" = profileComposition "test_nested_derive_profile";

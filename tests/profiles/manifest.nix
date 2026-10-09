@@ -29,6 +29,7 @@ let
       sandbox = wrix.mkSandbox {
         profile = wrix.profiles.base;
         inherit agent;
+        agentPkg = if agent == "direct" then pkgs.hello else null;
       };
       manifest = wrix.mkProfileImages { base = sandbox.image; };
       entry = manifest.passthru.manifest.base.${agent};

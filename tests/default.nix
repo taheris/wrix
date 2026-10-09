@@ -84,7 +84,10 @@ let
         _wrix_delta_bounded_probe = "v2";
       };
     };
-    baseDirect = mkTestImage { agent = "direct"; };
+    baseDirect = mkTestImage {
+      agent = "direct";
+      agentPkg = linuxPkgs.hello;
+    };
     basePi = mkTestImage {
       agent = "pi";
     };
@@ -989,7 +992,7 @@ in
     };
 
     agent-direct-runner = {
-      meta.description = "Verify default direct profile images contain loom-direct-runner.";
+      meta.description = "Verify explicit direct profile images contain the consumer package.";
       type = "app";
       program = "${sandboxImageChecks.agentDirectRunnerTest}/bin/test-agent-direct-runner";
     };

@@ -49,7 +49,7 @@ let
     let
       fakeConfig = {
         packages = {
-          profile-images-pi = writeText "profile-images-pi" "{}";
+          profile-images = writeText "profile-images" "{}";
           loom = writeShellScriptBin "loom" "exit 0";
         };
         treefmt.build.wrapper = writeShellScriptBin "treefmt" "exit 0";
@@ -102,7 +102,7 @@ let
     && !(hasAttr "sandbox" args)
     && !(hasAttr "shellHook" args);
 
-  checks = {
+  checks = mapAttrs (_: opaque) (import ./agent-defaults.nix { inherit flake system; }) // {
     "devshell.flake-module-does-not-own-hooks-path" = sourceCheck [ flakeDevshellSource ] (
       sources:
       ensure (lacks "core.hooksPath" (builtins.head sources)) "modules/flake/devshell.nix sets core.hooksPath"

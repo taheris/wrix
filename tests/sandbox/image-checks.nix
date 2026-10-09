@@ -38,6 +38,12 @@ let
       serviceCli
       ;
   };
+  directImage =
+    (sandboxLib.mkSandbox {
+      profile = sandboxLib.profiles.base;
+      agent = "direct";
+      agentPkg = linuxPkgs.hello;
+    }).image;
   defaultImage = (sandboxLib.mkSandbox { profile = sandboxLib.profiles.base; }).image;
   builderImage = import ../../lib/sandbox/builder/image.nix {
     pkgs = linuxPkgs;
@@ -1111,7 +1117,7 @@ let
     };
   };
   imageAgentMarkerMatrix = {
-    direct = sourceKindMatrix.base.image;
+    direct = directImage;
     claude = sourceKindMatrix.base-claude.image;
     pi = sourceKindMatrix.base-pi.image;
   };
@@ -1265,19 +1271,19 @@ let
       image = sourceKindMatrix.base.image;
       kind = "profile";
       profile = "base";
-      agent = "direct";
+      agent = "pi";
     };
     rust = {
       image = sourceKindMatrix.rust.image;
       kind = "profile";
       profile = "rust";
-      agent = "direct";
+      agent = "pi";
     };
     python = {
       image = sourceKindMatrix.python.image;
       kind = "profile";
       profile = "python";
-      agent = "direct";
+      agent = "pi";
     };
     base-pi = {
       image = sourceKindMatrix.base-pi.image;
@@ -1369,11 +1375,11 @@ let
 
       tmp=$(mktemp -d)
       trap 'rm -rf "$tmp"' EXIT
-      prepare_image_artifact "direct" "${defaultImage.source_kind}" "${toString defaultImage.source}" "$tmp/image" "$tmp/image.layers"
+      prepare_image_artifact "direct" "${directImage.source_kind}" "${toString directImage.source}" "$tmp/image" "$tmp/image.layers"
       list_layer_store_paths "$tmp/image" "$tmp/image.layers" >"$tmp/image.paths"
 
-      if ! grep -Eq '/nix/store/[a-z0-9]{32}-loom-direct-runner$' "$tmp/image.paths"; then
-          echo "FAIL: emitted agent=direct image does not contain loom-direct-runner" >&2
+      if ! grep -qxF "${linuxPkgs.hello}" "$tmp/image.paths"; then
+          echo "FAIL: emitted agent=direct image does not contain its explicit consumer package" >&2
           exit 1
       fi
 
@@ -1431,9 +1437,10 @@ let
   };
 
   prekSurfaceImageMatrix = {
-    base-direct = sourceKindMatrix.base.image;
-    rust-direct = sourceKindMatrix.rust.image;
-    python-direct = sourceKindMatrix.python.image;
+    base = sourceKindMatrix.base.image;
+    rust = sourceKindMatrix.rust.image;
+    python = sourceKindMatrix.python.image;
+    base-direct = directImage;
     base-claude = sourceKindMatrix.base-claude.image;
     rust-claude =
       (sandboxLib.mkSandbox {
@@ -2439,7 +2446,7 @@ let
 
       tmp=$(mktemp -d)
       trap 'rm -rf "$tmp"' EXIT
-      prepare_paths "default-direct" "${defaultImage.source_kind}" "${toString defaultImage.source}"
+      prepare_paths "profile-direct" "${directImage.source_kind}" "${toString directImage.source}"
       prepare_paths "custom-direct" "${agentExclusiveDirect.source_kind}" "${toString agentExclusiveDirect.source}"
       prepare_paths "claude" "${agentExclusiveClaude.source_kind}" "${toString agentExclusiveClaude.source}"
 
@@ -2447,12 +2454,12 @@ let
       pi_agent=${piAgentPkg}
       runner=${agentExclusiveRunner}
 
-      if ! grep -Eq '/nix/store/[a-z0-9]{32}-loom-direct-runner$' "$tmp/default-direct.paths"; then
-          echo "FAIL: emitted default direct image does not contain loom-direct-runner" >&2
+      if ! grep -qxF "${linuxPkgs.hello}" "$tmp/profile-direct.paths"; then
+          echo "FAIL: emitted direct image does not contain its explicit consumer package" >&2
           exit 1
       fi
-      if grep -qxF "$claude_code" "$tmp/default-direct.paths" || grep -qxF "$pi_agent" "$tmp/default-direct.paths"; then
-          echo "FAIL: emitted default direct image contains a non-selected agent runtime" >&2
+      if grep -qxF "$claude_code" "$tmp/profile-direct.paths" || grep -qxF "$pi_agent" "$tmp/profile-direct.paths"; then
+          echo "FAIL: emitted direct image contains a non-selected agent runtime" >&2
           exit 1
       fi
 

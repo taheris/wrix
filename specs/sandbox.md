@@ -656,7 +656,7 @@ supplied; there is no implicit default image baked in.
   [test](../crates/wrix-sandbox/tests/darwin_mounts.rs::mount_classifier_rejects_unix_sockets)
 - Omitted `agent` selects Pi; explicit `direct` requires a package and a valid
   `meta.mainProgram` declaration rather than supplying a placeholder
-  [check?](verify:sandbox.agent-default-and-direct-contract)
+  [check](verify:sandbox.agent-default-and-direct-contract)
 - Both entrypoints execute the selected Pi, Claude, or declared direct
   executable; a non-Loom-named direct runner receives the original arguments and
   bidirectional stdio, and a missing direct executable fails clearly

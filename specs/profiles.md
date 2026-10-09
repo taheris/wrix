@@ -476,11 +476,11 @@ without introducing a reciprocal flake dependency.
   Claude/Pi variants resolve to their selected image sources, and
   `packages.default` selects Rust Pi with `meta.mainProgram = "wrix-run"`; no
   built-in output supplies a placeholder direct runner
-  [check?](verify:profiles.pi-default-outputs)
+  [check](verify:profiles.pi-default-outputs)
 - `packages.profile-images` contains the built-in Pi entries with their matching
   launcher/profile config, with no redundant `profile-images-pi` output; custom
   direct manifests retain the generic `mkProfileImages` contract
-  [check?](verify:profiles.pi-default-manifest)
+  [check](verify:profiles.pi-default-manifest)
 - `profiles.rust.buildPackage` is exposed and returns an attrset with `bin`,
   `clippy`, `nextest`, and `cargoArtifacts` fields
   [check](verify:profiles.rust-build-package-exposed)

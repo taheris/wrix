@@ -78,7 +78,8 @@ class VerifierInputs(unittest.TestCase):
             self.assertIn("not-registered", result.stderr)
 
     def fixture(self, malformed=False, system=False):
-        for relative in ["tests/verify/profiles-eval.nix", "tests/lib/inputs.nix"]:
+        for relative in ["tests/verify/profiles-eval.nix", "tests/verify/agent-defaults.nix",
+                         "tests/lib/inputs.nix"]:
             destination = self.root / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(Path(SOURCE) / relative, destination)

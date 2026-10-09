@@ -24,14 +24,17 @@ result=$(nix eval --impure --no-warn-dirty --json --expr "
     flake = builtins.getFlake \"git+file://$REPO_ROOT\";
     system = builtins.currentSystem;
     lib = flake.legacyPackages.\${system}.lib;
+    runner = flake.inputs.nixpkgs.legacyPackages.\${system}.hello;
     directAttempt = builtins.tryEval ((lib.mkSandbox {
       profile = lib.profiles.base;
       agent = \"direct\";
+      agentPkg = runner;
       agentSettings = { env.WRIX_AGENT_SETTINGS_PROBE = \"direct\"; };
     }).package.drvPath);
     direct = lib.mkSandbox {
       profile = lib.profiles.base;
       agent = \"direct\";
+      agentPkg = runner;
     };
     claude = lib.mkSandbox {
       profile = lib.profiles.base;

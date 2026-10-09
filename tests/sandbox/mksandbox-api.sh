@@ -67,7 +67,7 @@ test_mksandbox_accepts_documented_parameters() {
         mcp = { };
         mcpRuntime = false;
         agent = "direct";
-        agentPkg = extraPkg;
+        agentPkg = flake.inputs.nixpkgs.legacyPackages.${system}.hello;
         agentSettings = { };
       };
       required = [ "package" "image" "launcher" "profile" "devShell" ];
