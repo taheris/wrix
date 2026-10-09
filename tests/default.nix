@@ -350,7 +350,8 @@ let
     (mkCiApp sandboxImageChecks.imageTierMembershipTest "test-image-tier-membership")
     (mkCiApp sandboxImageChecks.wrixImagesSourceKindTest "test-wrix-images-source-kind")
     (mkCiApp sandboxImageChecks.wrixImageLabelsTest "test-wrix-image-labels")
-    (mkCiApp sandboxImageChecks.agentDirectRunnerTest "test-agent-direct-runner")
+    (mkCiApp sandboxImageChecks.agentDeclaredDirectRunnerTest "test-agent-declared-direct-runner")
+    (mkCiApp sandboxImageChecks.agentConsumerRuntimeClosuresTest "test-agent-consumer-runtime-closures")
     (mkCiApp sandboxImageChecks.agentClaudeRuntimeTest "test-agent-claude-runtime")
     (mkCiApp sandboxImageChecks.claudeRuntimeNoopTest "test-claude-runtime-noop")
     (mkCiApp sandboxImageChecks.prekHooksClosureTest "test-prek-hooks-closure")
@@ -985,15 +986,21 @@ in
     };
 
     agent-exclusive = {
-      meta.description = "Verify exactly one agent rides each image: a direct image has no claude-code, a claude image no direct runner";
+      meta.description = "Verify Wrix automatically adds only the selected runtime.";
       type = "app";
       program = "${sandboxImageChecks.agentExclusiveTest}/bin/test-agent-exclusive";
     };
 
-    agent-direct-runner = {
-      meta.description = "Verify explicit direct profile images contain the consumer package.";
+    agent-declared-direct-runner = {
+      meta.description = "Verify direct images contain the consumer's declared executable.";
       type = "app";
-      program = "${sandboxImageChecks.agentDirectRunnerTest}/bin/test-agent-direct-runner";
+      program = "${sandboxImageChecks.agentDeclaredDirectRunnerTest}/bin/test-agent-declared-direct-runner";
+    };
+
+    agent-consumer-runtime-closures = {
+      meta.description = "Verify direct images preserve consumer runtime closures in their normal tiers.";
+      type = "app";
+      program = "${sandboxImageChecks.agentConsumerRuntimeClosuresTest}/bin/test-agent-consumer-runtime-closures";
     };
 
     agent-claude-runtime = {

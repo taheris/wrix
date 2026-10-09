@@ -18,6 +18,8 @@ let
     elem
     filterAttrs
     mapAttrsToList
+    makeBinPath
+    optionalString
     optionals
     ;
   discardContext = value: builtins.unsafeDiscardStringContext (toString value);
@@ -38,11 +40,28 @@ let
       serviceCli
       ;
   };
+  mkConsumerRunner =
+    runtimePackages:
+    linuxPkgs.runCommand "consumer-agent-package" { meta.mainProgram = "consumer-start"; } ''
+      set -euo pipefail
+      mkdir -p "$out/bin"
+      cp ${linuxPkgs.writeShellScript "consumer-start" ''
+        set -euo pipefail
+        export PATH="${makeBinPath runtimePackages}:$PATH"
+        printf '%s\n' 'consumer runner' "$@"
+      ''} "$out/bin/consumer-start"
+    '';
+  consumerRunner = mkConsumerRunner [ ];
   directImage =
     (sandboxLib.mkSandbox {
       profile = sandboxLib.profiles.base;
       agent = "direct";
-      agentPkg = linuxPkgs.hello;
+      agentPkg = consumerRunner;
+    }).image;
+  piImage =
+    (sandboxLib.mkSandbox {
+      profile = sandboxLib.profiles.base;
+      agent = "pi";
     }).image;
   defaultImage = (sandboxLib.mkSandbox { profile = sandboxLib.profiles.base; }).image;
   builderImage = import ../../lib/sandbox/builder/image.nix {
@@ -276,7 +295,7 @@ let
   nonUniversalBaseFixture = pkgs.writeText "wrix-non-universal-base-fixture" "not shared";
 
   claudeCodePkg = linuxPkgs.claude-code;
-  piAgentPkg = linuxPkgs.pi-coding-agent;
+  piAgentPkg = import ../../lib/sandbox/pi.nix { pkgs = linuxPkgs; };
   prekHooksBundle = import ../../lib/prek/bundle.nix { pkgs = linuxPkgs; };
   prekRunner = import ../../lib/prek/runner.nix { pkgs = linuxPkgs; };
   prekWrappers = import ../../lib/prek/wrappers.nix { pkgs = linuxPkgs; };
@@ -1092,15 +1111,7 @@ let
       expected_kind = expectedImageSourceKind;
     };
     base-pi = {
-      inherit
-        (
-          (sandboxLib.mkSandbox {
-            profile = sandboxLib.profiles.base;
-            agent = "pi";
-          })
-        )
-        image
-        ;
+      image = piImage;
       expected_kind = expectedImageSourceKind;
     };
     base-claude = {
@@ -1361,31 +1372,71 @@ let
     '';
   };
 
-  agentDirectRunnerTest = pkgs.writeShellApplication {
-    name = "test-agent-direct-runner";
-    runtimeInputs = [
-      pkgs.coreutils
-      pkgs.gawk
-      pkgs.gnugrep
-      pkgs.gnutar
-      pkgs.jq
-    ];
-    text = ''
-      ${archiveShellHelpers}
+  directContractShellHelpers = ''
+    assert_direct_contract() {
+        local image_dir="$1"
+        local all_layers="$2"
+        local leaf_layers="$3"
+        local runner="$4"
+        local executable="$runner/bin/consumer-start"
+        local marker configured layer member
+        extract_layer_member "$image_dir" "$leaf_layers" "etc/wrix/image-agent" "$image_dir/agent-marker"
+        extract_layer_member "$image_dir" "$leaf_layers" "etc/wrix/direct-executable" "$image_dir/direct-executable"
+        marker=$(<"$image_dir/agent-marker")
+        configured=$(<"$image_dir/direct-executable")
+        if [[ "$marker" != direct || "$configured" != "$executable" ]]; then
+            echo "FAIL: consumer contents changed the direct marker or declared executable" >&2
+            exit 1
+        fi
+        jq -e '.config.Labels["wrix.agent.kind"] == "direct"' "$image_dir/config.json" >/dev/null
+        while IFS= read -r layer; do
+            for member in "$executable" "''${executable#/}" "./''${executable#/}"; do
+                if grep -qxF "$member" < <(tar -tf "$image_dir/$layer"); then
+                    tar -xf "$image_dir/$layer" -C "$image_dir" "$member"
+                    break 2
+                fi
+            done
+        done <"$all_layers"
+        if [[ ! -x "$image_dir$executable" ]] || ! cmp -s "$executable" "$image_dir$executable"; then
+            echo "FAIL: declared consumer executable is missing, changed, or not executable in image layers" >&2
+            exit 1
+        fi
+    }
+  '';
 
-      tmp=$(mktemp -d)
-      trap 'rm -rf "$tmp"' EXIT
-      prepare_image_artifact "direct" "${directImage.source_kind}" "${toString directImage.source}" "$tmp/image" "$tmp/image.layers"
-      list_layer_store_paths "$tmp/image" "$tmp/image.layers" >"$tmp/image.paths"
+  agentDeclaredDirectRunnerTest =
+    assert consumerRunner.name != consumerRunner.meta.mainProgram;
+    pkgs.writeShellApplication {
+      name = "test-agent-declared-direct-runner";
+      runtimeInputs = [
+        pkgs.coreutils
+        pkgs.gawk
+        pkgs.gnugrep
+        pkgs.gnutar
+        pkgs.jq
+      ];
+      text = ''
+        ${archiveShellHelpers}
 
-      if ! grep -qxF "${linuxPkgs.hello}" "$tmp/image.paths"; then
-          echo "FAIL: emitted agent=direct image does not contain its explicit consumer package" >&2
-          exit 1
-      fi
+        tmp=$(mktemp -d)
+        trap 'rm -rf "$tmp"' EXIT
+        ${directContractShellHelpers}
+        prepare_image_artifact "direct" "${directImage.source_kind}" "${toString directImage.source}" "$tmp/image" "$tmp/image.layers"
+        list_layer_store_paths "$tmp/image" "$tmp/image.layers" >"$tmp/image.paths"
+        tail -n 1 "$tmp/image.layers" >"$tmp/leaf.layers"
 
-      echo "test-agent-direct-runner: PASS"
-    '';
-  };
+        grep -qxF "${consumerRunner}" "$tmp/image.paths"
+        assert_direct_contract "$tmp/image" "$tmp/image.layers" "$tmp/leaf.layers" "${consumerRunner}"
+        jq -e '.agent.kind == "direct"' "${directImage.profileConfig}" >/dev/null
+        ${optionalString isLinux ''
+          "$tmp/image${consumerRunner}/bin/consumer-start" 'argument with spaces' --probe >"$tmp/actual"
+          printf '%s\n' 'consumer runner' 'argument with spaces' --probe >"$tmp/expected"
+          cmp "$tmp/expected" "$tmp/actual"
+        ''}
+
+        echo "test-agent-declared-direct-runner: PASS"
+      '';
+    };
 
   agentClaudeRuntimeTest = pkgs.writeShellApplication {
     name = "test-agent-claude-runtime";
@@ -2387,43 +2438,31 @@ let
     '';
   };
 
-  # Agent-exclusivity guard (specs/image-builder.md § Provenance-Tiered Layering;
-  # specs/sandbox.md § Agent runtime axis). Exactly one agent rides each image:
-  # an `agent = "direct"` image carries its runner and NO claude-code, even when
-  # the build is handed a real claude-code as agentPkg (the claude branch is
-  # simply never selected); an `agent = "claude"` image carries claude-code and
-  # not the direct runner. Built via image.nix directly so the emitted image
-  # artifacts can be inspected without unrelated profile packages.
+  # Exclusivity limits automatic additions, not consumer runtime dependencies.
   agentExclusiveProfile = {
     name = "agentexcl";
     corePackages = [ linuxPkgs.coreutils ];
     packages = [ linuxPkgs.coreutils ];
     env = { };
   };
-  agentExclusiveRunner = linuxPkgs.writeShellScriptBin "wrix-agent-exclusive-runner" ''
-    echo "agent exclusive direct runner"
-  '';
   mkAgentExclusiveImage =
-    {
-      agent,
-      agentPkg ? null,
-    }:
-    import ../../lib/sandbox/image.nix {
-      pkgs = linuxPkgs;
-      hostPkgs = pkgs;
-      asTarball = !isLinux;
-      inherit agent;
+    { agent, agentPkg }:
+    (sandboxLib.mkSandbox {
+      inherit agent agentPkg;
       profile = agentExclusiveProfile;
-      agentPkg = if agentPkg == null then claudeCodePkg else agentPkg;
-      entrypointSh = ../../lib/sandbox/linux/entrypoint.sh;
-      claudeConfig = { };
-      claudeSettings = { };
-    };
+    }).image;
   agentExclusiveDirect = mkAgentExclusiveImage {
     agent = "direct";
-    agentPkg = agentExclusiveRunner;
+    agentPkg = consumerRunner;
   };
-  agentExclusiveClaude = mkAgentExclusiveImage { agent = "claude"; };
+  agentExclusiveClaude = mkAgentExclusiveImage {
+    agent = "claude";
+    agentPkg = claudeCodePkg;
+  };
+  agentExclusivePi = mkAgentExclusiveImage {
+    agent = "pi";
+    agentPkg = piAgentPkg;
+  };
   agentExclusiveTest = pkgs.writeShellApplication {
     name = "test-agent-exclusive";
     runtimeInputs = [
@@ -2449,12 +2488,13 @@ let
       prepare_paths "profile-direct" "${directImage.source_kind}" "${toString directImage.source}"
       prepare_paths "custom-direct" "${agentExclusiveDirect.source_kind}" "${toString agentExclusiveDirect.source}"
       prepare_paths "claude" "${agentExclusiveClaude.source_kind}" "${toString agentExclusiveClaude.source}"
+      prepare_paths "pi" "${agentExclusivePi.source_kind}" "${toString agentExclusivePi.source}"
 
-      claude_code=${claudeCodePkg}
-      pi_agent=${piAgentPkg}
-      runner=${agentExclusiveRunner}
+      claude_code="${claudeCodePkg}"
+      pi_agent="${piAgentPkg}"
+      runner="${consumerRunner}"
 
-      if ! grep -qxF "${linuxPkgs.hello}" "$tmp/profile-direct.paths"; then
+      if ! grep -qxF "$runner" "$tmp/profile-direct.paths"; then
           echo "FAIL: emitted direct image does not contain its explicit consumer package" >&2
           exit 1
       fi
@@ -2476,14 +2516,163 @@ let
           echo "FAIL: emitted claude image does not contain claude-code" >&2
           exit 1
       fi
-      if grep -qxF "$runner" "$tmp/claude.paths" \
-          || grep -qxF "$pi_agent" "$tmp/claude.paths" \
-          || grep -Eq '/nix/store/[a-z0-9]{32}-loom-direct-runner$' "$tmp/claude.paths"; then
-          echo "FAIL: emitted claude image contains a non-selected agent runtime" >&2
+      if grep -qxF "$runner" "$tmp/claude.paths" || grep -qxF "$pi_agent" "$tmp/claude.paths"; then
+          echo "FAIL: emitted claude image contains an automatically added non-selected runtime" >&2
+          exit 1
+      fi
+
+      if ! grep -qxF "$pi_agent" "$tmp/pi.paths"; then
+          echo "FAIL: emitted pi image does not contain its selected runtime" >&2
+          exit 1
+      fi
+      if grep -qxF "$runner" "$tmp/pi.paths" || grep -qxF "$claude_code" "$tmp/pi.paths"; then
+          echo "FAIL: emitted pi image contains an automatically added non-selected runtime" >&2
           exit 1
       fi
 
       echo "test-agent-exclusive: PASS"
+    '';
+  };
+
+  profileLibrary = import ../../lib/profile { sandbox = sandboxLib; };
+  consumerRuntimePackages = [
+    piAgentPkg
+    claudeCodePkg
+  ];
+  mkConsumerRuntimeCase =
+    {
+      runnerRuntimePackages ? [ ],
+      appendedRuntimePackages ? [ ],
+    }:
+    let
+      runner =
+        if runnerRuntimePackages == [ ] then consumerRunner else mkConsumerRunner runnerRuntimePackages;
+      profile = profileLibrary.deriveProfile agentExclusiveProfile {
+        packages = appendedRuntimePackages;
+      };
+      inherit
+        (
+          (sandboxLib.mkSandbox {
+            inherit profile;
+            agent = "direct";
+            agentPkg = runner;
+          })
+        )
+        image
+        ;
+    in
+    {
+      inherit image runner;
+      runnerClosure = pkgs.closureInfo { rootPaths = [ runner ]; };
+      appendedClosure = pkgs.closureInfo { rootPaths = appendedRuntimePackages; };
+    };
+  consumerRuntimeMatrix = {
+    runner-dependencies = mkConsumerRuntimeCase {
+      runnerRuntimePackages = consumerRuntimePackages;
+    };
+    profile-extensions = mkConsumerRuntimeCase {
+      appendedRuntimePackages = consumerRuntimePackages;
+    };
+    shared-runtime = mkConsumerRuntimeCase {
+      runnerRuntimePackages = [ piAgentPkg ];
+      appendedRuntimePackages = consumerRuntimePackages;
+    };
+  };
+  consumerRuntimeChecks = concatStringsSep "\n" (
+    mapAttrsToList (name: fixture: ''
+      check_consumer_closures "${name}" "${fixture.image.source_kind}" "${toString fixture.image.source}" \
+          "${fixture.image.stableProfileImage}" "${fixture.image.agentImage}" \
+          "${fixture.runnerClosure}/store-paths" "${fixture.appendedClosure}/store-paths" \
+          "${fixture.runner}" "${fixture.image.profileConfig}"
+    '') consumerRuntimeMatrix
+  );
+  agentConsumerRuntimeClosuresTest = pkgs.writeShellApplication {
+    name = "test-agent-consumer-runtime-closures";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.gawk
+      pkgs.gnugrep
+      pkgs.gnutar
+      pkgs.jq
+    ];
+    text = ''
+      ${archiveShellHelpers}
+      ${directContractShellHelpers}
+
+      assert_closure_in_tier() {
+          local label="$1"
+          local closure="$2"
+          local lower_paths="$3"
+          local tier_paths="$4"
+          local missing
+          missing=$(comm -23 <(comm -23 "$closure" "$lower_paths") "$tier_paths")
+          if [[ -n "$missing" ]]; then
+              echo "FAIL: $label closure paths are absent from their normal tier" >&2
+              printf '%s\n' "$missing" >&2
+              exit 1
+          fi
+      }
+
+      check_consumer_closures() {
+          local name="$1"
+          local source_kind="$2"
+          local source="$3"
+          local stable_image="$4"
+          local agent_image="$5"
+          local runner_closure="$6"
+          local appended_closure="$7"
+          local runner="$8"
+          local profile_config="$9"
+          local case_dir="$tmp/$name"
+          local tier overlap runtime
+          unpack_archive "$name stable" "$stable_image" "$case_dir/stable"
+          unpack_archive "$name agent" "$agent_image" "$case_dir/agent"
+          prepare_image_artifact "$name leaf" "$source_kind" "$source" "$case_dir/leaf" "$case_dir/leaf.layers"
+          for tier in stable agent; do
+              write_layers "$case_dir/$tier" "$case_dir/$tier.layers"
+          done
+          for tier in stable agent leaf; do
+              write_layer_digests "$case_dir/$tier" "$case_dir/$tier.layers" "$case_dir/$tier.digests"
+              list_layer_store_paths "$case_dir/$tier" "$case_dir/$tier.layers" >"$case_dir/$tier.all-paths"
+          done
+          write_owned_layers "$name agent" "$case_dir/stable.digests" "$case_dir/agent.digests" "$case_dir/agent.owned-digests"
+          write_owned_layers "$name leaf" "$case_dir/agent.digests" "$case_dir/leaf.digests" "$case_dir/leaf.owned-digests"
+          tail -n "$(wc -l <"$case_dir/agent.owned-digests")" "$case_dir/agent.layers" >"$case_dir/agent.owned"
+          tail -n "$(wc -l <"$case_dir/leaf.owned-digests")" "$case_dir/leaf.layers" >"$case_dir/leaf.owned"
+          for tier in agent leaf; do
+              list_layer_store_paths "$case_dir/$tier" "$case_dir/$tier.owned" >"$case_dir/$tier.paths"
+          done
+
+          assert_closure_in_tier "$name runner" "$runner_closure" "$case_dir/stable.all-paths" "$case_dir/agent.paths"
+          assert_closure_in_tier "$name appended packages" "$appended_closure" "$case_dir/agent.all-paths" "$case_dir/leaf.paths"
+          overlap=$(comm -12 "$case_dir/stable.all-paths" "$case_dir/agent.paths")
+          if [[ -n "$overlap" ]]; then
+              echo "FAIL: $name agent re-emits stable paths: $overlap" >&2
+              exit 1
+          fi
+          overlap=$(comm -12 "$case_dir/agent.all-paths" "$case_dir/leaf.paths")
+          if [[ -n "$overlap" ]]; then
+              echo "FAIL: $name leaf re-emits lower-tier paths: $overlap" >&2
+              exit 1
+          fi
+          for runtime in "${piAgentPkg}" "${claudeCodePkg}"; do
+              if ! grep -qxF "$runtime" "$case_dir/leaf.all-paths"; then
+                  echo "FAIL: $name consumer runtime is missing from the image: $runtime" >&2
+                  exit 1
+              fi
+              if grep -qxF "$runtime" "$case_dir/stable.all-paths"; then
+                  echo "FAIL: $name consumer runtime leaked into the stable tier" >&2
+                  exit 1
+              fi
+          done
+          assert_direct_contract "$case_dir/leaf" "$case_dir/leaf.layers" "$case_dir/leaf.owned" "$runner"
+          jq -e '.agent.kind == "direct"' "$profile_config" >/dev/null
+      }
+
+      tmp=$(mktemp -d)
+      trap 'rm -rf "$tmp"' EXIT
+      ${consumerRuntimeChecks}
+      echo "test-agent-consumer-runtime-closures: PASS"
     '';
   };
 
@@ -2893,7 +3082,8 @@ in
     imageTierMembershipTest
     wrixImagesSourceKindTest
     wrixImageLabelsTest
-    agentDirectRunnerTest
+    agentDeclaredDirectRunnerTest
+    agentConsumerRuntimeClosuresTest
     agentClaudeRuntimeTest
     claudeRuntimeNoopTest
     prekHooksClosureTest

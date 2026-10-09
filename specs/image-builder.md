@@ -343,11 +343,11 @@ missing tools on `PATH`, or maintain a hook-id skip list.
 - Consumer runner dependencies and appended profile packages may include Pi or
   Claude; image composition preserves those closures without changing the
   selected agent variant or its configured entrypoint executable
-  [check?](test-ci:test-agent-consumer-runtime-closures)
+  [check](test-ci:test-agent-consumer-runtime-closures)
 - An explicit `agent = "direct"` image contains the consumer package and its
   declared executable, with no Wrix placeholder or requirement that the
   executable be Loom-named; selection validation is owned by `sandbox.md`
-  [check?](test-ci:test-agent-declared-direct-runner)
+  [check](test-ci:test-agent-declared-direct-runner)
 - `agent = "claude"` produces an image that contains `claude-code`
   [check](test-ci:test-agent-claude-runtime)
 - The `agentPkg` code path threads the selected agent package into the image
