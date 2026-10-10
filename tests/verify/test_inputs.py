@@ -203,8 +203,8 @@ exec {shlex.quote(VERIFY)} "$@"
         self.fixture(malformed=True)
         result, calls = self.gate("README.md")
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn("input-query errored / emitted a malformed inputs document",
-                      result.stdout + result.stderr)
+        self.assertIn("input-query errored", result.stdout + result.stderr)
+        self.assertIn("emitted a malformed inputs document", result.stdout + result.stderr)
         self.assertEqual(calls.count("query"), 1, calls)
 
     def test_system_checks_remain_always_run_and_share_only_within_invocation(self):
