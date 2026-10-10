@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, ExitCode},
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 
 use lifecycle::{Control, Fixture, Process, Request, TestResult};
@@ -25,7 +25,6 @@ fn launch_records_precede_work_and_do_not_collide() -> TestResult {
         enable_service(&first)?;
         enable_service(&second)?;
         let workspace = first.workspace();
-        next_second()?;
         let mut a = start(&first, mode, &workspace, 37)?;
         let mut b = start(&second, mode, &workspace, 37)?;
         let mut control_a = first.accept(&mut a)?;
@@ -39,10 +38,6 @@ fn launch_records_precede_work_and_do_not_collide() -> TestResult {
             .map(|path| read_record(path))
             .collect::<TestResult<Vec<_>>>()?;
         assert_ne!(values[0]["execution_id"], values[1]["execution_id"]);
-        assert_eq!(
-            values[0]["timestamp_start"].as_str().unwrap()[..19],
-            values[1]["timestamp_start"].as_str().unwrap()[..19]
-        );
         for (path, value) in paths.iter().zip(&values) {
             assert_incomplete(value);
             assert_eq!(value["mode"], mode_name(mode));
@@ -565,12 +560,4 @@ const fn mode_name(mode: Mode) -> &'static str {
         Mode::Run => "run",
         Mode::Spawn => "spawn",
     }
-}
-
-fn next_second() -> TestResult {
-    let current = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-    while SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() == current {
-        thread::sleep(Duration::from_millis(1));
-    }
-    Ok(())
 }

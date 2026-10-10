@@ -134,8 +134,24 @@ impl Journal {
         agent_kind: AgentKind,
         focus_target: Option<&FocusTarget>,
     ) -> Result<Self, Error> {
+        Self::create_at(
+            workspace,
+            kind,
+            agent_kind,
+            focus_target,
+            OffsetDateTime::now_utc(),
+        )
+    }
+
+    fn create_at(
+        workspace: &Path,
+        kind: &Kind,
+        agent_kind: AgentKind,
+        focus_target: Option<&FocusTarget>,
+        now: OffsetDateTime,
+    ) -> Result<Self, Error> {
         let start = Instant::now();
-        let timestamp_start = timestamp()?;
+        let timestamp_start = timestamp(now)?;
         let directory = workspace.join(".wrix/log");
         fs::create_dir_all(&directory)?;
         let prefix = format!(".{}-", timestamp_start.replace([':', '.'], "-"));
@@ -189,7 +205,7 @@ impl Journal {
     /// Only an observed foreground runtime wait result supplies status fields.
     pub fn complete(mut self, status: Option<ExitStatus>) -> Result<(), Error> {
         self.record.state = State::Completed {
-            timestamp_end: timestamp()?,
+            timestamp_end: timestamp(OffsetDateTime::now_utc())?,
             duration_seconds: self.start.elapsed().as_secs_f64(),
             exit_code: status.and_then(|status| status.code()),
             signal: status.and_then(|status| status.signal()).map(signal_name),
@@ -204,9 +220,8 @@ impl Journal {
     }
 }
 
-fn timestamp() -> Result<String, Error> {
-    OffsetDateTime::now_utc()
-        .format(&Rfc3339)
+fn timestamp(now: OffsetDateTime) -> Result<String, Error> {
+    now.format(&Rfc3339)
         .map_err(|source| Error::Timestamp { source })
 }
 
@@ -241,4 +256,80 @@ fn signal_name(signal: i32) -> String {
         _ => return format!("SIG{signal}"),
     };
     name.to_owned()
+}
+
+#[cfg(test)]
+mod test {
+    use std::{fs, os::unix::process::ExitStatusExt, process::ExitStatus, sync::Barrier, thread};
+
+    use serde_json::Value;
+    use time::OffsetDateTime;
+
+    use super::Journal;
+    use crate::command::{
+        config::AgentKind,
+        launch::{Kind, Run},
+    };
+
+    #[test]
+    fn concurrent_same_timestamp_records_remain_distinct() {
+        let workspace = tempfile::tempdir().unwrap();
+        let kind = Kind::Run(Run {
+            workspace: workspace.path().to_owned(),
+            agent_args: Vec::new(),
+            git_deploy: None,
+            git_sign: None,
+        });
+        let barrier = Barrier::new(2);
+        let create = || {
+            barrier.wait();
+            Journal::create_at(
+                workspace.path(),
+                &kind,
+                AgentKind::Direct,
+                None,
+                OffsetDateTime::UNIX_EPOCH,
+            )
+            .unwrap()
+        };
+        let [a, b] = thread::scope(|scope| {
+            let a = scope.spawn(create);
+            let b = scope.spawn(create);
+            [a.join().unwrap(), b.join().unwrap()]
+        });
+        let paths = [a.path.clone(), b.path.clone()];
+        assert_ne!(paths[0], paths[1]);
+        let read = |path| -> Value { serde_json::from_slice(&fs::read(path).unwrap()).unwrap() };
+        let initial = paths.each_ref().map(read);
+        assert_ne!(initial[0]["execution_id"], initial[1]["execution_id"]);
+        for (path, value) in paths.iter().zip(&initial) {
+            assert_eq!(value["timestamp_start"], "1970-01-01T00:00:00Z");
+            assert_eq!(value["state"], "incomplete");
+            let filename = path.file_stem().unwrap().to_str().unwrap();
+            assert_eq!(filename, value["execution_id"].as_str().unwrap());
+            assert!(filename.starts_with("1970-01-01T00-00-00Z-"));
+        }
+        a.complete(Some(ExitStatus::from_raw(0))).unwrap();
+        let completed_a = read(&paths[0]);
+        assert_eq!(completed_a["state"], "completed");
+        assert_eq!(completed_a["exit_code"], 0);
+        assert_eq!(read(&paths[1]), initial[1]);
+        b.complete(Some(ExitStatus::from_raw(37 << 8))).unwrap();
+        let completed_b = read(&paths[1]);
+        assert_eq!(completed_b["state"], "completed");
+        assert_eq!(completed_b["exit_code"], 37);
+        assert_eq!(read(&paths[0]), completed_a);
+        for (completed, initial) in [completed_a, completed_b].iter().zip(&initial) {
+            assert_eq!(completed["execution_id"], initial["execution_id"]);
+            assert_eq!(completed["timestamp_start"], initial["timestamp_start"]);
+        }
+        let mut recorded_paths = fs::read_dir(workspace.path().join(".wrix/log"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        recorded_paths.sort();
+        let mut expected_paths = paths;
+        expected_paths.sort();
+        assert_eq!(recorded_paths, expected_paths);
+    }
 }

@@ -400,8 +400,10 @@ section is a reference index only.
   [system](test-ci:test-security-session-local-signing)
 - Each validated launch establishes one correctly typed execution record before
   any service/container startup, preserves optional issue and focus identities,
-  and keeps concurrent same-second execution IDs and files distinct
+  and keeps concurrent execution IDs and files distinct
   [test](../crates/wrix-sandbox/tests/execution_metadata.rs::launch_records_precede_work_and_do_not_collide)
+- Concurrent same-second execution IDs and files remain distinct
+  [test](command::launch::execution_metadata::test::concurrent_same_timestamp_records_remain_distinct)
 - A record-creation failure prevents work; observed success, failure, or signal
   termination atomically completes the same record without inventing a
   conversation identity
