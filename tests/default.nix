@@ -227,6 +227,10 @@ let
     // piMcpTests.checks
     // {
       builder-vmnet-route = builderRouteTest;
+      rust-source-fixtures = import ./services/rust-source.nix {
+        inherit pkgs;
+        inherit (wrix) rustPackage;
+      };
       image-assembly-native = sandboxImageChecks.imageAssemblyNativeCheck;
       audit-start-clock = auditClock.check;
       entrypoint-hook-failures =
