@@ -251,6 +251,22 @@ impl Fixture {
         &self.real_bd
     }
 
+    fn auto_export_enabled(&self) -> TestResult<bool> {
+        let output = ProcessCommand::new(self.real_bd())
+            .args(["config", "get", "export.auto"])
+            .current_dir(self.repo())
+            .env("HOME", self.home())
+            .env_remove("BD_EXPORT_AUTO")
+            .output()?;
+        assert!(
+            output.status.success(),
+            "bd config get export.auto failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Ok(String::from_utf8(output.stdout)?.trim().parse()?)
+    }
+
     fn beads_worktree(&self) -> PathBuf {
         self.repo.join(".git/beads-worktrees/beads")
     }
@@ -485,18 +501,21 @@ fn pull_fallback_preserves_local_intent() -> TestResult {
 fn disables_auto_export_idempotently() -> TestResult {
     let fixture = Fixture::new("auto-export")?;
     setup_minimal_repo(fixture.repo())?;
+    assert!(fixture.auto_export_enabled()?);
 
-    for _ in 0..2 {
+    let push = || -> TestResult<Vec<u8>> {
         let output = invoke_push(fixture.repo(), &[fixture.fake_bin()], |command| {
             configure_bd(command, &fixture, "success");
+            command.env_remove("BD_EXPORT_AUTO");
         })?;
         assert_eq!(output.code, 0, "stderr:\n{}", output.stderr);
-    }
+        assert!(!fixture.auto_export_enabled()?);
+        assert!(!fixture.repo().join(".beads/issues.jsonl").exists());
+        Ok(fs::read(fixture.repo().join(".beads/config.yaml"))?)
+    };
 
-    let config = fs::read_to_string(fixture.repo().join(".beads/config.yaml"))?;
-    assert!(config.contains("export.auto: false"));
-    assert_eq!(config.matches("export.auto: false").count(), 1);
-    assert!(!fixture.repo().join(".beads/issues.jsonl").exists());
+    let config = push()?;
+    assert_eq!(push()?, config);
     assert_eq!(
         count_command(&fixture.bd_lines()?, "bd\tconfig\tset\texport.auto\tfalse"),
         2
