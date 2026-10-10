@@ -48,11 +48,13 @@ class FixtureConformance(unittest.TestCase):
         self.root = Path(self.temp.name)
 
     def test_runtime_non_run_calls_preserve_real_command_stdio_and_status(self):
-        args = ["-c", 'IFS= read -r line; printf "%s:%s\\n" "$1" "$line"; echo diagnostic >&2; exit 37',
+        args = ["-c", 'IFS= read -r line; printf "%s:%s:%s:%s\\n" "$1" "$line" "$HOME" "$XDG_CACHE_HOME"; echo diagnostic >&2; exit 37',
                 "fixture", "argument with spaces"]
-        expected = subprocess.run(["bash", *args], input="input\n", text=True, capture_output=True)
+        env = dict(os.environ, HOME=str(self.root), XDG_CACHE_HOME=str(self.root / "cache"),
+                   WRIX_TEST_REAL_RUNTIME=shutil.which("bash"))
+        expected = subprocess.run(["bash", *args], env=env, input="input\n", text=True, capture_output=True)
         actual = subprocess.run(["bash", str(HERE / "execution-runtime.sh"), *args],
-                                env=dict(os.environ, WRIX_TEST_REAL_RUNTIME=shutil.which("bash")),
+                                env=env,
                                 input="input\n", text=True, capture_output=True, timeout=LIMIT)
         self.assertEqual((actual.returncode, actual.stdout, actual.stderr),
                          (expected.returncode, expected.stdout, expected.stderr))
@@ -135,8 +137,10 @@ class LiveExecution(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.launches = []
         self.addCleanup(self.cleanup_launches)
-        self.home = self.root / "home"
-        self.home.mkdir()
+        self.env = {key: value for key, value in os.environ.items()
+                    if not key.startswith(("WRIX_", "BEADS_DOLT_SERVER_"))
+                    and key not in ("TMUX", "TMUX_PANE")}
+        self.env["XDG_CACHE_HOME"] = str(self.root / "cache")
         self.bin = self.root / "bin"
         self.bin.mkdir()
         (self.bin / self.runtime_name).symlink_to(HERE / "execution-runtime.sh")
@@ -152,8 +156,8 @@ class LiveExecution(unittest.TestCase):
             self.profiles[agent] = path
 
     def runtime_call(self, *args, check=True):
-        return subprocess.run([self.runtime, *args], capture_output=True, text=True,
-                              timeout=30, check=check)
+        return subprocess.run([self.runtime, *args], env=self.env, capture_output=True,
+                              text=True, timeout=30, check=check)
 
     def remove_container(self, launch):
         if self.runtime_name == "podman":
@@ -194,11 +198,7 @@ class LiveExecution(unittest.TestCase):
         name = f"wrix-execution-{os.getpid()}-{member}"
         args = (["bash", "/workspace/probe.sh", "/workspace", member, str(status)]
                 if agent == "direct" else ["--version" if agent == "claude" else "--help"])
-        env = {key: value for key, value in os.environ.items()
-               if not key.startswith(("WRIX_", "BEADS_DOLT_SERVER_"))
-               and key not in ("TMUX", "TMUX_PANE")}
-        env.update(HOME=str(self.home), XDG_CACHE_HOME=str(self.root / "cache"),
-                   WRIX_PI_AUTH_FILE=str(self.auth), WRIX_FOCUS_TARGET=f"focus:{member}",
+        env = dict(self.env, WRIX_PI_AUTH_FILE=str(self.auth), WRIX_FOCUS_TARGET=f"focus:{member}",
                    WRIX_TEST_REAL_RUNTIME=self.runtime, WRIX_TEST_CONTROL=str(control),
                    WRIX_TEST_CONTAINER_NAME=name, PATH=f"{self.bin}:{os.environ['PATH']}")
         command = [str(self.launcher), "--profile-config", str(profile or self.profiles[agent])]
