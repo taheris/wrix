@@ -1,7 +1,7 @@
 use std::{
     fs,
     io::{self, BufRead, BufReader, Read, Write},
-    net::{TcpListener, TcpStream},
+    net::{SocketAddr, TcpListener, TcpStream},
     path::Path,
     process::{Child, Command, Stdio},
     thread,
@@ -9,6 +9,55 @@ use std::{
 };
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
+
+#[test]
+fn server_fixture_keeps_ephemeral_listeners_isolated() -> TestResult {
+    let first_root = tempfile::tempdir()?;
+    let second_root = tempfile::tempdir()?;
+    fs::write(first_root.path().join("nix-cache-info"), "first cache")?;
+    fs::write(second_root.path().join("nix-cache-info"), "second cache")?;
+    let (_first, first_endpoint) = Server::start(first_root.path())?;
+    let (_second, second_endpoint) = Server::start(second_root.path())?;
+    assert_ne!(first_endpoint, second_endpoint);
+    for (endpoint, body) in [
+        (first_endpoint, "first cache"),
+        (second_endpoint, "second cache"),
+    ] {
+        let response = request(endpoint, "GET /nix-cache-info HTTP/1.1\r\n\r\n")?;
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(response.ends_with(body));
+    }
+    Ok(())
+}
+
+#[test]
+fn server_fixture_reports_bind_failure_without_contacting_listener() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let listener = TcpListener::bind(("127.0.0.1", 0))?;
+    listener.set_nonblocking(true)?;
+    let result = Server::spawn(
+        Command::new(env!("CARGO_BIN_EXE_wrix-cache-serve")),
+        root.path(),
+        listener.local_addr()?,
+    );
+    let Err(error) = result else {
+        panic!("cache server started on an occupied port");
+    };
+    let diagnostic = error.to_string();
+    assert!(
+        diagnostic.contains("cache server exited during startup"),
+        "{diagnostic}"
+    );
+    assert!(
+        diagnostic.contains("wrix-cache-serve: cache helper I/O failed"),
+        "{diagnostic}"
+    );
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        io::ErrorKind::WouldBlock
+    );
+    Ok(())
+}
 
 #[test]
 fn static_server_enforces_binary_cache_path_policy() -> TestResult {
@@ -28,19 +77,17 @@ fn static_server_enforces_binary_cache_path_policy() -> TestResult {
     fs::write(cache_root.join("log/build.log"), "log payload\n")?;
     fs::write(cache_root.join("secret"), "secret\n")?;
 
-    let port = available_loopback_port()?;
-    let endpoint = format!("127.0.0.1:{port}");
-    let _server = Server::start(&cache_root, &endpoint)?;
+    let (_server, endpoint) = Server::start(&cache_root)?;
 
     let info = request(
-        &endpoint,
+        endpoint,
         "GET /nix-cache-info HTTP/1.1\r\nHost: cache\r\n\r\n",
     )?;
     assert!(info.starts_with("HTTP/1.1 200 OK\r\n"));
     assert!(info.ends_with("StoreDir: /nix/store\nWantMassQuery: 1\n"));
 
     let head = request(
-        &endpoint,
+        endpoint,
         "HEAD /aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-demo.narinfo HTTP/1.1\r\nHost: cache\r\n\r\n",
     )?;
     assert!(head.starts_with("HTTP/1.1 200 OK\r\n"));
@@ -48,20 +95,20 @@ fn static_server_enforces_binary_cache_path_policy() -> TestResult {
     assert!(!head.contains("StorePath"));
 
     let nar = request(
-        &endpoint,
+        endpoint,
         "GET /nar/demo.nar HTTP/1.1\r\nHost: cache\r\n\r\n",
     )?;
     assert!(nar.starts_with("HTTP/1.1 200 OK\r\n"));
     assert!(nar.ends_with("nar payload\n"));
 
     let log = request(
-        &endpoint,
+        endpoint,
         "GET /log/build.log HTTP/1.1\r\nHost: cache\r\n\r\n",
     )?;
     assert!(log.starts_with("HTTP/1.1 200 OK\r\n"));
 
     let method = request(
-        &endpoint,
+        endpoint,
         "POST /nar/demo.nar HTTP/1.1\r\nHost: cache\r\n\r\n",
     )?;
     assert!(method.starts_with("HTTP/1.1 405 Method Not Allowed\r\n"));
@@ -74,7 +121,7 @@ fn static_server_enforces_binary_cache_path_policy() -> TestResult {
         "/nar//demo.nar",
     ] {
         let response = request(
-            &endpoint,
+            endpoint,
             &format!("GET {target} HTTP/1.1\r\nHost: cache\r\n\r\n"),
         )?;
         assert!(response.starts_with("HTTP/1.1 404 Not Found\r\n"));
@@ -88,11 +135,10 @@ fn static_server_enforces_binary_cache_path_policy() -> TestResult {
 fn idle_clients_do_not_block_other_requests() -> TestResult {
     let root = tempfile::tempdir()?;
     fs::write(root.path().join("nix-cache-info"), "ready")?;
-    let endpoint = format!("127.0.0.1:{}", available_loopback_port()?);
-    let _server = Server::start(root.path(), &endpoint)?;
-    let _idle = TcpStream::connect(&endpoint)?;
+    let (_server, endpoint) = Server::start(root.path())?;
+    let _idle = TcpStream::connect(endpoint)?;
     thread::sleep(Duration::from_millis(50));
-    assert!(request(&endpoint, "GET /nix-cache-info HTTP/1.1\r\n\r\n")?.ends_with("ready"));
+    assert!(request(endpoint, "GET /nix-cache-info HTTP/1.1\r\n\r\n")?.ends_with("ready"));
     Ok(())
 }
 
@@ -100,14 +146,13 @@ fn idle_clients_do_not_block_other_requests() -> TestResult {
 fn request_headers_are_bounded_and_complete() -> TestResult {
     let root = tempfile::tempdir()?;
     fs::write(root.path().join("nix-cache-info"), "ready")?;
-    let endpoint = format!("127.0.0.1:{}", available_loopback_port()?);
-    let _server = Server::start(root.path(), &endpoint)?;
+    let (_server, endpoint) = Server::start(root.path())?;
     let oversized = format!(
         "GET /nix-cache-info HTTP/1.1\r\nX-Large: {}\r\n\r\n",
         "a".repeat(9000)
     );
-    assert!(request(&endpoint, &oversized)?.starts_with("HTTP/1.1 431"));
-    assert!(request(&endpoint, "GET /nix-cache-info HTTP/1.1\r\n")?.starts_with("HTTP/1.1 400"));
+    assert!(request(endpoint, &oversized)?.starts_with("HTTP/1.1 431"));
+    assert!(request(endpoint, "GET /nix-cache-info HTTP/1.1\r\n")?.starts_with("HTTP/1.1 400"));
     Ok(())
 }
 
@@ -115,25 +160,23 @@ fn request_headers_are_bounded_and_complete() -> TestResult {
 fn disconnected_clients_do_not_terminate_service() -> TestResult {
     let root = tempfile::tempdir()?;
     fs::write(root.path().join("nix-cache-info"), "ready")?;
-    let endpoint = format!("127.0.0.1:{}", available_loopback_port()?);
-    let mut server = Server::start(root.path(), &endpoint)?;
+    let (mut server, endpoint) = Server::start(root.path())?;
     for _ in 0..64 {
-        let stream = TcpStream::connect(&endpoint)?;
+        let stream = TcpStream::connect(endpoint)?;
         socket2::SockRef::from(&stream).set_linger(Some(Duration::ZERO))?;
         drop(stream);
     }
     thread::sleep(Duration::from_millis(200));
     assert!(server.child.try_wait()?.is_none());
-    assert!(request(&endpoint, "GET /nix-cache-info HTTP/1.1\r\n\r\n")?.ends_with("ready"));
+    assert!(request(endpoint, "GET /nix-cache-info HTTP/1.1\r\n\r\n")?.ends_with("ready"));
     Ok(())
 }
 
 #[test]
 fn partial_request_deadline_is_not_extended_by_trickling() -> TestResult {
     let root = tempfile::tempdir()?;
-    let endpoint = format!("127.0.0.1:{}", available_loopback_port()?);
-    let _server = Server::start(root.path(), &endpoint)?;
-    let mut stream = TcpStream::connect(&endpoint)?;
+    let (_server, endpoint) = Server::start(root.path())?;
+    let mut stream = TcpStream::connect(endpoint)?;
     stream.set_read_timeout(Some(Duration::from_secs(7)))?;
     stream.write_all(b"GET /nix-cache-info HTTP/1.1\r\nX-Slow: ")?;
     let mut writer = stream.try_clone()?;
@@ -168,9 +211,8 @@ fn head_reads_only_metadata_and_get_streams_large_files() -> TestResult {
     fs::create_dir(root.path().join("nar"))?;
     let file = fs::File::create(root.path().join("nar/sparse"))?;
     file.set_len(64 * 1024 * 1024 * 1024)?;
-    let endpoint = format!("127.0.0.1:{}", available_loopback_port()?);
-    let _server = Server::start_limited(root.path(), &endpoint)?;
-    let head = request(&endpoint, "HEAD /nar/sparse HTTP/1.1\r\n\r\n")?;
+    let (_server, endpoint) = Server::start_limited(root.path())?;
+    let head = request(endpoint, "HEAD /nar/sparse HTTP/1.1\r\n\r\n")?;
     assert!(head.contains("Content-Length: 68719476736\r\n"));
     assert!(head.ends_with("\r\n\r\n"));
 
@@ -179,7 +221,7 @@ fn head_reads_only_metadata_and_get_streams_large_files() -> TestResult {
     for _ in 0..4096 {
         file.write_all(&chunk)?;
     }
-    let mut stream = TcpStream::connect(&endpoint)?;
+    let mut stream = TcpStream::connect(endpoint)?;
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     stream.write_all(b"GET /nar/large HTTP/1.1\r\n\r\n")?;
     let mut reader = BufReader::new(stream);
@@ -205,51 +247,70 @@ fn head_reads_only_metadata_and_get_streams_large_files() -> TestResult {
 
 struct Server {
     child: Child,
+    diagnostics: tempfile::NamedTempFile,
 }
 
 impl Server {
-    fn start(cache_root: &Path, endpoint: &str) -> TestResult<Self> {
+    fn start(cache_root: &Path) -> TestResult<(Self, SocketAddr)> {
         Self::spawn(
             Command::new(env!("CARGO_BIN_EXE_wrix-cache-serve")),
             cache_root,
-            endpoint,
+            "127.0.0.1:0".parse()?,
         )
     }
 
-    fn start_limited(cache_root: &Path, endpoint: &str) -> TestResult<Self> {
+    fn start_limited(cache_root: &Path) -> TestResult<(Self, SocketAddr)> {
         let mut command = Command::new("bash");
         command.args([
             "-c",
-            "ulimit -v 131072; exec \"$@\"",
+            "set -euo pipefail; ulimit -v 131072; exec \"$@\"",
             "cache-test",
             env!("CARGO_BIN_EXE_wrix-cache-serve"),
         ]);
-        Self::spawn(command, cache_root, endpoint)
+        Self::spawn(command, cache_root, "127.0.0.1:0".parse()?)
     }
 
-    fn spawn(mut command: Command, cache_root: &Path, endpoint: &str) -> TestResult<Self> {
+    fn spawn(
+        mut command: Command,
+        cache_root: &Path,
+        listen: SocketAddr,
+    ) -> TestResult<(Self, SocketAddr)> {
+        let diagnostics = tempfile::NamedTempFile::new()?;
         let child = command
+            .env_clear()
+            .env("PATH", std::env::var_os("PATH").ok_or("PATH is missing")?)
+            .env("LC_ALL", "C")
+            .env("NO_COLOR", "1")
             .arg("--listen")
-            .arg(endpoint)
+            .arg(listen.to_string())
             .arg(cache_root)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(diagnostics.reopen()?)
             .spawn()?;
-        let server = Self { child };
+        let mut server = Self { child, diagnostics };
         let deadline = Instant::now() + Duration::from_secs(5);
-        while Instant::now() < deadline {
-            if request(
-                endpoint,
-                "GET /nix-cache-info HTTP/1.1\r\nHost: cache\r\n\r\n",
-            )
-            .is_ok()
-            {
-                return Ok(server);
+        loop {
+            if let Some(status) = server.child.try_wait()? {
+                let diagnostics = fs::read_to_string(server.diagnostics.path())?;
+                return Err(
+                    format!("cache server exited during startup: {status}: {diagnostics}").into(),
+                );
             }
-            thread::sleep(Duration::from_millis(50));
+            let diagnostics = fs::read_to_string(server.diagnostics.path())?;
+            for line in diagnostics.lines() {
+                if let Some((_, address)) = line.split_once("cache server listening address=") {
+                    let endpoint: SocketAddr = address.parse()?;
+                    assert_eq!(endpoint.ip(), listen.ip());
+                    assert_ne!(endpoint.port(), 0);
+                    return Ok((server, endpoint));
+                }
+            }
+            if Instant::now() >= deadline {
+                return Err(format!("cache server did not start: {diagnostics}").into());
+            }
+            thread::sleep(Duration::from_millis(10));
         }
-        Err(io::Error::new(io::ErrorKind::TimedOut, "cache server did not start").into())
     }
 }
 
@@ -260,7 +321,7 @@ impl Drop for Server {
     }
 }
 
-fn request(endpoint: &str, request: &str) -> io::Result<String> {
+fn request(endpoint: SocketAddr, request: &str) -> io::Result<String> {
     let mut stream = TcpStream::connect(endpoint)?;
     stream.set_read_timeout(Some(Duration::from_secs(2)))?;
     stream.write_all(request.as_bytes())?;
@@ -273,8 +334,4 @@ fn request(endpoint: &str, request: &str) -> io::Result<String> {
         }
     }
     Ok(response)
-}
-
-fn available_loopback_port() -> io::Result<u16> {
-    Ok(TcpListener::bind(("127.0.0.1", 0))?.local_addr()?.port())
 }

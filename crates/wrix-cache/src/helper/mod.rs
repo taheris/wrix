@@ -193,6 +193,7 @@ fn run_serve(args: &[String], stderr: &mut impl Write) -> Result<ExitCode> {
     let root = PathBuf::from(root);
     require_absolute_dir("cache root", &root)?;
     let listener = TcpListener::bind(listen)?;
+    tracing::info!(address = %listener.local_addr()?, "cache server listening");
     server::serve(&listener, &root)?;
     Ok(ExitCode::SUCCESS)
 }
