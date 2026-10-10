@@ -25,9 +25,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 FIXTURE_DIR="$REPO_ROOT/tests/fixtures/build-package-fixture"
 
-# Pinned sha256 for tests/fixtures/rust-toolchain.toml (channel 1.85.1).
+# Pinned sha256 for tests/fixtures/rust-toolchain.toml (Rust 1.99.0).
 # Same value as no-nightly-closure.sh; update both if the fixture changes.
-TOOLCHAIN_FIXTURE_SHA="sha256-Hn2uaQzRLidAWpfmRwSRdImifGUCAb9HeAqTYFXWeQk="
+TOOLCHAIN_FIXTURE_SHA="sha256-zm3dyIY2T414ZRR3EhLOvptzG6gta4WZUcawzMUWtqI="
 
 TMPDIRS=()
 cleanup() {

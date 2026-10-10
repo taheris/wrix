@@ -9,7 +9,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
-TOOLCHAIN_FIXTURE_SHA="sha256-Hn2uaQzRLidAWpfmRwSRdImifGUCAb9HeAqTYFXWeQk="
+TOOLCHAIN_FIXTURE_SHA="sha256-zm3dyIY2T414ZRR3EhLOvptzG6gta4WZUcawzMUWtqI="
 
 require_tools() {
   local tool
