@@ -529,11 +529,19 @@ impl FocusRegistration {
                         FocusRecord::new(target, tmux_target, platform, focus)
                     }
                     Err(LaunchError::FocusRegistrationJson { source, .. }) => {
-                        tracing::warn!(
-                            path = %path.display(),
-                            error = %source,
-                            "replacing malformed notification focus registration"
-                        );
+                        if source.is_data() {
+                            tracing::debug!(
+                                path = %path.display(),
+                                error = %source,
+                                "discarding obsolete notification focus registration"
+                            );
+                        } else {
+                            tracing::warn!(
+                                path = %path.display(),
+                                error = %source,
+                                "replacing malformed notification focus registration"
+                            );
+                        }
                         FocusRecord::new(target, tmux_target, platform, focus)
                     }
                     Err(error) => return Err(error),

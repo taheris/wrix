@@ -886,6 +886,114 @@ fn spawn_registers_focused_window_from_niri_reply() -> TestResult {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn launcher_discards_obsolete_focus_registrations_without_warning() -> TestResult {
+    for mode in ["run", "spawn"] {
+        for obsolete in [
+            json!({"session_id": "test:1.0", "window_id": "old", "registration_count": 4}),
+            json!({"session_id": "test:1.0", "terminal_app": "OldTerminal", "registration_count": 4}),
+            json!({"session_id": "test:1.0"}),
+            json!({}),
+            json!({"focus_target": 42}),
+            json!({"focus_target": "test:1.0", "registration_count": "obsolete"}),
+        ] {
+            let fixture = Fixture::new(None)?;
+            let mut command = fixture.focus_spawn(r#"{"id":42}"#)?;
+            if mode == "run" {
+                let mut run = fixture.command();
+                for (name, value) in command.get_envs() {
+                    if let Some(value) = value {
+                        run.env(name, value);
+                    } else {
+                        run.env_remove(name);
+                    }
+                }
+                command = run;
+            }
+            let directory = fixture.root.path().join("runtime/wrix/sessions");
+            fs::create_dir_all(&directory)?;
+            let path = directory.join("test-1-0.json");
+            fs::write(&path, serde_json::to_vec(&obsolete)?)?;
+
+            let output = command.output()?;
+            let stderr = String::from_utf8(output.stderr)?;
+            assert!(output.status.success(), "{stderr}");
+            assert!(!stderr.contains("WARN"), "{stderr}");
+            let response: Value = serde_json::from_slice(&output.stdout)?;
+            assert_eq!(response["command"], "get_state");
+            let record: Value =
+                serde_json::from_slice(&fs::read(fixture.root.path().join("session.json"))?)?;
+            assert_eq!(record["focus_target"], "test:1.0");
+            assert_eq!(record["tmux_target"], "test:1.0");
+            assert_eq!(record["window_id"], "42");
+            assert!(record["terminal_app"].is_null());
+            assert_eq!(record["registration_count"], 1);
+            assert!(record.get("session_id").is_none());
+            assert!(!path.exists());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn launcher_still_warns_when_focus_registration_json_is_corrupt() -> TestResult {
+    for corrupt in ["not JSON", "{", "{\"focus_target\":"] {
+        let fixture = Fixture::new(None)?;
+        let mut command = fixture.focus_spawn(r#"{"id":42}"#)?;
+        let directory = fixture.root.path().join("runtime/wrix/sessions");
+        fs::create_dir_all(&directory)?;
+        let path = directory.join("test-1-0.json");
+        fs::write(&path, corrupt)?;
+
+        let output = command.output()?;
+        let stderr = String::from_utf8(output.stderr)?;
+        assert!(output.status.success(), "{stderr}");
+        assert!(
+            stderr.contains("replacing malformed notification focus registration"),
+            "{stderr}"
+        );
+        let response: Value = serde_json::from_slice(&output.stdout)?;
+        assert_eq!(response["command"], "get_state");
+        let record: Value =
+            serde_json::from_slice(&fs::read(fixture.root.path().join("session.json"))?)?;
+        assert_eq!(record["focus_target"], "test:1.0");
+        assert_eq!(record["registration_count"], 1);
+        assert!(!path.exists());
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn launcher_preserves_current_focus_registration_ownership() -> TestResult {
+    let fixture = Fixture::new(None)?;
+    let mut command = fixture.focus_spawn(r#"{"id":42}"#)?;
+    let directory = fixture.root.path().join("runtime/wrix/sessions");
+    fs::create_dir_all(&directory)?;
+    let path = directory.join("test-1-0.json");
+    fs::write(
+        &path,
+        serde_json::to_vec(&json!({
+            "focus_target": "test:1.0", "tmux_target": "test:1.0",
+            "window_id": "old", "registration_count": 2
+        }))?,
+    )?;
+
+    let output = command.output()?;
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(output.status.success(), "{stderr}");
+    assert!(!stderr.contains("WARN"), "{stderr}");
+    let record: Value =
+        serde_json::from_slice(&fs::read(fixture.root.path().join("session.json"))?)?;
+    assert_eq!(record["registration_count"], 3);
+    let remaining: Value = serde_json::from_slice(&fs::read(&path)?)?;
+    assert_eq!(remaining["registration_count"], 2);
+    assert_eq!(remaining["focus_target"], "test:1.0");
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn launcher_focus_handoff_is_opaque_optional_and_not_an_identity_alias() -> TestResult {
     for mode in ["run", "spawn"] {
         for target in [None, Some(""), Some(" host/é:opaque\n")] {
