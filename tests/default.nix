@@ -178,7 +178,7 @@ let
     };
     services-limit-mode-cache-endpoint = import ./services/cache-network-system.nix {
       inherit pkgs wrix;
-      sandboxImage = testImages.base;
+      sandboxImage = testImages.baseDirect;
     };
   };
 
@@ -414,6 +414,7 @@ let
     (mkCiApp testBeadsLiveSystem "test-beads-live-system")
     (mkServiceCiApp testServicesDevshellStartIndependent "test-services-devshell-start-independent")
     (mkServiceCiApp testServicesLimitModeCacheEndpoint "test-services-limit-mode-cache-endpoint")
+    (mkServiceCiApp testServicesDoltPlatformTransport "test-services-dolt-platform-transport")
     (mkLiveCiApp testSecurityExecutionMetadataLifecycle "test-security-execution-metadata-lifecycle")
     (mkLiveCiApp testSecurityGitSshBootstrap "test-security-explicit-git-ssh-bootstrap")
     (mkLiveCiApp testSecurityHostContainerLoomGitHelper "test-security-host-container-loom-git-helper")
@@ -791,6 +792,17 @@ let
         name = "test-services-limit-mode-cache-endpoint";
         script = "tests/services/cache-network-live.sh";
         args = [ "test_limit_mode_cache_endpoint" ];
+        environment = serviceCiEnvironment;
+      };
+
+  testServicesDoltPlatformTransport =
+    if pkgs.stdenv.hostPlatform.isLinux then
+      mkSystemTestCiApp "test-services-dolt-platform-transport" "beads-live-system"
+    else
+      mkRepoScriptCiApp {
+        name = "test-services-dolt-platform-transport";
+        script = "tests/services/cache-network-live.sh";
+        args = [ "test_dolt_platform_transport" ];
         environment = serviceCiEnvironment;
       };
 

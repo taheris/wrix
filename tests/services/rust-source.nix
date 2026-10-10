@@ -4,6 +4,7 @@ let
   inherit (pkgs.lib) concatMapStringsSep;
 
   resources = [
+    "crates/wrix-cli/tests/fixtures/service-runtime.sh"
     "crates/wrix-cli/tests/fixtures/launch-runtime.sh"
     "crates/wrix-cli/tests/snapshots/init_help.txt"
     "crates/wrix-cli/tests/snapshots/run_help.txt"

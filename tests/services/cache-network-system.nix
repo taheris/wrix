@@ -28,7 +28,7 @@ let
         inherit (sandboxImage) source_kind;
         digest = "";
       };
-      agent.kind = "claude";
+      agent.kind = "direct";
       resources = {
         cpus = null;
         memory_mb = 2048;
@@ -67,6 +67,7 @@ let
       podman
       skopeo
       systemd
+      util-linux
       wrix.rustPackage.wrix
     ]
   );
@@ -89,8 +90,6 @@ let
     repo="$HOME/cache-network-repo"
     mkdir -p "$repo" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
     git -C "$repo" init -q -b main
-    ssh-keygen -t ed25519 -N "" -q -f "$HOME/deploy-key" \
-      -C "wrix-cache-network-system" >/dev/null
   '';
   unrelatedListener = pkgs.writeShellScript "wrix-cache-network-unrelated-listener" ''
     set -euo pipefail
@@ -101,16 +100,52 @@ let
     ${commonEnvironment}
 
     repo="$HOME/cache-network-repo"
+    cd "$repo"
+    wrix service start
+    wrix service endpoints > "$HOME/endpoints.json"
+    state_root=$(jq -r .state_root "$HOME/endpoints.json")
+    cache_root=$(jq -r .cache_root "$HOME/endpoints.json")
+    cache_port=$(jq -r .endpoints.cache_http.port "$HOME/endpoints.json")
+    [[ "$(jq -r .endpoints.cache_http.host "$HOME/endpoints.json")" == 127.0.0.1 ]]
+    (( cache_port >= 21000 && cache_port <= 22999 ))
+    cp "$state_root/keys/cache.pub" "$repo/expected-key"
+    printf '%s\n' "$cache_port" > "$repo/expected-cache-port"
+    printf '%s\n' "$state_root" > "$repo/state-root"
+    printf '%s\n' "$cache_root" > "$repo/cache-root"
+    printf 'service cache payload\n' > "$cache_root/nar/probe.nar"
+    printf 'host-only store sentinel\n' > "$HOME/host-sentinel"
+    nix-store --add "$HOME/host-sentinel" > "$repo/host-store-path"
+    podman inspect cache-network-repo-service | jq -e --arg cache "$cache_root" '
+      .[0].Mounts | any(.Source == $cache and .Destination == "/cache" and .RW == false)
+    ' >/dev/null
     cat > "$repo/probe.sh" <<'PROBE'
     #!/usr/bin/env bash
     set -euo pipefail
     cache_url=$(awk -F' = ' '$1 == "extra-substituters" { print $2; exit }' <<<"$NIX_CONFIG")
-    [[ "$cache_url" =~ ^http://[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+$ ]]
+    [[ "$cache_url" == "http://169.254.1.2:$(cat /workspace/expected-cache-port)" ]]
+    [[ "$WRIX_PROJECT_CACHE_HOST" == 169.254.1.2 && "$WRIX_PROJECT_CACHE_PORT" == "$(cat /workspace/expected-cache-port)" ]]
+    expected_key=$(cat /workspace/expected-key)
+    expected_config=$(printf 'extra-substituters = %s\nextra-trusted-public-keys = %s\nbuilders-use-substitutes = true' "$cache_url" "$expected_key")
+    [[ "$NIX_CONFIG" == "$expected_config" ]]
+    [[ ! -e "$(cat /workspace/host-store-path)" ]]
+    [[ ! -e /nix/var/nix/daemon-socket/socket ]]
+    [[ ! -e /etc/wrix/keys/cache.secret ]]
+    [[ ! -e /cache && ! -e "$(cat /workspace/state-root)" && ! -e "$(cat /workspace/cache-root)" ]]
+    if awk '$5 == "/nix/store" || $5 == "/cache" { found = 1 } END { exit !found }' /proc/self/mountinfo; then
+      printf 'host cache/store mount exposed to sandbox\n' >&2
+      exit 1
+    fi
     curl --noproxy "*" --fail --silent --show-error --connect-timeout 5 --max-time 10 "$cache_url/nix-cache-info" | grep -F "WantMassQuery: 1" >/dev/null
+    [[ "$(curl --noproxy '*' -fsS --max-time 10 "$cache_url/nar/probe.nar")" == 'service cache payload' ]]
+    [[ "$(curl --noproxy '*' -sS --max-time 10 -o /dev/null -w '%{http_code}' -I "$cache_url/nar/probe.nar")" == 200 ]]
+    [[ "$(curl --noproxy '*' -sS --max-time 10 -o /dev/null -w '%{http_code}' -X POST "$cache_url/nar/probe.nar")" == 405 ]]
+    [[ "$(curl --noproxy '*' -sS --max-time 10 -o /dev/null -w '%{http_code}' "$cache_url/")" == 404 ]]
+    [[ "$(curl --noproxy '*' -sS --max-time 10 --path-as-is -o /dev/null -w '%{http_code}' "$cache_url/nar/../nix-cache-info")" == 404 ]]
     if curl --noproxy "*" --fail --silent --show-error --connect-timeout 2 --max-time 5 http://169.254.1.2:29999/ >/tmp/wrix-unrelated-service 2>&1; then
       printf "unrelated host listener reachable through cache endpoint exception\\n" >&2
       exit 1
     fi
+    touch /workspace/probe-passed
     PROBE
     chmod +x "$repo/probe.sh"
     jq -n \
@@ -118,12 +153,16 @@ let
       '{workspace:$workspace,env:[],agent_args:["bash","/workspace/probe.sh"],mounts:[]}' \
       > "$HOME/spawn.json"
 
-    export WRIX_DEPLOY_KEY="$HOME/deploy-key"
-    export WRIX_GIT_SIGN=0
     export WRIX_NETWORK=limit
     ${wrix.rustPackage.wrix}/bin/wrix \
       --profile-config ${profileConfig} \
       spawn --spawn-config "$HOME/spawn.json"
+    [[ -f "$repo/probe-passed" ]]
+    rm "$repo/probe-passed"
+    script -qefc "${wrix.rustPackage.wrix}/bin/wrix --profile-config ${profileConfig} run '$repo' bash /workspace/probe.sh" /dev/null
+    [[ -f "$repo/probe-passed" ]]
+    wrix service endpoints > "$HOME/endpoints-after.json"
+    cmp "$HOME/endpoints.json" "$HOME/endpoints-after.json"
   '';
   stopService = pkgs.writeShellScript "wrix-cache-network-system-stop" ''
     set -euo pipefail

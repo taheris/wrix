@@ -9,39 +9,9 @@ let
   serviceScriptWithWrix = script: function: ''
     run_repo_script_with_wrix ${escapeShellArg "tests/services/${script}.sh"} ${escapeShellArg function}
   '';
-  lifecycle = serviceScriptWithWrix "lifecycle";
   hostNix = serviceScriptWithWrix "host-nix-config";
-  sandboxNix = serviceScript "sandbox-nix-config";
-  dolt = serviceScriptWithWrix "dolt-endpoints";
 in
 {
-  "services.start-loads-image-source" = lifecycle "test_service_start_loads_image_source";
-
-  "services.temp-cache-only" = lifecycle "test_temp_cache_only_workspace_does_not_start_service";
-
-  "services.dolt-platform-transport" = ''
-    ${serviceScript "dolt-endpoints" "test_cleanup_waits_for_shutdown_writes"}
-    ${serviceScript "dolt-endpoints" "test_cleanup_preserves_failure_status"}
-    ${serviceScript "dolt-endpoints" "test_cleanup_preserves_skip_status"}
-    ${serviceScript "dolt-endpoints" "test_cleanup_reports_server_failure"}
-    ${dolt "test_linux_dolt_uses_workspace_socket"}
-    ${dolt "test_explicit_tcp_dolt_uses_loopback_tcp"}
-  '';
-
-  "services.cache-state-layout" = ''
-    ${hostNix "test_default_cache_state_layout"}
-    ${hostNix "test_mkdevshell_nix_cache"}
-  '';
-
-  "services.container-pull-config" = sandboxNix "test_container_pull_config";
-
-  "services.cache-http-endpoint" = ''
-    ${sandboxNix "test_cache_server_policy_isolated_listeners"}
-    ${sandboxNix "test_no_container_dns_dependency"}
-  '';
-
-  "services.sandbox-cache-boundary" = sandboxNix "test_no_host_store_or_cache_secret";
-
   "services.rust-helper-binaries" = serviceScript "cli-surface" "test_rust_helper_binaries";
 
   "services.host-nix-config" = ''

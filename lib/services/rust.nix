@@ -12,6 +12,8 @@ let
     src = ../..;
     cargoLock = ../../Cargo.lock;
     extraSrcs = {
+      "crates/wrix-cli/tests/fixtures/service-runtime.sh" =
+        ../../crates/wrix-cli/tests/fixtures/service-runtime.sh;
       "crates/wrix-cli/tests/fixtures/launch-runtime.sh" =
         ../../crates/wrix-cli/tests/fixtures/launch-runtime.sh;
       "crates/wrix-cli/tests/snapshots/init_help.txt" =
@@ -111,6 +113,7 @@ in
         pkgs.dolt
         pkgs.hostname
         pkgs.jq
+        pkgs.nix
         pkgs.openssh
         pkgs.tmux
       ];

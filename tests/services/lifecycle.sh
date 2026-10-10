@@ -1164,31 +1164,6 @@ test_start_probes_past_unrelated_cache_port_owner() {
     "-p 127.0.0.1:$selected_port:8080"
 }
 
-test_temp_cache_only_workspace_does_not_start_service() {
-  require_python
-  local wrix_bin
-  wrix_bin="$(build_wrix)"
-  with_fake_runtime_env
-  unset WRIX_SERVICE_ALLOW_TEMP_CACHE
-
-  export HOME="$TEST_TMP/home-temp-cache-only"
-  export XDG_STATE_HOME="$TEST_TMP/xdg-state-temp-cache-only"
-  export XDG_CACHE_HOME="$TEST_TMP/xdg-cache-temp-cache-only"
-  mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
-
-  local workspace="$TEST_TMP/temp-cache-only-workspace"
-  mkdir -p "$workspace"
-  (cd "$workspace" && "$wrix_bin" service start >"$TEST_TMP/temp-cache-only-start.txt")
-  (cd "$workspace" && "$wrix_bin" service endpoints >"$TEST_TMP/temp-cache-only-endpoints.json")
-
-  if "$WRIX_CONTAINER_RUNTIME" container exists temp-cache-only-workspace-service; then
-    fail "cache-only temp workspace started a persistent service container"
-  fi
-  local cache_endpoint
-  cache_endpoint="$(json_get "$TEST_TMP/temp-cache-only-endpoints.json" endpoints.cache_http)"
-  assert_equals "temp cache endpoint" "None" "$cache_endpoint"
-}
-
 test_loom_bead_workspace_uses_repo_service() {
   require_python
   local wrix_bin
@@ -1393,7 +1368,6 @@ ALL_TESTS=(
   test_dolt_start_recreates_running_cache_only_service
   test_start_recreates_running_service_with_missing_dolt_socket
   test_start_probes_past_unrelated_cache_port_owner
-  test_temp_cache_only_workspace_does_not_start_service
   test_loom_bead_workspace_uses_repo_service
   test_service_start_loads_image_source
   test_service_mounts_beads_worktree_remote

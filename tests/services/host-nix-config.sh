@@ -791,46 +791,6 @@ test_host_nix_configures_cache_and_hook() {
   assert_contains "endpoint metadata" "$endpoints" "$cache_root" || return 1
 }
 
-test_default_cache_state_layout() {
-  if ! has_json_tool; then
-    exit 77
-  fi
-  local wrix_bin workspace endpoints state_root cache_root workspace_real
-  wrix_bin="$(build_wrix)"
-  with_fake_tools
-  export HOME="$TEST_TMP/home-layout"
-  export XDG_STATE_HOME="$TEST_TMP/state-layout"
-  export XDG_CACHE_HOME="$TEST_TMP/cache-layout"
-  mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
-  workspace="$TEST_TMP/workspace-layout"
-  mkdir -p "$workspace/.git"
-  workspace_real="$(cd "$workspace" && pwd -P)"
-
-  (cd "$workspace" && "$wrix_bin" service start >"$TEST_TMP/start-layout.txt")
-  (cd "$workspace" && "$wrix_bin" service endpoints >"$TEST_TMP/endpoints-layout.json")
-  endpoints="$TEST_TMP/endpoints-layout.json"
-  state_root="$(json_get "$endpoints" state_root)"
-  cache_root="$(json_get "$endpoints" cache_root)"
-
-  assert_contains "state root" "$state_root" "$XDG_STATE_HOME/wrix/workspaces/" || return 1
-  assert_contains "cache root" "$cache_root" "$XDG_CACHE_HOME/wrix/workspaces/" || return 1
-  if [[ "$state_root" == "$workspace_real"* || "$cache_root" == "$workspace_real"* ]]; then
-    fail "cache state was created inside the workspace"
-    return 1
-  fi
-  [[ -f "$state_root/cache.lock" ]] || { fail "cache lock missing"; return 1; }
-  [[ -f "$state_root/cache-status.json" ]] || { fail "cache status missing"; return 1; }
-  [[ -d "$state_root/gcroots" ]] || { fail "GC root directory missing"; return 1; }
-  [[ -d "$state_root/pending" ]] || { fail "pending directory missing"; return 1; }
-  [[ -f "$state_root/keys/cache.secret" ]] || { fail "cache secret missing"; return 1; }
-  [[ -f "$state_root/keys/cache.pub" ]] || { fail "cache public key missing"; return 1; }
-  [[ -f "$state_root/publish-roots.json" ]] || { fail "publish manifest missing"; return 1; }
-  [[ -f "$state_root/services.json" ]] || { fail "endpoint metadata missing"; return 1; }
-  [[ -f "$cache_root/nix-cache-info" ]] || { fail "nix-cache-info missing"; return 1; }
-  [[ -d "$cache_root/nar" ]] || { fail "nar directory missing"; return 1; }
-  [[ -d "$cache_root/log" ]] || { fail "log directory missing"; return 1; }
-}
-
 test_host_nix_config_fails_when_trusted_setting_ignored() {
   if ! has_json_tool; then
     exit 77
@@ -897,7 +857,6 @@ ALL_TESTS=(
   test_mkdevshell_loom_internal_worktree_uses_repo_service
   test_fake_nix_config_show_matches_real_nix
   test_host_nix_configures_cache_and_hook
-  test_default_cache_state_layout
   test_host_nix_config_fails_when_trusted_setting_ignored
   test_host_nix_config_rejects_non_wrix_hook
 )

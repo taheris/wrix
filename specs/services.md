@@ -333,10 +333,11 @@ default.
 - `wrix service start` delegates service-image installation to the shared
   runtime image installer using the source metadata defined by
   `image-builder.md`, with no service-specific install path
-  [system](verify:services.start-loads-image-source)
+  [test](../crates/wrix-cli/tests/service_cache.rs::service_start_uses_shared_image_digest_preflight_and_retention)
 - Cache-only service startup is suppressed for temp-directory scratch
   workspaces, so tests and integration runs do not accumulate `tmp.*-service`
-  containers [system](verify:services.temp-cache-only)
+  containers
+  [test](../crates/wrix-cli/tests/service_cache.rs::temp_cache_only_start_never_creates_a_service_container)
 - Loom bead clone paths under `.loom/beads/<id>` use the outer repository
   service identity, so launches do not accumulate bead-named `*-service`
   containers
@@ -350,7 +351,7 @@ default.
   [check](verify:services.rust-helper-binaries)
 - Linux beads clients reach Dolt through the workspace Unix socket, while Darwin
   beads clients receive the service container's TCP host/port endpoint
-  [system](verify:services.dolt-platform-transport)
+  [system](test-ci:test-services-dolt-platform-transport)
 - Fresh TCP Dolt services accept the default SQL login for forwarded connections
   [test](lifecycle::dolt::test::fresh_tcp_service_provisions_a_forwarded_root_login)
 - TCP startup repairs persisted localhost-only grants idempotently without
@@ -370,7 +371,8 @@ default.
   Darwin Library state/cache roots, plus GC-root directory, signing key, public
   key, publish-root manifest, pending directory, lock file, status file, and
   endpoint metadata outside `/workspace`; `nixCache = false` does not create
-  cache state solely for cache use [system](verify:services.cache-state-layout)
+  cache state solely for cache use
+  [test](../crates/wrix-cli/tests/service_cache.rs::cache_layout_uses_exact_platform_roots_and_opt_out_creates_no_cache)
 - Host devshell Nix uses `file://<cache-root>` as the project cache substituter,
   trusts the generated public key, enables `builders-use-substitutes`, installs
   a project-specific immutable post-build hook, and fails loudly when the host
@@ -379,12 +381,12 @@ default.
 - `wrix run` and `wrix spawn` inject container `NIX_CONFIG` that points at the
   project cache HTTP endpoint, trusts only the generated public key for that
   cache, and enables `builders-use-substitutes`
-  [system](verify:services.container-pull-config)
+  [system](test-ci:test-services-limit-mode-cache-endpoint)
 - The service cache HTTP endpoint is a Rust static read-only server for
   `<cache-root>`, uses an explicit persisted loopback host port in the
   `21000–22999` range, serves only Nix binary-cache paths, and does not require
   container DNS for sandbox substitution
-  [system](verify:services.cache-http-endpoint)
+  [system](test-ci:test-services-limit-mode-cache-endpoint)
 - An idle cache client does not block independent requests
   [test](../crates/wrix-cache/tests/helper_server.rs::idle_clients_do_not_block_other_requests)
 - Disconnected or reset cache clients cannot terminate the HTTP helper
@@ -405,7 +407,7 @@ default.
   [test](lifecycle::supervisor::test::either_service_exit_stops_its_sibling_and_fails_the_container)
 - Sandboxes receive no cache signing key, no durable state root mount, no host
   `/nix/store` mount, and no host Nix daemon socket as part of project-cache
-  integration [system](verify:services.sandbox-cache-boundary)
+  integration [system](test-ci:test-services-limit-mode-cache-endpoint)
 - With `WRIX_NETWORK=limit`, sandbox Nix can reach exactly the project cache
   endpoint while unrelated host-local services remain outside the generated
   allowlist [system](test-ci:test-services-limit-mode-cache-endpoint)

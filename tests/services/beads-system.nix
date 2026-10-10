@@ -322,7 +322,6 @@ let
     bd sql "CALL DOLT_REMOTE('add', 'origin', 'file:///host-only/beads/dolt-remote')" >/dev/null
     bd dolt remote list | grep -F 'file:///host-only/beads/dolt-remote' >/dev/null
 
-    ssh-keygen -t ed25519 -N "" -q -f "$HOME/deploy-key" -C "wrix-system-test" >/dev/null
     wrix service stop >/dev/null
   '';
   sandboxSync = pkgs.writeShellScript "wrix-beads-system-sandbox-sync" ''
@@ -330,18 +329,17 @@ let
     ${commonEnvironment}
 
     repo="$HOME/beads-repo"
-    command='[[ "''${BEADS_DOLT_AUTO_START:-}" == "0" ]] && [[ -S "''${BEADS_DOLT_SERVER_SOCKET:-}" ]] && [[ ! -e .beads/issues.jsonl ]] && bd dolt pull && bd dolt push'
+    command='[[ "''${BEADS_DOLT_AUTO_START:-}" == "0" ]] && [[ "''${BEADS_DOLT_SERVER_SOCKET:-}" == /run/wrix/dolt/dolt.sock ]] && [[ -S "$BEADS_DOLT_SERVER_SOCKET" ]] && [[ ! -e .beads/issues.jsonl ]] && bd --readonly sql "SELECT 1" >/dev/null && bd dolt pull && bd dolt push && touch /workspace/dolt-probe-passed'
     jq -n \
       --arg workspace "$repo" \
       --arg command "$command" \
       '{workspace:$workspace,env:[["BD_DISABLE_METRICS","1"]],agent_args:["bash","-euo","pipefail","-c",$command],mounts:[]}' \
       > "$HOME/spawn.json"
 
-    export WRIX_DEPLOY_KEY="$HOME/deploy-key"
-    export WRIX_GIT_SIGN=0
     ${wrix.rustPackage.wrix}/bin/wrix \
       --profile-config ${profileConfig} \
       spawn --spawn-config "$HOME/spawn.json"
+    [[ -f "$repo/dolt-probe-passed" ]]
   '';
   verifySync = pkgs.writeShellScript "wrix-beads-system-verify-sync" ''
         set -euo pipefail

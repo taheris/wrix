@@ -34,7 +34,7 @@ in
 import ../../lib/sandbox/image.nix {
   inherit pkgs profile;
   agent = "direct";
-  agentPkg = pkgs.hello;
+  agentPkg = import ./fixtures/command-runner.nix { inherit pkgs; };
   entrypointSh = ../../lib/sandbox/linux/entrypoint.sh;
   krunSupport = false;
   claudeConfig = { };

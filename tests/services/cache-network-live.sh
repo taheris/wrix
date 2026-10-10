@@ -165,7 +165,10 @@ cleanup() {
 }
 
 test_limit_mode_cache_endpoint() {
-  local profile_config profile_config_tmp spawn_config deploy_key target port probe output
+  local with_dolt="${1:-0}"
+  local profile_config profile_config_tmp spawn_config target port probe output
+  local endpoints state_root cache_root cache_port expected_key host_store_path
+  local guest_endpoint guest_host guest_port dolt_endpoint dolt_host dolt_probe=""
 
   wrix_require_live_sandbox
   command -v curl >/dev/null 2>&1 || wrix_live_skip "curl not on PATH"
@@ -178,7 +181,6 @@ test_limit_mode_cache_endpoint() {
   profile_config="$TEST_TMP/profile.json"
   profile_config_tmp="$TEST_TMP/profile.tmp.json"
   spawn_config="$TEST_TMP/spawn.json"
-  deploy_key="$TEST_TMP/deploy-key"
   output="$TEST_TMP/spawn.out"
   mkdir -p "$WORKSPACE" "$TEST_TMP/home" "$TEST_TMP/state" "$TEST_TMP/cache"
   git -C "$WORKSPACE" init -q -b main
@@ -187,35 +189,105 @@ test_limit_mode_cache_endpoint() {
   configure_service_image
   IMAGE_REF=$(wrix_live_image_ref "cache-network-live-$$")
   wrix_write_profile_config "$profile_config" "$IMAGE_REF" \
-    "$(wrix_realize_test_image_source claude)" claude
+    "$(nix build --no-link --print-out-paths --no-warn-dirty .#test-image-git-credentials.source)" direct
   jq '.services.nix_cache.enable = true' "$profile_config" >"$profile_config_tmp"
   mv "$profile_config_tmp" "$profile_config"
-  wrix_make_ed25519_key "$deploy_key" "cache-network-live-test"
+  export HOME="$TEST_TMP/home" XDG_STATE_HOME="$TEST_TMP/state" XDG_CACHE_HOME="$TEST_TMP/cache"
+  export WRIX_SERVICE_ALLOW_TEMP_CACHE=1
+  unset WRIX_DOLT_TRANSPORT WRIX_DRY_RUN WRIX_DRY_RUN_SERVICES WRIX_PROJECT_CACHE_SANDBOX_HOST
+  case "$(uname -s)" in
+    Darwin) export WRIX_CONTAINER_RUNTIME=container ;;
+    Linux) export WRIX_CONTAINER_RUNTIME=podman ;;
+  esac
+  if [[ "$with_dolt" == 1 ]]; then
+    mkdir -p "$WORKSPACE/.beads/dolt"
+  fi
+  (cd "$WORKSPACE" && "$LAUNCHER/bin/wrix" service start)
+  endpoints=$(cd "$WORKSPACE" && "$LAUNCHER/bin/wrix" service endpoints)
+  state_root=$(jq -r .state_root <<<"$endpoints")
+  cache_root=$(jq -r .cache_root <<<"$endpoints")
+  cache_port=$(jq -r .endpoints.cache_http.port <<<"$endpoints")
+  [[ "$(jq -r .endpoints.cache_http.host <<<"$endpoints")" == 127.0.0.1 ]]
+  (( cache_port >= 21000 && cache_port <= 22999 ))
+  guest_endpoint=$(cd "$WORKSPACE" && "$LAUNCHER/bin/wrix" service endpoints --sandbox-cache)
+  guest_host=$(jq -r .endpoints.cache_http.host <<<"$guest_endpoint")
+  guest_port=$(jq -r .endpoints.cache_http.port <<<"$guest_endpoint")
+  case "$(uname -s)" in
+    Darwin) [[ "$guest_host" != 127.0.0.1 && "$guest_port" == 8080 ]] ;;
+    Linux) [[ "$guest_host" == 169.254.1.2 && "$guest_port" == "$cache_port" ]] ;;
+  esac
+  expected_key=$(<"$state_root/keys/cache.pub")
+  printf 'service cache payload\n' >"$cache_root/nar/probe.nar"
+  printf 'host-only store sentinel\n' >"$TEST_TMP/host-sentinel"
+  host_store_path=$(nix-store --add "$TEST_TMP/host-sentinel")
+  if [[ "$with_dolt" == 1 ]]; then
+    (cd "$WORKSPACE" && "$LAUNCHER/bin/wrix" service dolt wait)
+    [[ "$(jq -r .endpoints.dolt.transport <<<"$endpoints")" == tcp ]]
+    [[ "$(jq -r .endpoints.dolt.host <<<"$endpoints")" == 127.0.0.1 ]]
+    export BEADS_DOLT_SERVER_HOST=127.0.0.1
+    export BEADS_DOLT_SERVER_PORT
+    BEADS_DOLT_SERVER_PORT=$(jq -r .endpoints.dolt.port <<<"$endpoints")
+    unset BEADS_DOLT_SERVER_SOCKET BEADS_DIR BEADS_DB
+    (cd "$WORKSPACE" && bd init --server --server-host 127.0.0.1 --server-port "$BEADS_DOLT_SERVER_PORT" \
+      --database wx --prefix wx --skip-hooks --skip-agents --non-interactive)
+    dolt_endpoint=$(cd "$WORKSPACE" && "$LAUNCHER/bin/wrix" service dolt sandbox-endpoint)
+    dolt_host=$(jq -r .host <<<"$dolt_endpoint")
+    [[ "$dolt_host" == "$guest_host" && "$(jq -r .port <<<"$dolt_endpoint")" == 3306 ]]
+    printf -v dolt_probe "[[ \"\$BEADS_DOLT_SERVER_HOST\" == %q && \"\$BEADS_DOLT_SERVER_PORT\" == 3306 ]]\nbd --readonly sql \"SELECT 1\"" "$dolt_host"
+  fi
   start_unrelated_listener LISTENER_PID target port
 
   probe=$(cat <<PROBE
 set -euo pipefail
 cache_url=\$(awk -F' = ' '\$1 == "extra-substituters" { print \$2; exit }' <<<"\$NIX_CONFIG")
 [[ "\$cache_url" =~ ^http://[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+:[0-9]+$ ]]
+[[ "\$cache_url" == 'http://$guest_host:$guest_port' ]]
+[[ "\$WRIX_PROJECT_CACHE_HOST" == '$guest_host' && "\$WRIX_PROJECT_CACHE_PORT" == '$guest_port' ]]
+expected_config=\$(printf 'extra-substituters = %s\\nextra-trusted-public-keys = %s\\nbuilders-use-substitutes = true' "\$cache_url" '$expected_key')
+[[ "\$NIX_CONFIG" == "\$expected_config" ]]
+[[ ! -e '$host_store_path' && ! -e '$state_root' && ! -e '$cache_root' ]]
+[[ ! -e /nix/var/nix/daemon-socket/socket && ! -e /etc/wrix/keys/cache.secret ]]
 curl --noproxy '*' --fail --silent --show-error --connect-timeout 5 --max-time 10 "\$cache_url/nix-cache-info" | grep -F 'WantMassQuery: 1' >/dev/null
-if curl --noproxy '*' --fail --silent --show-error --connect-timeout 2 --max-time 5 http://$target:$port/ >/tmp/wrix-unrelated-service 2>&1; then
+[[ "\$(curl --noproxy '*' -fsS --max-time 10 "\$cache_url/nar/probe.nar")" == 'service cache payload' ]]
+[[ "\$(curl --noproxy '*' -sS --max-time 10 -o /dev/null -w '%{http_code}' -I "\$cache_url/nar/probe.nar")" == 200 ]]
+[[ "\$(curl --noproxy '*' -sS --max-time 10 -o /dev/null -w '%{http_code}' -X POST "\$cache_url/nar/probe.nar")" == 405 ]]
+[[ "\$(curl --noproxy '*' -sS --max-time 10 -o /dev/null -w '%{http_code}' "\$cache_url/")" == 404 ]]
+[[ "\$(curl --noproxy '*' -sS --max-time 10 --path-as-is -o /dev/null -w '%{http_code}' "\$cache_url/nar/../nix-cache-info")" == 404 ]]
+$dolt_probe
+if curl --noproxy '*' --fail --silent --show-error --connect-timeout 2 --max-time 5 "http://$target:$port/" >/tmp/wrix-unrelated-service 2>&1; then
   echo 'unrelated host listener reachable through cache endpoint exception' >&2
   exit 1
 fi
+touch /workspace/probe-passed
 PROBE
 )
   wrix_write_spawn_config "$spawn_config" "$WORKSPACE" bash -lc "$probe"
 
-  if ! HOME="$TEST_TMP/home" XDG_STATE_HOME="$TEST_TMP/state" XDG_CACHE_HOME="$TEST_TMP/cache" \
-    WRIX_SERVICE_ALLOW_TEMP_CACHE=1 WRIX_DEPLOY_KEY="$deploy_key" WRIX_GIT_SIGN=0 \
-    WRIX_NETWORK=limit \
-    wrix_run_spawn "$LAUNCHER" "$profile_config" "$spawn_config" >"$output" 2>&1; then
+  if ! WRIX_NETWORK=limit wrix_run_spawn "$LAUNCHER" "$profile_config" "$spawn_config" >"$output" 2>&1; then
     cat "$output" >&2
     fail "assembled limit-mode sandbox could not isolate the live project cache endpoint"
     return 1
   fi
 
-  printf 'PASS: assembled limit-mode sandbox reaches only its live project cache endpoint\n'
+  [[ -f "$WORKSPACE/probe-passed" ]]
+  rm "$WORKSPACE/probe-passed"
+  printf '%s\n' "$probe" >"$WORKSPACE/probe.sh"
+  local run_line
+  printf -v run_line '%q ' "$LAUNCHER/bin/wrix" --profile-config "$profile_config" run "$WORKSPACE" bash /workspace/probe.sh
+  if ! WRIX_NETWORK=limit wrix_run_with_pty "$run_line" >"$output" 2>&1; then
+    cat "$output" >&2
+    fail "interactive sandbox did not receive the same service boundary"
+    return 1
+  fi
+  [[ -f "$WORKSPACE/probe-passed" ]]
+  [[ "$(cd "$WORKSPACE" && "$LAUNCHER/bin/wrix" service endpoints)" == "$endpoints" ]]
+  printf 'PASS: run and spawn receive HTTP cache trust without host cache/store exposure\n'
+}
+
+test_dolt_platform_transport() {
+  wrix_require_live_sandbox_darwin
+  command -v bd >/dev/null 2>&1 || wrix_live_skip "bd not on PATH"
+  test_limit_mode_cache_endpoint 1
 }
 
 if [[ "$#" -eq 0 ]]; then
