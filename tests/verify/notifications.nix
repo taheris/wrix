@@ -20,6 +20,7 @@ let
       pkgs.netcat
       pkgs.python3
       pkgs.socat
+      pkgs.tmux
     ]
     ++ optionals pkgs.stdenv.hostPlatform.isLinux [
       pkgs.podman
@@ -54,6 +55,7 @@ in
   "notifications.focus-target-registration" = ''
     export PATH="${notifyPath}:$PATH"
     run_repo_script_with_wrix "tests/standalone/notify-test.sh" "test_focus_target_registration"
+    run_repo_script "tests/standalone/notify-test.sh" "test_tmux_target_focus"
   '';
 
   "notifications.pi-settled" = ''

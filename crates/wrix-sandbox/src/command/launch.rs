@@ -439,6 +439,8 @@ struct FocusRecord {
     #[serde(default)]
     tmux_target: Option<FocusTarget>,
     #[serde(default)]
+    tmux_socket: Option<PathBuf>,
+    #[serde(default)]
     window_id: Option<String>,
     #[serde(default)]
     terminal_app: Option<String>,
@@ -450,6 +452,7 @@ impl FocusRecord {
     fn new(
         target: &FocusTarget,
         tmux_target: Option<&FocusTarget>,
+        tmux_socket: Option<PathBuf>,
         platform: Platform,
         focus: Option<String>,
     ) -> Self {
@@ -460,6 +463,7 @@ impl FocusRecord {
         Self {
             focus_target: target.clone(),
             tmux_target: tmux_target.cloned(),
+            tmux_socket,
             window_id,
             terminal_app,
             registration_count: 1,
@@ -514,11 +518,17 @@ impl FocusRegistration {
         fs::create_dir_all(directory)?;
         let path = directory.join(target.file_name());
         let focus = terminal_focus(platform);
+        let tmux_socket = tmux_target.and_then(|_| tmux_socket_from_env());
         with_focus_lock(&path, || {
             let record = if path.try_exists()? {
                 match read_focus_record(&path) {
                     Ok(mut record) if &record.focus_target == target => {
                         record.add_registration(platform, focus)?;
+                        if record.tmux_socket.is_none()
+                            && record.tmux_target.as_ref() == tmux_target
+                        {
+                            record.tmux_socket = tmux_socket;
+                        }
                         record
                     }
                     Ok(_) => {
@@ -526,7 +536,7 @@ impl FocusRegistration {
                             path = %path.display(),
                             "replacing colliding notification focus registration"
                         );
-                        FocusRecord::new(target, tmux_target, platform, focus)
+                        FocusRecord::new(target, tmux_target, tmux_socket, platform, focus)
                     }
                     Err(LaunchError::FocusRegistrationJson { source, .. }) => {
                         if source.is_data() {
@@ -542,12 +552,12 @@ impl FocusRegistration {
                                 "replacing malformed notification focus registration"
                             );
                         }
-                        FocusRecord::new(target, tmux_target, platform, focus)
+                        FocusRecord::new(target, tmux_target, tmux_socket, platform, focus)
                     }
                     Err(error) => return Err(error),
                 }
             } else {
-                FocusRecord::new(target, tmux_target, platform, focus)
+                FocusRecord::new(target, tmux_target, tmux_socket, platform, focus)
             };
             write_focus_record(&path, &record)
         })?;
@@ -2494,16 +2504,52 @@ fn resolve_focus_target(
     }
 }
 
+fn tmux_socket_from_env() -> Option<PathBuf> {
+    let value = match env::var("TMUX") {
+        Ok(value) => value,
+        Err(env::VarError::NotPresent) => return None,
+        Err(error) => {
+            tracing::warn!(error = %error, "host tmux socket is not valid UTF-8");
+            return None;
+        }
+    };
+    let socket = parse_tmux_socket(&value);
+    if socket.is_none() {
+        tracing::warn!("host TMUX does not identify a socket");
+    }
+    socket
+}
+
+fn parse_tmux_socket(value: &str) -> Option<PathBuf> {
+    let (prefix, index) = value.rsplit_once(',')?;
+    let (socket, pid) = prefix.rsplit_once(',')?;
+    if socket.is_empty()
+        || pid.is_empty()
+        || !pid.bytes().all(|byte| byte.is_ascii_digit())
+        || index.is_empty()
+        || !index.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    Some(PathBuf::from(socket))
+}
+
 fn tmux_focus_target() -> Option<FocusTarget> {
     env::var_os("TMUX")?;
-    let output = match run_output(
-        "tmux",
-        &[
-            "display-message",
-            "-p",
-            "#{session_name}:#{window_index}.#{pane_index}",
-        ],
-    ) {
+    let pane = match env::var("TMUX_PANE") {
+        Ok(value) => Some(value),
+        Err(env::VarError::NotPresent) => None,
+        Err(error) => {
+            tracing::warn!(error = %error, "host tmux pane is not valid UTF-8");
+            return None;
+        }
+    };
+    let mut args = vec!["display-message", "-p"];
+    if let Some(pane) = pane.as_deref().filter(|value| !value.is_empty()) {
+        args.extend(["-t", pane]);
+    }
+    args.push("#{session_name}:#{window_index}.#{pane_index}");
+    let output = match run_output("tmux", &args) {
         Ok(output) => output,
         Err(error) => {
             tracing::warn!(program = "tmux", error = %error, "could not query host tmux focus target");
@@ -3221,6 +3267,53 @@ mod test {
                 "accepted {invalid}"
             );
         }
+    }
+
+    #[test]
+    fn tmux_socket_parser_preserves_path_separators_spaces_and_commas() {
+        for socket in [
+            "/tmp/tmux-1000/default",
+            "/tmp/named socket",
+            "/tmp/socket,with,commas",
+        ] {
+            assert_eq!(
+                super::parse_tmux_socket(&format!("{socket},123,0")),
+                Some(PathBuf::from(socket))
+            );
+        }
+        for invalid in [
+            "",
+            "fixture",
+            ",123,0",
+            "/tmp/socket,,0",
+            "/tmp/socket,pid,0",
+            "/tmp/socket,123,",
+        ] {
+            assert_eq!(super::parse_tmux_socket(invalid), None, "{invalid}");
+        }
+    }
+
+    #[test]
+    fn focus_record_serializes_host_tmux_socket() {
+        let target = FocusTarget::parse("main:2.1").unwrap();
+        let record = super::FocusRecord::new(
+            &target,
+            Some(&target),
+            Some(PathBuf::from("/tmp/named socket")),
+            Platform::Linux,
+            Some(String::from("42")),
+        );
+        let value = serde_json::to_value(record).unwrap();
+        assert_eq!(value["tmux_socket"], "/tmp/named socket");
+    }
+
+    #[test]
+    fn legacy_focus_record_does_not_require_tmux_socket() {
+        let legacy: super::FocusRecord = serde_json::from_value(serde_json::json!({
+            "focus_target": "main:2.1", "tmux_target": "main:2.1"
+        }))
+        .unwrap();
+        assert!(legacy.tmux_socket.is_none());
     }
 
     #[test]

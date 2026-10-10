@@ -723,9 +723,14 @@ case "$(basename "$0")" in
     cat "$state/app"
     ;;
   tmux)
-    [[ "$*" == 'display-message -p #{session_name}:#{window_index}.#{pane_index}' ]] || exit 91
-    [[ ! -f "$state/fail-pane" ]] || exit 1
-    cat "$state/pane"
+    if [[ "$*" == 'display-message -p #{session_name}:#{window_index}.#{pane_index}' ]]; then
+      cat "$state/pane"
+    elif [[ "$*" == '-S /tmp/notify-tmux.sock display-message -p -t host:2.1 #{session_name}:#{window_index}.#{pane_index} #{window_active} #{pane_active} #{?session_attached,1,0}' ]]; then
+      [[ ! -f "$state/fail-pane" ]] || exit 1
+      printf '%s 1 1 1\n' "$(<"$state/pane")"
+    else
+      exit 91
+    fi
     ;;
 esac
 EOF
@@ -877,7 +882,7 @@ test_pi_focus_routing() {
     fi
     (
       unset WRIX_DRY_RUN WRIX_DRY_RUN_SERVICES WRIX_MICROVM WRIX_UNSAFE_PODMAN_SOCKET WRIX_SIGNING_KEY
-      WRIX_FOCUS_TARGET="$target" TMUX=host-terminal \
+      WRIX_FOCUS_TARGET="$target" TMUX=/tmp/notify-tmux.sock,123,0 \
         WRIX_NOTIFY_TEST_PI_RUNNER="$repo_root/tests/standalone/pi-notify-live.mjs" \
         PI_TEST_FOCUS_CAPTURE="$directory/wire.jsonl" \
         start_registered_launcher "$directory" spawn "$runtime_dir" "$state" "$bin_dir" "$endpoint" Pi
@@ -1001,9 +1006,9 @@ EOF
         unset WRIX_DRY_RUN WRIX_DRY_RUN_SERVICES WRIX_MICROVM WRIX_UNSAFE_PODMAN_SOCKET WRIX_SIGNING_KEY
         case "$case_name" in
           absent) unset WRIX_FOCUS_TARGET TMUX ;;
-          empty) export WRIX_FOCUS_TARGET="" TMUX=host-terminal ;;
-          opaque) export WRIX_FOCUS_TARGET="$target" TMUX=host-terminal ;;
-          *) unset WRIX_FOCUS_TARGET; export TMUX=host-terminal ;;
+          empty) export WRIX_FOCUS_TARGET="" TMUX=/tmp/notify-tmux.sock,123,0 ;;
+          opaque) export WRIX_FOCUS_TARGET="$target" TMUX=/tmp/notify-tmux.sock,123,0 ;;
+          *) unset WRIX_FOCUS_TARGET; export TMUX=/tmp/notify-tmux.sock,123,0 ;;
         esac
         start_registered_launcher "$directory" "$mode" "$runtime_dir" "$state" "$bin_dir" "$endpoint"
         launcher_pid="${BACKGROUND_PIDS[-1]}"
@@ -1085,6 +1090,143 @@ EOF
     done
   done
   pass "packaged launcher/client/daemon agree on host routing with external OS/runtime fixtures (not container delivery)"
+}
+
+test_tmux_target_focus() {
+  ensure_tmp
+  require_command tmux
+  require_command python3
+  require_command socat
+  require_command jq
+  if [[ "$(uname -s)" == "Darwin" ]] && ! ifconfig | grep 'inet 192.168.64.1 ' >/dev/null; then
+    skip "Darwin vmnet gateway is unavailable; no host daemon transport was tested"
+  fi
+
+  local runtime_dir="$TEST_TMP/runtime"
+  local bin_dir="$TEST_TMP/host-bin"
+  local capture="$TEST_TMP/dispatch.jsonl"
+  local daemon_log="$TEST_TMP/daemon.log"
+  mkdir -p "$bin_dir" "$TEST_TMP/default-server"
+  write_focus_fixture "$runtime_dir" "$bin_dir" "visible:0.0"
+  rm "$bin_dir/tmux"
+  PATH="$bin_dir:$PATH" TMUX="" TMUX_PANE="" TMUX_TMPDIR="$TEST_TMP/default-server" \
+    start_notify_daemon "$runtime_dir" "$capture" "$daemon_log" 0 1 "" || fail_with_output "packaged daemon did not start" "$daemon_log"
+
+  python3 - "$TEST_TMP" "$runtime_dir" "$capture" "$daemon_log" <<'PY'
+import json
+import os
+from pathlib import Path
+import socket
+import subprocess
+import sys
+import time
+
+root, runtime, capture, log = map(Path, sys.argv[1:])
+env = os.environ.copy()
+env.pop("TMUX", None)
+env.pop("TMUX_PANE", None)
+env["TMUX_TMPDIR"] = str(root / "default-server")
+named_socket = str(root / "named socket,focus")
+clients = []
+suppressions = 0
+session_dir = runtime / ("data/wrix/sessions" if sys.platform == "darwin" else "wrix/sessions")
+record_path = session_dir / "visible-0-0.json"
+record = json.loads(record_path.read_text())
+record.update(tmux_target="visible:0.0", tmux_socket=named_socket)
+
+
+def tmux(server, *args):
+    return subprocess.run(["tmux", *server, *args], env=env, check=True, capture_output=True, text=True).stdout.strip()
+
+
+def wait_for(predicate):
+    for _ in range(100):
+        if predicate():
+            return
+        time.sleep(0.05)
+    raise AssertionError("timed out waiting for tmux or notification daemon")
+
+
+def attach(server, session, count):
+    client = subprocess.Popen(["tmux", *server, "-C", "attach-session", "-t", session], env=env,
+                              stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    clients.append(client)
+    wait_for(lambda: len(tmux(server, "list-clients", "-F", "#{client_session}").splitlines()) == count)
+    return client
+
+
+def check(title, suppressed):
+    global suppressions
+    record_path.write_text(json.dumps(record))
+    capture.write_text("")
+    payload = json.dumps(dict(title=title, message="focus check", focus_target="visible:0.0")) + "\n"
+    if sys.platform == "darwin":
+        connection = socket.create_connection(("192.168.64.1", 5959), timeout=3)
+    else:
+        connection = socket.socket(socket.AF_UNIX)
+        connection.settimeout(3)
+        connection.connect(str(runtime / "wrix/notify.sock"))
+    with connection:
+        connection.sendall(payload.encode())
+    if suppressed:
+        suppressions += 1
+        wait_for(lambda: log.read_text().count("suppressed (terminal focused)") == suppressions)
+        assert not capture.read_text(), (title, capture.read_text(), log.read_text())
+    else:
+        wait_for(lambda: bool(capture.read_text()))
+        dispatches = [json.loads(line) for line in capture.read_text().splitlines()]
+        expected = ["-title", title, "-message", "focus check"] if sys.platform == "darwin" else [title, "focus check"]
+        assert dispatches == [expected], (title, dispatches, log.read_text())
+    print("PASS:", title, flush=True)
+
+
+named = ["-S", named_socket]
+try:
+    for server in [[], named]:
+        tmux(server, "-f", "/dev/null", "new-session", "-d", "-s", "visible", "sleep 120")
+    attach([], "visible", 1)
+    time.sleep(1.1)
+    tmux([], "new-session", "-d", "-s", "other", "sleep 120")
+    attach([], "other", 2)
+    assert tmux([], "display-message", "-p", "#{session_name}") == "other"
+    tmux(named, "new-session", "-d", "-s", "other", "sleep 120")
+    visible_client = attach(named, "visible", 1)
+    time.sleep(1.1)
+    attach(named, "other", 2)
+    assert tmux(named, "display-message", "-p", "#{session_name}") == "other"
+    check("focused target ignores another client and the default server", True)
+    record.pop("tmux_socket")
+    check("legacy registration checks the default server target", True)
+    record["tmux_socket"] = named_socket
+    tmux(named, "split-window", "-t", "visible:0.0", "sleep 120")
+    check("inactive target pane notifies", False)
+    tmux(named, "select-pane", "-t", "visible:0.0")
+    check("reselected target pane suppresses", True)
+    tmux(named, "new-window", "-t", "visible:", "sleep 120")
+    check("inactive target window notifies even with an active pane", False)
+    tmux(named, "select-window", "-t", "visible:0")
+    check("reselected target window suppresses", True)
+    visible_client.stdin.close()
+    visible_client.wait(timeout=5)
+    wait_for(lambda: tmux(named, "display-message", "-p", "-t", "visible:0.0", "#{session_attached}") == "0")
+    check("detached target session notifies", False)
+    tmux(named, "kill-session", "-t", "visible")
+    check("missing target notifies without using another client", False)
+    record["tmux_socket"] = str(root / "missing.socket")
+    check("unavailable registered socket notifies without default-server fallback", False)
+finally:
+    for server in [named, []]:
+        subprocess.run(["tmux", *server, "kill-server"], env=env, capture_output=True)
+    for client in clients:
+        if client.stdin is not None and not client.stdin.closed:
+            client.stdin.close()
+        try:
+            client.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            client.kill()
+            client.wait(timeout=5)
+PY
+  pass "packaged daemon checks registered tmux targets using real isolated servers and clients"
 }
 
 test_focus_override() {
@@ -1186,6 +1328,7 @@ main() {
     --inside-container) test_container_payload_inside ;;
     test_focus_target_envelope) test_focus_target_envelope ;;
     test_focus_target_registration) test_focus_target_registration ;;
+    test_tmux_target_focus) test_tmux_target_focus ;;
     test_pi_settled) test_pi_settled ;;
     test_pi_focus_routing) test_pi_focus_routing ;;
     test_pi_notify_failure) test_pi_notify_failure ;;

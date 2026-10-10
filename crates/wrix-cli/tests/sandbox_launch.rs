@@ -758,8 +758,11 @@ printf '%s\n' "$WRIX_TEST_FOCUS"
                 "tmux",
                 r#"#!/usr/bin/env bash
 set -euo pipefail
-[[ "$*" == 'display-message -p #{session_name}:#{window_index}.#{pane_index}' ]] || exit 91
-printf '%s\n' 'test:1.0'
+case "$*" in
+  'display-message -p #{session_name}:#{window_index}.#{pane_index}') printf '%s\n' 'test:1.0' ;;
+  'display-message -p -t %7 #{session_name}:#{window_index}.#{pane_index}') printf '%s\n' 'test:1.7' ;;
+  *) exit 91 ;;
+esac
 "#,
             ),
             (
@@ -794,7 +797,8 @@ printf '%s\n' 'test:1.0'
             .env("PATH", path)
             .env("HOME", self.root.path().join("home"))
             .env("XDG_RUNTIME_DIR", self.root.path().join("runtime"))
-            .env("TMUX", "fixture")
+            .env("TMUX", "/tmp/fixture-tmux.sock,123,0")
+            .env_remove("TMUX_PANE")
             .env("NO_COLOR", "1")
             .env("WRIX_TEST_FOCUS", reply)
             .env("WRIX_TEST_DIGEST", format!("sha256:{}", "a".repeat(64)))
@@ -880,7 +884,29 @@ fn spawn_registers_focused_window_from_niri_reply() -> TestResult {
     assert_eq!(record["window_id"], "42");
     assert_eq!(record["focus_target"], "test:1.0");
     assert_eq!(record["tmux_target"], "test:1.0");
+    assert_eq!(record["tmux_socket"], "/tmp/fixture-tmux.sock");
     assert!(record.get("session_id").is_none());
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn launcher_registers_originating_tmux_pane_instead_of_default_client() -> TestResult {
+    let fixture = Fixture::new(None)?;
+    let output = fixture
+        .focus_spawn(r#"{"id":42}"#)?
+        .env("TMUX_PANE", "%7")
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let record: Value =
+        serde_json::from_slice(&fs::read(fixture.root.path().join("session.json"))?)?;
+    assert_eq!(record["focus_target"], "test:1.7");
+    assert_eq!(record["tmux_target"], "test:1.7");
+    assert_eq!(record["tmux_socket"], "/tmp/fixture-tmux.sock");
     Ok(())
 }
 
@@ -989,6 +1015,7 @@ fn launcher_preserves_current_focus_registration_ownership() -> TestResult {
     let remaining: Value = serde_json::from_slice(&fs::read(&path)?)?;
     assert_eq!(remaining["registration_count"], 2);
     assert_eq!(remaining["focus_target"], "test:1.0");
+    assert_eq!(remaining["tmux_socket"], "/tmp/fixture-tmux.sock");
     Ok(())
 }
 

@@ -125,13 +125,18 @@ let
           if [[ "$VERBOSE" == "1" ]]; then echo "notifyd: tmux unavailable for pane focus check" >&2; fi
           return 1
         fi
-        local active_pane
-        if ! active_pane=$(tmux display-message -p '#{session_name}:#{window_index}.#{pane_index}' 2>/dev/null); then
-          if [[ "$VERBOSE" == "1" ]]; then echo "notifyd: tmux active pane query failed" >&2; fi
+        local tmux_socket
+        tmux_socket=$(jq -r '.tmux_socket // ""' "$session_file")
+        local -a tmux_args=()
+        if [[ -n "$tmux_socket" ]]; then tmux_args=(-S "$tmux_socket"); fi
+        local pane_state
+        if ! pane_state=$(tmux "''${tmux_args[@]}" display-message -p -t "$tmux_target" \
+          '#{session_name}:#{window_index}.#{pane_index} #{window_active} #{pane_active} #{?session_attached,1,0}' 2>/dev/null); then
+          if [[ "$VERBOSE" == "1" ]]; then echo "notifyd: tmux target pane query failed" >&2; fi
           return 1
         fi
-        if [[ "$VERBOSE" == "1" ]]; then echo "notifyd: pane target=$tmux_target active=$active_pane" >&2; fi
-        if [[ -z "$active_pane" || "$active_pane" != "$tmux_target" ]]; then
+        if [[ "$VERBOSE" == "1" ]]; then echo "notifyd: pane target=$tmux_target state=$pane_state" >&2; fi
+        if [[ "$pane_state" != "$tmux_target 1 1 1" ]]; then
           return 1
         fi
       fi
