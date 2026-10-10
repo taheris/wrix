@@ -8,8 +8,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use common::{RunResult, TestResult, run_command, set_mode, wrix_command};
+use common::{RunResult, TestResult, run_command, set_mode, wrix_command_with_path};
 use serde_json::{Value, json};
+use wrix_sandbox::command::Command as LaunchCommand;
 
 const APPLE_RUNTIME: &str = r#"#!/usr/bin/env bash
 set -euo pipefail
@@ -137,7 +138,8 @@ impl Fixture {
     }
 
     fn command(&self) -> TestResult<Command> {
-        let mut command = wrix_command(&self.workspace)?;
+        let mut command =
+            wrix_command_with_path(&self.workspace, &[&self.root.path().join("bin")])?;
         command
             .env("HOME", self.root.path().join("home"))
             .env("XDG_STATE_HOME", self.root.path().join("state"))
@@ -198,6 +200,77 @@ impl Fixture {
 
     fn state_root(&self) -> TestResult<PathBuf> {
         Ok(serde_json::from_value(self.metadata["state_root"].clone())?)
+    }
+
+    fn disable_dolt(&mut self) -> TestResult {
+        fs::remove_dir(self.workspace.join(".beads/dolt"))?;
+        self.snapshot[0]["configuration"]["labels"]["wrix.dolt.transport"] = json!("disabled");
+        self.write_snapshot()
+    }
+
+    fn launch_command(&self, mode: LaunchCommand, workspace: &Path) -> TestResult<Command> {
+        let bin = self.root.path().join("bin");
+        fs::create_dir_all(&bin)?;
+        for name in ["podman", "container", "route"] {
+            let path = bin.join(name);
+            fs::write(&path, include_str!("fixtures/launch-runtime.sh"))?;
+            set_mode(&path, 0o755)?;
+        }
+        let profile = self.root.path().join("profile.json");
+        let digest = format!("sha256:{}", "a".repeat(64));
+        fs::write(
+            &profile,
+            serde_json::to_vec(&json!({
+                "schema": 1,
+                "system": "test",
+                "profile": {"name": "base"},
+                "image": {
+                    "ref": "localhost/wrix-test:latest",
+                    "source": "/missing/image-source",
+                    "source_kind": if cfg!(target_os = "macos") {"docker-archive"} else {"nix-descriptor"},
+                    "digest": digest
+                },
+                "agent": {"kind": "direct"},
+                "services": {"nix_cache": {"enable": true}}
+            }))?,
+        )?;
+        let mut command = self.command()?;
+        command
+            .env("XDG_RUNTIME_DIR", self.root.path().join("runtime"))
+            .env("WRIX_IMAGE_KEEP_FILE", self.root.path().join("mru.json"))
+            .env("WRIX_TEST_DIGEST", digest)
+            .env("WRIX_TEST_ARGV", self.root.path().join("argv"))
+            .env("WRIX_NETWORK", "limit")
+            .arg("--profile-config")
+            .arg(profile)
+            .arg(match mode {
+                LaunchCommand::Run => "run",
+                LaunchCommand::Spawn => "spawn",
+            });
+        for name in [
+            "WRIX_DRY_RUN",
+            "WRIX_DRY_RUN_SERVICES",
+            "WRIX_PROJECT_CACHE_SANDBOX_HOST",
+            "WRIX_MICROVM",
+            "WRIX_UNSAFE_PODMAN_SOCKET",
+            "WRIX_FOCUS_TARGET",
+            "TMUX",
+        ] {
+            command.env_remove(name);
+        }
+        if mode == LaunchCommand::Run {
+            command.arg(workspace).arg("guest-marker");
+        } else {
+            let spawn = self.root.path().join("spawn.json");
+            fs::write(
+                &spawn,
+                serde_json::to_vec(
+                    &json!({"workspace": workspace, "env": [], "agent_args": ["guest-marker"]}),
+                )?,
+            )?;
+            command.arg("--spawn-config").arg(spawn).arg("--stdio");
+        }
+        Ok(command)
     }
 
     fn write_snapshot(&self) -> TestResult {
@@ -450,6 +523,357 @@ fn apple_sandbox_endpoint_accepts_legacy_network_layout() -> TestResult {
     assert!(output.status.success(), "{}", output.stderr);
     let endpoint: Value = serde_json::from_str(&output.stdout)?;
     assert_eq!(endpoint, json!({"host": "192.168.64.12", "port": 3306}));
+    Ok(())
+}
+
+#[test]
+fn apple_cache_endpoint_uses_service_vm_without_dolt_or_host_metadata_changes() -> TestResult {
+    let mut fixture = Fixture::new()?;
+    fixture.disable_dolt()?;
+    let persisted = fixture.state_root()?.join("services.json");
+    let before = fs::read(&persisted)?;
+    let output = run_command(
+        fixture
+            .command()?
+            .args(["service", "endpoints", "--sandbox-cache"]),
+    )?;
+    assert!(output.status.success(), "{}", output.stderr);
+    let metadata: Value = serde_json::from_str(&output.stdout)?;
+    assert_eq!(
+        metadata["endpoints"]["cache_http"],
+        json!({"host": "192.168.64.12", "port": 8080})
+    );
+    assert_eq!(metadata["endpoints"]["dolt"], Value::Null);
+    assert_eq!(fs::read(persisted)?, before);
+    let host: Value = serde_json::from_str(&fixture.run("endpoints")?.stdout)?;
+    assert_eq!(
+        host["endpoints"]["cache_http"],
+        fixture.metadata["endpoints"]["cache_http"]
+    );
+    assert_eq!(host["endpoints"]["cache_http"]["host"], "127.0.0.1");
+    assert!((21000..=22999).contains(&fixture.port("cache_http")?));
+    Ok(())
+}
+
+#[test]
+fn apple_cache_endpoint_accepts_legacy_network_layout() -> TestResult {
+    let mut fixture = Fixture::new()?;
+    let networks = fixture.snapshot[0]["status"]["networks"].take();
+    fixture.snapshot[0]["status"] = json!("running");
+    fixture.snapshot[0]["networks"] = networks;
+    fixture.write_snapshot()?;
+    let output = run_command(
+        fixture
+            .command()?
+            .args(["service", "endpoints", "--sandbox-cache"]),
+    )?;
+    assert!(output.status.success(), "{}", output.stderr);
+    let metadata: Value = serde_json::from_str(&output.stdout)?;
+    assert_eq!(
+        metadata["endpoints"]["cache_http"],
+        json!({"host": "192.168.64.12", "port": 8080})
+    );
+    Ok(())
+}
+
+#[test]
+fn apple_cache_endpoint_skips_unusable_interfaces() -> TestResult {
+    let mut fixture = Fixture::new()?;
+    fixture.snapshot[0]["status"]["networks"] = json!([
+        {"ipv4Address": "127.0.0.1/8"},
+        {"ipv4Address": "0.0.0.0/0"},
+        {"ipv4Address": "invalid"},
+        {"ipv4Address": "192.168.64.22/24"}
+    ]);
+    fixture.write_snapshot()?;
+    let output = run_command(
+        fixture
+            .command()?
+            .args(["service", "endpoints", "--sandbox-cache"]),
+    )?;
+    assert!(output.status.success(), "{}", output.stderr);
+    let metadata: Value = serde_json::from_str(&output.stdout)?;
+    assert_eq!(
+        metadata["endpoints"]["cache_http"],
+        json!({"host": "192.168.64.22", "port": 8080})
+    );
+    Ok(())
+}
+
+#[test]
+fn apple_cache_endpoint_rejects_missing_or_stopped_guest_addresses() -> TestResult {
+    let mut fixture = Fixture::new()?;
+    let running = fixture.snapshot.clone();
+    for status in [
+        json!({"state": "running", "networks": []}),
+        json!({"state": "running", "networks": [{"ipv4Address": "127.0.0.1/8"}]}),
+        json!({"state": "running", "networks": [{"ipv4Address": "0.0.0.0/0"}]}),
+        json!({"state": "running", "networks": [{"ipv4Address": "invalid"}]}),
+        json!({"state": "stopped", "networks": [{"ipv4Address": "192.168.64.12/24"}]}),
+        Value::Null,
+    ] {
+        fixture.snapshot = running.clone();
+        fixture.snapshot[0]["networks"] = json!([{"ipv4Address": "192.168.64.99/24"}]);
+        if status.is_null() {
+            fixture.snapshot = json!([]);
+        } else {
+            fixture.snapshot[0]["status"] = status;
+        }
+        fixture.write_snapshot()?;
+        let output =
+            run_command(
+                fixture
+                    .command()?
+                    .args(["service", "endpoints", "--sandbox-cache"]),
+            )?;
+        assert!(!output.status.success(), "accepted {}", fixture.snapshot);
+        assert!(
+            output.stderr.contains("no sandbox-reachable project cache"),
+            "{}",
+            output.stderr
+        );
+        assert_eq!(output.stdout, "");
+    }
+    Ok(())
+}
+
+#[test]
+fn disabled_cache_endpoint_does_not_inspect_the_runtime() -> TestResult {
+    let fixture = Fixture::new()?;
+    let output = run_command(fixture.command()?.args([
+        "service",
+        "endpoints",
+        "--sandbox-cache",
+        "--no-cache",
+    ]))?;
+    assert!(output.status.success(), "{}", output.stderr);
+    let metadata: Value = serde_json::from_str(&output.stdout)?;
+    assert_eq!(metadata["endpoints"]["cache_http"], Value::Null);
+    assert!(!fixture.root.path().join("runtime.log").exists());
+    Ok(())
+}
+
+#[test]
+fn sandbox_cache_endpoint_respects_the_selected_runtime() -> TestResult {
+    let fixture = Fixture::new()?;
+    let output = run_command(
+        fixture
+            .command()?
+            .env("WRIX_CONTAINER_RUNTIME", fixture.root.path().join("podman"))
+            .args(["service", "endpoints", "--sandbox-cache"]),
+    )?;
+    if cfg!(target_os = "linux") {
+        assert!(output.status.success(), "{}", output.stderr);
+        let metadata: Value = serde_json::from_str(&output.stdout)?;
+        assert_eq!(
+            metadata["endpoints"]["cache_http"],
+            json!({"host": "169.254.1.2", "port": fixture.port("cache_http")?})
+        );
+    } else {
+        assert!(!output.status.success());
+        assert!(
+            output.stderr.contains("no sandbox-reachable project cache"),
+            "{}",
+            output.stderr
+        );
+    }
+    assert!(!fixture.root.path().join("runtime.log").exists());
+    Ok(())
+}
+
+#[test]
+fn cache_guest_endpoint_and_key_reach_both_launch_commands() -> TestResult {
+    for mode in [LaunchCommand::Run, LaunchCommand::Spawn] {
+        for layout in ["", ".loom/beads/cache-route", ".loom/integration"] {
+            let mut fixture = Fixture::new()?;
+            fixture.disable_dolt()?;
+            let workspace = fixture.workspace.join(layout);
+            fs::create_dir_all(&workspace)?;
+            if !layout.is_empty() {
+                initialize_repository(&workspace)?;
+            }
+            let output = run_command(&mut fixture.launch_command(mode, &workspace)?)?;
+            assert!(
+                output.status.success(),
+                "{mode:?}/{layout}: {}",
+                output.stderr
+            );
+            let bytes = fs::read(fixture.root.path().join("argv"))?;
+            let argv: Vec<_> = bytes
+                .strip_suffix(&[0])
+                .ok_or("argv capture lacks trailing NUL")?
+                .split(|byte| *byte == 0)
+                .map(|arg| std::str::from_utf8(arg))
+                .collect::<Result<_, _>>()?;
+            let env: Vec<_> = argv
+                .windows(2)
+                .filter(|pair| pair[0] == "-e")
+                .map(|pair| pair[1])
+                .collect();
+            assert_eq!(
+                env.iter()
+                    .filter(|value| value.starts_with("WRIX_PROJECT_CACHE_"))
+                    .copied()
+                    .collect::<Vec<_>>(),
+                [
+                    "WRIX_PROJECT_CACHE_HOST=192.168.64.12",
+                    "WRIX_PROJECT_CACHE_PORT=8080"
+                ]
+            );
+            let public_key = fs::read_to_string(fixture.state_root()?.join("keys/cache.pub"))?;
+            assert_eq!(
+                env.iter()
+                    .filter(|value| value.starts_with("NIX_CONFIG="))
+                    .copied()
+                    .collect::<Vec<_>>(),
+                [format!(
+                    "NIX_CONFIG=extra-substituters = http://192.168.64.12:8080\nextra-trusted-public-keys = {}\nbuilders-use-substitutes = true",
+                    public_key.trim()
+                )]
+            );
+            assert!(env.contains(&"WRIX_NETWORK=limit"));
+            assert!(
+                !env.iter()
+                    .any(|value| value.starts_with("BEADS_DOLT_SERVER_")
+                        || value.starts_with("WRIX_NETWORK_LOCAL_ENDPOINTS="))
+            );
+            assert_eq!(argv.last().copied(), Some("guest-marker"));
+            let state_root = fixture.state_root()?;
+            let cache_root = fixture.metadata["cache_root"]
+                .as_str()
+                .ok_or("cache root missing")?;
+            assert!(
+                !argv
+                    .iter()
+                    .any(|arg| arg.contains(state_root.to_str().unwrap())
+                        || arg.contains(cache_root)
+                        || arg.contains("cache.secret")
+                        || arg.contains(":/nix/store")
+                        || arg.contains("daemon-socket"))
+            );
+            let persisted: Value =
+                serde_json::from_slice(&fs::read(state_root.join("services.json"))?)?;
+            assert_eq!(
+                persisted["endpoints"]["cache_http"],
+                fixture.metadata["endpoints"]["cache_http"]
+            );
+            let log = fs::read_to_string(fixture.root.path().join("runtime.log"))?;
+            assert!(log.lines().any(|line| line
+                == format!(
+                    "inspect {}",
+                    fixture.metadata["container_name"].as_str().unwrap()
+                )));
+            assert!(log.lines().all(|line| !line.starts_with("run ")), "{log}");
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn cache_endpoint_generates_only_an_exact_tcp_network_exception() -> TestResult {
+    let bootstrap = include_str!("../../../lib/sandbox/network-bootstrap.sh");
+    let policy = bootstrap
+        .split_once("# BEGIN wrix network policy\n")
+        .ok_or("network policy missing")?
+        .1
+        .split_once("# END wrix network policy")
+        .ok_or("network policy end missing")?
+        .0;
+    for mode in [LaunchCommand::Run, LaunchCommand::Spawn] {
+        let mut fixture = Fixture::new()?;
+        fixture.disable_dolt()?;
+        let output = run_command(&mut fixture.launch_command(mode, &fixture.workspace)?)?;
+        assert!(output.status.success(), "{}", output.stderr);
+        let bytes = fs::read(fixture.root.path().join("argv"))?;
+        let argv: Vec<_> = bytes
+            .strip_suffix(&[0])
+            .ok_or("argv capture lacks trailing NUL")?
+            .split(|byte| *byte == 0)
+            .map(std::str::from_utf8)
+            .collect::<Result<_, _>>()?;
+        let cache_env: Vec<_> = argv
+            .windows(2)
+            .filter(|pair| pair[0] == "-e")
+            .filter_map(|pair| pair[1].split_once('='))
+            .filter(|(name, _)| name.starts_with("WRIX_PROJECT_CACHE_"))
+            .collect();
+        for (backend, expected) in [
+            (
+                "nft",
+                "add rule inet wrix output ip daddr 192.168.64.12 tcp dport 8080 accept\n",
+            ),
+            (
+                "iptables",
+                "-w -A OUTPUT -p tcp -d 192.168.64.12 --dport 8080 -j ACCEPT\n",
+            ),
+        ] {
+            let output = Command::new(common::command_path("bash")?)
+                .env_clear()
+                .envs(cache_env.iter().copied())
+                .env("WRIX_FIREWALL_BACKEND", backend)
+                .env("WRIX_NFT_BIN", common::command_path("echo")?)
+                .env("WRIX_IPTABLES_BIN", common::command_path("echo")?)
+                .args([
+                    "-c",
+                    &format!("set -euo pipefail\n{policy}\nwrix_allow_local_endpoints"),
+                ])
+                .output()?;
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(String::from_utf8(output.stdout)?, expected);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn apple_cache_service_preserves_loopback_publication_and_read_only_mount() -> TestResult {
+    let mut fixture = Fixture::new()?;
+    fixture.disable_dolt()?;
+    fixture.snapshot[0]["configuration"]["labels"]["wrix.cache.enabled"] = json!("false");
+    fixture.write_snapshot()?;
+    let output = fixture.run("start")?;
+    assert!(output.status.success(), "{}", output.stderr);
+    let args = fs::read_to_string(fixture.root.path().join("run.argv"))?;
+    let publications: Vec<_> = args
+        .lines()
+        .collect::<Vec<_>>()
+        .windows(2)
+        .filter(|pair| pair[0] == "-p")
+        .map(|pair| pair[1])
+        .collect();
+    assert_eq!(
+        publications,
+        [format!("127.0.0.1:{}:8080", fixture.port("cache_http")?)]
+    );
+    assert!(args.lines().any(|arg| arg
+        == format!(
+            "{}:/cache:ro",
+            fixture.metadata["cache_root"].as_str().unwrap()
+        )));
+    assert!(!args.contains("/var/lib/wrix/beads/dolt"));
+    Ok(())
+}
+
+#[test]
+fn launcher_fails_before_agent_start_without_a_guest_cache_address() -> TestResult {
+    for mode in [LaunchCommand::Run, LaunchCommand::Spawn] {
+        let mut fixture = Fixture::new()?;
+        fixture.disable_dolt()?;
+        fixture.snapshot[0]["status"]["networks"] = json!([]);
+        fixture.write_snapshot()?;
+        let output = run_command(&mut fixture.launch_command(mode, &fixture.workspace)?)?;
+        assert!(!output.status.success());
+        assert!(
+            output.stderr.contains("no sandbox-reachable project cache"),
+            "{}",
+            output.stderr
+        );
+        assert!(!fixture.root.path().join("argv").exists());
+    }
     Ok(())
 }
 

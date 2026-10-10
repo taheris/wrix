@@ -133,7 +133,7 @@ fn public_flags_have_descriptions() -> TestResult {
         (
             "service",
             vec!["service", "start", "--no-cache", "--help"],
-            vec!["--no-cache", "-h, --help"],
+            vec!["--no-cache", "--sandbox-cache", "-h, --help"],
         ),
         (
             "dolt",

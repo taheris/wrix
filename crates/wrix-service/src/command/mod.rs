@@ -55,7 +55,7 @@ impl Dolt {
     }
 }
 
-pub const HELP: &str = "Manage workspace services.\n\nUsage: wrix service <command> [options]\n\nCommands:\n  start      Start the workspace services.\n  stop       Stop the workspace services.\n  status     Show workspace service status.\n  logs       Print workspace service logs.\n  endpoints  Print workspace service endpoints.\n  dolt <status|socket|port|host|sandbox-endpoint|attach|gc|wait>       Manage the workspace Dolt service.\n  cache <status|publish|warm|prune|rotate-key>        Manage the workspace project cache.\n\nOptions:\n  --no-cache  Disable project-cache handling for top-level service commands.\n  -h, --help  Print help.\n";
+pub const HELP: &str = "Manage workspace services.\n\nUsage: wrix service <command> [options]\n\nCommands:\n  start      Start the workspace services.\n  stop       Stop the workspace services.\n  status     Show workspace service status.\n  logs       Print workspace service logs.\n  endpoints  Print workspace service endpoints.\n  dolt <status|socket|port|host|sandbox-endpoint|attach|gc|wait>       Manage the workspace Dolt service.\n  cache <status|publish|warm|prune|rotate-key>        Manage the workspace project cache.\n\nOptions:\n  --no-cache  Disable project-cache handling for top-level service commands.\n  --sandbox-cache  Resolve the project-cache endpoint for sandbox reads (endpoints only).\n  -h, --help  Print help.\n";
 pub const DOLT_HELP: &str = "Manage the workspace Dolt service.\n\nUsage: wrix service dolt <command>\n\nCommands:\n  status  Show Dolt service status and connection details.\n  socket  Print the Dolt Unix-socket path.\n  port    Print the Dolt TCP port.\n  host    Print the Dolt TCP host.\n  sandbox-endpoint  Print the sandbox-visible Dolt TCP endpoint.\n  attach  Print a command that connects to Dolt.\n  gc      Print the Dolt garbage-collection target.\n  wait    Wait until the Dolt service is ready.\n\nOptions:\n  -h, --help  Print help.\n";
 
 pub fn write_help(stdout: &mut impl Write) -> io::Result<()> {
@@ -67,7 +67,7 @@ pub fn write_dolt_help(stdout: &mut impl Write) -> io::Result<()> {
 }
 
 pub fn run_top(command: Top, args: &[String], stdout: &mut impl Write) -> io::Result<ExitCode> {
-    let cache_mode = parse_cache_mode(args)?;
+    let (cache_mode, endpoint_view) = parse_options(command, args)?;
     match command {
         Top::Start => {
             let status = lifecycle::start(cache_mode).map_err(io::Error::other)?;
@@ -86,7 +86,11 @@ pub fn run_top(command: Top, args: &[String], stdout: &mut impl Write) -> io::Re
             stdout.write_all(&logs)?;
         }
         Top::Endpoints => {
-            let endpoints = lifecycle::endpoints(cache_mode).map_err(io::Error::other)?;
+            let endpoints = match endpoint_view {
+                EndpointView::Host => lifecycle::endpoints(cache_mode),
+                EndpointView::SandboxCache => lifecycle::sandbox_cache_endpoints(cache_mode),
+            }
+            .map_err(io::Error::other)?;
             stdout.write_all(endpoints.as_bytes())?;
         }
     }
@@ -175,11 +179,21 @@ fn attach_command(endpoint: &lifecycle::DoltEndpoint) -> String {
     }
 }
 
-fn parse_cache_mode(args: &[String]) -> io::Result<CacheMode> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EndpointView {
+    Host,
+    SandboxCache,
+}
+
+fn parse_options(command: Top, args: &[String]) -> io::Result<(CacheMode, EndpointView)> {
     let mut cache_mode = CacheMode::Enabled;
+    let mut endpoint_view = EndpointView::Host;
     for arg in args {
         match arg.as_str() {
             "--no-cache" => cache_mode = CacheMode::Disabled,
+            "--sandbox-cache" if command == Top::Endpoints => {
+                endpoint_view = EndpointView::SandboxCache;
+            }
             other => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
@@ -188,12 +202,12 @@ fn parse_cache_mode(args: &[String]) -> io::Result<CacheMode> {
             }
         }
     }
-    Ok(cache_mode)
+    Ok((cache_mode, endpoint_view))
 }
 
 #[cfg(test)]
 mod test {
-    use super::{Dolt, Top, parse_cache_mode};
+    use super::{Dolt, EndpointView, Top, parse_options};
     use crate::lifecycle::CacheMode;
 
     #[test]
@@ -219,6 +233,21 @@ mod test {
     #[test]
     fn no_cache_option_disables_cache_startup() {
         let args = vec![String::from("--no-cache")];
-        assert_eq!(parse_cache_mode(&args).unwrap(), CacheMode::Disabled);
+        assert_eq!(
+            parse_options(Top::Start, &args).unwrap(),
+            (CacheMode::Disabled, EndpointView::Host)
+        );
+    }
+
+    #[test]
+    fn sandbox_cache_option_is_scoped_to_endpoint_queries() {
+        let args = [String::from("--sandbox-cache")];
+        assert_eq!(
+            parse_options(Top::Endpoints, &args).unwrap(),
+            (CacheMode::Enabled, EndpointView::SandboxCache)
+        );
+        for command in [Top::Start, Top::Stop, Top::Status, Top::Logs] {
+            assert!(parse_options(command, &args).is_err());
+        }
     }
 }

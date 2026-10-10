@@ -5,7 +5,7 @@ mod supervisor;
 
 use std::{
     env, fs, io,
-    net::{SocketAddr, TcpListener, TcpStream},
+    net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream},
     num::NonZeroU16,
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -361,7 +361,10 @@ impl Plan {
     }
 
     pub fn services_json(&self) -> String {
-        let cache_port = json_port(self.cache_port);
+        self.render_services_json(&json_port(self.cache_port))
+    }
+
+    fn render_services_json(&self, cache_http: &str) -> String {
         let dolt = json_dolt_endpoint(self.dolt.as_ref());
         let dolt_unix = json_dolt_unix(self.dolt.as_ref());
         let dolt_tcp = json_dolt_tcp(self.dolt.as_ref());
@@ -388,7 +391,7 @@ impl Plan {
             escape_json(self.container_name().as_str()),
             escape_json(&self.paths.state_root().display().to_string()),
             escape_json(&self.paths.cache_root().display().to_string()),
-            cache_port,
+            cache_http,
             dolt,
             dolt_unix,
             dolt_tcp
@@ -652,32 +655,58 @@ pub fn endpoints(cache_mode: CacheMode) -> Result<String> {
     Ok(plan.services_json())
 }
 
+/// Project cache metadata for sandbox reads; host publication and durable metadata are unchanged.
+pub fn sandbox_cache_endpoints(cache_mode: CacheMode) -> Result<String> {
+    let plan = Plan::for_current_dir(cache_mode)?;
+    let Some(port) = plan.cache_port() else {
+        return Ok(plan.services_json());
+    };
+    let endpoint = Runtime::from_env()?.sandbox_endpoint(&plan, SandboxService::Cache, port)?;
+    Ok(plan.render_services_json(&json_tcp_endpoint(endpoint)))
+}
+
 /// Resolve a TCP endpoint in the sandbox's network, not the host's loopback namespace.
 pub fn sandbox_dolt_endpoint(cache_mode: CacheMode) -> Result<String> {
     let plan = Plan::for_current_dir(cache_mode)?;
-    let runtime = Runtime::from_env()?;
-    let unavailable = || Error::Operation {
-        message: String::from(
-            "no sandbox-reachable Dolt TCP endpoint; start the workspace service and check its runtime network",
-        ),
-    };
-    let port = plan.dolt_port().ok_or_else(unavailable)?;
-    let (host, port) = match runtime.kind {
-        RuntimeKind::Container => {
-            let snapshot = runtime
-                .apple_snapshot(plan.container_name().as_str())?
-                .ok_or_else(unavailable)?;
-            if snapshot.runtime_status() != RuntimeStatus::Running {
-                return Err(unavailable());
-            }
-            (snapshot.ipv4_address().ok_or_else(unavailable)?, 3306)
+    let service = SandboxService::Dolt;
+    let port = plan.dolt_port().ok_or_else(|| service.unavailable())?;
+    let endpoint = Runtime::from_env()?.sandbox_endpoint(&plan, service, port.get())?;
+    Ok(json_tcp_endpoint(endpoint))
+}
+
+#[derive(Clone, Copy)]
+enum SandboxService {
+    Cache,
+    Dolt,
+}
+
+impl SandboxService {
+    const fn internal_port(self) -> u16 {
+        match self {
+            Self::Cache => 8080,
+            Self::Dolt => 3306,
         }
-        RuntimeKind::Podman if cfg!(target_os = "linux") => {
-            (std::net::Ipv4Addr::new(169, 254, 1, 2), port.get())
+    }
+
+    fn unavailable(self) -> Error {
+        let name = match self {
+            Self::Cache => "project cache",
+            Self::Dolt => "Dolt",
+        };
+        Error::Operation {
+            message: format!(
+                "no sandbox-reachable {name} TCP endpoint; start the workspace service and check its runtime network"
+            ),
         }
-        RuntimeKind::Podman => return Err(unavailable()),
-    };
-    Ok(format!("{{\"host\":\"{host}\",\"port\":{port}}}"))
+    }
+}
+
+fn json_tcp_endpoint(endpoint: SocketAddrV4) -> String {
+    format!(
+        "{{\"host\":\"{}\",\"port\":{}}}",
+        endpoint.ip(),
+        endpoint.port()
+    )
 }
 
 pub fn wait_for_dolt(cache_mode: CacheMode) -> Result<()> {
@@ -1019,6 +1048,32 @@ impl Runtime {
             })?,
             image_source,
         })
+    }
+
+    fn sandbox_endpoint(
+        &self,
+        plan: &Plan,
+        service: SandboxService,
+        host_port: u16,
+    ) -> Result<SocketAddrV4> {
+        match self.kind {
+            RuntimeKind::Container => {
+                let snapshot = self
+                    .apple_snapshot(plan.container_name().as_str())?
+                    .ok_or_else(|| service.unavailable())?;
+                if snapshot.runtime_status() != RuntimeStatus::Running {
+                    return Err(service.unavailable());
+                }
+                let host = snapshot
+                    .ipv4_address()
+                    .ok_or_else(|| service.unavailable())?;
+                Ok(SocketAddrV4::new(host, service.internal_port()))
+            }
+            RuntimeKind::Podman if cfg!(target_os = "linux") => {
+                Ok(SocketAddrV4::new(Ipv4Addr::new(169, 254, 1, 2), host_port))
+            }
+            RuntimeKind::Podman => Err(service.unavailable()),
+        }
     }
 
     fn ensure_running(&self, plan: &Plan) -> Result<()> {

@@ -1726,7 +1726,7 @@ impl ServicesState {
     }
 
     fn load_project_cache(&mut self, workspace: &Path) -> Result<(), LaunchError> {
-        let output = run_service(workspace, &["service", "endpoints"])?;
+        let output = run_service(workspace, &["service", "endpoints", "--sandbox-cache"])?;
         let metadata = serde_json::from_slice::<ServiceMetadata>(&output.stdout)
             .map_err(|source| LaunchError::ServiceJson { source })?;
         let Some(endpoint) = metadata.endpoints.cache_http else {
@@ -1740,6 +1740,11 @@ impl ServicesState {
         let public_key_path = metadata.state_root.join("keys/cache.pub");
         let public_key = read_cache_public_key(&public_key_path)?;
         let sandbox_host = sandbox_cache_host(endpoint.host)?;
+        if sandbox_host.is_loopback() || sandbox_host.is_unspecified() {
+            return Err(LaunchError::InvalidCacheHost {
+                host: sandbox_host.to_string(),
+            });
+        }
         let url = format!("http://{sandbox_host}:{}", endpoint.port);
         let nix_config = format!(
             "extra-substituters = {url}\nextra-trusted-public-keys = {}\nbuilders-use-substitutes = true",
