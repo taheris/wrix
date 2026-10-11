@@ -226,32 +226,33 @@ The policy file is read from the nearest invoked repository, independently of
 Loom's shared service identity. Configuration reads do not provision services or
 mutate repository files.
 [test](../crates/wrix-cli/tests/cache_config.rs::cache_config_reads_repository_policy_outside_direnv_without_mutation)
-[test](../crates/wrix-cache/tests/config.rs::environment_can_reset_repository_policy_to_builtin_values_and_empty_lists)
-[test](../crates/wrix-cache/tests/config.rs::cache_policy_reader_uses_nearest_repository_not_shared_loom_service_identity)
 
 Supported keys:
 
 - `enable` and `require_trusted_nix` default to true; environment overrides are
   `WRIX_NIX_CACHE_ENABLE` and `WRIX_NIX_CACHE_REQUIRE_TRUSTED`. Disabling cache
   integration does not disable Dolt or prohibit explicit cache maintenance.
+  [test](../crates/wrix-cache/tests/config.rs::omitted_cache_policy_uses_documented_defaults)
 - `publish` and `warm` each accept `packages`, `checks`, `dev_shell`,
   `include_roots`, and `exclude_roots`. Publish enables all three categories;
   warm enables packages and devShell but not checks. Both root lists default to
   empty. Overrides use the existing `WRIX_CACHE_PUBLISH_*` and
   `WRIX_CACHE_WARM_*` variables; root-list variables are newline-separated.
+  [test](../crates/wrix-cache/tests/config.rs::repository_cache_policy_overrides_only_specified_fields)
 - `warn_size` defaults to `"50G"`, `pending_ttl` to `"7d"`, and `prune_interval`
   to `"24h"`. Overrides are `WRIX_CACHE_SOFT_LIMIT_BYTES`,
   `WRIX_CACHE_PENDING_RETENTION_SECS`, and `WRIX_CACHE_PRUNE_INTERVAL_SECS`.
+  [test](../crates/wrix-cache/tests/config.rs::omitted_cache_policy_uses_documented_defaults)
 - `lock_timeout` defaults to `"30s"`; `explicit_lock_timeout` follows it unless
   independently overridden. Their environment overrides are
   `WRIX_CACHE_LOCK_TIMEOUT_MS` and `WRIX_CACHE_EXPLICIT_LOCK_TIMEOUT_MS`.
+  [test](../crates/wrix-cache/tests/config.rs::omitted_cache_policy_uses_documented_defaults)
 - Sizes accept nonnegative byte counts or strings with binary `K`, `M`, `G`, or
   `T` suffixes. Durations accept nonnegative second counts or strings with `s`,
-  `m`, `h`, or `d` suffixes. Unknown keys, malformed values, and overflow fail
-  rather than silently falling back.
-  [test](../crates/wrix-cache/tests/config.rs::omitted_cache_policy_uses_documented_defaults)
-  [test](../crates/wrix-cache/tests/config.rs::repository_cache_policy_overrides_only_specified_fields)
+  `m`, `h`, or `d` suffixes.
   [test](../crates/wrix-core/tests/repository_policy.rs::cache_quantities_accept_documented_units_and_plain_numbers)
+- Unknown keys, malformed values, and overflow fail rather than silently falling
+  back.
   [test](../crates/wrix-core/tests/repository_policy.rs::invalid_cache_quantities_and_wrong_typed_roots_are_rejected)
 
 `mkDevShell` retains its `nixCache` argument as an explicit-override adapter.
@@ -369,6 +370,12 @@ default.
   [test](../crates/wrix-cache/tests/publisher.rs::daemon_publisher_uses_snapshot_without_ambient_config_or_repository_reads)
 - Warm reads repository check policy, while `--checks` overrides environment.
   [test](../crates/wrix-cache/tests/publisher.rs::warm_reads_repository_policy_and_checks_flag_overrides_environment)
+- Explicit environment values, including built-in defaults and empty lists,
+  override repository cache policy.
+  [test](../crates/wrix-cache/tests/config.rs::environment_can_reset_repository_policy_to_builtin_values_and_empty_lists)
+- Cache policy resolves from the invoked repository independently of shared Loom
+  service identity.
+  [test](../crates/wrix-cache/tests/config.rs::cache_policy_reader_uses_nearest_repository_not_shared_loom_service_identity)
 - Repository pending TTL controls expiration outside direnv.
   [test](../crates/wrix-cache/tests/publisher.rs::repository_pending_ttl_expires_records_without_direnv)
 - Service startup pruning honors the repository's configured interval.

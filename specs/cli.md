@@ -122,7 +122,6 @@ Policy sections are rooted directly in the file: `[git]`, `[init]`, and
 `[cache]`. Unknown sections and keys, including a `wrix` namespace, fail rather
 than being ignored. `services.md` owns cache policy and precedence.
 [test](../crates/wrix-core/tests/repository_policy.rs::unknown_policy_sections_and_keys_are_rejected)
-[test](../crates/wrix-core/tests/repository_policy.rs::prefixed_policy_is_rejected_instead_of_ignored)
 
 Supported Git and init keys:
 
