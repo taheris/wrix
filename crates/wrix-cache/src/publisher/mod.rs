@@ -18,6 +18,8 @@ use wrix_core::{
     path::{Workspace, WorkspaceHash, WorkspaceHashParseError},
 };
 
+use crate::config::{Roots, Settings};
+
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, Display, ThisError)]
@@ -41,6 +43,8 @@ pub enum Error {
     ProcessFailed { program: String, stderr: String },
     /// timed out waiting for project cache lock {path}
     LockTimeout { path: String },
+    /// {0}
+    Config(#[from] crate::config::ReadError),
     /// HOME is required to resolve wrix cache state roots
     HomeMissing,
 }
@@ -119,6 +123,7 @@ struct CacheStatus {
 struct Paths {
     state_root: PathBuf,
     cache_root: PathBuf,
+    settings: Settings,
 }
 
 #[derive(Clone, Debug)]
@@ -136,7 +141,7 @@ impl Report {
 
 pub fn run_current_workspace(mode: Mode) -> Result<Report> {
     let workspace = Workspace::from_service_current_dir()?;
-    let paths = Paths::for_workspace(workspace.hash())?;
+    let paths = Paths::for_workspace(workspace.hash(), Settings::current()?)?;
     run_at(&workspace, &paths, mode)
 }
 
@@ -149,20 +154,22 @@ pub fn run_workspace_at(
     let paths = Paths {
         state_root: state_root.to_path_buf(),
         cache_root: cache_root.to_path_buf(),
+        settings: Settings::for_workspace(workspace)?,
     };
     run_at(workspace, &paths, mode)
 }
 
 pub fn status_current_workspace() -> Result<Report> {
     let workspace = Workspace::from_service_current_dir()?;
-    let paths = Paths::for_workspace(workspace.hash())?;
+    let paths = Paths::for_workspace(workspace.hash(), Settings::current()?)?;
     status_at_paths(&paths)
 }
 
-pub fn status_at(state_root: &Path, cache_root: &Path) -> Result<Report> {
+pub fn status_at(state_root: &Path, cache_root: &Path, settings: Settings) -> Result<Report> {
     let paths = Paths {
         state_root: state_root.to_path_buf(),
         cache_root: cache_root.to_path_buf(),
+        settings,
     };
     status_at_paths(&paths)
 }
@@ -177,10 +184,11 @@ fn status_at_paths(paths: &Paths) -> Result<Report> {
     status_report(paths)
 }
 
-pub fn prune_stale_dirty(state_root: &Path, cache_root: &Path) -> Result<bool> {
+pub fn prune_stale_dirty(state_root: &Path, cache_root: &Path, settings: Settings) -> Result<bool> {
     let paths = Paths {
         state_root: state_root.to_path_buf(),
         cache_root: cache_root.to_path_buf(),
+        settings,
     };
     if !cache_status_dirty(&paths)? || !prune_is_stale(&paths)? {
         return Ok(false);
@@ -190,18 +198,30 @@ pub fn prune_stale_dirty(state_root: &Path, cache_root: &Path) -> Result<bool> {
     Ok(true)
 }
 
-pub fn run_hook_record(
-    workspace_hash: &WorkspaceHash,
-    state_root: &Path,
-    cache_root: &Path,
-    manifest: &Path,
-    drv_path: &str,
-    out_paths: &str,
-) -> Result<Report> {
+#[derive(Clone, Copy, Debug)]
+pub struct HookRecord<'a> {
+    pub workspace_hash: &'a WorkspaceHash,
+    pub state_root: &'a Path,
+    pub cache_root: &'a Path,
+    pub manifest: &'a Path,
+    pub drv_path: &'a str,
+    pub out_paths: &'a str,
+}
+
+pub fn run_hook_record(record: HookRecord<'_>, settings: Settings) -> Result<Report> {
+    let HookRecord {
+        workspace_hash,
+        state_root,
+        cache_root,
+        manifest,
+        drv_path,
+        out_paths,
+    } = record;
     tracing::debug!(%workspace_hash, "processing automatic cache publish");
     let paths = Paths {
         state_root: state_root.to_path_buf(),
         cache_root: cache_root.to_path_buf(),
+        settings,
     };
     paths.ensure()?;
     let roots = read_manifest_roots(manifest)?;
@@ -223,7 +243,7 @@ pub fn run_hook_record(
 fn run(workspace: &Workspace, paths: &Paths, mode: Mode) -> Result<Report> {
     match mode {
         Mode::Publish => with_explicit_lock(paths, || {
-            let roots = discover_roots(RootSet::Publish)?;
+            let roots = discover_roots(RootSet::Publish, &paths.settings)?;
             write_manifest(&paths.publish_roots_path(), workspace.hash(), &roots)?;
             let realized = realized_roots(roots.clone())?;
             let pending = read_pending(paths)?;
@@ -233,8 +253,8 @@ fn run(workspace: &Workspace, paths: &Paths, mode: Mode) -> Result<Report> {
             })
         }),
         Mode::Warm { checks } => with_explicit_lock(paths, || {
-            let configured = discover_roots(RootSet::Publish)?;
-            let warm = discover_roots(RootSet::Warm { checks })?;
+            let configured = discover_roots(RootSet::Publish, &paths.settings)?;
+            let warm = discover_roots(RootSet::Warm { checks }, &paths.settings)?;
             write_manifest(&paths.publish_roots_path(), workspace.hash(), &configured)?;
             build_roots(&warm)?;
             let selected = warm
@@ -262,7 +282,7 @@ fn run(workspace: &Workspace, paths: &Paths, mode: Mode) -> Result<Report> {
 
 fn run_automatic_publish(paths: &Paths, root: Root) -> Result<Report> {
     let mut lines = Vec::new();
-    let timeout = hook_lock_timeout()?;
+    let timeout = Duration::from_millis(paths.settings.lock_timeout_ms);
     let Some(lock) = OperationLock::acquire(paths, Some(timeout), &mut lines)? else {
         record_pending(paths, &root.drv_path, &root.out_paths)?;
         lines.push(String::from(
@@ -286,7 +306,7 @@ fn run_automatic_publish(paths: &Paths, root: Root) -> Result<Report> {
 
 fn with_explicit_lock<T>(paths: &Paths, operation: impl FnOnce() -> Result<T>) -> Result<T> {
     let mut lines = Vec::new();
-    let timeout = explicit_lock_timeout()?;
+    let timeout = Duration::from_millis(paths.settings.explicit_lock_timeout_ms);
     let Some(lock) = OperationLock::acquire(paths, Some(timeout), &mut lines)? else {
         return Err(Error::LockTimeout {
             path: paths.cache_lock_path().display().to_string(),
@@ -354,11 +374,17 @@ enum RootSet {
     Warm { checks: bool },
 }
 
-fn discover_roots(root_set: RootSet) -> Result<Vec<Root>> {
-    let config = RootConfig::from_env(root_set)?;
+fn discover_roots(root_set: RootSet, settings: &Settings) -> Result<Vec<Root>> {
+    let mut config = match root_set {
+        RootSet::Publish => settings.publish.clone(),
+        RootSet::Warm { .. } => settings.warm.clone(),
+    };
+    if let RootSet::Warm { checks } = root_set {
+        config.checks |= checks;
+    }
     if let Some(path) = env::var_os("WRIX_CACHE_ROOTS_FILE") {
         let roots = roots_from_file(Path::new(&path))?;
-        return filter_roots(roots, &config);
+        return Ok(filter_roots(roots, &config));
     }
     let system = current_system()?;
     let mut installables = Vec::new();
@@ -376,8 +402,8 @@ fn discover_roots(root_set: RootSet) -> Result<Vec<Root>> {
             installables.push((format!("devShells.{system}.{shell}"), installable));
         }
     }
-    for (index, installable) in env_lines(config.include_env)?.into_iter().enumerate() {
-        installables.push((format!("include.{index}"), installable));
+    for (index, installable) in config.include_roots.iter().enumerate() {
+        installables.push((format!("include.{index}"), installable.clone()));
     }
     let mut roots = Vec::new();
     for (name, installable) in installables {
@@ -389,49 +415,21 @@ fn discover_roots(root_set: RootSet) -> Result<Vec<Root>> {
             out_paths: Vec::new(),
         });
     }
-    filter_roots(roots, &config)
+    Ok(filter_roots(roots, &config))
 }
 
-#[derive(Debug)]
-struct RootConfig {
-    packages: bool,
-    checks: bool,
-    dev_shell: bool,
-    include_env: &'static str,
-    exclude_env: &'static str,
-}
-
-impl RootConfig {
-    fn from_env(root_set: RootSet) -> Result<Self> {
-        match root_set {
-            RootSet::Publish => Ok(Self {
-                packages: env_bool("WRIX_CACHE_PUBLISH_PACKAGES", true)?,
-                checks: env_bool("WRIX_CACHE_PUBLISH_CHECKS", true)?,
-                dev_shell: env_bool("WRIX_CACHE_PUBLISH_DEVSHELL", true)?,
-                include_env: "WRIX_CACHE_PUBLISH_INCLUDE",
-                exclude_env: "WRIX_CACHE_PUBLISH_EXCLUDE",
-            }),
-            RootSet::Warm { checks } => Ok(Self {
-                packages: env_bool("WRIX_CACHE_WARM_PACKAGES", true)?,
-                checks: checks || env_bool("WRIX_CACHE_WARM_CHECKS", false)?,
-                dev_shell: env_bool("WRIX_CACHE_WARM_DEVSHELL", true)?,
-                include_env: "WRIX_CACHE_WARM_INCLUDE",
-                exclude_env: "WRIX_CACHE_WARM_EXCLUDE",
-            }),
-        }
-    }
-}
-
-fn filter_roots(roots: Vec<Root>, config: &RootConfig) -> Result<Vec<Root>> {
-    let excludes: BTreeSet<String> = env_lines(config.exclude_env)?.into_iter().collect();
-    Ok(roots
+fn filter_roots(roots: Vec<Root>, config: &Roots) -> Vec<Root> {
+    let excludes: BTreeSet<&str> = config.exclude_roots.iter().map(String::as_str).collect();
+    roots
         .into_iter()
         .filter(|root| root_category_enabled(root, config))
-        .filter(|root| !excludes.contains(&root.name) && !excludes.contains(&root.installable))
-        .collect())
+        .filter(|root| {
+            !excludes.contains(root.name.as_str()) && !excludes.contains(root.installable.as_str())
+        })
+        .collect()
 }
 
-fn root_category_enabled(root: &Root, config: &RootConfig) -> bool {
+fn root_category_enabled(root: &Root, config: &Roots) -> bool {
     if root.name.starts_with("packages.") {
         return config.packages;
     }
@@ -442,29 +440,6 @@ fn root_category_enabled(root: &Root, config: &RootConfig) -> bool {
         return config.dev_shell;
     }
     true
-}
-
-fn env_bool(name: &'static str, default: bool) -> Result<bool> {
-    match env::var(name) {
-        Ok(value) if matches!(value.as_str(), "0" | "false" | "no") => Ok(false),
-        Ok(value) if matches!(value.as_str(), "1" | "true" | "yes") => Ok(true),
-        Ok(value) => Err(Error::InvalidEnvironment { name, value }),
-        Err(env::VarError::NotPresent) => Ok(default),
-        Err(env::VarError::NotUnicode(_)) => Err(Error::InvalidUnicodeEnvironment { name }),
-    }
-}
-
-fn env_lines(name: &'static str) -> Result<Vec<String>> {
-    match env::var(name) {
-        Ok(value) => Ok(value
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .map(str::to_owned)
-            .collect()),
-        Err(env::VarError::NotPresent) => Ok(Vec::new()),
-        Err(env::VarError::NotUnicode(_)) => Err(Error::InvalidUnicodeEnvironment { name }),
-    }
 }
 
 fn roots_from_file(path: &Path) -> Result<Vec<Root>> {
@@ -999,7 +974,7 @@ fn read_pending(paths: &Paths) -> Result<Vec<Pending>> {
             continue;
         }
         let record = read_pending_record(&path)?;
-        if pending_expired(&path, &record)? {
+        if pending_expired(&path, &record, paths.settings.pending_retention_secs)? {
             fs::remove_file(path)?;
             continue;
         }
@@ -1049,16 +1024,16 @@ fn purge_expired_pending(paths: &Paths) -> Result<()> {
             continue;
         }
         let record = read_pending_record(&path)?;
-        if pending_expired(&path, &record)? {
+        if pending_expired(&path, &record, paths.settings.pending_retention_secs)? {
             fs::remove_file(path)?;
         }
     }
     Ok(())
 }
 
-fn pending_expired(path: &Path, record: &PendingRecord) -> Result<bool> {
+fn pending_expired(path: &Path, record: &PendingRecord, retention_secs: u64) -> Result<bool> {
     let created_at = pending_created_at(path, record)?;
-    Ok(now_epoch()?.saturating_sub(created_at) > pending_retention()?.as_secs())
+    Ok(now_epoch()?.saturating_sub(created_at) > retention_secs)
 }
 
 fn pending_created_at(path: &Path, record: &PendingRecord) -> Result<u64> {
@@ -1114,7 +1089,7 @@ fn status_report(paths: &Paths) -> Result<Report> {
         ),
         format!("endpoints: {}", endpoints.trim()),
     ];
-    let threshold = soft_size_threshold()?;
+    let threshold = paths.settings.soft_limit_bytes;
     if cache_size > threshold {
         lines.push(format!(
             "warning: project cache size exceeds {threshold} byte soft threshold"
@@ -1158,7 +1133,7 @@ fn generate_project_keypair(paths: &Paths) -> Result<()> {
 }
 
 impl Paths {
-    fn for_workspace(hash: &WorkspaceHash) -> Result<Self> {
+    fn for_workspace(hash: &WorkspaceHash, settings: Settings) -> Result<Self> {
         let home = home_dir()?;
         let state_root = if cfg!(target_os = "macos") {
             home.join("Library/Application Support/wrix/workspaces")
@@ -1183,6 +1158,7 @@ impl Paths {
         Ok(Self {
             state_root,
             cache_root,
+            settings,
         })
     }
 
@@ -1344,7 +1320,7 @@ fn prune_is_stale(paths: &Paths) -> Result<bool> {
     let Some(last_prune) = read_cache_status(paths)?.last_prune_epoch else {
         return Ok(true);
     };
-    Ok(now_epoch()?.saturating_sub(last_prune) > prune_interval()?.as_secs())
+    Ok(now_epoch()?.saturating_sub(last_prune) > paths.settings.prune_interval_secs)
 }
 
 fn write_if_missing(path: &Path, content: impl AsRef<[u8]>) -> Result<()> {
@@ -1410,55 +1386,6 @@ fn system_time_epoch(time: SystemTime) -> Result<u64> {
 
 fn pending_file_age(path: &Path) -> Result<Duration> {
     Ok(fs::metadata(path)?.modified()?.elapsed()?)
-}
-
-fn hook_lock_timeout() -> Result<Duration> {
-    Ok(Duration::from_millis(env_u64(
-        "WRIX_CACHE_LOCK_TIMEOUT_MS",
-        30_000,
-    )?))
-}
-
-fn explicit_lock_timeout() -> Result<Duration> {
-    let default = env_u64("WRIX_CACHE_LOCK_TIMEOUT_MS", 30_000)?;
-    Ok(Duration::from_millis(env_u64(
-        "WRIX_CACHE_EXPLICIT_LOCK_TIMEOUT_MS",
-        default,
-    )?))
-}
-
-fn pending_retention() -> Result<Duration> {
-    const DEFAULT_PENDING_RETENTION_SECS: u64 = 604_800;
-    env_seconds(
-        "WRIX_CACHE_PENDING_RETENTION_SECS",
-        Duration::from_secs(DEFAULT_PENDING_RETENTION_SECS),
-    )
-}
-
-fn prune_interval() -> Result<Duration> {
-    const DEFAULT_PRUNE_INTERVAL_SECS: u64 = 86_400;
-    env_seconds(
-        "WRIX_CACHE_PRUNE_INTERVAL_SECS",
-        Duration::from_secs(DEFAULT_PRUNE_INTERVAL_SECS),
-    )
-}
-
-fn soft_size_threshold() -> Result<u64> {
-    env_u64("WRIX_CACHE_SOFT_LIMIT_BYTES", 50 * 1024 * 1024 * 1024)
-}
-
-fn env_seconds(name: &'static str, default: Duration) -> Result<Duration> {
-    Ok(Duration::from_secs(env_u64(name, default.as_secs())?))
-}
-
-fn env_u64(name: &'static str, default: u64) -> Result<u64> {
-    match env::var(name) {
-        Ok(value) => value
-            .parse::<u64>()
-            .map_err(|_source| Error::InvalidEnvironment { name, value }),
-        Err(env::VarError::NotPresent) => Ok(default),
-        Err(env::VarError::NotUnicode(_)) => Err(Error::InvalidUnicodeEnvironment { name }),
-    }
 }
 
 fn directory_size(path: &Path) -> Result<u64> {

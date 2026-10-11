@@ -129,7 +129,7 @@ fn git_grants_follow_override_repo_default_precedence() -> TestResult {
                     fs::write(
                         fixture.workspace.join("wrix.toml"),
                         format!(
-                            "[wrix.git]\ndeploy_key = 'repo-key'\ndeploy = {deploy}\nsign = {sign}\n"
+                            "[git]\ndeploy_key = 'repo-key'\ndeploy = {deploy}\nsign = {sign}\n"
                         ),
                     )?;
                     let output = fixture.run(
@@ -172,7 +172,7 @@ fn git_key_identity_uses_the_selected_repository_before_profile() -> TestResult 
         )?;
         fs::write(
             fixture.workspace.join("wrix.toml"),
-            "[wrix.git]\ndeploy_key = 'repo-key'\ndeploy = true\n",
+            "[git]\ndeploy_key = 'repo-key'\ndeploy = true\n",
         )?;
         fixture.workspace = fixture.workspace.join("src");
         fs::create_dir(&fixture.workspace)?;
@@ -193,7 +193,7 @@ fn git_key_identity_uses_the_selected_repository_before_profile() -> TestResult 
         fixture.init_repository()?;
         fs::write(
             fixture.workspace.join("wrix.toml"),
-            "[wrix.git]\ndeploy_key = 'repo-key'\nsign = true\n",
+            "[git]\ndeploy_key = 'repo-key'\nsign = true\n",
         )?;
         let output = fixture.run(mode, GitGrants::default(), Vec::new(), true)?;
         assert!(output.success, "{}", output.stderr);
@@ -492,7 +492,7 @@ fn deploy_key_mount_uses_container_key_dir_without_public_key() -> TestResult {
         .arg(&workspace)
         .status()?;
     assert!(status.success());
-    fs::write(workspace.join("wrix.toml"), "[wrix.git]\ndeploy = true\n")?;
+    fs::write(workspace.join("wrix.toml"), "[git]\ndeploy = true\n")?;
     fs::write(&key_path, "private key\n")?;
     fs::write(key_dir.join("repo-key.pub"), "public key\n")?;
     common::write_profile_config(

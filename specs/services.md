@@ -82,11 +82,11 @@ pointers, but not cache signing keys, publish manifests, or trusted state.
 ### Lifecycle
 
 `mkDevShell` starts the service container by default because the project Nix
-cache is default-on. `nixCache = false` opts out of cache service/integration
-but still starts the service container when the Beads-owned workspace database
-exists. `wrix run` and `wrix spawn` call `wrix service start` as an idempotent
-ensure/health-check before launching the agent container; if the service is
-already healthy, this is a no-op.
+cache is default-on. `cache.enable = false` in `wrix.toml` or `nixCache = false`
+opts out of cache service/integration but still starts the service container
+when the Beads-owned workspace database exists. `wrix run` and `wrix spawn` call
+`wrix service start` as an idempotent ensure/health-check before launching the
+agent container; if the service is already healthy, this is a no-op.
 
 The service container has a caller-independent lifecycle invariant: stopping the
 shell, editor, or service that evaluated shellHook does not tear down or SIGKILL
@@ -114,7 +114,8 @@ group:
 - lifecycle and diagnostics: `start`, `stop`, `status`, `logs`, `endpoints`;
 - Dolt endpoint and maintenance operations: `status`, `socket`, `port`, `host`,
   `attach`, `gc`, `wait`, `sandbox-endpoint`;
-- project-cache operations: `status`, `publish`, `warm`, `prune`, `rotate-key`.
+- project-cache operations: `config`, `status`, `publish`, `warm`, `prune`,
+  `rotate-key`.
 
 The delegated implementation is Rust-first. Service internals are proper Rust
 crates and helper binaries:
@@ -213,6 +214,57 @@ the remaining paths with `--no-recursive`, so the project cache contains
 project-specific misses while dependencies still available from upstream caches
 stay upstream-owned.
 
+### Cache policy
+
+The invoked repository's optional root-level `[cache]` section in `wrix.toml`
+supplies cache overrides, including outside a devshell. Missing files and keys
+leave built-in defaults intact. Settings resolve field-by-field from built-ins,
+then repository policy, then explicitly set environment variables; invocation
+flags such as `warm --checks` and `service --no-cache` take precedence. An
+explicit built-in value or empty root list still overrides repository policy.
+The policy file is read from the nearest invoked repository, independently of
+Loom's shared service identity. Configuration reads do not provision services or
+mutate repository files.
+[test](../crates/wrix-cli/tests/cache_config.rs::cache_config_reads_repository_policy_outside_direnv_without_mutation)
+[test](../crates/wrix-cache/tests/config.rs::environment_can_reset_repository_policy_to_builtin_values_and_empty_lists)
+[test](../crates/wrix-cache/tests/config.rs::cache_policy_reader_uses_nearest_repository_not_shared_loom_service_identity)
+
+Supported keys:
+
+- `enable` and `require_trusted_nix` default to true; environment overrides are
+  `WRIX_NIX_CACHE_ENABLE` and `WRIX_NIX_CACHE_REQUIRE_TRUSTED`. Disabling cache
+  integration does not disable Dolt or prohibit explicit cache maintenance.
+- `publish` and `warm` each accept `packages`, `checks`, `dev_shell`,
+  `include_roots`, and `exclude_roots`. Publish enables all three categories;
+  warm enables packages and devShell but not checks. Both root lists default to
+  empty. Overrides use the existing `WRIX_CACHE_PUBLISH_*` and
+  `WRIX_CACHE_WARM_*` variables; root-list variables are newline-separated.
+- `warn_size` defaults to `"50G"`, `pending_ttl` to `"7d"`, and `prune_interval`
+  to `"24h"`. Overrides are `WRIX_CACHE_SOFT_LIMIT_BYTES`,
+  `WRIX_CACHE_PENDING_RETENTION_SECS`, and `WRIX_CACHE_PRUNE_INTERVAL_SECS`.
+- `lock_timeout` defaults to `"30s"`; `explicit_lock_timeout` follows it unless
+  independently overridden. Their environment overrides are
+  `WRIX_CACHE_LOCK_TIMEOUT_MS` and `WRIX_CACHE_EXPLICIT_LOCK_TIMEOUT_MS`.
+- Sizes accept nonnegative byte counts or strings with binary `K`, `M`, `G`, or
+  `T` suffixes. Durations accept nonnegative second counts or strings with `s`,
+  `m`, `h`, or `d` suffixes. Unknown keys, malformed values, and overflow fail
+  rather than silently falling back.
+  [test](../crates/wrix-cache/tests/config.rs::omitted_cache_policy_uses_documented_defaults)
+  [test](../crates/wrix-cache/tests/config.rs::repository_cache_policy_overrides_only_specified_fields)
+  [test](../crates/wrix-core/tests/repository_policy.rs::cache_quantities_accept_documented_units_and_plain_numbers)
+  [test](../crates/wrix-core/tests/repository_policy.rs::invalid_cache_quantities_and_wrong_typed_roots_are_rejected)
+
+`mkDevShell` retains its `nixCache` argument as an explicit-override adapter.
+Default or empty configuration exports no cache-policy variables; an attrset
+exports only supplied keys, including explicit default values and empty lists.
+`nixCache = false` emits an explicit disable override. The Nix adapter does not
+fill in an independent copy of runtime defaults.
+[check](verify:services.cache-devshell-overrides)
+
+`wrix service cache config` prints the complete resolved settings as JSON
+without creating cache state.
+[test](../crates/wrix-cli/tests/cache_config.rs::cache_config_reads_repository_policy_outside_direnv_without_mutation)
+
 ### Host Nix integration and publish hook
 
 By default, `mkDevShell` configures host Nix to pull from the project cache and
@@ -226,12 +278,17 @@ entry fails loud with remediation; `nixCache = false` is the explicit opt-out.
 
 The hook is a project-specific immutable wrapper in the Nix store. It bakes in
 the workspace hash, workspace owner uid/gid, state root, cache root, manifest
-path, and immutable publisher-helper path. When the Nix daemon invokes it as
+path, immutable publisher-helper path, and a complete resolved cache-settings
+snapshot in the same immutable store output. When the Nix daemon invokes it as
 root (Linux and normal multi-user Darwin), the wrapper performs only static
 validation and portable privilege drop to the workspace owner, then execs the
 user-owned publisher helper. The wrapper and publisher never evaluate Nix roots
 as root, source shell code, execute repo files, or read authoritative publish
-data from the workspace.
+data from the workspace. The user-owned publisher reads the immutable settings
+snapshot after privilege drop; it does not resolve repository policy or depend
+on the Nix daemon inheriting direnv's cache variables. Policy or override
+changes require devshell re-entry to install a matching hook snapshot.
+[test](../crates/wrix-cache/tests/publisher.rs::daemon_publisher_uses_snapshot_without_ambient_config_or_repository_reads)
 
 Automatic post-build publishing is scoped by `<state-root>/publish-roots.json`.
 The publisher acts only when `DRV_PATH` matches a configured publish-root
@@ -300,6 +357,22 @@ default.
 
 ## Success Criteria
 
+- Devshells export only explicit cache overrides and preserve explicit resets.
+  [check](verify:services.cache-devshell-overrides)
+- Cache commands read repository policy outside direnv without mutation.
+  [test](../crates/wrix-cli/tests/cache_config.rs::cache_config_reads_repository_policy_outside_direnv_without_mutation)
+- Repository cache opt-out suppresses startup; environment overrides and
+  explicit service flags take precedence.
+  [test](../crates/wrix-cli/tests/service_cache.rs::repository_cache_opt_out_suppresses_startup_and_environment_can_override_it)
+- Automatic publishing uses immutable resolved settings without consulting
+  repository policy or ambient cache configuration.
+  [test](../crates/wrix-cache/tests/publisher.rs::daemon_publisher_uses_snapshot_without_ambient_config_or_repository_reads)
+- Warm reads repository check policy, while `--checks` overrides environment.
+  [test](../crates/wrix-cache/tests/publisher.rs::warm_reads_repository_policy_and_checks_flag_overrides_environment)
+- Repository pending TTL controls expiration outside direnv.
+  [test](../crates/wrix-cache/tests/publisher.rs::repository_pending_ttl_expires_records_without_direnv)
+- Service startup pruning honors the repository's configured interval.
+  [test](../crates/wrix-cli/tests/service_cache.rs::service_startup_pruning_uses_repository_interval)
 - Dolt endpoint payloads preserve Unix/TCP metadata shapes, and TCP endpoints
   carry a nonzero port rather than optional or sentinel port state
   [test](../crates/wrix-service/src/lifecycle/mod.rs::endpoint_payloads_serialize_without_missing_or_zero_tcp_ports)
@@ -492,7 +565,8 @@ default.
    service container runs its Dolt SQL server and publishes the endpoint in the
    shape `beads.md` expects.
 6. **Cache enablement** — `mkDevShell` enables the standard project cache by
-   default; `nixCache = false` disables it.
+   default; repository `cache.enable = false`, explicit `nixCache = false`, or
+   `service --no-cache` disables integration according to policy precedence.
 7. **Host cache pull** — enabled host devshells configure Nix to use
    `file://<cache-root>` plus the generated public key and
    `builders-use-substitutes = true`.

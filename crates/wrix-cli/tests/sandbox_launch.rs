@@ -346,11 +346,11 @@ fn run_launch_options_stop_before_agent_arguments() -> TestResult {
 #[test]
 fn invalid_git_policy_fails_before_side_effects() -> TestResult {
     for policy in [
-        "[wrix.git",
-        "[wrix.git]\ndeploy = 'true'\n",
-        "[wrix.git]\nsign = 1\n",
-        "[wrix.git]\nsign_commits = true\n",
-        "[wrix.git]\ndeploy_key = '../escape'\n",
+        "[git",
+        "[git]\ndeploy = 'true'\n",
+        "[git]\nsign = 1\n",
+        "[git]\nsign_commits = true\n",
+        "[git]\ndeploy_key = '../escape'\n",
     ] {
         for mode in ["run", "spawn"] {
             let fixture = Fixture::new(None)?;

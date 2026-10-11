@@ -586,6 +586,13 @@ pub fn set_mode(path: &Path, mode: u32) -> TestResult {
 
 fn set_isolated_env(command: &mut Command, extra_paths: &[&Path]) -> TestResult {
     set_isolated_git_env(command);
+    for (name, _) in env::vars_os() {
+        if name.to_str().is_some_and(|name| {
+            name.starts_with("WRIX_CACHE_") || name.starts_with("WRIX_NIX_CACHE_")
+        }) {
+            command.env_remove(name);
+        }
+    }
     command.env("PATH", path_with_binary_dir(extra_paths)?);
     for name in [
         "HOME",

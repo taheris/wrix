@@ -79,7 +79,7 @@ fn explicit_deploy_and_sign_provision_both_keys() -> TestResult {
 
 #[test]
 fn deploy_provisioning_does_not_grant_sandbox_credentials() -> TestResult {
-    for policy in [None, Some("[wrix.git]\ndeploy = false\nsign = false\n")] {
+    for policy in [None, Some("[git]\ndeploy = false\nsign = false\n")] {
         let fixture = DeployFixture::new()?;
         let repo = setup_committed_repo("deploy-without-grants", false)?;
         let home = fixture.home("deploy-only");
@@ -128,7 +128,7 @@ fn deploy_provisioning_does_not_grant_sandbox_credentials() -> TestResult {
     let fixture = DeployFixture::new()?;
     let repo = setup_committed_repo("deploy-grant-not-provisioning", false)?;
     let home = fixture.home("grant-only");
-    let policy = "[wrix.git]\ndeploy = true\n";
+    let policy = "[git]\ndeploy = true\n";
     fs::write(repo.path().join("wrix.toml"), policy)?;
     let result = fixture.run_init(repo.path(), &home, &["--key", "deploy-key", "--no-hooks"])?;
     assert_failure_with_clean_stdout(&result);
@@ -149,7 +149,7 @@ fn provisioning_honors_repository_signing_policy() -> TestResult {
     let fixture = DeployFixture::new()?;
     let repo = setup_committed_repo("deploy-signing-policy", false)?;
     let home = fixture.home("policy-signing");
-    let policy = "[wrix.git]\ndeploy = false\nsign = true\n";
+    let policy = "[git]\ndeploy = false\nsign = true\n";
     fs::write(repo.path().join("wrix.toml"), policy)?;
     let result = fixture.run_init(
         repo.path(),
@@ -175,7 +175,7 @@ fn no_sign_provisioning_overrides_repository_signing_policy() -> TestResult {
     let fixture = DeployFixture::new()?;
     let repo = setup_committed_repo("deploy-no-sign-override", false)?;
     let home = fixture.home("no-sign-override");
-    let policy = "[wrix.git]\ndeploy = false\nsign = true\n";
+    let policy = "[git]\ndeploy = false\nsign = true\n";
     fs::write(repo.path().join("wrix.toml"), policy)?;
     let result = fixture.run_init(
         repo.path(),
@@ -426,7 +426,7 @@ fn deploy_offline_config_fails_before_key_or_api_mutation() -> TestResult {
     let home = fixture.home("offline-config");
     fs::write(
         repo.path().join("wrix.toml"),
-        "[wrix.init]\nonline_verify = false\n",
+        "[init]\nonline_verify = false\n",
     )?;
     fixture.clear_gh_log()?;
 

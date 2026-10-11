@@ -118,18 +118,24 @@ merely to record defaults. When present, it contains policy only — never priva
 key material, generated host keys, absolute private-key paths, per-machine cache
 paths, or secrets.
 
-Supported v1 keys:
+Policy sections are rooted directly in the file: `[git]`, `[init]`, and
+`[cache]`. Unknown sections and keys, including a `wrix` namespace, fail rather
+than being ignored. `services.md` owns cache policy and precedence.
+[test](../crates/wrix-core/tests/repository_policy.rs::unknown_policy_sections_and_keys_are_rejected)
+[test](../crates/wrix-core/tests/repository_policy.rs::prefixed_policy_is_rejected_instead_of_ignored)
 
-| Key                       | Default                                                                                   | Purpose                                                                                                 |
-| ------------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `wrix.git.deploy_key`     | `ProfileConfig.security.deploy_key` when supplied, otherwise `<repo-basename>-<hostname>` | Key name used for deploy/signing key resolution                                                         |
-| `wrix.git.deploy`         | `false`                                                                                   | Whether sandbox launches receive the selected deploy key; does not provision keys                       |
-| `wrix.git.sign`           | `false`                                                                                   | Whether Git signing is enabled and sandbox launches receive the selected signing key                    |
-| `wrix.git.remote`         | `origin`                                                                                  | Git remote used for GitHub repository detection and online verification                                 |
-| `wrix.init.prek_hooks`    | `true` when `.pre-commit-config.yaml` is present                                          | Whether init configures the repo to use Wrix's prek hook bundle                                         |
-| `wrix.init.online_verify` | `true`                                                                                    | Whether init performs network verification by default; `false` is repo-policy equivalent to `--offline` |
+Supported Git and init keys:
 
-Key-name precedence is `--key`, then `wrix.git.deploy_key`, then supplied
+| Key                  | Default                                                                                   | Purpose                                                                                                 |
+| -------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `git.deploy_key`     | `ProfileConfig.security.deploy_key` when supplied, otherwise `<repo-basename>-<hostname>` | Key name used for deploy/signing key resolution                                                         |
+| `git.deploy`         | `false`                                                                                   | Whether sandbox launches receive the selected deploy key; does not provision keys                       |
+| `git.sign`           | `false`                                                                                   | Whether Git signing is enabled and sandbox launches receive the selected signing key                    |
+| `git.remote`         | `origin`                                                                                  | Git remote used for GitHub repository detection and online verification                                 |
+| `init.prek_hooks`    | `true` when `.pre-commit-config.yaml` is present                                          | Whether init configures the repo to use Wrix's prek hook bundle                                         |
+| `init.online_verify` | `true`                                                                                    | Whether init performs network verification by default; `false` is repo-policy equivalent to `--offline` |
+
+Key-name precedence is `--key`, then `git.deploy_key`, then supplied
 `ProfileConfig.security.deploy_key`, then `<repo-basename>-<hostname>`. The
 ProfileConfig tier supplies only key identity and applies only when the
 invocation already has an immutable Wrix profile configuration. Plain host
@@ -144,18 +150,17 @@ key identity, not grants. `sandbox.md` owns the launch override interface and
 repository policy. A repository can configure both once:
 
 ```toml
-[wrix.git]
+[git]
 deploy = true
 sign = true
 ```
 
-For `wrix init` signing, `--sign` or `--no-sign` overrides `wrix.git.sign`,
-which otherwise defaults to `false`; ProfileConfig does not supply signing
-policy. `deploy` is a sandbox credential grant, not a request to generate keys,
-register them with GitHub, or publish anything. `wrix init --deploy` remains an
-explicit provisioning action. The policy reader rejects non-boolean grants and
-the unsupported `sign_commits` key rather than treating that spelling as an
-alias.
+For `wrix init` signing, `--sign` or `--no-sign` overrides `git.sign`, which
+otherwise defaults to `false`; ProfileConfig does not supply signing policy.
+`deploy` is a sandbox credential grant, not a request to generate keys, register
+them with GitHub, or publish anything. `wrix init --deploy` remains an explicit
+provisioning action. The policy reader rejects non-boolean grants and the
+unsupported `sign_commits` key rather than treating that spelling as an alias.
 
 ### `wrix init`
 
@@ -174,7 +179,7 @@ Supported flags:
 | `--offline`       | Skip network checks and remote API calls; still verify local files, config, helper behavior, and signing preconditions; incompatible with `--deploy` and any `--deploy` invocation selected under offline policy |
 | `--sign`          | Enable SSH commit signing for this invocation                                                                                                                                                                    |
 | `--no-sign`       | Disable SSH commit signing for this invocation; conflicts with `--sign`                                                                                                                                          |
-| `--no-hooks`      | Explicitly skip repo-local `core.hooksPath` setup for this invocation, equivalent to invocation-scoped `wrix.init.prek_hooks = false`                                                                            |
+| `--no-hooks`      | Explicitly skip repo-local `core.hooksPath` setup for this invocation, equivalent to invocation-scoped `init.prek_hooks = false`                                                                                 |
 | `--force`         | Replace existing local/remote key material where the selected operation supports replacement                                                                                                                     |
 
 `wrix init` writes Git configuration to the shared/common Git config of the
@@ -232,7 +237,7 @@ that repository, registers the signing public key with the operator's GitHub
 account when signing is enabled, then runs the normal local init and
 verification flow. Because remote registration is part of provisioning,
 `--deploy` is invalid under any offline policy, whether selected by `--offline`
-or by `wrix.init.online_verify = false`.
+or by `init.online_verify = false`.
 
 Existing keys or remote registrations are reused when they match the requested
 state. Conflicting existing material fails loudly unless `--force` is supplied,
@@ -244,11 +249,11 @@ registrations.
 Verification is part of `wrix init`, not a separate best-effort suggestion.
 Online verification is the default and proves that a fresh host-side Git
 operation uses the Wrix helper, strict host-key checking, the pinned GitHub host
-keys, and the selected deploy key. `--offline` or
-`wrix.init.online_verify = false` skips network and GitHub API calls but still
-checks local config, key presence, permissions, signing requirements, helper
-path stability, and hook configuration; it does not claim to prove GitHub
-reachability or repository authorization.
+keys, and the selected deploy key. `--offline` or `init.online_verify = false`
+skips network and GitHub API calls but still checks local config, key presence,
+permissions, signing requirements, helper path stability, and hook
+configuration; it does not claim to prove GitHub reachability or repository
+authorization.
 
 The online verifier runs from the root of the repository where init was invoked
 and exercises that repository's effective Git config. It parses the configured
@@ -299,14 +304,19 @@ separately from host-key failure.
 - `wrix init --deploy --offline` exits non-zero with usage before mutating Git
   config.
   [test](../crates/wrix-cli/tests/cli_surface.rs::deploy_offline_flags_are_non_mutating)
-- `wrix init --deploy` under `wrix.init.online_verify = false` exits non-zero
-  with usage before mutating Git config or policy.
+- `wrix init --deploy` under `init.online_verify = false` exits non-zero with
+  usage before mutating Git config or policy.
   [test](../crates/wrix-cli/tests/cli_surface.rs::deploy_under_offline_policy_is_non_mutating)
 - `wrix init` succeeds without `wrix.toml` and does not create it for default
   behavior. Key-name selection applies flag > repository > supplied
   ProfileConfig > derived-default precedence; remote, hook, and
   online-verification policy apply flag > repository > documented defaults.
   [test](../crates/wrix-cli/tests/init_config.rs::defaults_and_overrides)
+- Repository policy accepts root-level Git/init sections, dotted keys, and
+  inline tables without a redundant namespace.
+  [test](../crates/wrix-core/tests/repository_policy.rs::supported_key_remote_and_init_overrides_are_typed)
+- Prefixed or mixed-format policy fails before init mutates repository state.
+  [test](../crates/wrix-cli/tests/cache_config.rs::prefixed_policy_fails_before_init_mutates_repository)
 - ProfileConfig security policy rejects wrong-typed `security` and
   `security.deploy_key` values before repository mutation.
   [test](../crates/wrix-cli/tests/init_config.rs::profile_config_rejects_wrong_typed_security_policy)
@@ -330,9 +340,8 @@ separately from host-key failure.
 - The policy reader rejects malformed grants and the unsupported `sign_commits`
   spelling before repository mutation
   [test](../crates/wrix-cli/tests/init_config.rs::invalid_and_retired_git_grants_are_rejected)
-- `wrix init` leaves signing disabled by default; `--sign` or
-  `wrix.git.sign = true` configures signing and produces a verifiable signed
-  test commit
+- `wrix init` leaves signing disabled by default; `--sign` or `git.sign = true`
+  configures signing and produces a verifiable signed test commit
   [test](../crates/wrix-cli/tests/init_signing.rs::signing_is_opt_in)
 - Conflicting `wrix init --sign --no-sign` flags fail before repository mutation
   [test](../crates/wrix-cli/tests/cli_surface.rs::conflicting_sign_flags_are_non_mutating)
@@ -340,15 +349,15 @@ separately from host-key failure.
   [test](../crates/wrix-cli/tests/init_signing.rs::fallback_signing_key_is_required)
 - `--no-sign` explicitly disables commit signing.
   [test](../crates/wrix-cli/tests/init_signing.rs::no_sign_flag_disables_signing)
-- Explicit init signing flags override `wrix.git.sign` without rewriting
-  repository policy
+- Explicit init signing flags override `git.sign` without rewriting repository
+  policy
   [test](../crates/wrix-cli/tests/init_signing.rs::sign_flags_override_repository_policy)
 - `wrix init --deploy --sign` generates separate passphraseless deploy and
   signing ed25519 keys with secure permissions, registers the deploy key with
   write access, and registers the signing key with GitHub
   [test](../crates/wrix-cli/tests/init_deploy.rs::explicit_deploy_and_sign_provision_both_keys)
 - `wrix init --deploy` with signing disabled provisions only the deploy key and
-  does not write sandbox grant policy; setting `wrix.git.deploy` alone does not
+  does not write sandbox grant policy; setting `git.deploy` alone does not
   trigger provisioning
   [test](../crates/wrix-cli/tests/init_deploy.rs::deploy_provisioning_does_not_grant_sandbox_credentials)
 - Deploy provisioning reuses matching local and remote keys without remote
@@ -378,8 +387,8 @@ separately from host-key failure.
 - `--offline` skips network verification while preserving local helper and key
   verification.
   [test](../crates/wrix-cli/tests/init_verify.rs::offline_flag_skips_network_verification)
-- `wrix.init.online_verify = false` skips network verification while preserving
-  local helper and key verification.
+- `init.online_verify = false` skips network verification while preserving local
+  helper and key verification.
   [test](../crates/wrix-cli/tests/init_verify.rs::offline_config_skips_network_verification)
 - Offline verification rejects insecure local deploy-key permissions without a
   network operation.
@@ -419,7 +428,7 @@ separately from host-key failure.
    credential trust invariants.
 4. **Optional config** — `wrix.toml` is read only when present and stores
    override policy only. Defaults must not require a tracked Wrix config file.
-   `--no-hooks` is the invocation-scoped form of `wrix.init.prek_hooks = false`.
+   `--no-hooks` is the invocation-scoped form of `init.prek_hooks = false`.
 5. **Init apply-and-verify** — `wrix init` applies repository-local Git
    transport, signing, hook, and known-host state, then verifies the result
    before exiting success.
@@ -429,10 +438,10 @@ separately from host-key failure.
    invocation and is not silently mutated from the outer checkout.
 7. **Context-aware key resolution** — Git helpers implement the credential
    resolution and ambient-identity policy owned by `security.md`.
-8. **Git policy** — `wrix.git.deploy` and `wrix.git.sign` default to false.
-   Signing is opt-in for init and sandbox launch; enabled signing requires its
-   key. Explicit overrides take precedence over repository policy without
-   persisting an override. Key identity and sandbox grants are separate.
+8. **Git policy** — `git.deploy` and `git.sign` default to false. Signing is
+   opt-in for init and sandbox launch; enabled signing requires its key.
+   Explicit overrides take precedence over repository policy without persisting
+   an override. Key identity and sandbox grants are separate.
 9. **Strict GitHub SSH** — Git transport implements the host-verification policy
    owned by `security.md`; this spec owns helper installation and verification
    through `wrix init`.
@@ -440,9 +449,8 @@ separately from host-key failure.
     when signing is enabled, a signing key for GitHub repositories, then runs
     the normal init verification path. Provisioning does not enable sandbox
     credential grants. `--deploy` is invalid under `--offline` or
-    `wrix.init.online_verify = false` because provisioning requires remote API
-    calls.
-11. **Offline mode** — `--offline` and `wrix.init.online_verify = false` disable
+    `init.online_verify = false` because provisioning requires remote API calls.
+11. **Offline mode** — `--offline` and `init.online_verify = false` disable
     network/API verification only; local config, key, permission, signing,
     helper, and hook checks still run, but offline success does not assert
     GitHub reachability or repository authorization.

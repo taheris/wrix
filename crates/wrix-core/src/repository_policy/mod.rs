@@ -1,5 +1,7 @@
 //! Typed, read-only repository overrides from the repository-root `wrix.toml`.
 
+pub mod cache;
+
 use std::{
     fs, io,
     path::{Path, PathBuf},
@@ -16,6 +18,7 @@ use crate::{deploy_key, git::remote};
 pub struct Policy {
     pub git: Git,
     pub init: Init,
+    pub cache: cache::Policy,
 }
 
 /// Key identity and independent credential grants; identity alone grants nothing.
@@ -50,9 +53,9 @@ pub struct Init {
 pub enum ParseError {
     /// invalid repository policy TOML: {0}
     Toml(#[from] toml::de::Error),
-    /// invalid `wrix.git.deploy_key`: {0}
+    /// invalid `git.deploy_key`: {0}
     DeployKey(#[from] deploy_key::ParseError),
-    /// invalid `wrix.git.remote`: {0}
+    /// invalid `git.remote`: {0}
     Remote(#[from] remote::ParseError),
 }
 
@@ -75,18 +78,16 @@ pub fn read(repository_root: &Path) -> Result<Policy, ReadError> {
     parse(&content).map_err(|source| ReadError::Policy { path, source })
 }
 
-/// Parse overrides, accepting unrelated root extensions but rejecting unknown Wrix fields.
+/// Parse root-level policy sections, rejecting unknown sections and keys.
 pub fn parse(content: &str) -> Result<Policy, ParseError> {
     let raw: RawFile = toml::from_str(content)?;
     let deploy_key = raw
-        .wrix
         .git
         .deploy_key
         .as_deref()
         .map(deploy_key::Name::parse)
         .transpose()?;
     let remote = raw
-        .wrix
         .git
         .remote
         .as_deref()
@@ -95,14 +96,15 @@ pub fn parse(content: &str) -> Result<Policy, ParseError> {
     Ok(Policy {
         git: Git {
             deploy_key,
-            deploy: raw.wrix.git.deploy,
-            sign: raw.wrix.git.sign,
+            deploy: raw.git.deploy,
+            sign: raw.git.sign,
             remote,
         },
         init: Init {
-            prek_hooks: raw.wrix.init.prek_hooks,
-            online_verify: raw.wrix.init.online_verify,
+            prek_hooks: raw.init.prek_hooks,
+            online_verify: raw.init.online_verify,
         },
+        cache: raw.cache,
     })
 }
 
@@ -117,18 +119,14 @@ where
 }
 
 #[derive(Default, Deserialize)]
-struct RawFile {
-    #[serde(default, deserialize_with = "deserialize_table")]
-    wrix: RawWrix,
-}
-
-#[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RawWrix {
+struct RawFile {
     #[serde(default, deserialize_with = "deserialize_table")]
     git: RawGit,
     #[serde(default, deserialize_with = "deserialize_table")]
     init: RawInit,
+    #[serde(default, deserialize_with = "deserialize_table")]
+    cache: cache::Policy,
 }
 
 #[derive(Default, Deserialize)]

@@ -100,8 +100,8 @@ See [specs/sandbox.md](specs/sandbox.md) for full details.
 
 `wrix init --deploy --key <name>` provisions a GitHub deploy key and configures
 and verifies local Git policy, including hooks when configured. Signing defaults
-off; add `--sign` or set `wrix.git.sign = true` to provision a separate signing
-key and enable signing. Provisioning does not enable sandbox credential grants.
+off; add `--sign` or set `git.sign = true` to provision a separate signing key
+and enable signing. Provisioning does not enable sandbox credential grants.
 Matching keys are reused; `--force` permits replacing conflicting material. See
 [repository initialization](specs/cli.md#wrix-init) for prerequisites and
 options.
@@ -114,7 +114,7 @@ independently with `wrix run --git-deploy --git-sign /repo`, or with
 set in `wrix.toml`:
 
 ```toml
-[wrix.git]
+[git]
 deploy = true
 sign = true
 ```
@@ -133,6 +133,29 @@ delivery: absent keys do not imply a read-only workspace or no network access.
 Provider credentials, explicitly declared mounts, and public-internet access
 remain governed by their separate policies. A deploy key conveys its actual
 repository permissions, not a restricted publishing transaction.
+
+### Project cache policy
+
+Cache policy belongs in the optional repository-root `wrix.toml`, alongside
+`[git]` and `[init]`:
+
+```toml
+[cache]
+warn_size = "20G"
+pending_ttl = "3d"
+
+[cache.warm]
+checks = true
+
+[cache.publish]
+exclude_roots = [".#packages.x86_64-linux.large"]
+```
+
+Built-in defaults apply when keys are omitted. Explicit environment overrides
+win over repository policy; `warm --checks` also overrides policy. Devshells
+export only explicitly configured `nixCache` overrides, not implicit defaults.
+Use `wrix service cache config` to inspect the resolved settings. See
+[workspace services](specs/services.md#cache-policy) for all keys and defaults.
 
 ## Profiles
 

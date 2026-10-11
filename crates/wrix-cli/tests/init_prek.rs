@@ -74,7 +74,7 @@ fn prek_hooks() -> TestResult {
     run_git(config_repo.path(), &["config", "core.hooksPath", sentinel])?;
     fs::write(
         config_repo.path().join("wrix.toml"),
-        "[wrix.init]\nprek_hooks = false\n",
+        "[init]\nprek_hooks = false\n",
     )?;
     let mut command = init_command(config_repo.path(), &home, &deploy_key, &hooks)?;
     command

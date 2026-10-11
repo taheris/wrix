@@ -168,7 +168,7 @@ fn offline_config_skips_network_verification() -> TestResult {
     let deploy_key = write_deploy_key(&home, 0o600)?;
     fs::write(
         repo.path().join("wrix.toml"),
-        "[wrix.init]\nonline_verify = false\n",
+        "[init]\nonline_verify = false\n",
     )?;
     fixture.set_mode("fail-if-online")?;
 

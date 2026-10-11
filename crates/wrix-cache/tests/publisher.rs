@@ -7,7 +7,10 @@ use std::{
 };
 
 use fs2::FileExt;
-use wrix_cache::publisher::{self, Mode};
+use wrix_cache::{
+    config::Settings,
+    publisher::{self, HookRecord, Mode},
+};
 use wrix_core::path::Workspace;
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
@@ -605,18 +608,188 @@ fn publisher_child() -> TestResult {
         "rotate" => {
             publisher::run_workspace_at(&workspace, &state_root, &cache_root, Mode::RotateKey)?
         }
-        "status" => publisher::status_at(&state_root, &cache_root)?,
-        "auto" => publisher::run_hook_record(
-            workspace.hash(),
+        "status" => publisher::status_at(
             &state_root,
             &cache_root,
-            Path::new(&env::var("WRIX_CACHE_TEST_ROOTS_FILE")?),
-            &env::var("WRIX_CACHE_TEST_DRV_PATH")?,
-            &env::var("WRIX_CACHE_TEST_OUT_PATHS")?,
+            Settings::for_workspace(&workspace)?,
+        )?,
+        "auto" => publisher::run_hook_record(
+            HookRecord {
+                workspace_hash: workspace.hash(),
+                state_root: &state_root,
+                cache_root: &cache_root,
+                manifest: Path::new(&env::var("WRIX_CACHE_TEST_ROOTS_FILE")?),
+                drv_path: &env::var("WRIX_CACHE_TEST_DRV_PATH")?,
+                out_paths: &env::var("WRIX_CACHE_TEST_OUT_PATHS")?,
+            },
+            Settings::for_workspace(&workspace)?,
         )?,
         other => return Err(io::Error::other(format!("unknown action {other}")).into()),
     };
     fs::write(output_path, format!("{}\n", report.lines().join("\n")))?;
+    Ok(())
+}
+
+#[test]
+fn warm_reads_repository_policy_and_checks_flag_overrides_environment() -> TestResult {
+    for (policy_checks, cli_checks) in [(true, false), (false, true)] {
+        let fixture = Fixture::new("warm-policy")?;
+        fixture.write_roots(&[RootSpec::new(
+            "checks.x86_64-linux.unit",
+            ".#checks.x86_64-linux.unit",
+            "/nix/store/check.drv",
+            &["/nix/store/check-out"],
+        )])?;
+        fs::write(
+            fixture.workspace.canonical_path().join("wrix.toml"),
+            format!("cache.warm.checks = {policy_checks}\n"),
+        )?;
+        if cli_checks {
+            fixture.run_with_env(
+                "warm",
+                &[
+                    ("WRIX_CACHE_TEST_CHECKS", "1"),
+                    ("WRIX_CACHE_WARM_CHECKS", "0"),
+                ],
+            )?;
+        } else {
+            fixture.run("warm")?;
+        }
+        assert!(
+            fixture
+                .nix_log()?
+                .contains("nix build --no-link .#checks.x86_64-linux.unit")
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn publish_environment_can_clear_repository_exclusions() -> TestResult {
+    let fixture = Fixture::new("publish-policy")?;
+    fixture.write_roots(&[RootSpec::new(
+        "packages.x86_64-linux.demo",
+        ".#packages.x86_64-linux.demo",
+        PROJECT_DRV,
+        &[PROJECT_OUT],
+    )])?;
+    fs::write(
+        fixture.workspace.canonical_path().join("wrix.toml"),
+        "cache.publish.exclude_roots = ['.#packages.x86_64-linux.demo']",
+    )?;
+    assert!(!fixture.run("publish")?.contains("published root:"));
+    assert!(
+        fixture
+            .run_with_env("publish", &[("WRIX_CACHE_PUBLISH_EXCLUDE", "")])?
+            .contains("published root: .#packages.x86_64-linux.demo")
+    );
+    Ok(())
+}
+
+#[test]
+fn repository_pending_ttl_expires_records_without_direnv() -> TestResult {
+    let fixture = Fixture::new("pending-policy")?;
+    fs::write(
+        fixture.workspace.canonical_path().join("wrix.toml"),
+        "cache.pending_ttl = '1s'",
+    )?;
+    fixture.write_pending("expired", PROJECT_DRV, &[PROJECT_OUT])?;
+    let created_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs()
+        .saturating_sub(60);
+    fs::write(
+        fixture.state_root.join("pending/expired.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "created_at_epoch": created_at, "drv_path": PROJECT_DRV, "out_paths": [PROJECT_OUT],
+        }))?,
+    )?;
+    assert!(fixture.run("status")?.contains("pending records: 0"));
+    assert_eq!(fixture.pending_count()?, 0);
+    Ok(())
+}
+
+#[test]
+fn status_reads_repository_soft_limit_without_direnv() -> TestResult {
+    let fixture = Fixture::new("status-policy")?;
+    fs::write(
+        fixture.workspace.canonical_path().join("wrix.toml"),
+        "cache.warn_size = 0",
+    )?;
+    assert!(
+        fixture
+            .run("status")?
+            .contains("warning: project cache size exceeds 0")
+    );
+    Ok(())
+}
+
+#[test]
+fn daemon_publisher_uses_snapshot_without_ambient_config_or_repository_reads() -> TestResult {
+    let fixture = Fixture::new("hook-snapshot")?;
+    fixture.write_roots(&[RootSpec::new(
+        "packages.demo",
+        ".#demo",
+        PROJECT_DRV,
+        &[PROJECT_OUT],
+    )])?;
+    fixture.run("publish")?;
+    fs::write(
+        fixture.workspace.canonical_path().join("wrix.toml"),
+        "cache.lock_timeout = 0",
+    )?;
+    let settings = Settings::for_workspace(&fixture.workspace)?;
+    let snapshot = fixture.root.path().join("cache-config.json");
+    fs::write(&snapshot, serde_json::to_vec(&settings)?)?;
+    fs::write(
+        fixture.workspace.canonical_path().join("wrix.toml"),
+        "[wrix]\ninvalid = true",
+    )?;
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(fixture.state_root.join("cache.lock"))?;
+    lock.try_lock_exclusive()?;
+    let env_source = fixture.child_command("auto", &fixture.root.path().join("unused"))?;
+    let mut hook = Command::new(env!("CARGO_BIN_EXE_wrix-cache-hook"));
+    for (name, value) in env_source.get_envs() {
+        if let Some(value) = value {
+            hook.env(name, value);
+        }
+    }
+    let uid = Command::new("id").arg("-u").output()?;
+    let gid = Command::new("id").arg("-g").output()?;
+    assert!(uid.status.success() && gid.status.success());
+    let output = hook
+        .current_dir(fixture.workspace.canonical_path())
+        .arg("--workspace-hash")
+        .arg(fixture.workspace.hash().as_str())
+        .arg("--owner-uid")
+        .arg(String::from_utf8(uid.stdout)?.trim())
+        .arg("--owner-gid")
+        .arg(String::from_utf8(gid.stdout)?.trim())
+        .arg("--state-root")
+        .arg(&fixture.state_root)
+        .arg("--cache-root")
+        .arg(&fixture.cache_root)
+        .arg("--manifest")
+        .arg(fixture.state_root.join("publish-roots.json"))
+        .arg("--publisher-helper")
+        .arg(env!("CARGO_BIN_EXE_wrix-cache-publish"))
+        .arg("--config")
+        .arg(&snapshot)
+        .env("DRV_PATH", PROJECT_DRV)
+        .env("OUT_PATHS", PROJECT_OUT)
+        .env("WRIX_CACHE_LOCK_TIMEOUT_MS", "invalid-ambient-value")
+        .output()?;
+    lock.unlock()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("recorded pending publish"));
+    assert_eq!(fixture.pending_count()?, 1);
     Ok(())
 }
 

@@ -144,6 +144,11 @@ struct HookInvocation<'a> {
 }
 
 fn run_hook(invocation: HookInvocation<'_>) -> io::Result<std::process::Output> {
+    let settings = invocation.state_root.join("cache-config.json");
+    fs::write(
+        &settings,
+        serde_json::to_vec(&wrix_cache::config::Settings::default()).map_err(io::Error::other)?,
+    )?;
     Command::new(env!("CARGO_BIN_EXE_wrix-cache-hook"))
         .arg("--workspace-hash")
         .arg(WORKSPACE_HASH)
@@ -159,6 +164,8 @@ fn run_hook(invocation: HookInvocation<'_>) -> io::Result<std::process::Output> 
         .arg(invocation.manifest)
         .arg("--publisher-helper")
         .arg(invocation.publisher)
+        .arg("--config")
+        .arg(settings)
         .env("DRV_PATH", invocation.drv_path)
         .env("OUT_PATHS", invocation.out_paths)
         .env("WRIX_WORKSPACE_SCRIPT_RAN", invocation.workspace_marker)

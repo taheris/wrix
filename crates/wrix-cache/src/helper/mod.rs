@@ -53,6 +53,8 @@ pub enum Error {
     },
     /// invalid publish manifest JSON: {source}
     ManifestJson { source: serde_json::Error },
+    /// {0}
+    Config(#[from] crate::config::ReadError),
 }
 
 impl From<io::Error> for Error {
@@ -89,6 +91,7 @@ struct HookConfig {
     cache_root: PathBuf,
     manifest: PathBuf,
     publisher_helper: PathBuf,
+    settings: PathBuf,
 }
 
 #[derive(Clone, Debug)]
@@ -99,6 +102,7 @@ struct PublishConfig {
     manifest: PathBuf,
     drv_path: String,
     out_paths: String,
+    settings: PathBuf,
 }
 
 #[derive(Deserialize)]
@@ -216,13 +220,17 @@ fn run_hook(args: &[String], stdout: &mut impl Write) -> Result<ExitCode> {
 
 fn run_publish(args: &[String], stdout: &mut impl Write) -> Result<ExitCode> {
     let config = PublishConfig::parse(args)?;
+    let settings = crate::config::Settings::read_snapshot(&config.settings)?;
     let report = crate::publisher::run_hook_record(
-        &config.workspace_hash,
-        &config.state_root,
-        &config.cache_root,
-        &config.manifest,
-        &config.drv_path,
-        &config.out_paths,
+        crate::publisher::HookRecord {
+            workspace_hash: &config.workspace_hash,
+            state_root: &config.state_root,
+            cache_root: &config.cache_root,
+            manifest: &config.manifest,
+            drv_path: &config.drv_path,
+            out_paths: &config.out_paths,
+        },
+        settings,
     )?;
     for line in report.lines() {
         writeln!(stdout, "{line}")?;
@@ -252,6 +260,8 @@ fn exec_publisher(config: HookConfig, drv_path: String, out_paths: String) -> Re
         .arg(drv_path)
         .arg("--out-paths")
         .arg(out_paths)
+        .arg("--config")
+        .arg(config.settings)
         .stdin(Stdio::null());
     #[cfg(unix)]
     if current_uid == 0 {
@@ -305,6 +315,7 @@ impl HookConfig {
         let cache_root = PathBuf::from(parser.required("--cache-root")?);
         let manifest = PathBuf::from(parser.required("--manifest")?);
         let publisher_helper = PathBuf::from(parser.required("--publisher-helper")?);
+        let settings = PathBuf::from(parser.required("--config")?);
         parser.finish()?;
         Ok(Self {
             workspace_hash,
@@ -314,6 +325,7 @@ impl HookConfig {
             cache_root,
             manifest,
             publisher_helper,
+            settings,
         })
     }
 
@@ -321,6 +333,7 @@ impl HookConfig {
         require_absolute_dir("state root", &self.state_root)?;
         require_absolute_dir("cache root", &self.cache_root)?;
         require_absolute_file("publish manifest", &self.manifest)?;
+        require_absolute_file("cache configuration snapshot", &self.settings)?;
         require_executable_file("publisher helper", &self.publisher_helper)
     }
 }
@@ -334,6 +347,7 @@ impl PublishConfig {
         let manifest = PathBuf::from(parser.required("--manifest")?);
         let drv_path = parser.required("--drv-path")?;
         let out_paths = parser.required("--out-paths")?;
+        let settings = PathBuf::from(parser.required("--config")?);
         parser.finish()?;
         Ok(Self {
             workspace_hash,
@@ -342,6 +356,7 @@ impl PublishConfig {
             manifest,
             drv_path,
             out_paths,
+            settings,
         })
     }
 }
@@ -446,13 +461,13 @@ fn write_help(helper: Helper, stdout: &mut impl Write) -> Result<()> {
     match helper {
         Helper::Hook => writeln!(
             stdout,
-            "{}\n\nUsage: {} --workspace-hash HASH --owner-uid UID --owner-gid GID --state-root PATH --cache-root PATH --manifest PATH --publisher-helper PATH",
+            "{}\n\nUsage: {} --workspace-hash HASH --owner-uid UID --owner-gid GID --state-root PATH --cache-root PATH --manifest PATH --publisher-helper PATH --config PATH",
             helper.purpose(),
             helper.binary_name()
         ),
         Helper::Publish => writeln!(
             stdout,
-            "{}\n\nUsage: {} --workspace-hash HASH --state-root PATH --cache-root PATH --manifest PATH --drv-path PATH --out-paths PATHS",
+            "{}\n\nUsage: {} --workspace-hash HASH --state-root PATH --cache-root PATH --manifest PATH --drv-path PATH --out-paths PATHS --config PATH",
             helper.purpose(),
             helper.binary_name()
         ),

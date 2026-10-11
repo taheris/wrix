@@ -63,12 +63,12 @@ non-interactively. Acceptable because:
 - The signing key adds attribution to commits; it does not grant any additional
   access.
 
-**Explicit grants.** `cli.md` owns `[wrix.git]` policy and `sandbox.md` owns
-launch overrides. Neither `run` nor `spawn` receives deploy or signing keys
-without the corresponding effective grant. Grants are independent: signing alone
-does not grant repository access, and deploying alone does not grant signing. A
-deploy grant exposes the key's actual repository permissions; it is not a
-read-only Git capability or a validated publishing transaction.
+**Explicit grants.** `cli.md` owns `[git]` policy and `sandbox.md` owns launch
+overrides. Neither `run` nor `spawn` receives deploy or signing keys without the
+corresponding effective grant. Grants are independent: signing alone does not
+grant repository access, and deploying alone does not grant signing. A deploy
+grant exposes the key's actual repository permissions; it is not a read-only Git
+capability or a validated publishing transaction.
 
 **Repository policy trust.** The repository's `wrix.toml` is trusted launch
 input, not agent-resistant authorization storage. Because the workspace is

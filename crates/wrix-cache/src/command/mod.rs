@@ -6,7 +6,10 @@ use std::{
 use displaydoc::Display;
 use thiserror::Error as ThisError;
 
-use crate::publisher::{self, Mode};
+use crate::{
+    config::Settings,
+    publisher::{self, Mode},
+};
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -16,6 +19,10 @@ pub enum Error {
     Io { source: io::Error },
     /// {source}
     Publisher { source: publisher::Error },
+    /// {0}
+    Config(#[from] crate::config::ReadError),
+    /// invalid cache configuration JSON: {0}
+    Json(#[from] serde_json::Error),
     /// unknown cache warm option: {option}
     UnknownWarmOption { option: String },
     /// unexpected cache option: {option}
@@ -36,6 +43,7 @@ impl From<publisher::Error> for Error {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Command {
+    Config,
     Status,
     Publish,
     Warm,
@@ -46,6 +54,7 @@ pub enum Command {
 impl Command {
     pub fn parse(input: &str) -> Option<Self> {
         match input {
+            "config" => Some(Self::Config),
             "status" => Some(Self::Status),
             "publish" => Some(Self::Publish),
             "warm" => Some(Self::Warm),
@@ -58,13 +67,22 @@ impl Command {
 
 pub fn write_help(stdout: &mut impl Write) -> Result<()> {
     stdout.write_all(
-        b"Manage the workspace project cache.\n\nUsage: wrix service cache <command> [options]\n\nCommands:\n  status      Show project-cache status and warnings.\n  publish     Publish realized project outputs.\n  warm        Build and publish configured warm roots.\n  prune       Remove cache entries outside current roots.\n  rotate-key  Replace the cache signing key and clear cached content.\n\nOptions:\n  --checks    Include flake checks when warming the cache (default: off).\n  -h, --help  Print help.\n",
+        b"Manage the workspace project cache.\n\nUsage: wrix service cache <command> [options]\n\nCommands:\n  config      Show resolved project-cache settings.\n  status      Show project-cache status and warnings.\n  publish     Publish realized project outputs.\n  warm        Build and publish configured warm roots.\n  prune       Remove cache entries outside current roots.\n  rotate-key  Replace the cache signing key and clear cached content.\n\nOptions:\n  --checks    Include flake checks when warming the cache (default: off).\n  -h, --help  Print help.\n",
     )?;
     Ok(())
 }
 
 pub fn run(command: Command, args: &[String], stdout: &mut impl Write) -> Result<ExitCode> {
     match command {
+        Command::Config => {
+            reject_args(args)?;
+            writeln!(
+                stdout,
+                "{}",
+                serde_json::to_string_pretty(&Settings::current()?)?
+            )?;
+            Ok(ExitCode::SUCCESS)
+        }
         Command::Status => run_status(args, stdout),
         Command::Publish => run_publish(args, stdout),
         Command::Warm => run_warm(args, stdout),
@@ -145,6 +163,7 @@ mod test {
 
     #[test]
     fn cache_command_parser_accepts_public_cache_commands() {
+        assert_eq!(Command::parse("config"), Some(Command::Config));
         assert_eq!(Command::parse("status"), Some(Command::Status));
         assert_eq!(Command::parse("publish"), Some(Command::Publish));
         assert_eq!(Command::parse("warm"), Some(Command::Warm));

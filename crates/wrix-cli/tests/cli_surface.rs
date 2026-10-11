@@ -219,7 +219,7 @@ fn conflicting_sign_flags_are_non_mutating() -> TestResult {
     let home = tempfile::Builder::new()
         .prefix("cli-sign-conflict-home")
         .tempdir()?;
-    let policy = "[wrix.git]\nsign = true\n";
+    let policy = "[git]\nsign = true\n";
     fs::write(repo.path().join("wrix.toml"), policy)?;
     let before = git_config(repo.path())?;
 
@@ -272,7 +272,7 @@ fn deploy_offline_flags_are_non_mutating() -> TestResult {
 #[test]
 fn deploy_under_offline_policy_is_non_mutating() -> TestResult {
     let repo = setup_repo("cli-deploy-offline-policy")?;
-    let policy = "[wrix.init]\nonline_verify = false\n";
+    let policy = "[init]\nonline_verify = false\n";
     fs::write(repo.path().join("wrix.toml"), policy)?;
     let before = git_config(repo.path())?;
 

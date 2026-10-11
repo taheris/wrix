@@ -755,6 +755,7 @@ test_host_nix_configures_cache_and_hook() {
   mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
   workspace="$TEST_TMP/workspace"
   mkdir -p "$workspace/.git"
+  printf 'cache.pending_ttl = "3d"\n' >"$workspace/wrix.toml"
   (cd "$workspace" && "$wrix_bin" service start >"$TEST_TMP/start.txt")
   (cd "$workspace" && "$wrix_bin" service endpoints >"$TEST_TMP/endpoints.json")
   state_root="$(json_get "$TEST_TMP/endpoints.json" state_root)"
@@ -788,6 +789,8 @@ test_host_nix_configures_cache_and_hook() {
   assert_contains "wrapper cache root" "$(cat "$wrapper")" "$cache_root" || return 1
   assert_contains "wrapper manifest" "$(cat "$wrapper")" "$state_root/publish-roots.json" || return 1
   assert_contains "wrapper publisher" "$(cat "$wrapper")" "$REPO_ROOT/target/debug/wrix-cache-publish" || return 1
+  assert_contains "wrapper snapshot handoff" "$(cat "$wrapper")" '--config "${BASH_SOURCE[0]%/*}/../cache-config.json"' || return 1
+  [[ "$(json_get "${wrapper%/*}/../cache-config.json" pending_retention_secs)" == "259200" ]] || { fail "stored snapshot lost repository retention policy"; return 1; }
   assert_contains "endpoint metadata" "$endpoints" "$cache_root" || return 1
 }
 
@@ -851,7 +854,58 @@ test_host_nix_config_rejects_non_wrix_hook() {
   assert_contains "conflict error" "$(cat "$TEST_TMP/conflict.err")" "existing non-wrix post-build-hook conflicts" || return 1
 }
 
+test_host_cache_opt_out_preserves_existing_nix_config() {
+  local wrix_bin workspace output
+  wrix_bin="$(build_wrix)"
+  with_fake_tools
+  export HOME="$TEST_TMP/home-opt-out"
+  export XDG_STATE_HOME="$TEST_TMP/state-opt-out"
+  export XDG_CACHE_HOME="$TEST_TMP/cache-opt-out"
+  export NIX_CONFIG="post-build-hook = /tmp/other-hook"
+  workspace="$TEST_TMP/workspace-opt-out"
+  mkdir -p "$workspace/.git" "$HOME"
+  printf 'cache.enable = false\n' >"$workspace/wrix.toml"
+  (cd "$workspace" && "$wrix_bin" service start >"$TEST_TMP/opt-out-start")
+  output="$(
+    cd "$workspace"
+    WRIX_SERVICE_BIN="$wrix_bin" WRIX_HOST_NIX_CONFIG_PRINT=1 \
+      bash "$REPO_ROOT/lib/services/host-nix-config.sh"
+  )"
+  [[ "$output" == "$NIX_CONFIG" ]] || { fail "cache opt-out changed inherited NIX_CONFIG"; return 1; }
+}
+
+test_host_trust_validation_resolves_repository_and_environment_overrides() {
+  local wrix_bin workspace
+  wrix_bin="$(build_wrix)"
+  with_fake_tools
+  export HOME="$TEST_TMP/home-policy-trust"
+  export XDG_STATE_HOME="$TEST_TMP/state-policy-trust"
+  export XDG_CACHE_HOME="$TEST_TMP/cache-policy-trust"
+  workspace="$TEST_TMP/workspace-policy-trust"
+  mkdir -p "$workspace/.git" "$HOME"
+  printf 'cache.require_trusted_nix = false\n' >"$workspace/wrix.toml"
+  (cd "$workspace" && "$wrix_bin" service start >"$TEST_TMP/policy-trust-start")
+  (
+    cd "$workspace"
+    unset NIX_CONFIG
+    WRIX_SERVICE_BIN="$wrix_bin" WRIX_FAKE_NIX_IGNORE=substituter \
+      bash "$REPO_ROOT/lib/services/host-nix-config.sh"
+  )
+  if (
+    cd "$workspace"
+    unset NIX_CONFIG
+    WRIX_SERVICE_BIN="$wrix_bin" WRIX_NIX_CACHE_REQUIRE_TRUSTED=1 WRIX_FAKE_NIX_IGNORE=substituter \
+      bash "$REPO_ROOT/lib/services/host-nix-config.sh"
+  ) >"$TEST_TMP/policy-trust.out" 2>"$TEST_TMP/policy-trust.err"; then
+    fail "explicit environment did not restore trust validation"
+    return 1
+  fi
+  assert_contains "restored validation" "$(<"$TEST_TMP/policy-trust.err")" "host Nix does not honor project cache substituter"
+}
+
 ALL_TESTS=(
+  test_host_cache_opt_out_preserves_existing_nix_config
+  test_host_trust_validation_resolves_repository_and_environment_overrides
   test_mkdevshell_nix_cache
   test_mkdevshell_beads_workspace_does_not_run_raw_dolt
   test_mkdevshell_loom_internal_worktree_uses_repo_service

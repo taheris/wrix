@@ -105,6 +105,8 @@ pub enum Error {
     InvalidPersistedWorkspaceHash { value: String },
     /// {source}
     BeadsConfig { source: ReadError },
+    /// {0}
+    CacheConfig(#[from] wrix_cache::config::ReadError),
 }
 
 impl From<io::Error> for Error {
@@ -151,6 +153,7 @@ pub struct Plan {
     container_name: ContainerName,
     cache_port: Option<u16>,
     dolt: Option<DoltEndpoint>,
+    cache_settings: wrix_cache::config::Settings,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -205,8 +208,11 @@ pub struct Status {
 
 impl Plan {
     pub fn for_current_dir(cache_mode: CacheMode) -> Result<Self> {
+        let settings = wrix_cache::config::Settings::current()?;
         let workspace = Workspace::from_service_current_dir()?;
-        Self::for_workspace(workspace, cache_mode)
+        let paths = Paths::for_workspace(workspace.hash())?;
+        let branch = read_sync_branch(workspace.canonical_path())?;
+        Self::from_parsed(workspace, cache_mode, paths, branch, settings)
     }
 
     pub fn for_workspace(workspace: Workspace, cache_mode: CacheMode) -> Result<Self> {
@@ -219,8 +225,9 @@ impl Plan {
         cache_mode: CacheMode,
         paths: Paths,
     ) -> Result<Self> {
+        let settings = wrix_cache::config::Settings::for_workspace(&workspace)?;
         let beads_sync_branch = read_sync_branch(workspace.canonical_path())?;
-        Self::from_parsed(workspace, cache_mode, paths, beads_sync_branch)
+        Self::from_parsed(workspace, cache_mode, paths, beads_sync_branch, settings)
     }
 
     fn from_parsed(
@@ -228,11 +235,15 @@ impl Plan {
         cache_mode: CacheMode,
         paths: Paths,
         beads_sync_branch: Branch,
+        cache_settings: wrix_cache::config::Settings,
     ) -> Result<Self> {
         let container_name = select_container_name(&workspace, &paths)?;
         let prior_ports = PortLease::read(&paths.services_path())?;
         let cache_port = match cache_mode {
-            CacheMode::Enabled if cache_allowed_for_workspace(workspace.canonical_path()) => {
+            CacheMode::Enabled
+                if cache_settings.enable
+                    && cache_allowed_for_workspace(workspace.canonical_path()) =>
+            {
                 Some(select_port(
                     prior_ports.cache_http_port,
                     CACHE_PORT_START,
@@ -267,6 +278,7 @@ impl Plan {
             container_name,
             cache_port,
             dolt,
+            cache_settings,
         })
     }
 
@@ -336,6 +348,7 @@ impl Plan {
             wrix_cache::publisher::prune_stale_dirty(
                 self.paths.state_root(),
                 self.paths.cache_root(),
+                self.cache_settings.clone(),
             )?;
         }
         if self.dolt.is_some() {
@@ -605,7 +618,7 @@ pub fn start(cache_mode: CacheMode) -> Result<Status> {
     }
     let runtime = Runtime::from_env()?;
     if plan.has_services() && runtime.reconcile_legacy_containers(&plan)? {
-        plan = Plan::for_workspace(plan.workspace().clone(), cache_mode)?;
+        plan = Plan::for_current_dir(cache_mode)?;
     }
     runtime.refresh_unavailable_ports(&mut plan)?;
     plan.ensure_layout()?;
@@ -616,6 +629,7 @@ pub fn start(cache_mode: CacheMode) -> Result<Status> {
 }
 
 fn locked_plan(cache_mode: CacheMode) -> Result<(Plan, fs::File)> {
+    let settings = wrix_cache::config::Settings::current()?;
     let workspace = Workspace::from_service_current_dir()?;
     let paths = Paths::for_workspace(workspace.hash())?;
     let branch = read_sync_branch(workspace.canonical_path())?;
@@ -628,7 +642,7 @@ fn locked_plan(cache_mode: CacheMode) -> Result<(Plan, fs::File)> {
         .open(paths.state_root().join("service.lock"))?;
     lock.lock_exclusive()?;
     Ok((
-        Plan::from_parsed(workspace, cache_mode, paths, branch)?,
+        Plan::from_parsed(workspace, cache_mode, paths, branch, settings)?,
         lock,
     ))
 }

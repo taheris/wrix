@@ -305,12 +305,12 @@ selection, deploy key, workspace service startup, network firewall
 configuration); they differ only in stdio and per-launch configuration source.
 
 Git grants are resolved independently for `deploy` and `sign`: explicit launch
-override, then `[wrix.git]` in the selected workspace repository's root
-`wrix.toml`, then `false`. Outside a repository there is no repository policy
-tier. Repository policy is read anew for each launch. The trusted caller can
-grant or remove either capability. `cli.md` owns repository policy names;
-`security.md` owns the repository-policy trust boundary, key resolution, and
-credential exposure. Profiles select key identity, not grants.
+override, then `[git]` in the selected workspace repository's root `wrix.toml`,
+then `false`. Outside a repository there is no repository policy tier.
+Repository policy is read anew for each launch. The trusted caller can grant or
+remove either capability. `cli.md` owns repository policy names; `security.md`
+owns the repository-policy trust boundary, key resolution, and credential
+exposure. Profiles select key identity, not grants.
 
 `wrix run` accepts `--git-deploy` / `--no-git-deploy` and `--git-sign` /
 `--no-git-sign` as invocation-only launcher options. Supplying both sides of a
@@ -806,11 +806,11 @@ supplied; there is no implicit default image baked in.
    maps right-merge by environment name; values are resolved only by the
    launcher.
 6. **Git key identity and delivery** — `deployKey` supplies a default validated
-   key name, overridden by repository `wrix.git.deploy_key`; without either, the
-   name is derived as specified by `cli.md`. Identity does not grant
-   credentials. An effective deploy grant mounts only the deploy key at
-   `/etc/wrix/keys/<name>`; an effective sign grant mounts only the signing key
-   at `/etc/wrix/keys/<name>-signing`. Each mounted key gets its corresponding
+   key name, overridden by repository `git.deploy_key`; without either, the name
+   is derived as specified by `cli.md`. Identity does not grant credentials. An
+   effective deploy grant mounts only the deploy key at `/etc/wrix/keys/<name>`;
+   an effective sign grant mounts only the signing key at
+   `/etc/wrix/keys/<name>-signing`. Each mounted key gets its corresponding
    child `WRIX_DEPLOY_KEY` or `WRIX_SIGNING_KEY` value. Public keys can be
    derived with `ssh-keygen -y`; `.pub` files are not mounted. Host-source
    resolution and missing-key behavior belong to `security.md`.

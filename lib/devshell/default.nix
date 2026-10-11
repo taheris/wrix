@@ -18,7 +18,7 @@ let
     readFile
     ;
 
-  inherit (pkgs.lib) escapeShellArgs toShellVars;
+  inherit (pkgs.lib) escapeShellArgs optionalAttrs toShellVars;
 
   hostNixConfig = pkgs.writeText "wrix-host-nix-config.sh" (readFile ../services/host-nix-config.sh);
   startIndependent = import ../services/start.nix { inherit (pkgs.stdenv.hostPlatform) isDarwin; };
@@ -106,60 +106,38 @@ in
               unset _wrix_hooks_target _wrix_hooks_current
             fi
           '';
-      defaultNixCache = {
-        enable = true;
-        requireTrustedNix = true;
-        publish = {
-          packages = true;
-          checks = true;
-          devShell = true;
-          includeRoots = [ ];
-          excludeRoots = [ ];
-        };
-        warm = {
-          packages = true;
-          checks = false;
-          devShell = true;
-          includeRoots = [ ];
-          excludeRoots = [ ];
-        };
-        warnSize = "50G";
-        pendingTtl = "7d";
-        pruneInterval = "24h";
-      };
-      nixCacheConfig =
+      nixCacheOverrides =
         if nixCache == false then
-          defaultNixCache // { enable = false; }
+          { enable = false; }
         else if isAttrs nixCache then
-          defaultNixCache
-          // nixCache
-          // {
-            publish = defaultNixCache.publish // (nixCache.publish or { });
-            warm = defaultNixCache.warm // (nixCache.warm or { });
-          }
-        else
-          defaultNixCache;
-      nixCacheEnabled = nixCacheConfig.enable;
-      cacheEnv =
-        if !nixCacheEnabled then
+          nixCache
+        else if nixCache == true then
           { }
         else
-          {
-            WRIX_NIX_CACHE_REQUIRE_TRUSTED = boolEnv nixCacheConfig.requireTrustedNix;
-            WRIX_CACHE_PUBLISH_PACKAGES = boolEnv nixCacheConfig.publish.packages;
-            WRIX_CACHE_PUBLISH_CHECKS = boolEnv nixCacheConfig.publish.checks;
-            WRIX_CACHE_PUBLISH_DEVSHELL = boolEnv nixCacheConfig.publish.devShell;
-            WRIX_CACHE_PUBLISH_INCLUDE = listEnv nixCacheConfig.publish.includeRoots;
-            WRIX_CACHE_PUBLISH_EXCLUDE = listEnv nixCacheConfig.publish.excludeRoots;
-            WRIX_CACHE_WARM_PACKAGES = boolEnv nixCacheConfig.warm.packages;
-            WRIX_CACHE_WARM_CHECKS = boolEnv nixCacheConfig.warm.checks;
-            WRIX_CACHE_WARM_DEVSHELL = boolEnv nixCacheConfig.warm.devShell;
-            WRIX_CACHE_WARM_INCLUDE = listEnv nixCacheConfig.warm.includeRoots;
-            WRIX_CACHE_WARM_EXCLUDE = listEnv nixCacheConfig.warm.excludeRoots;
-            WRIX_CACHE_SOFT_LIMIT_BYTES = sizeBytes nixCacheConfig.warnSize;
-            WRIX_CACHE_PENDING_RETENTION_SECS = durationSeconds "pendingTtl" nixCacheConfig.pendingTtl;
-            WRIX_CACHE_PRUNE_INTERVAL_SECS = durationSeconds "pruneInterval" nixCacheConfig.pruneInterval;
-          };
+          throw "nixCache must be a boolean or attrset";
+      nixCacheEnabled = nixCacheOverrides.enable or true;
+      overrideEnv =
+        config: field: name: convert:
+        optionalAttrs (hasAttr field config) { ${name} = convert config.${field}; };
+      rootsEnv =
+        prefix: config:
+        overrideEnv config "packages" "${prefix}_PACKAGES" boolEnv
+        // overrideEnv config "checks" "${prefix}_CHECKS" boolEnv
+        // overrideEnv config "devShell" "${prefix}_DEVSHELL" boolEnv
+        // overrideEnv config "includeRoots" "${prefix}_INCLUDE" listEnv
+        // overrideEnv config "excludeRoots" "${prefix}_EXCLUDE" listEnv;
+      cacheEnv =
+        overrideEnv nixCacheOverrides "enable" "WRIX_NIX_CACHE_ENABLE" boolEnv
+        // overrideEnv nixCacheOverrides "requireTrustedNix" "WRIX_NIX_CACHE_REQUIRE_TRUSTED" boolEnv
+        // rootsEnv "WRIX_CACHE_PUBLISH" (nixCacheOverrides.publish or { })
+        // rootsEnv "WRIX_CACHE_WARM" (nixCacheOverrides.warm or { })
+        // overrideEnv nixCacheOverrides "warnSize" "WRIX_CACHE_SOFT_LIMIT_BYTES" sizeBytes
+        // overrideEnv nixCacheOverrides "pendingTtl" "WRIX_CACHE_PENDING_RETENTION_SECS" (
+          durationSeconds "pendingTtl"
+        )
+        // overrideEnv nixCacheOverrides "pruneInterval" "WRIX_CACHE_PRUNE_INTERVAL_SECS" (
+          durationSeconds "pruneInterval"
+        );
       serviceEnv = {
         WRIX_SERVICE_IMAGE = serviceImage.ref;
         WRIX_SERVICE_IMAGE_SOURCE = "${serviceImage.source}";

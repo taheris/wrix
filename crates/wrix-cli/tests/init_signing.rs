@@ -61,7 +61,7 @@ fn signing_is_opt_in() -> TestResult {
     write_ed25519_key(&signing_key)?;
     for use_policy in [false, true] {
         if use_policy {
-            fs::write(repo.path().join("wrix.toml"), "[wrix.git]\nsign = true\n")?;
+            fs::write(repo.path().join("wrix.toml"), "[git]\nsign = true\n")?;
         }
         let mut command = wrix_command(repo.path())?;
         command
@@ -175,7 +175,7 @@ fn signing_config_opt_out_disables_signing() -> TestResult {
         .tempdir()?;
     let home = fixture.path().join("home");
     write_ed25519_key(&home.join(".ssh/deploy_keys/config-key"))?;
-    fs::write(repo.path().join("wrix.toml"), "[wrix.git]\nsign = false\n")?;
+    fs::write(repo.path().join("wrix.toml"), "[git]\nsign = false\n")?;
     let mut command = wrix_command(repo.path())?;
     command
         .arg("init")
@@ -205,7 +205,7 @@ fn sign_flags_override_repository_policy() -> TestResult {
     write_ed25519_key(&signing_key)?;
 
     for (policy_sign, flag, expected) in [(false, "--sign", "true"), (true, "--no-sign", "false")] {
-        let policy = format!("[wrix.git]\ndeploy = false\nsign = {policy_sign}\n");
+        let policy = format!("[git]\ndeploy = false\nsign = {policy_sign}\n");
         fs::write(repo.path().join("wrix.toml"), &policy)?;
         let mut command = wrix_command(repo.path())?;
         command

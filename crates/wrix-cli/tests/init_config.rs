@@ -96,8 +96,8 @@ fn defaults_and_overrides() -> TestResult {
     )?;
     fs::write(
         repo.path().join("wrix.toml"),
-        r"wrix.git = { deploy_key = 'toml-key', sign = false, remote = 'upstream' }
-wrix.init = { prek_hooks = false, online_verify = false }
+        r"git = { deploy_key = 'toml-key', sign = false, remote = 'upstream' }
+init = { prek_hooks = false, online_verify = false }
 ",
     )?;
     let mut command = init_command(repo.path(), &home, &deploy_key, &signing_key, &hooks, &[])?;
@@ -115,12 +115,12 @@ wrix.init = { prek_hooks = false, online_verify = false }
 
     fs::write(
         repo.path().join("wrix.toml"),
-        r#"[wrix.git]
+        r#"[git]
 deploy_key = "toml-key"
 sign = true
 remote = "upstream"
 
-[wrix.init]
+[init]
 prek_hooks = true
 online_verify = true
 "#,
@@ -168,29 +168,13 @@ fn git_grants_are_independent_and_default_false() -> TestResult {
 
     for (policy, deploy, sign) in [
         (None, false, false),
-        (
-            Some("[wrix.git]\ndeploy_key = 'policy-key'\n"),
-            false,
-            false,
-        ),
-        (Some("[wrix.git]\ndeploy = true\n"), true, false),
-        (Some("[wrix.git]\nsign = true\n"), false, true),
-        (
-            Some("[wrix.git]\ndeploy = false\nsign = false\n"),
-            false,
-            false,
-        ),
-        (
-            Some("[wrix.git]\ndeploy = false\nsign = true\n"),
-            false,
-            true,
-        ),
-        (
-            Some("[wrix.git]\ndeploy = true\nsign = false\n"),
-            true,
-            false,
-        ),
-        (Some("[wrix.git]\ndeploy = true\nsign = true\n"), true, true),
+        (Some("[git]\ndeploy_key = 'policy-key'\n"), false, false),
+        (Some("[git]\ndeploy = true\n"), true, false),
+        (Some("[git]\nsign = true\n"), false, true),
+        (Some("[git]\ndeploy = false\nsign = false\n"), false, false),
+        (Some("[git]\ndeploy = false\nsign = true\n"), false, true),
+        (Some("[git]\ndeploy = true\nsign = false\n"), true, false),
+        (Some("[git]\ndeploy = true\nsign = true\n"), true, true),
     ] {
         if let Some(policy) = policy {
             fs::write(repo.path().join("wrix.toml"), policy)?;
@@ -253,18 +237,18 @@ fn invalid_and_retired_git_grants_are_rejected() -> TestResult {
     let before = fs::read(repo.path().join(".git/config"))?;
 
     for policy in [
-        "[wrix.git]\ndeploy = 'true'\n",
-        "[wrix.git]\nsign = 'false'\n",
-        "[wrix.git]\ndeploy = 1\n",
-        "[wrix.git]\nsign = 0\n",
-        "[wrix.git]\ndeploy = []\n",
-        "[wrix.git]\nsign = {}\n",
-        "wrix.git = false\n",
-        "[wrix.git]\nsign_commits = true\n",
-        "[wrix.git]\nsign_commits = false\nsign = false\n",
-        "[wrix.git]\nsign = true\nsign = false\n",
-        "[wrix.git]\ndeploy_key = 'first'\ndeploy_key = 'second'\n",
-        "[wrix.git\n",
+        "[git]\ndeploy = 'true'\n",
+        "[git]\nsign = 'false'\n",
+        "[git]\ndeploy = 1\n",
+        "[git]\nsign = 0\n",
+        "[git]\ndeploy = []\n",
+        "[git]\nsign = {}\n",
+        "git = false\n",
+        "[git]\nsign_commits = true\n",
+        "[git]\nsign_commits = false\nsign = false\n",
+        "[git]\nsign = true\nsign = false\n",
+        "[git]\ndeploy_key = 'first'\ndeploy_key = 'second'\n",
+        "[git\n",
     ] {
         fs::write(repo.path().join("wrix.toml"), policy)?;
         let mut command = wrix_command_with_path(repo.path(), &[&fake_gh, &fake_keygen])?;

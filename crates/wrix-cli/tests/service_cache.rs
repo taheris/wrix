@@ -131,6 +131,40 @@ fn temp_cache_only_start_never_creates_a_service_container() -> TestResult {
 }
 
 #[test]
+fn repository_cache_opt_out_suppresses_startup_and_environment_can_override_it() -> TestResult {
+    let fixture = Fixture::new()?;
+    fs::write(fixture.workspace.join("wrix.toml"), "cache.enable = false")?;
+    let output = run_command(
+        fixture
+            .command("podman")?
+            .args(["service", "start"])
+            .env("WRIX_SERVICE_ALLOW_TEMP_CACHE", "1"),
+    )?;
+    assert!(output.status.success(), "{}", output.stderr);
+    assert!(!fixture.root.path().join("run.argv").exists());
+    let metadata = fixture.endpoints(true)?;
+    assert!(metadata["endpoints"]["cache_http"].is_null());
+    assert!(!PathBuf::from(metadata["cache_root"].as_str().unwrap()).exists());
+
+    let mut command = fixture.command("podman")?;
+    command
+        .args(["service", "endpoints"])
+        .env("WRIX_SERVICE_ALLOW_TEMP_CACHE", "1")
+        .env("WRIX_NIX_CACHE_ENABLE", "1");
+    let output = run_command(&mut command)?;
+    assert!(output.status.success(), "{}", output.stderr);
+    let metadata: Value = serde_json::from_str(&output.stdout)?;
+    assert!(!metadata["endpoints"]["cache_http"].is_null());
+
+    command.arg("--no-cache");
+    let output = run_command(&mut command)?;
+    assert!(output.status.success(), "{}", output.stderr);
+    let metadata: Value = serde_json::from_str(&output.stdout)?;
+    assert!(metadata["endpoints"]["cache_http"].is_null());
+    Ok(())
+}
+
+#[test]
 fn cache_layout_uses_exact_platform_roots_and_opt_out_creates_no_cache() -> TestResult {
     for cache in [false, true] {
         let fixture = Fixture::new()?;
@@ -196,6 +230,44 @@ fn cache_layout_uses_exact_platform_roots_and_opt_out_creates_no_cache() -> Test
         } else {
             assert!(!fixture.root.path().join("run.argv").exists());
         }
+    }
+    Ok(())
+}
+
+#[test]
+fn service_startup_pruning_uses_repository_interval() -> TestResult {
+    for (interval, retained) in [("1h", false), ("24h", true)] {
+        let fixture = Fixture::new()?;
+        fs::write(
+            fixture.workspace.join("wrix.toml"),
+            format!("cache.prune_interval = '{interval}'"),
+        )?;
+        let mut command = fixture.command("podman")?;
+        command
+            .args(["service", "start"])
+            .env("WRIX_SERVICE_ALLOW_TEMP_CACHE", "1");
+        let output = run_command(&mut command)?;
+        assert!(output.status.success(), "{}", output.stderr);
+        let metadata = fixture.endpoints(true)?;
+        let state_root = PathBuf::from(metadata["state_root"].as_str().unwrap());
+        let cache_root = PathBuf::from(metadata["cache_root"].as_str().unwrap());
+        let stale = cache_root.join("nar/orphan.nar");
+        fs::write(&stale, "orphan")?;
+        let last_prune = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs()
+            .saturating_sub(7200);
+        fs::write(
+            state_root.join("cache-status.json"),
+            serde_json::to_vec(&json!({
+                "dirty": true, "last_publish": null, "last_prune": null,
+                "last_error": null, "last_prune_epoch": last_prune,
+            }))?,
+        )?;
+        fs::remove_file(fixture.root.path().join("running"))?;
+        let output = run_command(&mut command)?;
+        assert!(output.status.success(), "{}", output.stderr);
+        assert_eq!(stale.exists(), retained, "{interval}");
     }
     Ok(())
 }

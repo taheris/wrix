@@ -4,7 +4,7 @@ set -euo pipefail
 wrix_host_fail() {
   local message="$1"
   printf 'wrix: project Nix cache is not active: %s\n' "$message" >&2
-  printf 'wrix: add this user or a wrix group to trusted-users and restart the Nix daemon, or set nixCache = false.\n' >&2
+  printf 'wrix: add this user or a wrix group to trusted-users and restart the Nix daemon, or set cache.enable = false in wrix.toml (nixCache = false also opts out).\n' >&2
   return 1
 }
 
@@ -16,6 +16,20 @@ wrix_host_json_string() {
       value = $0
       sub(".*\"" key "\"[[:space:]]*:[[:space:]]*\"", "", value)
       sub("\".*", "", value)
+      print value
+      exit
+    }
+  '
+}
+
+wrix_host_json_boolean() {
+  local json="$1"
+  local key="$2"
+  printf '%s\n' "$json" | awk -v key="$key" '
+    $0 ~ "^[[:space:]]*\"" key "\"[[:space:]]*:" {
+      value = $0
+      sub(".*:[[:space:]]*", "", value)
+      sub("[,[:space:]]*$", "", value)
       print value
       exit
     }
@@ -108,7 +122,10 @@ wrix_host_write_hook_source() {
   local state_root="$7"
   local cache_root="$8"
   local manifest_path="$9"
+  local cache_config="${10}"
   mkdir -p "$hook_dir/bin"
+  printf '%s\n' "$cache_config" >"$hook_dir/cache-config.json"
+  chmod 0444 "$hook_dir/cache-config.json"
   cat >"$hook_dir/bin/wrix-cache-post-build-hook" <<EOF
 #!${WRIX_BASH_BIN:-/usr/bin/env bash}
 set -euo pipefail
@@ -119,7 +136,8 @@ exec "$hook_bin" \\
   --state-root "$state_root" \\
   --cache-root "$cache_root" \\
   --manifest "$manifest_path" \\
-  --publisher-helper "$publish_bin"
+  --publisher-helper "$publish_bin" \\
+  --config "\${BASH_SOURCE[0]%/*}/../cache-config.json"
 EOF
   chmod 0555 "$hook_dir/bin/wrix-cache-post-build-hook"
 }
@@ -157,20 +175,30 @@ wrix_host_nix_config_main() {
   local service_bin="${WRIX_SERVICE_BIN:-wrix}"
   local hook_bin="${WRIX_CACHE_HOOK_BIN:-wrix-cache-hook}"
   local publish_bin="${WRIX_CACHE_PUBLISH_BIN:-wrix-cache-publish}"
-  local require_trusted="${WRIX_NIX_CACHE_REQUIRE_TRUSTED:-1}"
+  local require_trusted cache_config
   local endpoints workspace_hash state_root cache_root public_key manifest_path hook_build_root hook_store hook_path before_config after_config owner_uid owner_gid
 
   command -v "${WRIX_NIX_BIN:-nix}" >/dev/null 2>&1 || { wrix_host_fail "nix is not on PATH"; return 1; }
   command -v "${WRIX_NIX_STORE_BIN:-nix-store}" >/dev/null 2>&1 || { wrix_host_fail "nix-store is not on PATH"; return 1; }
 
-  before_config="$(wrix_host_config_snapshot)" || return 1
-  if [[ "$require_trusted" != "0" ]]; then
-    wrix_host_reject_conflicting_hook "$before_config" || return 1
+  cache_config="$("$service_bin" service cache config)" || return 1
+  require_trusted="$(wrix_host_json_boolean "$cache_config" require_trusted_nix)"
+  if [[ "$require_trusted" != "true" && "$require_trusted" != "false" ]]; then
+    wrix_host_fail "missing require_trusted_nix in resolved cache configuration"
+    return 1
   fi
 
   endpoints="$("$service_bin" service endpoints)" || return 1
   if printf '%s\n' "$endpoints" | grep -q '"cache_http":[[:space:]]*null'; then
+    if [[ "${WRIX_HOST_NIX_CONFIG_PRINT:-0}" == "1" ]]; then
+      printf '%s\n' "${NIX_CONFIG:-}"
+    fi
     return 0
+  fi
+
+  before_config="$(wrix_host_config_snapshot)" || return 1
+  if [[ "$require_trusted" == "true" ]]; then
+    wrix_host_reject_conflicting_hook "$before_config" || return 1
   fi
   workspace_hash="$(wrix_host_json_string "$endpoints" "workspace_hash")"
   state_root="$(wrix_host_json_string "$endpoints" "state_root")"
@@ -187,14 +215,14 @@ wrix_host_nix_config_main() {
 
   hook_build_root="$state_root/hook-wrapper"
   rm -rf "$hook_build_root"
-  wrix_host_write_hook_source "$hook_build_root" "$hook_bin" "$publish_bin" "$workspace_hash" "$owner_uid" "$owner_gid" "$state_root" "$cache_root" "$manifest_path" || return 1
+  wrix_host_write_hook_source "$hook_build_root" "$hook_bin" "$publish_bin" "$workspace_hash" "$owner_uid" "$owner_gid" "$state_root" "$cache_root" "$manifest_path" "$cache_config" || return 1
   hook_store="$(wrix_host_store_hook "$hook_build_root")" || return 1
   hook_path="$hook_store/bin/wrix-cache-post-build-hook"
 
   wrix_host_append_nix_config "$cache_root" "$public_key" "$hook_path"
   after_config="$(wrix_host_config_snapshot)" || return 1
 
-  if [[ "$require_trusted" != "0" ]]; then
+  if [[ "$require_trusted" == "true" ]]; then
     wrix_host_assert_contains "project cache substituter" "$after_config" "file://$cache_root" || return 1
     wrix_host_assert_contains "project cache public key" "$after_config" "$public_key" || return 1
     wrix_host_assert_line_equals "builders-use-substitutes" "$after_config" "builders-use-substitutes" "true" || return 1

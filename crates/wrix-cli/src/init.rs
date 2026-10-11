@@ -2164,7 +2164,7 @@ enum Error {
     ConflictingSignFlags,
     /// --deploy cannot be used with --offline because deploy provisioning requires online verification
     DeployOfflineFlag,
-    /// --deploy requires online verification; remove --deploy or set wrix.init.online_verify = true
+    /// --deploy requires online verification; remove --deploy or set init.online_verify = true
     DeployOfflinePolicy,
     /// cannot resolve current directory: {0}
     CurrentDir(#[source] io::Error),
