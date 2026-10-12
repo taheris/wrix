@@ -606,9 +606,9 @@ fn parse_path_info_paths(input: &str) -> Result<Vec<String>> {
         return Ok(Vec::new());
     };
     let mut paths = object
-        .keys()
-        .filter(|value| value.starts_with("/nix/store/"))
-        .cloned()
+        .iter()
+        .filter(|(path, info)| path.starts_with("/nix/store/") && !info.is_null())
+        .map(|(path, _)| path.clone())
         .collect::<Vec<_>>();
     paths.sort();
     paths.dedup();
@@ -698,21 +698,16 @@ fn closure_paths(out_paths: &[String]) -> Result<Vec<String>> {
 
 fn subtract_upstream(paths: &Paths, candidates: BTreeSet<String>) -> Result<Vec<String>> {
     let substituters = upstream_substituters(paths)?;
-    let mut filtered = Vec::new();
-    for candidate in candidates {
-        let mut upstream = false;
-        for substituter in &substituters {
-            if substitutable(substituter, &candidate)? {
-                upstream = true;
-                break;
+    let mut filtered = candidates;
+    for substituter in &substituters {
+        let remaining = filtered.iter().cloned().collect::<Vec<_>>();
+        for batch in remaining.chunks(256) {
+            for path in substitutable_paths(substituter, batch)? {
+                filtered.remove(&path);
             }
         }
-        if upstream {
-            continue;
-        }
-        filtered.push(candidate);
     }
-    Ok(filtered)
+    Ok(filtered.into_iter().collect())
 }
 
 fn upstream_substituters(paths: &Paths) -> Result<Vec<String>> {
@@ -741,17 +736,24 @@ fn upstream_substituters(paths: &Paths) -> Result<Vec<String>> {
         .collect())
 }
 
-fn substitutable(substituter: &str, path: &str) -> Result<bool> {
-    let status = Command::new(nix_bin()?)
+fn substitutable_paths(substituter: &str, paths: &[String]) -> Result<Vec<String>> {
+    let output = Command::new(nix_bin()?)
         .arg("path-info")
         .arg("--store")
         .arg(substituter)
-        .arg(path)
+        .arg("--json")
+        .args(paths)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()?;
-    Ok(status.success())
+        .output()?;
+    if output.stdout.is_empty() && !output.status.success() {
+        tracing::warn!(
+            path_count = paths.len(),
+            "upstream lookup failed; retaining candidates for publication"
+        );
+        return Ok(Vec::new());
+    }
+    // Nix can return successful entries alongside null misses or a nonzero status.
+    parse_path_info_paths(&String::from_utf8_lossy(&output.stdout))
 }
 
 fn copy_to_cache(paths: &Paths, store_paths: &[String]) -> Result<()> {

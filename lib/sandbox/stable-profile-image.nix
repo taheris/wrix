@@ -3,13 +3,10 @@
 # closure — profile.corePackages plus the wrix-generated derivations that do
 # not vary with profile.packages, MCP configs, the merged Claude settings, or
 # the agent runtime selection — chained atop wrix-base-image. The per-profile
-# leaf chains on top via fromImage, so this tier's tar loads into the platform
-# store once and is not re-emitted when profile-level inputs change.
+# leaf composes this tier's cached layers, so the platform store loads them
+# once and profile-level input changes do not re-emit them.
 #
-# Built with buildLayeredImage (a tar in the store) on every platform so it is
-# usable as the fromImage of the leaf on both Linux and Darwin, matching the
-# tar-only constraint base-image.nix records for tier 0 (the Linux
-# streamLayeredImage Python shebang cannot execute on macOS).
+# Darwin uses the archive chain; Linux references the parent's OCI blobs.
 {
   pkgs,
   imageBuilderPkgs ? pkgs,
@@ -140,21 +137,28 @@ let
              ]' \
           > "$out"
       '';
+  image = dockerTools.buildLayeredImage {
+    name = "wrix-stable-profile-${profile.name}";
+    tag = "latest";
+    architecture = pkgs.go.GOARCH;
+    fromImage = wrixBaseImage;
+    inherit layeringPipeline;
+
+    contents = tierContents;
+
+    # Pin the bundle for entrypoint installation (specs/image-builder.md § Hook Installation).
+    config.Env = [
+      "WRIX_PREK_HOOKS=${prekHooksBundle}"
+    ];
+  };
+  mkOciLayout = import ./oci-layout.nix { pkgs = imageBuilderPkgs; };
 in
-dockerTools.buildLayeredImage {
-  name = "wrix-stable-profile-${profile.name}";
-  tag = "latest";
-  architecture = pkgs.go.GOARCH;
-  fromImage = wrixBaseImage;
-  inherit layeringPipeline;
-
-  contents = tierContents;
-
-  # Pin the bundle for entrypoint installation (specs/image-builder.md § Hook Installation).
-  config.Env = [
-    "WRIX_PREK_HOOKS=${prekHooksBundle}"
-  ];
-}
+image
 // {
+  ociLayout = mkOciLayout {
+    inherit image;
+    name = "wrix-stable-profile-${profile.name}-oci";
+    fromLayout = wrixBaseImage.ociLayout;
+  };
   inherit lowerTiersClosure lowerTiersRootPaths lowerTiersContents;
 }

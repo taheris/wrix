@@ -6,9 +6,7 @@
 # the platform store once and an agent-version bump re-emits only this tier and
 # the leaf, leaving the heavier toolchain tier (below) byte-identical.
 #
-# Built with buildLayeredImage (a tar in the store) on every platform so it is
-# usable as the fromImage of the leaf on both Linux and Darwin, matching the
-# tar-only constraint base-image.nix records for tier 0.
+# Darwin uses the archive chain; Linux references the parent's OCI blobs.
 {
   pkgs,
   imageBuilderPkgs ? pkgs,
@@ -76,17 +74,24 @@ let
              ]' \
           > "$out"
       '';
-in
-dockerTools.buildLayeredImage {
-  name = agentImageName;
-  tag = "latest";
-  architecture = pkgs.go.GOARCH;
-  fromImage = stableProfileImage;
-  inherit layeringPipeline;
+  image = dockerTools.buildLayeredImage {
+    name = agentImageName;
+    tag = "latest";
+    architecture = pkgs.go.GOARCH;
+    fromImage = stableProfileImage;
+    inherit layeringPipeline;
 
-  contents = tierContents;
-}
+    contents = tierContents;
+  };
+  mkOciLayout = import ./oci-layout.nix { pkgs = imageBuilderPkgs; };
+in
+image
 // {
+  ociLayout = mkOciLayout {
+    inherit image;
+    name = "${agentImageName}-oci";
+    fromLayout = stableProfileImage.ociLayout;
+  };
   inherit
     lowerTiersClosure
     lowerTiersRootPaths

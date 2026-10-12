@@ -1,20 +1,19 @@
 #!/usr/bin/env python3
-"""Build an OCI layout from a dockerTools streamLayeredImage config."""
+"""Compose cached package blobs and parent OCI layouts with dockerTools metadata."""
 
 from __future__ import annotations
 
+import argparse
 import hashlib
-import io
 import itertools
 import json
 import os
 import pathlib
-import shutil
 import sys
 import tarfile
 import tempfile
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any, BinaryIO
 
@@ -28,7 +27,7 @@ INDEX_MEDIA_TYPE = "application/vnd.oci.image.index.v1+json"
 class Layer:
     digest: str
     size: int
-    paths: list[str]
+    paths: list[str] | str
 
 
 def parse_time(value: str) -> datetime:
@@ -121,30 +120,25 @@ def archive_paths_to(
                     tar.addfile(info)
 
 
-def sha256_file(path: pathlib.Path) -> tuple[str, int]:
-    digest = hashlib.sha256()
-    size = 0
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-            size += len(chunk)
-    return digest.hexdigest(), size
-
-
-def copy_blob(source: pathlib.Path, blobs_dir: pathlib.Path) -> tuple[str, int]:
-    digest, size = sha256_file(source)
-    target = blobs_dir / digest
-    if not target.exists():
-        shutil.copyfile(source, target)
-    return digest, size
-
-
 def write_blob_bytes(content: bytes, blobs_dir: pathlib.Path) -> tuple[str, int]:
     digest = hashlib.sha256(content).hexdigest()
     target = blobs_dir / digest
     if not target.exists():
         target.write_bytes(content)
     return digest, len(content)
+
+
+class HashingWriter:
+    def __init__(self, stream: BinaryIO) -> None:
+        self.stream = stream
+        self.digest = hashlib.sha256()
+        self.size = 0
+
+    def write(self, data: bytes) -> int:
+        written = self.stream.write(data)
+        self.digest.update(data[:written])
+        self.size += written
+        return written
 
 
 def write_store_layer(
@@ -157,9 +151,10 @@ def write_store_layer(
     uname: str,
     gname: str,
 ) -> Layer:
-    with tempfile.NamedTemporaryFile(dir=blobs_dir.parent) as temp:
+    with tempfile.NamedTemporaryFile(dir=blobs_dir.parent, delete=False) as temp:
+        writer = HashingWriter(temp)
         archive_paths_to(
-            temp,
+            writer,
             paths,
             mtime=mtime,
             uid=uid,
@@ -168,43 +163,35 @@ def write_store_layer(
             gname=gname,
         )
         temp.flush()
-        digest, size = sha256_file(pathlib.Path(temp.name))
+        digest, size = writer.digest.hexdigest(), writer.size
         target = blobs_dir / digest
-        if not target.exists():
-            shutil.copyfile(temp.name, target)
+        os.replace(temp.name, target)
     return Layer(digest=digest, size=size, paths=paths)
 
 
-def read_json_member(archive: tarfile.TarFile, member: str) -> Any:
-    extracted = archive.extractfile(member)
-    if extracted is None:
-        raise ValueError(f"{member} is not a regular file")
-    with extracted:
-        return json.load(extracted)
+def link_blob(source: pathlib.Path, blobs_dir: pathlib.Path, digest: str) -> None:
+    target = blobs_dir / digest
+    if not target.exists():
+        target.symlink_to(source.absolute())
 
 
-def add_base_layers(from_image: str | None, blobs_dir: pathlib.Path) -> tuple[list[Layer], dict[str, Any]]:
-    if from_image is None:
-        return [], {}
+def add_layout_layers(layout: pathlib.Path, blobs_dir: pathlib.Path) -> tuple[list[Layer], dict[str, Any]]:
+    manifest = json.loads((layout / "wrix" / "manifest.json").read_text(encoding="utf-8"))
+    config_digest = manifest["config"]["digest"].removeprefix("sha256:")
+    config = json.loads((layout / "blobs" / "sha256" / config_digest).read_text(encoding="utf-8"))
+    layers = []
+    for descriptor, history in zip(manifest["layers"], config["history"], strict=True):
+        digest = descriptor["digest"].removeprefix("sha256:")
+        link_blob(layout / "blobs" / "sha256" / digest, blobs_dir, digest)
+        layers.append(Layer(digest, descriptor["size"], history["comment"]))
+    return layers, config.get("config", {})
 
-    layers: list[Layer] = []
-    with tarfile.open(from_image, mode="r:*") as archive:
-        manifest = read_json_member(archive, "manifest.json")
-        image_config = read_json_member(archive, manifest[0]["Config"])
-        for layer_name in manifest[0]["Layers"]:
-            member = archive.getmember(layer_name)
-            extracted = archive.extractfile(member)
-            if extracted is None:
-                raise ValueError(f"{layer_name} is not a regular file")
-            with extracted, tempfile.NamedTemporaryFile(dir=blobs_dir.parent) as temp:
-                shutil.copyfileobj(extracted, temp)
-                temp.flush()
-                digest, size = sha256_file(pathlib.Path(temp.name))
-                target = blobs_dir / digest
-                if not target.exists():
-                    shutil.copyfile(temp.name, target)
-            layers.append(Layer(digest=digest, size=size, paths=[layer_name]))
-    return layers, image_config.get("config", {})
+
+def add_store_layers(source: pathlib.Path, blobs_dir: pathlib.Path) -> list[Layer]:
+    layers = [Layer(**entry) for entry in json.loads((source / "layers.json").read_text(encoding="utf-8"))]
+    for layer in layers:
+        link_blob(source / "blobs" / "sha256" / layer.digest, blobs_dir, layer.digest)
+    return layers
 
 
 def overlay_base_config(base_config: dict[str, Any], final_config: dict[str, Any]) -> dict[str, Any]:
@@ -225,13 +212,18 @@ def descriptor_for_layer(layer: Layer) -> dict[str, Any]:
 
 
 def main() -> None:
-    if len(sys.argv) != 3:
-        print("usage: make-oci-layout.py <docker-tools-conf.json> <out>", file=sys.stderr)
-        sys.exit(2)
-
-    conf_path = pathlib.Path(sys.argv[1])
-    out = pathlib.Path(sys.argv[2])
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("conf", type=pathlib.Path)
+    parser.add_argument("out", type=pathlib.Path)
+    parser.add_argument("--from-layout", type=pathlib.Path)
+    parser.add_argument("--store-layers", type=pathlib.Path)
+    parser.add_argument("--store-layers-only", action="store_true")
+    args = parser.parse_args()
+    conf_path = args.conf
+    out = args.out
     conf = json.loads(conf_path.read_text(encoding="utf-8"))
+    if conf.get("from_image") is not None:
+        raise ValueError("OCI assembly requires an OCI parent layout, not a whole-image archive")
 
     blobs_dir = out / "blobs" / "sha256"
     wrix_dir = out / "wrix"
@@ -245,26 +237,37 @@ def main() -> None:
     uname = conf["uname"]
     gname = conf["gname"]
 
-    from_image = conf.get("from_image")
-    base_layers, base_config = add_base_layers(from_image, blobs_dir)
-    layers = list(base_layers)
-
-    for store_layer in conf["store_layers"]:
-        print(f"Creating OCI layer from paths: {store_layer}", file=sys.stderr)
-        layers.append(
-            write_store_layer(
-                store_layer,
-                blobs_dir,
-                mtime=mtime,
-                uid=uid,
-                gid=gid,
-                uname=uname,
-                gname=gname,
+    if args.store_layers:
+        store_layers = add_store_layers(args.store_layers, blobs_dir)
+    else:
+        store_layers = []
+        for store_layer in conf["store_layers"]:
+            print(f"Creating OCI layer from paths: {store_layer}", file=sys.stderr)
+            store_layers.append(
+                write_store_layer(
+                    store_layer,
+                    blobs_dir,
+                    mtime=mtime,
+                    uid=uid,
+                    gid=gid,
+                    uname=uname,
+                    gname=gname,
+                )
             )
-        )
+    if args.store_layers_only:
+        (out / "layers.json").write_text(json.dumps([asdict(layer) for layer in store_layers]) + "\n", encoding="utf-8")
+        return
+
+    if args.from_layout:
+        base_layers, base_config = add_layout_layers(args.from_layout, blobs_dir)
+    else:
+        base_layers, base_config = [], {}
+    layers = base_layers + store_layers
 
     customisation_layer = pathlib.Path(conf["customisation_layer"])
-    custom_digest, custom_size = copy_blob(customisation_layer / "layer.tar", blobs_dir)
+    custom_digest = (customisation_layer / "checksum").read_text(encoding="utf-8").strip()
+    custom_size = (customisation_layer / "layer.tar").stat().st_size
+    link_blob(customisation_layer / "layer.tar", blobs_dir, custom_digest)
     layers.append(Layer(digest=custom_digest, size=custom_size, paths=[str(customisation_layer)]))
 
     image_config = {
@@ -279,7 +282,7 @@ def main() -> None:
         "history": [
             {
                 "created": datetime.isoformat(created),
-                "comment": f"store paths: {layer.paths}",
+                "comment": layer.paths if isinstance(layer.paths, str) else f"store paths: {layer.paths}",
             }
             for layer in layers
         ],

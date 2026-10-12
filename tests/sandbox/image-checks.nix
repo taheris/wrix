@@ -921,16 +921,33 @@ let
 
       tmp=$(mktemp -d)
       trap 'rm -rf "$tmp"' EXIT
-      unpack_archive "tier 0" "${defaultImage.baseImage}" "$tmp/tier0"
-      unpack_archive "tier 1" "${defaultImage.stableProfileImage}" "$tmp/tier1"
-      unpack_archive "tier 2" "${defaultImage.agentImage}" "$tmp/tier2"
-      prepare_image_artifact "selected leaf" "${defaultImage.source_kind}" "${toString defaultImage.source}" "$tmp/leaf" "$tmp/leaf.layers"
-      for tier in tier0 tier1 tier2; do
-          write_layers "$tmp/$tier" "$tmp/$tier.layers"
-      done
-      for tier in tier0 tier1 tier2 leaf; do
-          write_layer_digests "$tmp/$tier" "$tmp/$tier.layers" "$tmp/$tier.digests"
-      done
+      ${
+        if isLinux then
+          ''
+            write_oci_digests() {
+                local layout="$1" output="$2" manifest_digest
+                manifest_digest=$(jq -r '.manifests[0].digest' "$layout/index.json")
+                jq -r '.layers[].digest' "$layout/blobs/sha256/''${manifest_digest#sha256:}" >"$output"
+            }
+            write_oci_digests "${defaultImage.baseImage.ociLayout}" "$tmp/tier0.digests"
+            write_oci_digests "${defaultImage.stableProfileImage.ociLayout}" "$tmp/tier1.digests"
+            write_oci_digests "${defaultImage.agentImage.ociLayout}" "$tmp/tier2.digests"
+            write_oci_digests "${defaultImage.ociLayout}" "$tmp/leaf.digests"
+          ''
+        else
+          ''
+            unpack_archive "tier 0" "${defaultImage.baseImage}" "$tmp/tier0"
+            unpack_archive "tier 1" "${defaultImage.stableProfileImage}" "$tmp/tier1"
+            unpack_archive "tier 2" "${defaultImage.agentImage}" "$tmp/tier2"
+            prepare_image_artifact "selected leaf" "${defaultImage.source_kind}" "${toString defaultImage.source}" "$tmp/leaf" "$tmp/leaf.layers"
+            for tier in tier0 tier1 tier2; do
+                write_layers "$tmp/$tier" "$tmp/$tier.layers"
+            done
+            for tier in tier0 tier1 tier2 leaf; do
+                write_layer_digests "$tmp/$tier" "$tmp/$tier.layers" "$tmp/$tier.digests"
+            done
+          ''
+      }
 
       write_owned_layers "tier 1" "$tmp/tier0.digests" "$tmp/tier1.digests" "$tmp/tier1.owned"
       write_owned_layers "tier 2" "$tmp/tier1.digests" "$tmp/tier2.digests" "$tmp/tier2.owned"
@@ -2216,157 +2233,175 @@ let
     '';
   };
 
-  archivelessGeneratedChangeTest = pkgs.writeShellApplication {
-    name = "test-archiveless-generated-change";
-    runtimeInputs = optionals isLinux [
-      pkgs.coreutils
-      pkgs.gnugrep
-      pkgs.gnutar
-      pkgs.jq
-      pkgs.nix
-    ];
-    text =
-      if isLinux then
-        ''
-          assert_no_raw_image_input() {
-              local label="$1"
-              local path="$2"
-              local forbidden="$3"
-              local deriver
-              deriver=$(nix-store -q --deriver "$path")
-              if [[ "$deriver" != "unknown-deriver" ]] && nix-store -q --references "$deriver" | grep -Fxq "$forbidden"; then
-                  echo "FAIL: $label builder depends on the raw whole-image output" >&2
-                  exit 1
-              fi
-          }
+  archivelessGeneratedChangeTest =
+    assert
+      !isLinux
+      || (
+        leafProbeSettingsA.ociLayout.storeLayers == leafProbeSettingsB.ociLayout.storeLayers
+        && leafProbeMcpA.ociLayout.storeLayers == leafProbeMcpB.ociLayout.storeLayers
+        && leafProbeEntrypointA.ociLayout.storeLayers == leafProbeEntrypointB.ociLayout.storeLayers
+      );
+    pkgs.writeShellApplication {
+      name = "test-archiveless-generated-change";
+      runtimeInputs = optionals isLinux [
+        pkgs.coreutils
+        pkgs.gnugrep
+        pkgs.gnutar
+        pkgs.jq
+        pkgs.nix
+      ];
+      text =
+        if isLinux then
+          ''
+            assert_no_raw_image_input() {
+                local label="$1"
+                local path="$2"
+                local forbidden="$3"
+                local deriver
+                deriver=$(nix-store -q --deriver "$path")
+                if [[ "$deriver" != "unknown-deriver" ]] && nix-store -q --requisites "$deriver" | grep -Fx "$forbidden" >/dev/null; then
+                    echo "FAIL: $label builder depends on the raw whole-image output" >&2
+                    exit 1
+                fi
+            }
 
-          assert_generated_change() {
-              local label="$1"
-              local source_a="$2"
-              local source_b="$3"
-              local raw_a="$4"
-              local raw_b="$5"
-              local agent_tar="$6"
-              local case_dir="$tmp/$label"
-              local digest_a digest_b missing only_a only_b top_a top_b oci_a oci_b
+            assert_generated_change() {
+                local label="$1"
+                local source_a="$2"
+                local source_b="$3"
+                local raw_a="$4"
+                local raw_b="$5"
+                local agent_tar="$6"
+                local case_dir="$tmp/$label"
+                local digest_a digest_b missing only_a only_b top_a top_b oci_a oci_b layer blob
 
-              mkdir -p "$case_dir"
-              digest_a=$(jq -r '.digest' "$source_a")
-              digest_b=$(jq -r '.digest' "$source_b")
-              if [[ "$digest_a" == "$digest_b" ]]; then
-                  echo "FAIL: $label generated metadata change left the descriptor/config digest unchanged" >&2
-                  exit 1
-              fi
+                mkdir -p "$case_dir"
+                digest_a=$(jq -r '.digest' "$source_a")
+                digest_b=$(jq -r '.digest' "$source_b")
+                if [[ "$digest_a" == "$digest_b" ]]; then
+                    echo "FAIL: $label generated metadata change left the descriptor/config digest unchanged" >&2
+                    exit 1
+                fi
 
-              jq -r '.layers[].digest' "$source_a" | sort -u >"$case_dir/a.layers"
-              jq -r '.layers[].digest' "$source_b" | sort -u >"$case_dir/b.layers"
-              tar -xOf "$agent_tar" manifest.json \
-                | jq -r '.[0].Layers[] | sub("/layer.tar$"; "") | "sha256:" + .' \
-                | sort -u >"$case_dir/lower.layers"
-              comm -12 "$case_dir/a.layers" "$case_dir/b.layers" >"$case_dir/shared.layers"
-              comm -23 "$case_dir/a.layers" "$case_dir/b.layers" >"$case_dir/a.only"
-              comm -13 "$case_dir/a.layers" "$case_dir/b.layers" >"$case_dir/b.only"
+                jq -r '.layers[].digest' "$source_a" | sort -u >"$case_dir/a.layers"
+                jq -r '.layers[].digest' "$source_b" | sort -u >"$case_dir/b.layers"
+                tar -xOf "$agent_tar" manifest.json \
+                  | jq -r '.[0].Layers[] | sub("/layer.tar$"; "") | "sha256:" + .' \
+                  | sort -u >"$case_dir/lower.layers"
+                comm -12 "$case_dir/a.layers" "$case_dir/b.layers" >"$case_dir/shared.layers"
+                comm -23 "$case_dir/a.layers" "$case_dir/b.layers" >"$case_dir/a.only"
+                comm -13 "$case_dir/a.layers" "$case_dir/b.layers" >"$case_dir/b.only"
 
-              missing=$(comm -23 "$case_dir/lower.layers" "$case_dir/shared.layers")
-              if [[ -n "$missing" ]]; then
-                  echo "FAIL: $label generated metadata change altered a lower-tier layer blob" >&2
-                  echo "$missing" >&2
-                  exit 1
-              fi
+                missing=$(comm -23 "$case_dir/lower.layers" "$case_dir/shared.layers")
+                if [[ -n "$missing" ]]; then
+                    echo "FAIL: $label generated metadata change altered a lower-tier layer blob" >&2
+                    echo "$missing" >&2
+                    exit 1
+                fi
 
-              only_a=$(wc -l <"$case_dir/a.only")
-              only_b=$(wc -l <"$case_dir/b.only")
-              if [[ "$only_a" -ne 1 || "$only_b" -ne 1 ]]; then
-                  echo "FAIL: $label should alter only the top customisation layer (only_a=$only_a only_b=$only_b)" >&2
-                  exit 1
-              fi
+                only_a=$(wc -l <"$case_dir/a.only")
+                only_b=$(wc -l <"$case_dir/b.only")
+                if [[ "$only_a" -ne 1 || "$only_b" -ne 1 ]]; then
+                    echo "FAIL: $label should alter only the top customisation layer (only_a=$only_a only_b=$only_b)" >&2
+                    exit 1
+                fi
 
-              top_a=$(jq -r '.layers[-1].digest' "$source_a")
-              top_b=$(jq -r '.layers[-1].digest' "$source_b")
-              if ! grep -qxF "$top_a" "$case_dir/a.only" || ! grep -qxF "$top_b" "$case_dir/b.only"; then
-                  echo "FAIL: $label changed layer is not the descriptor's final customisation layer" >&2
-                  exit 1
-              fi
+                top_a=$(jq -r '.layers[-1].digest' "$source_a")
+                top_b=$(jq -r '.layers[-1].digest' "$source_b")
+                if ! grep -qxF "$top_a" "$case_dir/a.only" || ! grep -qxF "$top_b" "$case_dir/b.only"; then
+                    echo "FAIL: $label changed layer is not the descriptor's final customisation layer" >&2
+                    exit 1
+                fi
 
-              oci_a=$(jq -r '.oci_layout' "$source_a")
-              oci_b=$(jq -r '.oci_layout' "$source_b")
-              assert_no_raw_image_input "$label descriptor A" "$source_a" "$raw_a"
-              assert_no_raw_image_input "$label descriptor B" "$source_b" "$raw_b"
-              assert_no_raw_image_input "$label OCI layout A" "$oci_a" "$raw_a"
-              assert_no_raw_image_input "$label OCI layout B" "$oci_b" "$raw_b"
-          }
+                oci_a=$(jq -r '.oci_layout' "$source_a")
+                oci_b=$(jq -r '.oci_layout' "$source_b")
+                assert_no_raw_image_input "$label descriptor A" "$source_a" "$raw_a"
+                assert_no_raw_image_input "$label descriptor B" "$source_b" "$raw_b"
+                assert_no_raw_image_input "$label OCI layout A" "$oci_a" "$raw_a"
+                assert_no_raw_image_input "$label OCI layout B" "$oci_b" "$raw_b"
+                assert_no_raw_image_input "$label inherited archive A" "$oci_a" "$agent_tar"
+                assert_no_raw_image_input "$label inherited archive B" "$oci_b" "$agent_tar"
+                while IFS= read -r layer; do
+                    blob="''${layer#sha256:}"
+                    if [[ ! -L "$oci_a/blobs/sha256/$blob" || ! -L "$oci_b/blobs/sha256/$blob" ]] \
+                        || [[ "$(readlink -f "$oci_a/blobs/sha256/$blob")" != "$(readlink -f "$oci_b/blobs/sha256/$blob")" ]]; then
+                        echo "FAIL: $label shared blob is copied rather than reused" >&2
+                        exit 1
+                    fi
+                done <"$case_dir/shared.layers"
+            }
 
-          assert_nix_db_registration_top_layer() {
-              local label="$1"
-              local leaf_stream="$2"
-              local agent_tar="$3"
-              local case_dir="$tmp/$label"
-              local db_layer cust_layer layer
+            assert_nix_db_registration_top_layer() {
+                local label="$1"
+                local leaf_stream="$2"
+                local agent_tar="$3"
+                local case_dir="$tmp/$label"
+                local db_layer cust_layer layer
 
-              mkdir -p "$case_dir/leaf" "$case_dir/lower"
-              "$leaf_stream" >"$case_dir/leaf.tar"
-              tar -xf "$case_dir/leaf.tar" -C "$case_dir/leaf"
-              cust_layer=$(jq -r '.[0].Layers[-1]' "$case_dir/leaf/manifest.json")
-              db_layer=""
-              while IFS= read -r layer; do
-                  if grep -qE '(^|\./)nix/var/nix/db/db\.sqlite$' < <(tar -tf "$case_dir/leaf/$layer"); then
-                      db_layer="$layer"
-                      break
-                  fi
-              done < <(jq -r '.[0].Layers[]' "$case_dir/leaf/manifest.json")
+                mkdir -p "$case_dir/leaf" "$case_dir/lower"
+                "$leaf_stream" >"$case_dir/leaf.tar"
+                tar -xf "$case_dir/leaf.tar" -C "$case_dir/leaf"
+                cust_layer=$(jq -r '.[0].Layers[-1]' "$case_dir/leaf/manifest.json")
+                db_layer=""
+                while IFS= read -r layer; do
+                    if grep -qE '(^|\./)nix/var/nix/db/db\.sqlite$' < <(tar -tf "$case_dir/leaf/$layer"); then
+                        db_layer="$layer"
+                        break
+                    fi
+                done < <(jq -r '.[0].Layers[]' "$case_dir/leaf/manifest.json")
 
-              if [[ -z "$db_layer" ]]; then
-                  echo "FAIL: Nix DB registration was not baked into the leaf image" >&2
-                  exit 1
-              fi
-              if [[ "$db_layer" != "$cust_layer" ]]; then
-                  echo "FAIL: Nix DB registration rides in $db_layer, not top customisation layer $cust_layer" >&2
-                  exit 1
-              fi
+                if [[ -z "$db_layer" ]]; then
+                    echo "FAIL: Nix DB registration was not baked into the leaf image" >&2
+                    exit 1
+                fi
+                if [[ "$db_layer" != "$cust_layer" ]]; then
+                    echo "FAIL: Nix DB registration rides in $db_layer, not top customisation layer $cust_layer" >&2
+                    exit 1
+                fi
 
-              tar -xf "$agent_tar" -C "$case_dir/lower"
-              while IFS= read -r layer; do
-                  if grep -qE '(^|\./)nix/var/nix/db/db\.sqlite$' < <(tar -tf "$case_dir/lower/$layer"); then
-                      echo "FAIL: Nix DB registration leaked into a lower tier layer" >&2
-                      exit 1
-                  fi
-              done < <(jq -r '.[0].Layers[]' "$case_dir/lower/manifest.json")
-          }
+                tar -xf "$agent_tar" -C "$case_dir/lower"
+                while IFS= read -r layer; do
+                    if grep -qE '(^|\./)nix/var/nix/db/db\.sqlite$' < <(tar -tf "$case_dir/lower/$layer"); then
+                        echo "FAIL: Nix DB registration leaked into a lower tier layer" >&2
+                        exit 1
+                    fi
+                done < <(jq -r '.[0].Layers[]' "$case_dir/lower/manifest.json")
+            }
 
-          tmp=$(mktemp -d)
-          trap 'rm -rf "$tmp"' EXIT
+            tmp=$(mktemp -d)
+            trap 'rm -rf "$tmp"' EXIT
 
-          assert_generated_change "settings" \
-              "${leafProbeSettingsA.source}" \
-              "${leafProbeSettingsB.source}" \
-              "${discardContext leafProbeSettingsA}" \
-              "${discardContext leafProbeSettingsB}" \
-              "${leafProbeSettingsA.agentImage}"
-          assert_generated_change "mcp-config" \
-              "${leafProbeMcpA.source}" \
-              "${leafProbeMcpB.source}" \
-              "${discardContext leafProbeMcpA}" \
-              "${discardContext leafProbeMcpB}" \
-              "${leafProbeMcpA.agentImage}"
-          assert_generated_change "entrypoint" \
-              "${leafProbeEntrypointA.source}" \
-              "${leafProbeEntrypointB.source}" \
-              "${discardContext leafProbeEntrypointA}" \
-              "${discardContext leafProbeEntrypointB}" \
-              "${leafProbeEntrypointA.agentImage}"
-          assert_nix_db_registration_top_layer \
-              "nix-db-registration" \
-              "${leafProbeSettingsA}" \
-              "${leafProbeSettingsA.agentImage}"
+            assert_generated_change "settings" \
+                "${leafProbeSettingsA.source}" \
+                "${leafProbeSettingsB.source}" \
+                "${discardContext leafProbeSettingsA}" \
+                "${discardContext leafProbeSettingsB}" \
+                "${leafProbeSettingsA.agentImage}"
+            assert_generated_change "mcp-config" \
+                "${leafProbeMcpA.source}" \
+                "${leafProbeMcpB.source}" \
+                "${discardContext leafProbeMcpA}" \
+                "${discardContext leafProbeMcpB}" \
+                "${leafProbeMcpA.agentImage}"
+            assert_generated_change "entrypoint" \
+                "${leafProbeEntrypointA.source}" \
+                "${leafProbeEntrypointB.source}" \
+                "${discardContext leafProbeEntrypointA}" \
+                "${discardContext leafProbeEntrypointB}" \
+                "${leafProbeEntrypointA.agentImage}"
+            assert_nix_db_registration_top_layer \
+                "nix-db-registration" \
+                "${leafProbeSettingsA}" \
+                "${leafProbeSettingsA.agentImage}"
 
-          echo "test-archiveless-generated-change: PASS"
-        ''
-      else
-        ''
-          echo "test-archiveless-generated-change: skipped on this platform (Linux-only descriptor verifier)" >&2
-          exit 0
-        '';
-  };
+            echo "test-archiveless-generated-change: PASS"
+          ''
+        else
+          ''
+            echo "test-archiveless-generated-change: skipped on this platform (Linux-only descriptor verifier)" >&2
+            exit 0
+          '';
+    };
 
   leafProbeRunnerPkgA = linuxPkgs.writeShellScriptBin "wrix-agent-probe-runner" ''
     echo "agent probe runner A"

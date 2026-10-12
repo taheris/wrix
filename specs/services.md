@@ -209,10 +209,15 @@ roots**:
 installables or explicit flake attr paths, not arbitrary `/nix/store` paths.
 
 Before copying, publishing computes the eligible root closure and subtracts
-paths already available from configured upstream substituters. It then copies
-the remaining paths with `--no-recursive`, so the project cache contains
-project-specific misses while dependencies still available from upstream caches
-stay upstream-owned.
+paths already available from configured upstream substituters. Upstream
+availability queries are batched (at most 256 paths per subprocess); JSON null
+misses remain publishable, and successful entries survive a partial query
+failure.
+[test](../crates/wrix-cache/tests/publisher.rs::publish_batches_upstream_queries_and_retains_null_misses)
+[test](../crates/wrix-cache/tests/publisher.rs::publish_uses_successful_upstream_entries_even_on_partial_query_failure)
+It then copies the remaining paths with `--no-recursive`, so the project cache
+contains project-specific misses while dependencies still available from
+upstream caches stay upstream-owned.
 
 ### Cache policy
 

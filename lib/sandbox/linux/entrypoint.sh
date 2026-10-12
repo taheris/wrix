@@ -26,9 +26,7 @@ export HOME="${HOME:-/home/wrix}"
 
 KNOWN_HOSTS_SRC="/etc/wrix/known_hosts_dir/known_hosts"
 if [[ -f "$KNOWN_HOSTS_SRC" ]]; then
-  mkdir -p /etc/ssh
-  cp "$KNOWN_HOSTS_SRC" /etc/ssh/ssh_known_hosts
-  chmod 0644 /etc/ssh/ssh_known_hosts
+  /bin/bash /install-known-hosts.sh "$KNOWN_HOSTS_SRC" / runtime
 fi
 
 cd /workspace

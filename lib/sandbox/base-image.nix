@@ -8,9 +8,7 @@
 # scripts, merged Claude settings, MCP configs, the agent runtime selection)
 # stays in the per-profile top layers.
 #
-# Always built with `buildLayeredImage` (a tar in the store) on every platform,
-# not `streamLayeredImage` (an executable script): only a tar can be consumed as
-# the `fromImage` of the per-profile image on both Linux and Darwin.
+# The archive remains available for Darwin; Linux composes cached OCI blobs.
 {
   pkgs,
   imageBuilderPkgs ? pkgs,
@@ -18,12 +16,20 @@
 
 let
   inherit (imageBuilderPkgs) dockerTools;
-in
-dockerTools.buildLayeredImage {
-  name = "wrix-base-image";
-  tag = "latest";
-  architecture = pkgs.go.GOARCH;
-  maxLayers = 64;
+  image = dockerTools.buildLayeredImage {
+    name = "wrix-base-image";
+    tag = "latest";
+    architecture = pkgs.go.GOARCH;
+    maxLayers = 64;
 
-  contents = import ./base-contents.nix { inherit pkgs; };
+    contents = import ./base-contents.nix { inherit pkgs; };
+  };
+  mkOciLayout = import ./oci-layout.nix { pkgs = imageBuilderPkgs; };
+in
+image
+// {
+  ociLayout = mkOciLayout {
+    inherit image;
+    name = "wrix-base-image-oci";
+  };
 }

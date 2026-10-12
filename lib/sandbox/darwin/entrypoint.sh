@@ -158,7 +158,7 @@ wrix_sync_file_mounts() {
 # Copy known_hosts from mounted directory (VirtioFS only supports dirs, not files)
 KNOWN_HOSTS_SRC="/etc/wrix/known_hosts_dir/known_hosts"
 if [[ -f "$KNOWN_HOSTS_SRC" ]]; then
-  cp "$KNOWN_HOSTS_SRC" /etc/ssh/ssh_known_hosts
+  /bin/bash /install-known-hosts.sh "$KNOWN_HOSTS_SRC" / runtime
 fi
 
 # Git/SSH setup — shared with Linux entrypoint

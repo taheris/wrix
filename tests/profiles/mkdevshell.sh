@@ -153,7 +153,7 @@ source_hook_env() {
     export HOME="$tmp/home"
     export PATH="$bin_dir:$PATH"
     export WRIX_BIN="$bin_dir/wrix"
-    unset SCCACHE_DIR
+    unset SCCACHE_DIR CARGO_INCREMENTAL
     apply_env_json "$devshell_env"
     unset NIX_CONFIG
     # shellcheck source=/dev/null
@@ -264,8 +264,8 @@ test_profile_shellhook_spliced() {
     echo "FAIL: SCCACHE_CACHE_SIZE should export 50G, got '$sccache_size'" >&2
     return 1
   }
-  [[ "$cargo_incremental" == "0" ]] || {
-    echo "FAIL: CARGO_INCREMENTAL should export 0, got '$cargo_incremental'" >&2
+  [[ -z "$cargo_incremental" ]] || {
+    echo "FAIL: CARGO_INCREMENTAL should remain unset, got '$cargo_incremental'" >&2
     return 1
   }
 }

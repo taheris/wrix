@@ -163,6 +163,96 @@ fn publish_filters_to_current_workspace_closure() -> TestResult {
 }
 
 #[test]
+fn publish_batches_upstream_queries_and_retains_null_misses() -> TestResult {
+    let fixture = Fixture::new("publish-batched")?;
+    fixture.write_roots(&[RootSpec::new(
+        "packages.x86_64-linux.demo",
+        ".#packages.x86_64-linux.demo",
+        PROJECT_DRV,
+        &[PROJECT_OUT],
+    )])?;
+    let extra = (0..600)
+        .map(|index| format!("/nix/store/dependency-{index}-out"))
+        .collect::<Vec<_>>();
+    let mut closure = extra.iter().map(String::as_str).collect::<Vec<_>>();
+    closure.push(UPSTREAM_OUT);
+    fixture.write_extra_closure(&closure)?;
+
+    fixture.run("publish")?;
+
+    let log = fixture.nix_log()?;
+    let queries = log
+        .lines()
+        .filter(|line| line.starts_with("nix path-info --store"))
+        .collect::<Vec<_>>();
+    assert_eq!(queries.len(), 3);
+    assert!(queries.iter().all(|line| line.contains(" --json ")));
+    let copy = fixture.copy_log_line()?;
+    assert!(copy.contains(PROJECT_OUT));
+    assert!(!copy.contains(UPSTREAM_OUT));
+    assert!(
+        extra
+            .iter()
+            .all(|path| copy.split_whitespace().any(|arg| arg == path))
+    );
+    Ok(())
+}
+
+#[test]
+fn publish_uses_successful_upstream_entries_even_on_partial_query_failure() -> TestResult {
+    let fixture = Fixture::new("publish-partial-upstream")?;
+    fixture.write_roots(&[RootSpec::new(
+        "packages.x86_64-linux.demo",
+        ".#packages.x86_64-linux.demo",
+        PROJECT_DRV,
+        &[PROJECT_OUT],
+    )])?;
+    fixture.write_extra_closure(&[UPSTREAM_OUT])?;
+    fixture.run_with_env("publish", &[("WRIX_FAKE_UPSTREAM_PARTIAL_FAILURE", "1")])?;
+    let copy = fixture.copy_log_line()?;
+    assert!(copy.contains(PROJECT_OUT));
+    assert!(!copy.contains(UPSTREAM_OUT));
+    Ok(())
+}
+
+#[test]
+fn publish_retains_candidates_when_upstream_is_unavailable() -> TestResult {
+    let fixture = Fixture::new("publish-upstream-unavailable")?;
+    fixture.write_roots(&[RootSpec::new(
+        "packages.x86_64-linux.demo",
+        ".#packages.x86_64-linux.demo",
+        PROJECT_DRV,
+        &[PROJECT_OUT],
+    )])?;
+    fixture.write_extra_closure(&[UPSTREAM_OUT])?;
+    fixture.run_with_env("publish", &[("WRIX_FAKE_UPSTREAM_RESPONSE", "unavailable")])?;
+    let copy = fixture.copy_log_line()?;
+    assert!(copy.contains(PROJECT_OUT));
+    assert!(copy.contains(UPSTREAM_OUT));
+    Ok(())
+}
+
+#[test]
+fn publish_rejects_malformed_upstream_json_before_copying() -> TestResult {
+    let fixture = Fixture::new("publish-upstream-malformed")?;
+    fixture.write_roots(&[RootSpec::new(
+        "packages.x86_64-linux.demo",
+        ".#packages.x86_64-linux.demo",
+        PROJECT_DRV,
+        &[PROJECT_OUT],
+    )])?;
+    let error = fixture.run_failure("publish", &[("WRIX_FAKE_UPSTREAM_RESPONSE", "malformed")])?;
+    assert!(error.contains("nix path-info output"));
+    assert!(
+        !fixture
+            .nix_log()?
+            .lines()
+            .any(|line| line.starts_with("nix copy "))
+    );
+    Ok(())
+}
+
+#[test]
 fn publish_fails_when_root_closure_query_fails() -> TestResult {
     let fixture = Fixture::new("publish-query-failure")?;
     fixture.write_roots(&[RootSpec::new(
@@ -980,6 +1070,7 @@ impl Fixture {
             .env("WRIX_FAKE_EXTRA_CLOSURE_FILE", &self.extra_closure_file)
             .env("WRIX_FAKE_CACHE_ROOT", &self.cache_root)
             .env("WRIX_FAKE_QUERY_FAIL", "0")
+            .env("WRIX_FAKE_UPSTREAM_RESPONSE", "normal")
             .env("WRIX_FAKE_UPSTREAM_MATCH", "upstream")
             .env("WRIX_UPSTREAM_SUBSTITUTERS", "https://cache.example");
         if self.roots_file.exists() {
@@ -1040,12 +1131,27 @@ for arg in "$@"; do
 done
 printf '\n' >>"$log"
 
-if [[ "$#" -ge 4 && "$1" == "path-info" && "$2" == "--store" ]]; then
-  candidate="$4"
-  if [[ -n "$WRIX_FAKE_UPSTREAM_MATCH" && "$candidate" == *"$WRIX_FAKE_UPSTREAM_MATCH"* ]]; then
-    exit 0
-  fi
-  exit 1
+if [[ "$#" -ge 5 && "$1" == "path-info" && "$2" == "--store" && "$4" == "--json" ]]; then
+  case "$WRIX_FAKE_UPSTREAM_RESPONSE" in
+    normal) ;;
+    unavailable) printf 'upstream unavailable\n' >&2; exit 1 ;;
+    malformed) printf 'not JSON\n'; exit 0 ;;
+    *) printf 'unknown upstream fixture response\n' >&2; exit 1 ;;
+  esac
+  shift 4
+  printf '{'
+  separator=""
+  for candidate in "$@"; do
+    printf '%s"%s":' "$separator" "$candidate"
+    if [[ -n "$WRIX_FAKE_UPSTREAM_MATCH" && "$candidate" == *"$WRIX_FAKE_UPSTREAM_MATCH"* ]]; then
+      printf '{}'
+    else
+      printf 'null'
+    fi
+    separator=","
+  done
+  printf '}\n'
+  exit "${WRIX_FAKE_UPSTREAM_PARTIAL_FAILURE:-0}"
 fi
 
 case "$1" in

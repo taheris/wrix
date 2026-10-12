@@ -12,6 +12,9 @@ Wrix provides sandboxed containers for AI-driven development. See
 
 [Verifier input discovery and measurements](verifier-inputs.md) describes
 checked resource projections, conservative scope, and measured worker costs.
+[Sandbox build and cache measurements](sandbox-build-performance.md) records the
+OCI rebuild investigation, Podman experiments, and remaining cache-lifetime
+work.
 
 ## Specs
 

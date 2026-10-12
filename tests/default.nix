@@ -231,6 +231,13 @@ let
         inherit (wrix) rustPackage;
       };
       image-assembly-native = sandboxImageChecks.imageAssemblyNativeCheck;
+      oci-layout-builder = pkgs.runCommandLocal "oci-layout-builder" { } ''
+        set -euo pipefail
+        export PYTHONDONTWRITEBYTECODE=1
+        export WRIX_OCI_BUILDER=${../lib/sandbox/make-oci-layout.py}
+        ${pkgs.python3}/bin/python3 ${./sandbox/test_oci_layout.py}
+        touch "$out"
+      '';
       execution-fixtures =
         pkgs.runCommandLocal "execution-fixture-conformance"
           {

@@ -186,6 +186,14 @@ remains reproducible: given the same profile, selected agent, agent package,
 generated settings, and MCP config, it produces the same layer digest list and
 config digest.
 
+Linux builds package blobs separately from final OCI metadata for each tier.
+Parent layers and package blobs are referenced through immutable Nix-store
+symlinks; composing a child reads parent manifests/configs, not parent layer
+bytes. Package tars are hashed while written, without a second hash/copy pass.
+Darwin retains its archive fallback. The builder rejects an archive parent
+rather than silently reintroducing whole-image work. [check](nix build
+.#checks.x86_64-linux.oci-layout-builder)
+
 ## Image Ownership Labels
 
 Every wrix-managed image carries labels that identify it as wrix-owned. At
@@ -328,8 +336,10 @@ missing tools on `PATH`, or maintain a hook-id skip list.
 - A generated-metadata-only change — agent settings, MCP config, entrypoint
   metadata, or Nix DB registration — changes only the image descriptor/config
   and the tiny top customisation layer; lower-tier layer blobs stay
-  byte-identical and descriptor/layout builders do not depend on the raw
-  whole-image output [check](test-ci:test-archiveless-generated-change)
+  byte-identical and descriptor/layout builders do not depend on any raw
+  whole-image output, including inherited tier archives. Generated metadata does
+  not invalidate package-blob derivations; shared blobs reference the same
+  cached files, not copies [check](test-ci:test-archiveless-generated-change)
 - The selected agent runtime rides its own tier `wrix-agent-<agent>-<name>`,
   chained atop `wrix-stable-profile-<name>`; an agent-version change leaves
   every tier-0 and tier-1 blob byte-identical

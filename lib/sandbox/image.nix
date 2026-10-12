@@ -323,6 +323,7 @@ let
       echo "127.0.0.1 localhost" > etc/hosts
 
       cp ${entrypointSh} entrypoint.sh
+      cp ${./install-known-hosts.sh} install-known-hosts.sh
       chmod +x entrypoint.sh
       cp ${./network-ready.sh} network-ready.sh
       cp ${../beads/sandbox.sh} beads-sandbox.sh
@@ -411,6 +412,14 @@ let
   ociLayout = mkOciLayout {
     image = rawImage;
     name = "${imageName}-oci";
+    fromLayout = agentImage.ociLayout;
+    storeImage = rawImage.override {
+      extraCommands = ''
+        mkdir -p etc/wrix
+        cp ${imageStoreRoots} etc/wrix/store-roots
+      '';
+      includeNixDB = false;
+    };
   };
 
   descriptorMetadata = {
@@ -497,9 +506,9 @@ rawImage
   # Expose tier 1 so the stable-profile verifiers (hash-stability, membership,
   # pinned-toolchain) can assert against it and its `lowerTiersClosure` without
   # rebuilding the leaf, and tier 2 so the agent verifiers (tier-isolated,
-  # exclusive) can assert the agent rides its own tar (specs/image-builder.md
+  # exclusive) can inspect the agent-only tier (specs/image-builder.md
   # § Provenance-Tiered Layering).
-  inherit stableProfileImage agentImage;
+  inherit stableProfileImage agentImage ociLayout;
   # Expose generated agent configuration so verifiers inspect the image input JSON.
   inherit
     claudeConfigJson

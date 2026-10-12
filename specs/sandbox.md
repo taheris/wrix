@@ -502,6 +502,13 @@ supplied; there is no implicit default image baked in.
   Unix-socket sources rejected at launch
 - Entrypoint creates user matching host UID
 
+Known-host installation detaches a store-backed `/etc/ssh` directory and
+replaces any known-host file symlink before writing. Runtime SSH setup preserves
+baked Nix-store contents rather than modifying the OpenSSH package through a
+rootfs symlink. [check](nix build
+.#checks.x86_64-linux.known-hosts-runtime-store-purity) [check](nix build
+.#checks.x86_64-linux.known-hosts-runtime-file-symlink)
+
 ## Success Criteria
 
 - `mkSandbox` accepts the documented parameter set (`profile`, `cpus`,

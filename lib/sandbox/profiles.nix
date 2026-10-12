@@ -341,7 +341,6 @@ let
 
       env = {
         CARGO_BUILD_RUSTC_WRAPPER = "${pkgs.sccache}/bin/sccache";
-        CARGO_INCREMENTAL = "0";
         LIBRARY_PATH = "${pkgs.postgresql.lib}/lib";
         OPENSSL_INCLUDE_DIR = "${pkgs.openssl.dev}/include";
         OPENSSL_LIB_DIR = "${pkgs.openssl.out}/lib";
@@ -354,7 +353,6 @@ let
 
       hostEnv = {
         CARGO_BUILD_RUSTC_WRAPPER = "${hostPkgs.sccache}/bin/sccache";
-        CARGO_INCREMENTAL = "0";
         LIBRARY_PATH = "${hostPkgs.postgresql.lib}/lib";
         OPENSSL_INCLUDE_DIR = "${hostPkgs.openssl.dev}/include";
         OPENSSL_LIB_DIR = "${hostPkgs.openssl.out}/lib";
@@ -405,7 +403,6 @@ let
         export CARGO_BUILD_RUSTC_WRAPPER="''${CARGO_BUILD_RUSTC_WRAPPER:-${hostPkgs.sccache}/bin/sccache}"
         export SCCACHE_DIR="''${SCCACHE_DIR:-$HOME/.cache/sccache}"
         export SCCACHE_CACHE_SIZE="''${SCCACHE_CACHE_SIZE:-50G}"
-        export CARGO_INCREMENTAL="''${CARGO_INCREMENTAL:-0}"
       '';
     }
     // (

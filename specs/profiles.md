@@ -116,14 +116,17 @@ selected derivations:
 | `RUSTC_WRAPPER`, `CARGO_BUILD_RUSTC_WRAPPER`             | sccache binary                                                                           |
 | `SCCACHE_DIR`                                            | `/home/wrix/.cache/sccache` in the image; `$HOME/.cache/sccache` default in a host shell |
 | `SCCACHE_CACHE_SIZE`                                     | `50G`                                                                                    |
-| `CARGO_INCREMENTAL`                                      | `0`                                                                                      |
+| `CARGO_INCREMENTAL`                                      | Unset; Cargo retains its development/test incremental defaults                           |
 | `LIBRARY_PATH`, `OPENSSL_INCLUDE_DIR`, `OPENSSL_LIB_DIR` | Platform-matching library paths                                                          |
 
-`CARGO_HOME` and `CARGO_TARGET_DIR` remain unset. The profile optionally mounts
-`~/.cargo/registry`, `~/.cargo/git`, and `~/.cache/sccache` read-write at their
-`/home/wrix` counterparts. `/home/wrix/.cargo` and `/home/wrix/.cache` are
-writable parents. The Rust allowlist adds `crates.io`, `static.crates.io`, and
-`index.crates.io`.
+`CARGO_INCREMENTAL`, `CARGO_HOME`, and `CARGO_TARGET_DIR` remain unset. Cargo
+can incrementally rebuild workspace development/test crates while sccache caches
+eligible dependency compilations. Explicit `CARGO_INCREMENTAL=0` remains a
+caller override; forcing `1` is incompatible with the packaged sccache wrapper.
+The profile optionally mounts `~/.cargo/registry`, `~/.cargo/git`, and
+`~/.cache/sccache` read-write at their `/home/wrix` counterparts.
+`/home/wrix/.cargo` and `/home/wrix/.cache` are writable parents. The Rust
+allowlist adds `crates.io`, `static.crates.io`, and `index.crates.io`.
 
 `profile.toolchain` is the host-platform combined fenix derivation used by the
 devshell and `buildPackage`. It matches the image toolchain on Linux. Sibling
@@ -389,8 +392,8 @@ without introducing a reciprocal flake dependency.
   [check](verify:profiles.runtime-secret-validation)
 - `wrix.mkDevShell { profile = wrix.rustProfile { ... }; }` produces a devshell
   whose env contains an absolute `RUSTC` under `profile.toolchain`,
-  `RUSTC_WRAPPER=sccache`, `SCCACHE_DIR`, `SCCACHE_CACHE_SIZE`, and
-  `CARGO_INCREMENTAL=0` (the rust profile's `shellHook` was spliced)
+  `RUSTC_WRAPPER=sccache`, `SCCACHE_DIR`, `SCCACHE_CACHE_SIZE`, and no forced
+  `CARGO_INCREMENTAL` value (the rust profile's `shellHook` was spliced)
   [check](verify:devshell.profile-shellhook-spliced)
 - The rust devshell exports host-platform `RUSTC`, `RUST_SRC_PATH`,
   `LIBRARY_PATH`, and `OPENSSL_*` paths; on Darwin they differ from the Linux

@@ -1,6 +1,45 @@
 { pkgs }:
 
 {
+  known-hosts-runtime-store-purity = pkgs.runCommandLocal "known-hosts-runtime-store-purity" { } ''
+    set -euo pipefail
+    root="$PWD/root"
+    store="$PWD/store-ssh"
+    known_hosts="$PWD/known_hosts"
+    mkdir -p "$root/etc" "$store"
+    printf '%s\n' 'Host *' > "$store/ssh_config"
+    printf '%s\n' 'github.com ssh-ed25519 test' > "$known_hosts"
+    chmod 0444 "$store/ssh_config"
+    chmod 0555 "$store"
+    ln -s "$store" "$root/etc/ssh"
+    ${pkgs.bash}/bin/bash ${../../lib/sandbox/install-known-hosts.sh} "$known_hosts" "$root" runtime
+    [[ ! -L "$root/etc/ssh" ]]
+    [[ ! -e "$store/ssh_known_hosts" ]]
+    cmp "$store/ssh_config" "$root/etc/ssh/ssh_config"
+    [[ $(stat -c %a "$root/etc/ssh/ssh_config") == 444 ]]
+    cmp "$known_hosts" "$root/etc/ssh/ssh_known_hosts"
+    ${pkgs.bash}/bin/bash ${../../lib/sandbox/install-known-hosts.sh} "$known_hosts" "$root" runtime
+    [[ ! -e "$store/ssh_known_hosts" ]]
+    touch "$out"
+  '';
+
+  known-hosts-runtime-file-symlink = pkgs.runCommandLocal "known-hosts-runtime-file-symlink" { } ''
+    set -euo pipefail
+    root="$PWD/root"
+    store_file="$PWD/store-known-hosts"
+    known_hosts="$PWD/known_hosts"
+    mkdir -p "$root/etc/ssh"
+    printf '%s\n' 'unchanged store contents' > "$store_file"
+    printf '%s\n' 'github.com ssh-ed25519 test' > "$known_hosts"
+    cp "$store_file" "$PWD/expected"
+    ln -s "$store_file" "$root/etc/ssh/ssh_known_hosts"
+    ${pkgs.bash}/bin/bash ${../../lib/sandbox/install-known-hosts.sh} "$known_hosts" "$root" runtime
+    [[ ! -L "$root/etc/ssh/ssh_known_hosts" ]]
+    cmp "$store_file" "$PWD/expected"
+    cmp "$known_hosts" "$root/etc/ssh/ssh_known_hosts"
+    touch "$out"
+  '';
+
   container-runtime-state =
     pkgs.runCommandLocal "test-container-runtime-state"
       {
