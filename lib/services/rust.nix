@@ -6,28 +6,28 @@
 
 let
   inherit (builtins) concatStringsSep;
-  inherit (pkgs.lib) makeBinPath optionalAttrs;
+  inherit (pkgs.lib) makeBinPath removePrefix;
 
   workspace = rustProfile.buildPackage {
     src = ../..;
     cargoLock = ../../Cargo.lock;
+    srcFilter =
+      path: type:
+      let
+        relative = removePrefix "${toString ../..}/" path;
+      in
+      builtins.match "crates/[^/]+/tests(/.*)?" relative == null
+      && rustProfile.craneLib.filterCargoSources path type;
     extraSrcs = {
-      "crates/wrix-cli/tests/fixtures/service-runtime.sh" =
-        ../../crates/wrix-cli/tests/fixtures/service-runtime.sh;
-      "crates/wrix-cli/tests/fixtures/launch-runtime.sh" =
-        ../../crates/wrix-cli/tests/fixtures/launch-runtime.sh;
-      "crates/wrix-cli/tests/snapshots/init_help.txt" =
-        ../../crates/wrix-cli/tests/snapshots/init_help.txt;
-      "crates/wrix-cli/tests/snapshots/run_help.txt" = ../../crates/wrix-cli/tests/snapshots/run_help.txt;
-      "crates/wrix-sandbox/tests/fixtures/consumer-entrypoint.sh" =
-        ../../crates/wrix-sandbox/tests/fixtures/consumer-entrypoint.sh;
-      "crates/wrix-sandbox/tests/fixtures/container-spawn-runtime.sh" =
-        ../../crates/wrix-sandbox/tests/fixtures/container-spawn-runtime.sh;
-      "crates/wrix-sandbox/tests/fixtures/lifecycle-runtime.sh" =
-        ../../crates/wrix-sandbox/tests/fixtures/lifecycle-runtime.sh;
-      "crates/wrix-sandbox/tests/fixtures/podman-spawn-runtime.sh" =
-        ../../crates/wrix-sandbox/tests/fixtures/podman-spawn-runtime.sh;
+      "crates/wrix-cache/tests" = ../../crates/wrix-cache/tests;
+      "crates/wrix-cli/tests" = ../../crates/wrix-cli/tests;
+      "crates/wrix-core/tests" = ../../crates/wrix-core/tests;
+      "crates/wrix-sandbox/tests" = ../../crates/wrix-sandbox/tests;
+      "crates/wrix-service/tests" = ../../crates/wrix-service/tests;
+      ".config/nextest.toml" = ../../.config/nextest.toml;
+      "tests/prepare-native-fixtures.sh" = ../../tests/prepare-native-fixtures.sh;
       "lib/util/git-ssh-setup.sh" = ../util/git-ssh-setup.sh;
+      "lib/sandbox/network-bootstrap.sh" = ../sandbox/network-bootstrap.sh;
       "tests/standalone/notify-runtime.sh" = ../../tests/standalone/notify-runtime.sh;
     };
     nativeBuildInputs = [ pkgs.git ];
@@ -66,6 +66,12 @@ let
       pkgs.dolt
     ]}"
   ];
+
+  fixtures = import ../../tests/prek/native-fixtures.nix {
+    inherit pkgs;
+    packagedWrix = wrixPackage;
+    devshellHook = prekDevShellHook;
+  };
 
   binaryMeta = name: {
     description = "Rust ${name} binary";
@@ -122,19 +128,11 @@ in
         export HOME
       '';
       WRIX_TEST_PUBLISHER_HELPER = "${cacheHookTestPublisher}/bin/wrix-cache-test-publisher";
-      WRIX_TEST_PREK_HOOKS = "${prekHooksBundle}";
-      WRIX_TEST_PREK_RUNNER = "${prekRunner}/bin/wrix-prek";
-      WRIX_TEST_BROKEN_PREK_RUNNER = "${
-        import ../../tests/prek/missing-runtime.nix { inherit pkgs; }
-      }/bin/wrix-prek";
-      WRIX_TEST_PREK_BUILD_SPEC = import ../../tests/prek/bundle-build-spec.nix { inherit pkgs; };
-      WRIX_TEST_PACKAGED_WRIX = "${wrixPackage}/bin/wrix";
     }
-    // optionalAttrs (prekDevShellHook != null) {
-      WRIX_TEST_DEVSHELL_HOOK = pkgs.writeText "wrix-test-devshell-hook" prekDevShellHook;
-    }
+    // fixtures.environment
   );
 
+  testFixtures = fixtures.bundle;
   package = workspace.bin;
   wrix = wrixPackage;
   cacheHook = mkBinaryPackage "wrix-cache-hook";

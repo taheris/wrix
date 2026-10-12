@@ -1,0 +1,8 @@
+experimental = ["setup-scripts"]
+
+[scripts.setup.packaging-fixtures]
+command = ["bash", "tests/prepare-native-fixtures.sh"]
+
+[[profile.default.scripts]]
+filter = "package(wrix-cli) & (binary(init_config) | binary(init_idempotency) | binary(init_prek) | binary(prek_bundle_build) | binary(prek_runtime))"
+setup = "packaging-fixtures"

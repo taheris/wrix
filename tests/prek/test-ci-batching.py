@@ -123,6 +123,20 @@ class CiBatching(unittest.TestCase):
         self.assertEqual([v["target"] for v in verdicts], list(apps), result.stderr)
         return result, verdicts, calls.read_text().splitlines()
 
+    def test_positional_app_names_require_json_without_running_the_full_suite(self):
+        result = command(RUNNER, PASS, cwd=self.root)
+        self.assertEqual(result.returncode, 64, result.stderr)
+        self.assertIn("--json", result.stderr)
+        self.assertNotIn("WRIX-CI-BATCH-QUERY", result.stderr)
+        self.assertEqual(result.stdout, "")
+
+    def test_unknown_options_do_not_trigger_the_full_suite(self):
+        result = command(RUNNER, "--typo", cwd=self.root)
+        self.assertEqual(result.returncode, 64, result.stderr)
+        self.assertIn("--json", result.stderr)
+        self.assertNotIn("WRIX-CI-BATCH-QUERY", result.stderr)
+        self.assertEqual(result.stdout, "")
+
     def test_selected_runners_batch_before_independent_execution(self):
         result, verdicts, calls = self.run_apps(PASS, STATUS, PASS)
         self.assertEqual(result.returncode, 0, result.stderr)

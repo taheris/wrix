@@ -607,6 +607,11 @@ let
           exit 0
         fi
 
+        if [[ "$#" -ne 0 ]]; then
+          printf 'test-ci app selection requires --json; use test-ci --json <app> ...\n' >&2
+          exit 64
+        fi
+
         failed=0
         skipped=0
         run_step() {

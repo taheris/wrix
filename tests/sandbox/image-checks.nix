@@ -121,19 +121,31 @@ let
       mkdir "$out"
     '';
 
+  inspectionImage =
+    image:
+    pkgs.runCommand "wrix-image-inspection" { nativeBuildInputs = [ pkgs.python3 ]; } ''
+      set -euo pipefail
+      python ${../lib/image-artifact.py} \
+        prepare ${if isLinux then image.ociLayout else image} "$out"
+    '';
+
   archiveShellHelpers = ''
+    image_query() {
+        ${pkgs.python3}/bin/python ${../lib/image-artifact.py} "$@"
+    }
+
     unpack_archive() {
         local label="$1"
         local archive="$2"
         local dest="$3"
-        mkdir -p "$dest"
-        if [[ -x "$archive" ]]; then
-            "$archive" | tar -xf - -C "$dest"
+        if [[ -d "$archive" && -f "$archive/members.json" ]]; then
+            mkdir -p "$dest"
+            cp -rs "$archive/." "$dest/"
         else
-            tar -xf "$archive" -C "$dest"
+            image_query prepare "$archive" "$dest"
         fi
         if [[ ! -f "$dest/manifest.json" ]]; then
-            echo "FAIL: $label archive did not contain manifest.json" >&2
+            echo "FAIL: $label artifact did not contain manifest.json" >&2
             exit 1
         fi
     }
@@ -144,23 +156,9 @@ let
         local source="$3"
         local dest="$4"
         local layers="$5"
-        local config_digest config_file layout manifest_digest manifest_file
-        mkdir -p "$dest"
         case "$source_kind" in
-            nix-descriptor)
-                layout=$(jq -er '.oci_layout' "$source")
-                manifest_digest=$(jq -er '.manifests[0].digest' "$layout/index.json")
-                manifest_file="$layout/blobs/sha256/''${manifest_digest#sha256:}"
-                config_digest=$(jq -er '.config.digest' "$manifest_file")
-                ln -s "$layout/blobs" "$dest/blobs"
-                ln -s "$layout/blobs/sha256/''${config_digest#sha256:}" "$dest/config.json"
-                jq -r '.layers[].digest | sub("^sha256:"; "blobs/sha256/")' \
-                    "$manifest_file" >"$layers"
-                ;;
-            docker-archive)
+            nix-descriptor|docker-archive)
                 unpack_archive "$label" "$source" "$dest"
-                config_file=$(jq -er '.[0].Config' "$dest/manifest.json")
-                ln -s "$config_file" "$dest/config.json"
                 write_layers "$dest" "$layers"
                 ;;
             *)
@@ -176,13 +174,6 @@ let
         jq -r '.[0].Layers[]' "$archive_dir/manifest.json" >"$output"
     }
 
-    write_unique_layers() {
-        local archive_dir="$1"
-        local output="$2"
-        write_layers "$archive_dir" "$output"
-        sort -u -o "$output" "$output"
-    }
-
     write_layer_digests() {
         local archive_dir="$1"
         local layers_file="$2"
@@ -191,7 +182,10 @@ let
         : >"$output"
         while IFS= read -r layer; do
             [[ -n "$layer" ]] || continue
-            digest=$(sha256sum "$archive_dir/$layer" | cut -d ' ' -f 1)
+            case "$layer" in
+                blobs/sha256/*) digest="''${layer##*/}" ;;
+                *) digest=$(sha256sum "$archive_dir/$layer" | cut -d ' ' -f 1) ;;
+            esac
             printf 'sha256:%s\n' "$digest" >>"$output"
         done <"$layers_file"
     }
@@ -218,54 +212,15 @@ let
     }
 
     list_layer_store_paths() {
-        local archive_dir="$1"
-        local layers_file="$2"
-        local layer
-        while IFS= read -r layer; do
-            [[ -n "$layer" ]] || continue
-            tar -tf "$archive_dir/$layer"
-        done <"$layers_file" \
-            | awk 'match($0, /nix\/store\/[a-z0-9]{32}-[^\/]+/) { print "/" substr($0, RSTART, RLENGTH) }' \
-            | sort -u
+        image_query paths "$@"
     }
 
     extract_layer_member() {
-        local archive_dir="$1"
-        local layers_file="$2"
-        local member="$3"
-        local output="$4"
-        local layer dot_member
-        dot_member="./$member"
-        while IFS= read -r layer; do
-            [[ -n "$layer" ]] || continue
-            if grep -qxF "$member" < <(tar -tf "$archive_dir/$layer"); then
-                tar -xOf "$archive_dir/$layer" "$member" >"$output"
-                return 0
-            fi
-            if grep -qxF "$dot_member" < <(tar -tf "$archive_dir/$layer"); then
-                tar -xOf "$archive_dir/$layer" "$dot_member" >"$output"
-                return 0
-            fi
-        done <"$layers_file"
-        return 1
+        image_query extract "$@"
     }
 
     member_exists_in_layers() {
-        local archive_dir="$1"
-        local layers_file="$2"
-        local member="$3"
-        local layer dot_member
-        dot_member="./$member"
-        while IFS= read -r layer; do
-            [[ -n "$layer" ]] || continue
-            if grep -qxF "$member" < <(tar -tf "$archive_dir/$layer"); then
-                return 0
-            fi
-            if grep -qxF "$dot_member" < <(tar -tf "$archive_dir/$layer"); then
-                return 0
-            fi
-        done <"$layers_file"
-        return 1
+        image_query exists "$@"
     }
   '';
 
@@ -936,10 +891,10 @@ let
           ''
         else
           ''
-            unpack_archive "tier 0" "${defaultImage.baseImage}" "$tmp/tier0"
-            unpack_archive "tier 1" "${defaultImage.stableProfileImage}" "$tmp/tier1"
-            unpack_archive "tier 2" "${defaultImage.agentImage}" "$tmp/tier2"
-            prepare_image_artifact "selected leaf" "${defaultImage.source_kind}" "${toString defaultImage.source}" "$tmp/leaf" "$tmp/leaf.layers"
+            unpack_archive "tier 0" "${inspectionImage defaultImage.baseImage}" "$tmp/tier0"
+            unpack_archive "tier 1" "${inspectionImage defaultImage.stableProfileImage}" "$tmp/tier1"
+            unpack_archive "tier 2" "${inspectionImage defaultImage.agentImage}" "$tmp/tier2"
+            prepare_image_artifact "selected leaf" "${defaultImage.source_kind}" "${inspectionImage defaultImage}" "$tmp/leaf" "$tmp/leaf.layers"
             for tier in tier0 tier1 tier2; do
                 write_layers "$tmp/$tier" "$tmp/$tier.layers"
             done
@@ -973,24 +928,16 @@ let
           local archive_dir="$1"
           local layers_file="$2"
           local output="$3"
-          local layer member
-          while IFS= read -r layer; do
-              [[ -n "$layer" ]] || continue
-              member=$(awk '/^\/?nix\/store\/[a-z0-9]{32}-nix\.conf\/etc\/nix\/nix\.conf$/ { print; exit }' \
-                  < <(tar -tf "$archive_dir/$layer"))
-              if [[ -n "$member" ]]; then
-                  tar -xOf "$archive_dir/$layer" "$member" >"$output"
-                  return 0
-              fi
-          done <"$layers_file"
-          return 1
+          local member
+          member=$(image_query find "$archive_dir" "$layers_file" 'nix/store/[a-z0-9]{32}-nix\.conf/etc/nix/nix\.conf') || return 1
+          extract_layer_member "$archive_dir" "$layers_file" "$member" "$output"
       }
 
       tmp=$(mktemp -d)
       trap 'rm -rf "$tmp"' EXIT
 
-      unpack_archive "stable-profile" "${defaultImage.stableProfileImage}" "$tmp/stable"
-      write_unique_layers "$tmp/stable" "$tmp/stable.layers"
+      unpack_archive "stable-profile" "${inspectionImage defaultImage.stableProfileImage}" "$tmp/stable"
+      write_layers "$tmp/stable" "$tmp/stable.layers"
       if ! extract_nix_conf "$tmp/stable" "$tmp/stable.layers" "$tmp/nix.conf"; then
           echo "FAIL: /etc/nix/nix.conf target is absent from the stable profile image" >&2
           exit 1
@@ -1025,8 +972,8 @@ let
       tmp=$(mktemp -d)
       trap 'rm -rf "$tmp"' EXIT
 
-      unpack_archive "leaf" "${defaultImage}" "$tmp/leaf"
-      write_unique_layers "$tmp/leaf" "$tmp/leaf.layers"
+      unpack_archive "leaf" "${inspectionImage defaultImage}" "$tmp/leaf"
+      write_layers "$tmp/leaf" "$tmp/leaf.layers"
       list_layer_store_paths "$tmp/leaf" "$tmp/leaf.layers" >"$tmp/leaf.paths"
       config_file=$(jq -r '.[0].Config' "$tmp/leaf/manifest.json")
       expected_env="SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
@@ -1065,7 +1012,7 @@ let
       tmp=$(mktemp -d)
       trap 'rm -rf "$tmp"' EXIT
 
-      prepare_image_artifact "selected leaf" "${defaultImage.source_kind}" "${toString defaultImage.source}" "$tmp/leaf" "$tmp/leaf.layers"
+      prepare_image_artifact "selected leaf" "${defaultImage.source_kind}" "${inspectionImage defaultImage}" "$tmp/leaf" "$tmp/leaf.layers"
       expected_command="/network-bootstrap.sh"
 
       if ! jq -e --arg expected "$expected_command" '.config.Entrypoint == [$expected]' "$tmp/leaf/config.json" >/dev/null; then
@@ -1151,7 +1098,7 @@ let
   };
   imageAgentMarkerChecks = concatStringsSep "\n" (
     mapAttrsToList (agent: image: ''
-      check_agent_marker "${agent}" "${image}"
+      check_agent_marker "${agent}" "${inspectionImage image}"
     '') imageAgentMarkerMatrix
   );
   imageAgentMarkerTest = pkgs.writeShellApplication {
@@ -1172,7 +1119,7 @@ let
           local marker_file="$tmp/$expected_agent-marker"
           local marker
           unpack_archive "$expected_agent" "$image" "$image_dir"
-          write_unique_layers "$image_dir" "$image_dir.layers"
+          write_layers "$image_dir" "$image_dir.layers"
           if ! extract_layer_member "$image_dir" "$image_dir.layers" "etc/wrix/image-agent" "$marker_file"; then
               echo "FAIL: $expected_agent image does not declare /etc/wrix/image-agent" >&2
               exit 1
@@ -1342,7 +1289,7 @@ let
         agent = expected.agent or "";
       in
       ''
-        check_artifact_labels "${name}" "${expected.image.source_kind}" "${toString expected.image.source}" "${expected.kind}" "${profile}" "${agent}"
+        check_artifact_labels "${name}" "${expected.image.source_kind}" "${inspectionImage expected.image}" "${expected.kind}" "${profile}" "${agent}"
       ''
     ) imageLabelMatrix
   );
@@ -1396,7 +1343,7 @@ let
         local leaf_layers="$3"
         local runner="$4"
         local executable="$runner/bin/consumer-start"
-        local marker configured layer member
+        local marker configured
         extract_layer_member "$image_dir" "$leaf_layers" "etc/wrix/image-agent" "$image_dir/agent-marker"
         extract_layer_member "$image_dir" "$leaf_layers" "etc/wrix/direct-executable" "$image_dir/direct-executable"
         marker=$(<"$image_dir/agent-marker")
@@ -1406,14 +1353,8 @@ let
             exit 1
         fi
         jq -e '.config.Labels["wrix.agent.kind"] == "direct"' "$image_dir/config.json" >/dev/null
-        while IFS= read -r layer; do
-            for member in "$executable" "''${executable#/}" "./''${executable#/}"; do
-                if grep -qxF "$member" < <(tar -tf "$image_dir/$layer"); then
-                    tar -xf "$image_dir/$layer" -C "$image_dir" "$member"
-                    break 2
-                fi
-            done
-        done <"$all_layers"
+        mkdir -p "$(dirname "$image_dir$executable")"
+        extract_layer_member "$image_dir" "$all_layers" "$executable" "$image_dir$executable"
         if [[ ! -x "$image_dir$executable" ]] || ! cmp -s "$executable" "$image_dir$executable"; then
             echo "FAIL: declared consumer executable is missing, changed, or not executable in image layers" >&2
             exit 1
@@ -1438,7 +1379,7 @@ let
         tmp=$(mktemp -d)
         trap 'rm -rf "$tmp"' EXIT
         ${directContractShellHelpers}
-        prepare_image_artifact "direct" "${directImage.source_kind}" "${toString directImage.source}" "$tmp/image" "$tmp/image.layers"
+        prepare_image_artifact "direct" "${directImage.source_kind}" "${inspectionImage directImage}" "$tmp/image" "$tmp/image.layers"
         list_layer_store_paths "$tmp/image" "$tmp/image.layers" >"$tmp/image.paths"
         tail -n 1 "$tmp/image.layers" >"$tmp/leaf.layers"
 
@@ -1469,7 +1410,7 @@ let
 
       tmp=$(mktemp -d)
       trap 'rm -rf "$tmp"' EXIT
-      prepare_image_artifact "claude" "${claudeImage.source_kind}" "${toString claudeImage.source}" "$tmp/image" "$tmp/image.layers"
+      prepare_image_artifact "claude" "${claudeImage.source_kind}" "${inspectionImage claudeImage}" "$tmp/image" "$tmp/image.layers"
       list_layer_store_paths "$tmp/image" "$tmp/image.layers" >"$tmp/image.paths"
       claude_code_path=${claudeCodePkg}
 
@@ -1534,7 +1475,7 @@ let
   };
   prekSurfaceChecks = concatStringsSep "\n" (
     mapAttrsToList (name: image: ''
-      check_surfaces "${name}" "${image.source_kind}" "${toString image.source}" "${prekHooksBundle}" "${prekRunner}" "${prekWrappers.prePushChecks}" "${prekWrappers.skipIfMissing}"
+      check_surfaces "${name}" "${image.source_kind}" "${inspectionImage image}" "${prekHooksBundle}" "${prekRunner}" "${prekWrappers.prePushChecks}" "${prekWrappers.skipIfMissing}"
     '') prekSurfaceImageMatrix
   );
   prekHooksClosureTest = pkgs.writeShellApplication {
@@ -1638,6 +1579,8 @@ let
       pkgs.jq
     ];
     text = ''
+      ${archiveShellHelpers}
+
       image_closure=${defaultImageClosure}/store-paths
       base_contents=${baseContentsClosure}/store-paths
       resolver=${linuxPkgs.getent.provider}
@@ -1664,50 +1607,15 @@ let
 
       tmp=$(mktemp -d)
       trap 'rm -rf "$tmp"' EXIT
-      ${defaultImage} > "$tmp/image.tar"
-      tar -xf "$tmp/image.tar" -C "$tmp"
-
-      jq -r '.[0].Layers[]' "$tmp/manifest.json" > "$tmp/layers"
-
-      getent_target=""
-      while IFS= read -r layer; do
-          listing=$(tar -tvf "$tmp/$layer")
-          line=""
-          if line=$(grep -m 1 -E '(^| )\.?/bin/getent -> /nix/store/' <<<"$listing"); then
-              :
-          else
-              grep_status="$?"
-              if [[ "$grep_status" -ne 1 ]]; then
-                  echo "FAIL: could not inspect $layer for /bin/getent" >&2
-                  exit "$grep_status"
-              fi
-          fi
-          if [[ -n "$line" ]]; then
-              getent_target=''${line##* -> }
-          fi
-      done < "$tmp/layers"
-
-      if [[ -z "$getent_target" ]]; then
-          echo "FAIL: composed image does not expose /bin/getent" >&2
-          exit 1
-      fi
+      unpack_archive "resolver image" "${inspectionImage defaultImage}" "$tmp/image"
+      write_layers "$tmp/image" "$tmp/layers"
+      getent_target=$(image_query link "$tmp/image" "$tmp/layers" "bin/getent")
       if [[ "$getent_target" != /nix/store/* ]]; then
           echo "FAIL: /bin/getent does not point into /nix/store: $getent_target" >&2
           exit 1
       fi
-
-      target_member="''${getent_target#/}"
-      target_present=0
-      while IFS= read -r layer; do
-          if tar -tf "$tmp/$layer" | grep -qxF "$target_member" \
-              || tar -tf "$tmp/$layer" | grep -qxF "$getent_target"; then
-              target_present=1
-              break
-          fi
-      done < "$tmp/layers"
-      if [[ "$target_present" != "1" ]]; then
-          echo "FAIL: /bin/getent target is absent from image layers" >&2
-          echo "  /bin/getent -> $getent_target" >&2
+      if ! member_exists_in_layers "$tmp/image" "$tmp/layers" "$getent_target"; then
+          echo "FAIL: /bin/getent target is absent from image layers: $getent_target" >&2
           exit 1
       fi
 
@@ -1881,7 +1789,7 @@ let
 
       tmp=$(mktemp -d)
       trap 'rm -rf "$tmp"' EXIT
-      prepare_image_artifact "package fixture" "${membershipImage.source_kind}" "${toString membershipImage.source}" "$tmp/image" "$tmp/image.layers"
+      prepare_image_artifact "package fixture" "${membershipImage.source_kind}" "${inspectionImage membershipImage}" "$tmp/image" "$tmp/image.layers"
       list_layer_store_paths "$tmp/image" "$tmp/image.layers" >"$tmp/image.paths"
       for package in "${membershipStablePkg}" "${membershipAppendedPkg}"; do
           if ! grep -qxF "$package" "$tmp/image.paths"; then
@@ -1921,10 +1829,10 @@ let
       tmp=$(mktemp -d)
       trap 'rm -rf "$tmp"' EXIT
 
-      unpack_archive "tier0" "${membershipImage.baseImage}" "$tmp/tier0"
-      unpack_archive "tier1" "${membershipImage.stableProfileImage}" "$tmp/tier1"
-      unpack_archive "tier2" "${membershipImage.agentImage}" "$tmp/tier2"
-      unpack_archive "leaf" "${membershipImage}" "$tmp/leaf"
+      unpack_archive "tier0" "${inspectionImage membershipImage.baseImage}" "$tmp/tier0"
+      unpack_archive "tier1" "${inspectionImage membershipImage.stableProfileImage}" "$tmp/tier1"
+      unpack_archive "tier2" "${inspectionImage membershipImage.agentImage}" "$tmp/tier2"
+      unpack_archive "leaf" "${inspectionImage membershipImage}" "$tmp/leaf"
 
       for tier in tier0 tier1 tier2 leaf; do
           write_layers "$tmp/$tier" "$tmp/$tier.layers"
@@ -1985,10 +1893,10 @@ let
       tmp=$(mktemp -d)
       trap 'rm -rf "$tmp"' EXIT
 
-      unpack_archive "tier0" "${membershipImage.baseImage}" "$tmp/tier0"
-      unpack_archive "tier1" "${membershipImage.stableProfileImage}" "$tmp/tier1"
-      unpack_archive "tier2" "${membershipImage.agentImage}" "$tmp/tier2"
-      unpack_archive "leaf" "${membershipImage}" "$tmp/leaf"
+      unpack_archive "tier0" "${inspectionImage membershipImage.baseImage}" "$tmp/tier0"
+      unpack_archive "tier1" "${inspectionImage membershipImage.stableProfileImage}" "$tmp/tier1"
+      unpack_archive "tier2" "${inspectionImage membershipImage.agentImage}" "$tmp/tier2"
+      unpack_archive "leaf" "${inspectionImage membershipImage}" "$tmp/leaf"
       for tier in tier0 tier1 tier2 leaf; do
           write_layers "$tmp/$tier" "$tmp/$tier.layers"
       done
@@ -2035,10 +1943,10 @@ let
       tmp=$(mktemp -d)
       trap 'rm -rf "$tmp"' EXIT
 
-      unpack_archive "tier0" "${pinnedSandbox.image.baseImage}" "$tmp/tier0"
-      unpack_archive "tier1" "${pinnedSandbox.image.stableProfileImage}" "$tmp/tier1"
-      unpack_archive "tier2" "${pinnedSandbox.image.agentImage}" "$tmp/tier2"
-      unpack_archive "leaf" "${pinnedSandbox.image}" "$tmp/leaf"
+      unpack_archive "tier0" "${inspectionImage pinnedSandbox.image.baseImage}" "$tmp/tier0"
+      unpack_archive "tier1" "${inspectionImage pinnedSandbox.image.stableProfileImage}" "$tmp/tier1"
+      unpack_archive "tier2" "${inspectionImage pinnedSandbox.image.agentImage}" "$tmp/tier2"
+      unpack_archive "leaf" "${inspectionImage pinnedSandbox.image}" "$tmp/leaf"
       for tier in tier0 tier1 tier2 leaf; do
           write_layers "$tmp/$tier" "$tmp/$tier.layers"
       done
@@ -2214,19 +2122,19 @@ let
       trap 'rm -rf "$tmp"' EXIT
 
       assert_leaf_change "settings" \
-          "${leafProbeSettingsA}" "${leafProbeSettingsB}" \
-          "${leafProbeSettingsA.stableProfileImage}" "${leafProbeSettingsB.stableProfileImage}" \
-          "${leafProbeSettingsA.agentImage}" "${leafProbeSettingsB.agentImage}" \
+          "${inspectionImage leafProbeSettingsA}" "${inspectionImage leafProbeSettingsB}" \
+          "${inspectionImage leafProbeSettingsA.stableProfileImage}" "${inspectionImage leafProbeSettingsB.stableProfileImage}" \
+          "${inspectionImage leafProbeSettingsA.agentImage}" "${inspectionImage leafProbeSettingsB.agentImage}" \
           "" ""
       assert_leaf_change "package-delta" \
-          "${leafProbePackageA}" "${leafProbePackageB}" \
-          "${leafProbePackageA.stableProfileImage}" "${leafProbePackageB.stableProfileImage}" \
-          "${leafProbePackageA.agentImage}" "${leafProbePackageB.agentImage}" \
+          "${inspectionImage leafProbePackageA}" "${inspectionImage leafProbePackageB}" \
+          "${inspectionImage leafProbePackageA.stableProfileImage}" "${inspectionImage leafProbePackageB.stableProfileImage}" \
+          "${inspectionImage leafProbePackageA.agentImage}" "${inspectionImage leafProbePackageB.agentImage}" \
           "${leafProbePackagePkgA}" "${leafProbePackagePkgB}"
       assert_leaf_change "mcp-config" \
-          "${leafProbeMcpA}" "${leafProbeMcpB}" \
-          "${leafProbeMcpA.stableProfileImage}" "${leafProbeMcpB.stableProfileImage}" \
-          "${leafProbeMcpA.agentImage}" "${leafProbeMcpB.agentImage}" \
+          "${inspectionImage leafProbeMcpA}" "${inspectionImage leafProbeMcpB}" \
+          "${inspectionImage leafProbeMcpA.stableProfileImage}" "${inspectionImage leafProbeMcpB.stableProfileImage}" \
+          "${inspectionImage leafProbeMcpA.agentImage}" "${inspectionImage leafProbeMcpB.agentImage}" \
           "" ""
 
       echo "test-downstream-change-leaf-only: PASS"
@@ -2253,6 +2161,8 @@ let
       text =
         if isLinux then
           ''
+            ${archiveShellHelpers}
+
             assert_no_raw_image_input() {
                 local label="$1"
                 local path="$2"
@@ -2272,6 +2182,7 @@ let
                 local raw_a="$4"
                 local raw_b="$5"
                 local agent_tar="$6"
+                local agent_layout="$7"
                 local case_dir="$tmp/$label"
                 local digest_a digest_b missing only_a only_b top_a top_b oci_a oci_b layer blob
 
@@ -2285,8 +2196,7 @@ let
 
                 jq -r '.layers[].digest' "$source_a" | sort -u >"$case_dir/a.layers"
                 jq -r '.layers[].digest' "$source_b" | sort -u >"$case_dir/b.layers"
-                tar -xOf "$agent_tar" manifest.json \
-                  | jq -r '.[0].Layers[] | sub("/layer.tar$"; "") | "sha256:" + .' \
+                jq -r '.layers[].digest' "$agent_layout/wrix/manifest.json" \
                   | sort -u >"$case_dir/lower.layers"
                 comm -12 "$case_dir/a.layers" "$case_dir/b.layers" >"$case_dir/shared.layers"
                 comm -23 "$case_dir/a.layers" "$case_dir/b.layers" >"$case_dir/a.only"
@@ -2333,39 +2243,24 @@ let
 
             assert_nix_db_registration_top_layer() {
                 local label="$1"
-                local leaf_stream="$2"
-                local agent_tar="$3"
+                local leaf="$2"
+                local agent="$3"
                 local case_dir="$tmp/$label"
-                local db_layer cust_layer layer
-
-                mkdir -p "$case_dir/leaf" "$case_dir/lower"
-                "$leaf_stream" >"$case_dir/leaf.tar"
-                tar -xf "$case_dir/leaf.tar" -C "$case_dir/leaf"
-                cust_layer=$(jq -r '.[0].Layers[-1]' "$case_dir/leaf/manifest.json")
-                db_layer=""
-                while IFS= read -r layer; do
-                    if grep -qE '(^|\./)nix/var/nix/db/db\.sqlite$' < <(tar -tf "$case_dir/leaf/$layer"); then
-                        db_layer="$layer"
-                        break
-                    fi
-                done < <(jq -r '.[0].Layers[]' "$case_dir/leaf/manifest.json")
-
-                if [[ -z "$db_layer" ]]; then
-                    echo "FAIL: Nix DB registration was not baked into the leaf image" >&2
+                unpack_archive "$label leaf" "$leaf" "$case_dir/leaf"
+                unpack_archive "$label lower" "$agent" "$case_dir/lower"
+                write_layers "$case_dir/leaf" "$case_dir/leaf.layers"
+                write_layers "$case_dir/lower" "$case_dir/lower.layers"
+                tail -n 1 "$case_dir/leaf.layers" >"$case_dir/top.layers"
+                if ! member_exists_in_layers "$case_dir/leaf" "$case_dir/top.layers" "nix/var/nix/db/db.sqlite"; then
+                    echo "FAIL: Nix DB registration is absent from the top customisation layer" >&2
                     exit 1
                 fi
-                if [[ "$db_layer" != "$cust_layer" ]]; then
-                    echo "FAIL: Nix DB registration rides in $db_layer, not top customisation layer $cust_layer" >&2
+                head -n -1 "$case_dir/leaf.layers" >"$case_dir/below-top.layers"
+                if image_query find "$case_dir/leaf" "$case_dir/below-top.layers" 'nix/var/nix/db/db\.sqlite' >/dev/null \
+                    || image_query find "$case_dir/lower" "$case_dir/lower.layers" 'nix/var/nix/db/db\.sqlite' >/dev/null; then
+                    echo "FAIL: Nix DB registration leaked into a lower tier layer" >&2
                     exit 1
                 fi
-
-                tar -xf "$agent_tar" -C "$case_dir/lower"
-                while IFS= read -r layer; do
-                    if grep -qE '(^|\./)nix/var/nix/db/db\.sqlite$' < <(tar -tf "$case_dir/lower/$layer"); then
-                        echo "FAIL: Nix DB registration leaked into a lower tier layer" >&2
-                        exit 1
-                    fi
-                done < <(jq -r '.[0].Layers[]' "$case_dir/lower/manifest.json")
             }
 
             tmp=$(mktemp -d)
@@ -2376,23 +2271,26 @@ let
                 "${leafProbeSettingsB.source}" \
                 "${discardContext leafProbeSettingsA}" \
                 "${discardContext leafProbeSettingsB}" \
-                "${leafProbeSettingsA.agentImage}"
+                "${discardContext leafProbeSettingsA.agentImage}" \
+                "${leafProbeSettingsA.agentImage.ociLayout}"
             assert_generated_change "mcp-config" \
                 "${leafProbeMcpA.source}" \
                 "${leafProbeMcpB.source}" \
                 "${discardContext leafProbeMcpA}" \
                 "${discardContext leafProbeMcpB}" \
-                "${leafProbeMcpA.agentImage}"
+                "${discardContext leafProbeMcpA.agentImage}" \
+                "${leafProbeMcpA.agentImage.ociLayout}"
             assert_generated_change "entrypoint" \
                 "${leafProbeEntrypointA.source}" \
                 "${leafProbeEntrypointB.source}" \
                 "${discardContext leafProbeEntrypointA}" \
                 "${discardContext leafProbeEntrypointB}" \
-                "${leafProbeEntrypointA.agentImage}"
+                "${discardContext leafProbeEntrypointA.agentImage}" \
+                "${leafProbeEntrypointA.agentImage.ociLayout}"
             assert_nix_db_registration_top_layer \
                 "nix-db-registration" \
-                "${leafProbeSettingsA}" \
-                "${leafProbeSettingsA.agentImage}"
+                "${inspectionImage leafProbeSettingsA}" \
+                "${inspectionImage leafProbeSettingsA.agentImage}"
 
             echo "test-archiveless-generated-change: PASS"
           ''
@@ -2432,12 +2330,12 @@ let
       tmp=$(mktemp -d)
       trap 'rm -rf "$tmp"' EXIT
 
-      unpack_archive "tier 1 A" "${leafProbeRunnerA.stableProfileImage}" "$tmp/tier1-a"
-      unpack_archive "tier 1 B" "${leafProbeRunnerB.stableProfileImage}" "$tmp/tier1-b"
-      unpack_archive "agent A" "${leafProbeRunnerA.agentImage}" "$tmp/agent-a"
-      unpack_archive "agent B" "${leafProbeRunnerB.agentImage}" "$tmp/agent-b"
-      unpack_archive "leaf A" "${leafProbeRunnerA}" "$tmp/leaf-a"
-      unpack_archive "leaf B" "${leafProbeRunnerB}" "$tmp/leaf-b"
+      unpack_archive "tier 1 A" "${inspectionImage leafProbeRunnerA.stableProfileImage}" "$tmp/tier1-a"
+      unpack_archive "tier 1 B" "${inspectionImage leafProbeRunnerB.stableProfileImage}" "$tmp/tier1-b"
+      unpack_archive "agent A" "${inspectionImage leafProbeRunnerA.agentImage}" "$tmp/agent-a"
+      unpack_archive "agent B" "${inspectionImage leafProbeRunnerB.agentImage}" "$tmp/agent-b"
+      unpack_archive "leaf A" "${inspectionImage leafProbeRunnerA}" "$tmp/leaf-a"
+      unpack_archive "leaf B" "${inspectionImage leafProbeRunnerB}" "$tmp/leaf-b"
       for image in tier1-a tier1-b agent-a agent-b leaf-a leaf-b; do
           write_layers "$tmp/$image" "$tmp/$image.layers"
       done
@@ -2520,10 +2418,10 @@ let
 
       tmp=$(mktemp -d)
       trap 'rm -rf "$tmp"' EXIT
-      prepare_paths "profile-direct" "${directImage.source_kind}" "${toString directImage.source}"
-      prepare_paths "custom-direct" "${agentExclusiveDirect.source_kind}" "${toString agentExclusiveDirect.source}"
-      prepare_paths "claude" "${agentExclusiveClaude.source_kind}" "${toString agentExclusiveClaude.source}"
-      prepare_paths "pi" "${agentExclusivePi.source_kind}" "${toString agentExclusivePi.source}"
+      prepare_paths "profile-direct" "${directImage.source_kind}" "${inspectionImage directImage}"
+      prepare_paths "custom-direct" "${agentExclusiveDirect.source_kind}" "${inspectionImage agentExclusiveDirect}"
+      prepare_paths "claude" "${agentExclusiveClaude.source_kind}" "${inspectionImage agentExclusiveClaude}"
+      prepare_paths "pi" "${agentExclusivePi.source_kind}" "${inspectionImage agentExclusivePi}"
 
       claude_code="${claudeCodePkg}"
       pi_agent="${piAgentPkg}"
@@ -2615,8 +2513,8 @@ let
   };
   consumerRuntimeChecks = concatStringsSep "\n" (
     mapAttrsToList (name: fixture: ''
-      check_consumer_closures "${name}" "${fixture.image.source_kind}" "${toString fixture.image.source}" \
-          "${fixture.image.stableProfileImage}" "${fixture.image.agentImage}" \
+      check_consumer_closures "${name}" "${fixture.image.source_kind}" "${inspectionImage fixture.image}" \
+          "${inspectionImage fixture.image.stableProfileImage}" "${inspectionImage fixture.image.agentImage}" \
           "${fixture.runnerClosure}/store-paths" "${fixture.appendedClosure}/store-paths" \
           "${fixture.runner}" "${fixture.image.profileConfig}"
     '') consumerRuntimeMatrix
@@ -2733,9 +2631,9 @@ let
       tmp=$(mktemp -d)
       trap 'rm -rf "$tmp"' EXIT
 
-      unpack_archive "tier 1" "${agentPkgThreadedImage.stableProfileImage}" "$tmp/tier1"
-      unpack_archive "agent" "${agentPkgThreadedImage.agentImage}" "$tmp/agent"
-      unpack_archive "leaf" "${agentPkgThreadedImage}" "$tmp/leaf"
+      unpack_archive "tier 1" "${inspectionImage agentPkgThreadedImage.stableProfileImage}" "$tmp/tier1"
+      unpack_archive "agent" "${inspectionImage agentPkgThreadedImage.agentImage}" "$tmp/agent"
+      unpack_archive "leaf" "${inspectionImage agentPkgThreadedImage}" "$tmp/leaf"
       for image in tier1 agent leaf; do
           write_layers "$tmp/$image" "$tmp/$image.layers"
       done
@@ -2807,8 +2705,8 @@ let
     text =
       if isLinux then
         ''
-          imgA=${iterationProbeImageA}
-          imgB=${iterationProbeImageB}
+          imgA=${iterationProbeImageA.source}
+          imgB=${iterationProbeImageB.source}
           max_changed=${toString iterationMaxChangedBlobs}
 
           if [[ "$imgA" == "$imgB" ]]; then
@@ -2820,17 +2718,10 @@ let
           tmp=$(mktemp -d)
           trap 'rm -rf "$tmp"' EXIT
 
-          # streamLayeredImage emits a docker-archive tar; manifest.json lists each
-          # layer blob as "<sha256>/layer.tar".
-          "$imgA" | tar -xO manifest.json > "$tmp/a.json"
-          "$imgB" | tar -xO manifest.json > "$tmp/b.json"
-
-          jq -r '.[0].Layers[]' "$tmp/a.json" | sort -u > "$tmp/a.layers"
-          jq -r '.[0].Layers[]' "$tmp/b.json" | sort -u > "$tmp/b.layers"
-
-          # The customisation layer is streamLayeredImage's final layer.
-          custA=$(jq -r '.[0].Layers[-1]' "$tmp/a.json")
-          custB=$(jq -r '.[0].Layers[-1]' "$tmp/b.json")
+          jq -r '.layers[].digest' "$imgA" | sort -u > "$tmp/a.layers"
+          jq -r '.layers[].digest' "$imgB" | sort -u > "$tmp/b.layers"
+          custA=$(jq -r '.layers[-1].digest' "$imgA")
+          custB=$(jq -r '.layers[-1].digest' "$imgB")
 
           total=$(wc -l < "$tmp/a.layers")
           shared=$(comm -12 "$tmp/a.layers" "$tmp/b.layers" | wc -l)
@@ -2867,10 +2758,7 @@ let
         ''
       else
         ''
-          # streamLayeredImage's stream script carries a Linux Python shebang;
-          # the manifest diff this verifier performs is Linux-only. Darwin's
-          # iteration-cost bound is covered by base-image pinning alone (see
-          # specs/image-builder.md § Out of Scope).
+          # Darwin iteration bounds remain covered by base-image pinning.
           echo "test-iteration-cost-bounded: skipped on this platform (streamLayeredImage is Linux-only)" >&2
           exit 0
         '';
@@ -2897,29 +2785,25 @@ let
     text =
       if isLinux then
         ''
-          img=${iterationProbeImageA}
+          ${archiveShellHelpers}
+          img=${inspectionImage iterationProbeImageA}
           max_bytes=${toString customisationLayerMaxBytes}
 
           tmp=$(mktemp -d)
           trap 'rm -rf "$tmp"' EXIT
 
-          "$img" | tar -xf - -C "$tmp"
+          unpack_archive "customisation probe" "$img" "$tmp/image"
+          write_layers "$tmp/image" "$tmp/layers"
+          tail -n 1 "$tmp/layers" > "$tmp/custom.layers"
+          cust=$(<"$tmp/custom.layers")
+          layer="$tmp/image/$cust"
 
-          cust=$(jq -r '.[0].Layers[-1]' "$tmp/manifest.json")
-          layer="$tmp/$cust"
-
-          if [[ ! -f "$layer" ]]; then
-              echo "FAIL: customisation layer tar $cust not found in image archive" >&2
-              exit 1
-          fi
-
-          if tar -tf "$layer" | grep -qE '(^|/)nix/var/nix/db/reserved$'; then
+          if member_exists_in_layers "$tmp/image" "$tmp/custom.layers" "nix/var/nix/db/reserved"; then
               echo "FAIL: customisation layer still carries nix/var/nix/db/reserved" >&2
-              echo "      (the gc-reserved-space padding was not elided)" >&2
               exit 1
           fi
 
-          layer_bytes=$(stat -c %s "$layer")
+          layer_bytes=$(stat -Lc %s "$layer")
           echo "customisation layer: $cust ($layer_bytes bytes)" >&2
 
           if [[ "$layer_bytes" -gt "$max_bytes" ]]; then
@@ -2932,9 +2816,7 @@ let
         ''
       else
         ''
-          # streamLayeredImage's stream script carries a Linux Python shebang;
-          # extracting the customisation layer here is Linux-only. The reserved
-          # elision itself runs identically under buildLayeredImage on Darwin.
+          # Reserved-space elision also runs under Darwin's archive builder.
           echo "test-customisation-layer-bounded: skipped on this platform (streamLayeredImage is Linux-only)" >&2
           exit 0
         '';
@@ -2976,30 +2858,17 @@ let
           prepare_image_artifact \
               "Nix DB probe" \
               "${nixDbProbeImage.source_kind}" \
-              "${toString nixDbProbeImage.source}" \
+              "${inspectionImage nixDbProbeImage}" \
               "$tmp/image" \
               "$tmp/image.layers"
           list_layer_store_paths "$tmp/image" "$tmp/image.layers" >"$tmp/ondisk"
 
-          dbroot="$tmp/dbroot"
-          mkdir -p "$dbroot"
-          db=""
-          while IFS= read -r layer; do
-              listing=$(tar -tf "$tmp/image/$layer")
-              if grep -qE '(^|\./)nix/var/nix/db/db\.sqlite$' <<<"$listing"; then
-                  tar -xf "$tmp/image/$layer" -C "$dbroot"
-                  db="$dbroot/nix/var/nix/db/db.sqlite"
-                  break
-              fi
-          done <"$tmp/image.layers"
-
-          if [[ -z "$db" || ! -f "$db" ]]; then
-              echo "FAIL: no nix/var/nix/db/db.sqlite found in the selected image layers" >&2
-              echo "      (includeNixDB / load-db did not bake a database)" >&2
+          db="$tmp/db.sqlite"
+          if ! extract_layer_member "$tmp/image" "$tmp/image.layers" "nix/var/nix/db/db.sqlite" "$db"; then
+              echo "FAIL: no baked Nix DB found in the selected image layers" >&2
               exit 1
           fi
-
-          chmod -R u+rwX "$dbroot/nix/var/nix/db"
+          chmod u+rw "$db"
           sqlite3 "$db" 'SELECT path FROM ValidPaths' | sort -u \
               > "$tmp/registered"
 
@@ -3047,30 +2916,17 @@ let
           prepare_image_artifact \
               "Nix DB probe" \
               "${nixDbProbeImage.source_kind}" \
-              "${toString nixDbProbeImage.source}" \
+              "${inspectionImage nixDbProbeImage}" \
               "$tmp/image" \
               "$tmp/image.layers"
           list_layer_store_paths "$tmp/image" "$tmp/image.layers" >"$tmp/ondisk"
 
-          dbroot="$tmp/dbroot"
-          mkdir -p "$dbroot"
-          db=""
-          while IFS= read -r layer; do
-              listing=$(tar -tf "$tmp/image/$layer")
-              if grep -qE '(^|\./)nix/var/nix/db/db\.sqlite$' <<<"$listing"; then
-                  tar -xf "$tmp/image/$layer" -C "$dbroot"
-                  db="$dbroot/nix/var/nix/db/db.sqlite"
-                  break
-              fi
-          done <"$tmp/image.layers"
-
-          if [[ -z "$db" || ! -f "$db" ]]; then
-              echo "FAIL: no nix/var/nix/db/db.sqlite found in the selected image layers" >&2
-              echo "      (includeNixDB / load-db did not bake a database)" >&2
+          db="$tmp/db.sqlite"
+          if ! extract_layer_member "$tmp/image" "$tmp/image.layers" "nix/var/nix/db/db.sqlite" "$db"; then
+              echo "FAIL: no baked Nix DB found in the selected image layers" >&2
               exit 1
           fi
-
-          chmod -R u+rwX "$dbroot/nix/var/nix/db"
+          chmod u+rw "$db"
           sqlite3 "$db" 'SELECT path FROM ValidPaths' | sort -u \
               > "$tmp/registered"
 

@@ -1,6 +1,31 @@
 { pkgs }:
 
 {
+  native-test-preparation =
+    pkgs.runCommandLocal "test-native-test-preparation"
+      {
+        nativeBuildInputs = [
+          pkgs.bash
+          pkgs.python3
+        ];
+      }
+      ''
+        set -euo pipefail
+        python ${../prek/test_native_fixtures.py} ${../prepare-native-fixtures.sh}
+        touch "$out"
+      '';
+
+  image-verifier-artifacts =
+    pkgs.runCommandLocal "test-image-verifier-artifacts"
+      {
+        nativeBuildInputs = [ pkgs.python3 ];
+      }
+      ''
+        set -euo pipefail
+        python ${../lib}/test_image_artifact.py
+        touch "$out"
+      '';
+
   known-hosts-runtime-store-purity = pkgs.runCommandLocal "known-hosts-runtime-store-purity" { } ''
     set -euo pipefail
     root="$PWD/root"

@@ -498,6 +498,10 @@ without introducing a reciprocal flake dependency.
   workspace source closure is shared by all three) but does **not** invalidate
   `cargoArtifacts`
   [check](verify:profiles.rust-build-package-workspace-edit-skips-cargo-artifacts)
+- Repository integration-test edits invalidate the Rust check derivations but
+  preserve the packaged launcher and Cargo dependency artifacts; production
+  source edits still invalidate the launcher
+  [check](verify:profiles.repository-integration-source-isolation)
 - Editing a file in `extraSrcs` invalidates `clippy` and `nextest` but does
   **not** invalidate `bin` or `cargoArtifacts`
   [check](verify:profiles.rust-build-package-extra-srcs-scoped-to-checks)

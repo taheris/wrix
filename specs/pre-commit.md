@@ -293,6 +293,9 @@ execution; worker acceptance cannot supply host coverage or a push marker.
 - Pre-push runs `test-ci:` targets on Linux and reports an unverified policy
   skip with exit 77 without realizing them on Darwin, while direct Darwin
   invocation still runs them [system](verify:prek.ci-platform-policy)
+- Positional app names and unknown options to `test-ci` fail before any checks
+  or runners execute; named app selection requires `--json`
+  [system](verify:prek.ci-batching)
 - Batched `test-ci:` execution resolves only the selected app runners together
   while keeping each invocation and verdict independent, including duplicate
   targets, script failures, exit-77 results, unknown apps, and partial build

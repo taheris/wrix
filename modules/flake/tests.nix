@@ -45,5 +45,6 @@
       legacyPackages.systemTests = test.systemTests;
       legacyPackages.testApps = test.testAppDerivations;
       legacyPackages.testFixtures.execution = test.executionSandbox;
+      legacyPackages.testFixtures.native = wrix.rustPackage.testFixtures;
     };
 }

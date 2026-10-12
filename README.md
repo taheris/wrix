@@ -230,3 +230,16 @@ Desktop alerts when the agent needs attention:
 Remote Nix builds for aarch64-linux on macOS:
 `wrix-builder start && wrix-builder setup`. See
 [specs/linux-builder.md](specs/linux-builder.md).
+
+## Development tests
+
+Run native tests with `cargo nextest run`. The repository's nextest setup script
+prepares the real packaged launcher, prek runtimes, and devshell hook once for
+the packaging-test binaries. Existing `WRIX_TEST_*` fixture overrides are
+preserved; Nix-packaged tests already provide them and need no nested Nix build.
+Direct `cargo test` retains the individual test helpers' fallback preparation.
+
+Select CI apps explicitly with `nix run .#test-ci -- --json <app> ...`. Passing
+app names without `--json` is an error; no arguments runs the full CI suite.
+Linux image verifiers share cached indexes of emitted OCI tar headers and
+extract only requested files. Darwin keeps the real archive inspection path.

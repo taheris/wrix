@@ -91,6 +91,11 @@ in
   "profiles.nested-derive" = profileComposition "test_nested_derive_profile";
   "profiles.no-dev-toolchain-lib" = nixEval "profiles.no-dev-toolchain-lib";
   "profiles.no-rust-with-toolchain" = nixEval "profiles.no-rust-with-toolchain";
+  "profiles.repository-integration-source-isolation" = ''
+    local root
+    root="$(repo_root)"
+    python3 "$root/tests/profiles/repository-source-isolation.py" "$root"
+  '';
   "profiles.rust-build-package-exposed" = buildPackage "test_build_package_exposed";
   "profiles.rust-build-package-extra-srcs-scoped-to-checks" =
     buildPackage "test_extra_srcs_scoped_to_lint_test";
