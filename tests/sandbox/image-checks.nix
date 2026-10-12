@@ -126,7 +126,7 @@ let
     pkgs.runCommand "wrix-image-inspection" { nativeBuildInputs = [ pkgs.python3 ]; } ''
       set -euo pipefail
       python ${../lib/image-artifact.py} \
-        prepare ${if isLinux then image.ociLayout else image} "$out"
+        prepare ${if isLinux && image ? ociLayout then image.ociLayout else image.source or image} "$out"
     '';
 
   archiveShellHelpers = ''
