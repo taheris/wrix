@@ -139,6 +139,24 @@ fn runtime_shim_image_inspection_returns_identifiers_not_references() -> TestRes
 }
 
 #[test]
+fn runtime_shim_apple_image_listing_preserves_cached_reference() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let runtime = write_runtime_shims(root.path())?;
+    let output = std::process::Command::new(root.path().join("runtime-bin/container"))
+        .args(["image", "list", "--format", "json"])
+        .env("WRIX_TEST_RUNTIME_STATE", &runtime.state)
+        .output()?;
+    assert!(output.status.success());
+    let value: Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(
+        value[0]["configuration"]["name"],
+        "localhost/wrix-test:latest"
+    );
+    assert_eq!(value[0]["id"], "sha256:image-id");
+    Ok(())
+}
+
+#[test]
 fn consumer_spawn_config_fields_are_mounted_for_entrypoint() -> TestResult {
     let fixture = SpawnFixture::new("spawn-consumer-fields")?;
     let config = fixture.write(

@@ -419,6 +419,11 @@ fn service_runtime_fixture_conforms_to_missing_running_and_image_contracts() -> 
                 .success()
         );
         assert!(!invoke(&["inspect", "workspace-service"])?.status.success());
+        if runtime == "container" {
+            let output = invoke(&["image", "list", "--format", "json"])?;
+            assert!(output.status.success());
+            assert_eq!(serde_json::from_slice::<Value>(&output.stdout)?, json!([]));
+        }
         fs::write(fixture.root.path().join("image"), "installed image")?;
         let image = invoke(&["image", "inspect", "wrix-service:test"])?;
         assert!(image.status.success());
@@ -426,6 +431,11 @@ fn service_runtime_fixture_conforms_to_missing_running_and_image_contracts() -> 
         if runtime == "container" {
             let value: Value = serde_json::from_slice(&image.stdout)?;
             assert_eq!(value[0]["digest"], digest);
+            let output = invoke(&["image", "list", "--format", "json"])?;
+            assert!(output.status.success());
+            let listed: Value = serde_json::from_slice(&output.stdout)?;
+            assert_eq!(listed[0]["configuration"]["name"], "wrix-service:test");
+            assert_eq!(listed[0]["id"], digest);
         } else {
             assert_eq!(String::from_utf8(image.stdout)?.trim(), digest);
         }

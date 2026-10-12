@@ -633,11 +633,8 @@ let
           printf '%s\n' "$*" >>"$WRIX_DIGEST_SKIP_STATE/container.log"
           case "$1 $2" in
             'image list')
-              if [[ "$*" == *'--format json'* ]]; then
-                printf '[]\n'
-              else
-                printf 'REPOSITORY TAG ID\nwrix-existing old sha256:image-id\n'
-              fi
+              [[ "$*" == 'image list --format json' ]]
+              printf '%s\n' '[{"configuration":{"name":"wrix-existing:old"},"id":"sha256:image-id"}]'
               ;;
             'image inspect')
               printf '[{"id":"sha256:image-id","digest":"%s","labels":{"wrix.managed":"true"}}]\n' "$DESIRED_DIGEST"

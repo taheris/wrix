@@ -39,11 +39,11 @@ case "${1:-} ${2:-}" in
     ;;
   'image exists') [[ -f "${WRIX_TEST_IMAGE:?}" ]] ;;
   'image list')
-    if [[ "${3:-}" == --format ]]; then
-      printf '[]\n'
+    [[ "$*" == 'image list --format json' ]]
+    if [[ -f "${WRIX_TEST_IMAGE:?}" ]]; then
+      printf '[{"configuration":{"name":"wrix-service:test"},"id":"%s"}]\n' "${WRIX_TEST_DIGEST:?}"
     else
-      printf 'NAME TAG DIGEST\n'
-      [[ ! -f "${WRIX_TEST_IMAGE:?}" ]] || printf 'wrix-service test %s\n' "${WRIX_TEST_DIGEST:?}"
+      printf '[]\n'
     fi
     ;;
   tag* | 'image tag') [[ -f "${WRIX_TEST_IMAGE:?}" ]] ;;

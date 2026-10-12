@@ -4,11 +4,8 @@ set -euo pipefail
 state="${WRIX_TEST_RUNTIME_STATE:?}"
 case "${1:-} ${2:-}" in
   'image list')
-    if [[ "${3:-}" == "--format" ]]; then
-      printf '[]\n'
-    else
-      printf 'REPOSITORY TAG ID\nlocalhost/wrix-test latest sha256:image-id\n'
-    fi
+    [[ "$*" == 'image list --format json' ]]
+    printf '%s\n' '[{"configuration":{"name":"localhost/wrix-test:latest"},"id":"sha256:image-id"}]'
     ;;
   'image inspect')
     printf '%s\n' '[{"id":"sha256:image-id","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","labels":{"wrix.managed":"true"}}]'

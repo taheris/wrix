@@ -1175,23 +1175,19 @@ fn container_image_in_use(
 }
 
 fn darwin_image_for_digest(digest: &Digest) -> Result<Option<Target>, Error> {
-    let output = run_output("container", &["image", "list"])?;
+    let output = run_output("container", &["image", "list", "--format", "json"])?;
     if !output.status.success() {
         return Ok(None);
     }
-    let text = String::from_utf8_lossy(&output.stdout);
-    for line in text.lines().skip(1) {
-        let Some(reference) = container_reference_from_line(line)? else {
-            continue;
-        };
-        let inspect = run_output("container", &["image", "inspect", reference.as_str()])?;
+    for row in container_image_rows(&output.stdout)? {
+        let inspect = run_output("container", &["image", "inspect", row.target.as_str()])?;
         if !inspect.status.success() {
             continue;
         }
         let value = serde_json::from_slice::<Value>(&inspect.stdout)
             .map_err(|source| Error::DescriptorJson { source })?;
         if container_content_digest(&value)?.as_ref() == Some(digest) {
-            return Ok(Some(Target::Reference(reference)));
+            return Ok(Some(row.target));
         }
     }
     Ok(None)
@@ -1218,23 +1214,6 @@ fn container_content_digest(value: &Value) -> Result<Option<Digest>, Error> {
         // Opaque runtime IDs are valid, but are not content-digest evidence.
         Ok(None)
     }
-}
-
-fn container_reference_from_line(line: &str) -> Result<Option<ImageRef>, Error> {
-    let mut fields = line.split_whitespace();
-    let Some(repo) = fields.next() else {
-        return Ok(None);
-    };
-    if repo.eq_ignore_ascii_case("repository") {
-        return Ok(None);
-    }
-    let Some(tag) = fields.next() else {
-        return Ok(None);
-    };
-    if tag == "<none>" && repo.starts_with("untagged@sha256:") {
-        return Ok(Some(ImageRef::parse(repo)?));
-    }
-    Ok(Some(ImageRef::parse(&format!("{repo}:{tag}"))?))
 }
 
 fn create_temp_dir(prefix: &str) -> Result<PathBuf, Error> {
