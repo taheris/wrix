@@ -89,14 +89,14 @@ launcher ancestry. Missing process/window information, multiple windows sharing
 a terminal PID, linked panes in multiple sessions, and multi-client sessions
 omit navigation routing while retaining notification delivery. Clients in other
 sessions do not make an otherwise unique originating client ambiguous.
-[test](../crates/wrix-sandbox/src/command/launch/linux_terminal.rs#changing_focus_and_unrelated_application_do_not_change_origin)
-[test](../crates/wrix-sandbox/src/command/launch/linux_terminal.rs#multiple_terminal_clients_are_resolved_by_session)
-[test](../crates/wrix-sandbox/src/command/launch/linux_terminal.rs#multi_client_session_is_ambiguous)
-[test](../crates/wrix-sandbox/src/command/launch/linux_terminal.rs#linked_pane_sessions_are_ambiguous)
+[test](command::launch::linux_terminal::tests::changing_focus_and_unrelated_application_do_not_change_origin)
+[test](command::launch::linux_terminal::tests::multiple_terminal_clients_are_resolved_by_session)
+[test](command::launch::linux_terminal::tests::multi_client_session_is_ambiguous)
+[test](command::launch::linux_terminal::tests::linked_pane_sessions_are_ambiguous)
 
 Automatic Linux focus keys include the tmux socket and stable pane ID, since
 pane IDs are unique only within one server; consumer overrides remain opaque.
-[test](../crates/wrix-sandbox/src/command/launch/linux_terminal.rs#pane_routing_keys_are_scoped_to_the_tmux_socket)
+[test](command::launch::linux_terminal::tests::pane_routing_keys_are_scoped_to_the_tmux_socket)
 
 Linux routes carry `linux_route` provenance (terminal PID and, for tmux, client
 name/PID/TTY/session ID). Additional registrations preserve an already proven
