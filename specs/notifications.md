@@ -56,11 +56,32 @@ inside the container.
 ## Focus Detection
 
 The launcher registers the host terminal target at container start using the
-same runtime-file naming as the daemon. Linux/niri records its window ID; Darwin
-records its terminal application. Where applicable, tmux's active pane is also
-checked. The daemon suppresses only when it positively identifies the registered
-target as focused. Missing registration or unavailable focus information does
-not suppress an otherwise valid notification.
+same runtime-file naming as the daemon. Linux/niri records its proven
+originating window ID and PID; Darwin records its terminal application and
+window title. The host daemon suppresses only when that terminal window is
+focused and, for a tmux origin, the registered pane and tmux window are active
+in an attached session. An inactive pane or an active pane in a background
+terminal window still notifies. Missing origin metadata, ambiguous windows,
+malformed focus responses, or failed focus queries leave notification delivery
+unchanged. [system](verify:notifications.focus-target-registration)
+[system](verify:notifications.attention-navigation)
+
+Linux focus suppression currently requires niri IPC and a provable origin; other
+compositors/desktops still receive notifications normally. Darwin uses System
+Events Accessibility to check the frontmost application's `AXFocusedWindow`
+against a unique registered title, not merely the application name.
+Accessibility permission is required; app-only registrations, changed or
+duplicate titles, and unavailable focused-window attributes do not suppress.
+Darwin registration captures the foreground terminal at launch, so launch from
+the intended terminal window. Stable unique terminal titles are recommended for
+multi-window macOS use. Live Accessibility behavior requires validation on the
+consuming macOS desktop; portable tests cover command routing and query failure.
+[system](verify:notifications.focus-target-registration)
+[system](verify:notifications.attention-navigation)
+
+Suppression is host-owned; no downstream notification hooks or dotfile focus
+checks are needed. Update and restart `wrix-notifyd` to use the packaged helper.
+Restart sandboxes to refresh registrations that lack origin metadata.
 
 `WRIX_NOTIFY_ALWAYS=1` bypasses focus checking, `WRIX_NOTIFY_VERBOSE=1` enables
 diagnostic logging, and `WRIX_NOTIFY_TCP=host:port` overrides the client's TCP
@@ -233,9 +254,12 @@ hidden.
 - Host native dispatch remains available after client disconnects
   [judge](../tests/judges/notifications.sh#test_native_dispatch_and_reliability)
 - Launcher registration, the exported `WRIX_FOCUS_TARGET`, and daemon lookup
-  agree on the opaque host target, suppress only positively focused targets, and
-  never substitute an execution ID, agent conversation ID, or in-container
-  debugging pane ID [system](verify:notifications.focus-target-registration)
+  agree on the opaque host target and suppress only an active origin pane in its
+  focused terminal window; inactive panes, background windows (including another
+  window of the same macOS app), and unavailable origin/focus information still
+  notify, without substituting an execution ID, agent conversation ID, or
+  in-container debugging pane ID
+  [system](verify:notifications.focus-target-registration)
 - `WRIX_NOTIFY_ALWAYS=1` disables focus checking
   [system](verify:notifications.focus-override)
 - `WRIX_NOTIFY_VERBOSE=1` enables diagnostic logging

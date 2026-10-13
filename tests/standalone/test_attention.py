@@ -132,6 +132,20 @@ else:
         self.assertFalse(attention.is_focused(self.directory, "legacy"))
         self.assertFalse(self.log.exists())
 
+    def test_linux_unavailable_or_malformed_focus_information_does_not_suppress(self):
+        self.register("agent")
+        for response in ("invalid", "null", "{}", '["invalid"]',
+                         '[{"id":1,"pid":%d,"is_focused":"true"}]' % os.getpid()):
+            with self.subTest(response=response):
+                self.state.write_text(response)
+                self.assertFalse(attention.is_focused(self.directory, "agent"))
+
+    def test_linux_ambiguous_focused_windows_do_not_suppress(self):
+        self.register("agent")
+        self.desktop({"id":1, "pid":os.getpid(), "is_focused":True},
+                     {"id":2, "pid":os.getpid() + 1, "is_focused":True})
+        self.assertFalse(attention.is_focused(self.directory, "agent"))
+
     def test_window_pid_mismatch_cannot_focus_unrelated_application(self):
         self.register("agent")
         attention.enqueue(self.directory, "agent")
@@ -587,6 +601,80 @@ os.close(slave)
         self.assertEqual(self.focused_window(), 99)
         self.assertIsNone(self.saved_origin())
         self.assertEqual(self.log.read_text().splitlines(), ["1", "99"])
+
+    def darwin_focus_registration(self, target="mac"):
+        title = 'Alacritty "quoted"; do shell script "bad"'
+        self.register(target, terminal_app="Alacritty", terminal_window_title=title)
+        osascript = self.bin / "osascript"
+        osascript.write_text(f'''#!{sys.executable}
+import json, os, sys
+if len(sys.argv) != 5 or sys.argv[1] != "-e": sys.exit(64)
+with open(os.environ["LOG"], "a") as log: log.write(json.dumps(sys.argv[1:]) + "\\n")
+if os.environ.get("AX_FAILURE"): sys.exit(72)
+print(os.environ.get("AX_RESULT", "true"))
+''')
+        osascript.chmod(0o755)
+        return title
+
+    def test_darwin_focused_origin_window_suppresses_and_title_is_data(self):
+        title = self.darwin_focus_registration()
+        with patch.object(attention.sys, "platform", "darwin"):
+            self.assertTrue(attention.is_focused(self.directory, "mac"))
+        argv = json.loads(self.log.read_text())
+        self.assertEqual(argv[-2:], ["Alacritty", title])
+        self.assertNotIn(title, argv[1])
+
+    def test_darwin_background_window_of_same_app_does_not_suppress(self):
+        self.darwin_focus_registration()
+        with patch.object(attention.sys, "platform", "darwin"), patch.dict(os.environ, AX_RESULT="false"):
+            self.assertFalse(attention.is_focused(self.directory, "mac"))
+
+    def test_darwin_unavailable_accessibility_does_not_suppress(self):
+        self.darwin_focus_registration()
+        with patch.object(attention.sys, "platform", "darwin"), patch.dict(os.environ, AX_FAILURE="1"):
+            self.assertFalse(attention.is_focused(self.directory, "mac"))
+
+    def test_darwin_unexpected_focus_response_does_not_suppress(self):
+        self.darwin_focus_registration()
+        with patch.object(attention.sys, "platform", "darwin"), patch.dict(os.environ, AX_RESULT="unknown"):
+            self.assertFalse(attention.is_focused(self.directory, "mac"))
+
+    def test_darwin_missing_origin_title_does_not_suppress(self):
+        self.register("mac", terminal_app="Alacritty")
+        with patch.object(attention.sys, "platform", "darwin"):
+            self.assertFalse(attention.is_focused(self.directory, "mac"))
+        self.assertFalse(self.log.exists())
+
+    @unittest.skipUnless(shutil.which("tmux"), "tmux unavailable")
+    def test_darwin_focused_active_origin_pane_suppresses(self):
+        socket_path, _, _, call = self.terminal("mac")
+        self.darwin_focus_registration()
+        self.register("mac", terminal_app="Alacritty", terminal_window_title="Origin",
+                      tmux_target="mac:0.0", tmux_socket=socket_path)
+        with patch.object(attention.sys, "platform", "darwin"):
+            self.assertTrue(attention.is_focused(self.directory, "mac"))
+        self.assertEqual(call("display-message", "-p", "-t", "mac:0.0", "#{pane_active}"), "1")
+
+    @unittest.skipUnless(shutil.which("tmux"), "tmux unavailable")
+    def test_darwin_inactive_origin_pane_does_not_suppress(self):
+        socket_path, _, _, call = self.terminal("mac")
+        self.darwin_focus_registration()
+        self.register("mac", terminal_app="Alacritty", terminal_window_title="Origin",
+                      tmux_target="mac:0.0", tmux_socket=socket_path)
+        call("split-window", "-t", "mac:0.0", "sleep 300")
+        with patch.object(attention.sys, "platform", "darwin"):
+            self.assertFalse(attention.is_focused(self.directory, "mac"))
+        self.assertEqual(call("display-message", "-p", "-t", "mac:0.0", "#{pane_active}"), "0")
+
+    @unittest.skipUnless(shutil.which("tmux"), "tmux unavailable")
+    def test_darwin_inactive_tmux_window_does_not_suppress(self):
+        socket_path, _, _, call = self.terminal("mac")
+        self.darwin_focus_registration()
+        self.register("mac", terminal_app="Alacritty", terminal_window_title="Origin",
+                      tmux_target="mac:0.0", tmux_socket=socket_path)
+        call("new-window", "-t", "mac:", "sleep 300")
+        with patch.object(attention.sys, "platform", "darwin"):
+            self.assertFalse(attention.is_focused(self.directory, "mac"))
 
     def test_darwin_unique_window_required_and_title_is_data(self):
         osascript = self.bin / "osascript"

@@ -676,7 +676,7 @@ write_focus_fixture() {
 #!/usr/bin/env bash
 set -euo pipefail
 [[ "$*" == 'msg -j windows' ]] || exit 91
-printf '[{"id":"focused-window","pid":%s,"is_focused":true}]\n' "$WRIX_NOTIFY_TEST_TERMINAL_PID"
+printf '[{"id":"focused-window","pid":%s,"is_focused":%s}]\n' "$WRIX_NOTIFY_TEST_TERMINAL_PID" "$(<"$WRIX_NOTIFY_TEST_WINDOW_FOCUS")"
 EOF
       chmod +x "$bin_dir/niri"
       export WRIX_NOTIFY_TEST_TERMINAL_PID="$$"
@@ -685,17 +685,20 @@ EOF
       session_dir="$runtime_dir/data/wrix/sessions"
       mkdir -p "$session_dir"
       jq -n --arg focus_target "$focus_target" --arg terminal_app "FocusedTerminal" \
-        '{focus_target: $focus_target, terminal_app: $terminal_app}' >"$session_dir/$safe_id.json"
+        '{focus_target: $focus_target, terminal_app: $terminal_app, terminal_window_title: "Origin window"}' >"$session_dir/$safe_id.json"
       cat >"$bin_dir/osascript" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-printf '%s\n' 'FocusedTerminal'
+[[ "$#" -eq 4 && "$1" == '-e' && "$3" == 'FocusedTerminal' && "$4" == 'Origin window' ]] || exit 91
+printf '%s\n' "$(<"$WRIX_NOTIFY_TEST_WINDOW_FOCUS")"
 EOF
       chmod +x "$bin_dir/osascript"
       ;;
     *) skip "unsupported platform: $(uname -s)" ;;
   esac
 
+  export WRIX_NOTIFY_TEST_WINDOW_FOCUS="$runtime_dir/window-focus"
+  printf '%s\n' true >"$WRIX_NOTIFY_TEST_WINDOW_FOCUS"
   cat >"$bin_dir/tmux" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -707,7 +710,7 @@ EOF
 write_host_focus_commands() {
   local bin_dir="$1"
   local command
-  export WRIX_NOTIFY_TEST_TERMINAL_PID="$$"
+  export WRIX_NOTIFY_TEST_TERMINAL_PID="$$" WRIX_NOTIFY_TEST_FOCUS_BIN="$bin_dir"
   mkdir -p "$bin_dir"
   for command in niri osascript tmux; do
     cat >"$bin_dir/$command" <<'EOF'
@@ -723,14 +726,30 @@ case "$(basename "$0")" in
   osascript)
     [[ "$1" == '-e' ]] || exit 91
     [[ ! -f "$state/fail-window" ]] || exit 1
-    cat "$state/app"
+    if [[ "$#" -eq 2 ]]; then
+      cat "$state/app"
+    elif [[ "$#" -eq 3 ]]; then
+      cat "$state/title"
+    elif [[ "$#" -eq 4 ]]; then
+      [[ "$3" == 'FocusedTerminal' && "$4" == 'Origin window' ]] || exit 91
+      if [[ "$(<"$state/app")" == "$3" && "$(<"$state/title")" == "$4" && ! -f "$state/duplicate-title" ]]; then
+        printf '%s\n' true
+      else
+        printf '%s\n' false
+      fi
+    else
+      exit 91
+    fi
     ;;
   tmux)
     if [[ "$*" == 'display-message -p #{session_name}:#{window_index}.#{pane_index}' ]]; then
       cat "$state/pane"
-    elif [[ "$*" == '-S /tmp/notify-tmux.sock display-message -p -t host:2.1 #{session_name}:#{window_index}.#{pane_index} #{window_active} #{pane_active} #{?session_attached,1,0}' ]]; then
+    elif [[ "$*" == '-S /tmp/notify-tmux.sock display-message -p -t host:2.1 #{session_name}:#{window_index}.#{pane_index} #{pane_dead}' ]]; then
       [[ ! -f "$state/fail-pane" ]] || exit 1
-      printf '%s 1 1 1\n' "$(<"$state/pane")"
+      printf '%s 0\n' "$(<"$state/pane")"
+    elif [[ "$*" == '-S /tmp/notify-tmux.sock display-message -p -t host:2.1 #{window_active} #{pane_active} #{?session_attached,1,0}' ]]; then
+      [[ ! -f "$state/fail-pane" ]] || exit 1
+      if [[ "$(<"$state/pane")" == 'host:2.1' ]]; then printf '%s\n' '1 1 1'; else printf '%s\n' '1 0 1'; fi
     else
       exit 91
     fi
@@ -866,6 +885,7 @@ test_pi_focus_routing() {
     printf '{}\n' >"$directory/home/.pi/agent/auth.json"
     printf '{"id":42}\n' >"$state/window"
     printf 'FocusedTerminal\n' >"$state/app"
+    printf 'Origin window\n' >"$state/title"
     printf 'host:2.1\n' >"$state/pane"
     case "$(uname -s)" in
       Linux) session_dir="$runtime_dir/wrix/sessions" ;;
@@ -965,7 +985,7 @@ EOF
 
   local mode case_name directory runtime_dir state capture daemon_log session_dir target endpoint
   local host_tmux='"host:2.1"'
-  local -a cases=(focused opaque window-unfocused pane-unfocused pane-unknown pane-empty window-unknown window-missing absent empty)
+  local -a cases=(focused opaque window-unfocused same-app-background duplicate-title title-missing pane-unfocused pane-unknown pane-empty window-unknown window-missing absent empty)
   if [[ "$(uname -s)" == "Linux" ]]; then
     host_tmux=null
     cases=(focused opaque window-unfocused window-unknown window-missing absent empty)
@@ -981,11 +1001,13 @@ EOF
       mkdir -p "$state"
       printf '{"id":42}\n' >"$state/window"
       printf 'FocusedTerminal\n' >"$state/app"
+      printf 'Origin window\n' >"$state/title"
       printf 'host:2.1\n' >"$state/pane"
       if [[ "$case_name" == "window-missing" ]]; then
         printf 'null\n' >"$state/window"
         : >"$state/app"
       fi
+      if [[ "$case_name" == 'title-missing' ]]; then : >"$state/title"; fi
       case "$(uname -s)" in
         Linux) session_dir="$runtime_dir/wrix/sessions" ;;
         Darwin) session_dir="$runtime_dir/data/wrix/sessions" ;;
@@ -1062,6 +1084,8 @@ EOF
         fi
         case "$case_name" in
           window-unfocused) printf '{"id":43}\n' >"$state/window"; printf 'OtherTerminal\n' >"$state/app" ;;
+          same-app-background) printf 'Other window\n' >"$state/title" ;;
+          duplicate-title) touch "$state/duplicate-title" ;;
           pane-unfocused) printf 'host:2.2\n' >"$state/pane" ;;
           pane-unknown) touch "$state/fail-pane" ;;
           pane-empty) : >"$state/pane" ;;
@@ -1221,8 +1245,14 @@ try:
         name, pid, tty, session = next(row.split("\t") for row in rows if row.split("\t")[-1] == session)
         record["linux_route"]["client"] = dict(name=name, pid=int(pid), tty=tty, session=session)
     check("focused target ignores another client and the default server", True)
+    window_focus = Path(os.environ["WRIX_NOTIFY_TEST_WINDOW_FOCUS"])
+    window_focus.write_text("false\n")
+    check("active origin pane in a background terminal window notifies", False)
+    window_focus.unlink()
+    check("unavailable terminal focus information notifies", False)
+    window_focus.write_text("true\n")
     record.pop("tmux_socket")
-    check("legacy socketless registration does not navigate on Linux", sys.platform == "darwin")
+    check("socketless pane registration leaves delivery unsuppressed", False)
     record["tmux_socket"] = named_socket
     tmux(named, "split-window", "-t", "visible:0.0", "sleep 120")
     check("inactive target pane notifies", False)
@@ -1345,7 +1375,7 @@ test_verbose_logging() {
   if ! wait_for_capture "$capture"; then
     fail_with_output "verbose daemon did not dispatch the test payload" "$daemon_log"
   fi
-  if [[ "$(<"$daemon_log")" != *"notifyd: session file not found:"* ]]; then
+  if [[ "$(<"$daemon_log")" != *"notifyd: checking registered origin for missing:0.1"* ]]; then
     fail_with_output "WRIX_NOTIFY_VERBOSE did not enable daemon diagnostics" "$daemon_log"
   fi
   pass "WRIX_NOTIFY_VERBOSE=1 enables notification diagnostics"

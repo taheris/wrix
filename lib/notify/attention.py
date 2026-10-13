@@ -363,21 +363,39 @@ def return_to_origin(directory):
     return 0
 
 
-def is_focused(directory, target):
-    record = registration(directory, target)
-    if record is None or validate(record) != "success":
-        return False
+def terminal_window_focused(record):
+    if sys.platform == "darwin":
+        result = run(["osascript", "-e", '''on run argv
+ tell application "System Events"
+  if not (exists process (item 1 of argv)) then return false
+  tell process (item 1 of argv)
+   if not frontmost then return false
+   set matches to windows whose name is (item 2 of argv)
+   if (count of matches) is not 1 then return false
+   return (name of (value of attribute "AXFocusedWindow")) is (item 2 of argv)
+  end tell
+ end tell
+end run''', record["terminal_app"], record["terminal_window_title"]])
+        return result == "true"
     windows = run(["niri", "msg", "-j", "windows"])
     try:
-        focused = any(str(window["id"]) == record["window_id"] and window.get("is_focused") for window in json.loads(windows))
-    except (ValueError, TypeError, KeyError):
+        focused = [window for window in json.loads(windows) if window.get("is_focused") is True]
+        return (len(focused) == 1 and str(focused[0]["id"]) == record["window_id"]
+                and focused[0].get("pid") == record["linux_route"]["terminal_pid"])
+    except (ValueError, TypeError, KeyError, AttributeError):
         return False
-    if not focused:
+
+
+def is_focused(directory, target):
+    record = registration(directory, target)
+    if record is None or validate(record) != "success" or not terminal_window_focused(record):
         return False
     if record.get("tmux_target"):
-        state = run(["tmux", "-S", record["tmux_socket"], "display-message", "-p", "-t", record["tmux_target"],
-                     "#{window_active} #{pane_active}"])
-        return state == "1 1"
+        if not record.get("tmux_socket"):
+            return False
+        pane_format = "#{window_active} #{pane_active} #{?session_attached,1,0}"
+        state = run(tmux_command(record) + ["display-message", "-p", "-t", record["tmux_target"], pane_format])
+        return state == "1 1 1"
     return True
 
 

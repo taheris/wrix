@@ -37,7 +37,16 @@ let
     ${pkgs.jq}/bin/jq -cn --args '$ARGS.positional' -- "$@" \
       >> "$WRIX_NOTIFY_TEST_DISPATCH_CAPTURE"
   '';
+  tmuxBridge = pkgs.writeShellScriptBin "tmux" ''
+    set -euo pipefail
+
+    if [[ -n "''${WRIX_NOTIFY_TEST_FOCUS_STATE:-}" ]]; then
+      exec "''${WRIX_NOTIFY_TEST_FOCUS_BIN:?}/tmux" "$@"
+    fi
+    exec ${pkgs.tmux}/bin/tmux "$@"
+  '';
   daemonPkgs = pkgs // {
+    tmux = tmuxBridge;
     libnotify = nativeBridge;
     terminal-notifier = nativeBridge;
   };
