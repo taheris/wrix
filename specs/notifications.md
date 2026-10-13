@@ -144,6 +144,47 @@ attention and do not stop later notifications.
 [system](verify:notifications.attention-navigation)
 [system](verify:notifications.focus-target-registration)
 
+### Return to the previous position
+
+On Linux/niri, `wrix-focus-notification --return` restores the position before
+the last successful attention jump. Desktop bindings remain consumer-owned:
+invoke the ordinary command for attention and invoke it with `--return` for
+return. The host remembers the originating niri window ID and PID; when tmux is
+present it also records the explicitly resolved client name/PID/TTY, socket,
+stable session/window IDs and stable pane ID. Capture resolves host-owned tmux
+listeners and client ancestry using the same route validation as navigation; the
+originating pane need not itself have an agent registration.
+[system](verify:notifications.attention-navigation)
+
+Every successful jump replaces the single saved origin, including moves within
+the same workspace, terminal window, tmux window, or pane. In particular, a
+cross-workspace jump followed by a pane-only jump returns to the pane before the
+latter jump, not to the earlier workspace. Empty queues and unsuccessful
+navigation leave the saved position unchanged. If a successful jump cannot
+resolve an unambiguous origin, it clears the old return position rather than
+leaving a misleading destination.
+[system](verify:notifications.attention-navigation)
+
+Return validates the saved window/PID, client identity and ancestry, session,
+window and live pane, then restores only that explicitly identified client to
+the saved session, selects the saved window/pane and focuses the saved niri
+window. It does not switch any other client. Ambiguous shared session state,
+closed windows, exited/replaced clients, missing sessions/windows, and
+dead/missing/moved panes are discarded safely. Successful returns consume the
+saved position; transient navigation failures retain it for retry. Return
+neither consumes attention entries nor saves a new origin.
+[system](verify:notifications.attention-navigation)
+
+Attention navigation, return, and saved-position updates serialize under the
+pending queue's SQLite transaction. The return table is added automatically to
+the existing host-local database; there is no manual migration or sandbox
+restart for this feature. Update the consuming desktop's focus package and
+reload its command references to enable return. Delivery still never captures or
+changes desktop focus. Darwin's existing attention navigation is unchanged;
+`--return` is unsupported on Darwin and reports that limitation without moving
+focus or changing the queue/return state.
+[system](verify:notifications.attention-navigation)
+
 ## Security
 
 The Darwin listener binds to the vmnet gateway (`192.168.64.1:5959`), not
