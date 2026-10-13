@@ -78,7 +78,7 @@ successful navigation or stale entries. Missing registrations, changed routes,
 closed niri windows, and missing/dead tmux panes are discarded. Concurrent
 delivery and navigation serialize queue transactions, including navigation, so a
 newly delivered notification cannot be lost by a previous visit.
-[test](../tests/standalone/test_attention.py)
+[system](verify:notifications.attention-navigation)
 
 Linux navigation requires niri and focuses the registered window after selecting
 the registered host tmux window/pane through its registered socket. Darwin uses
@@ -94,7 +94,7 @@ Alacritty windows on Darwin, use unique stable window titles (disable dynamic
 titles in the consuming Alacritty configuration). Live macOS window raising
 requires validation on the consuming desktop; the portable verifier covers
 argument routing, not macOS Accessibility itself.
-[test](../tests/standalone/test_attention.py)
+[system](verify:notifications.attention-navigation)
 
 Navigation happens only on explicit host invocation, never on delivery. Unrouted
 notifications still dispatch normally. Queue storage failures are diagnosed

@@ -298,7 +298,7 @@ Delivery never moves focus; the operator invokes `wrix-focus-notification` to
 visit pending attention. The unauthenticated Darwin transport permits spoofed
 attention for known keys, but cannot introduce a new host navigation route.
 `notifications.md` owns queue behavior and platform limitations.
-[test](../tests/standalone/test_attention.py)
+[system](verify:notifications.attention-navigation)
 
 Completion updates the same file atomically. `"completed"` means the launcher
 recorded the end of its attempt, not that the attempt succeeded or that Wrix
