@@ -343,7 +343,6 @@ in
     IMAGE="${../../lib/sandbox/image.nix}"
 
     grep -q 'defaultProvider = "openai-codex"' "$DEFAULTS" || { echo "Pi default provider must be OpenAI Codex"; exit 1; }
-    grep -q 'defaultThinkingLevel = "xhigh"' "$DEFAULTS" || { echo "Pi default reasoning must be xhigh"; exit 1; }
     grep -q 'defaultProjectTrust = "always"' "$DEFAULTS" || { echo "Pi must trust /workspace by default"; exit 1; }
     grep -q 'steeringMode = "all"' "$DEFAULTS" || { echo "Pi steering mode must default to all"; exit 1; }
     grep -q 'followUpMode = "all"' "$DEFAULTS" || { echo "Pi follow-up mode must default to all"; exit 1; }

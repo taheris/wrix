@@ -32,6 +32,7 @@ let
 in
 {
   pi-settings-precedence =
+    assert defaults.defaultThinkingLevel == "medium";
     assert defaults.defaultTools == [ "+codemode" ];
     assert defaults.codemode.mode == "on";
     assert defaults.defaultProjectTrust == "always";

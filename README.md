@@ -38,7 +38,7 @@ Explicit variants are `packages.image-<profile>-claude` and
 `packages.image-<profile>-pi`. `packages.profile-images` is the built-in Pi
 manifest; consumers create custom manifests with `mkProfileImages`.
 
-Pi images seed OpenAI Codex subscription defaults, high reasoning, trusted
+Pi images seed OpenAI Codex subscription defaults, medium reasoning, trusted
 project fallback, regular terminal mode for tmux scrollback, and all-at-once
 steering/follow-up queues. Run `/login` in Pi and choose ChatGPT Plus/Pro
 (Codex) once; credentials persist in host `~/.pi/agent/auth.json`. Pi session

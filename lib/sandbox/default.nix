@@ -235,7 +235,7 @@ let
   basePiSettings = {
     defaultProvider = "openai-codex";
     defaultModel = "gpt-6.1-sol";
-    defaultThinkingLevel = "xhigh";
+    defaultThinkingLevel = "medium";
     defaultTools = [ "+codemode" ];
     codemode.mode = "on";
     defaultProjectTrust = "always";
