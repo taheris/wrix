@@ -78,14 +78,13 @@ impl Fixture {
 
     fn command(&self, executable: &Path, cwd: &Path, context: &str) -> Command {
         let mut command = Command::new(executable);
+        common::set_isolated_git_env(&mut command);
         command
             .current_dir(cwd)
             .env("PATH", &self.tools)
             .env("HOME", self.work.path())
             .env("PREK_HOME", self.work.path().join("prek-cache"))
             .env("WRIX_PREK_CONTEXT", context)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
             .env_remove("WRIX_PREK_RUNNER");
         command
     }

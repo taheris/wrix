@@ -613,11 +613,13 @@ fn set_isolated_env(command: &mut Command, extra_paths: &[&Path]) -> TestResult 
     Ok(())
 }
 
-fn set_isolated_git_env(command: &mut Command) {
+pub fn set_isolated_git_env(command: &mut Command) {
     command
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_TERMINAL_PROMPT", "0");
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env_remove("GIT_CONFIG_COUNT")
+        .env_remove("GIT_CONFIG_PARAMETERS");
 }
 
 fn path_with_binary_dir(extra_paths: &[&Path]) -> TestResult<OsString> {

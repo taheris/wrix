@@ -1,3 +1,5 @@
+mod common;
+
 use std::{
     env,
     error::Error,
@@ -7,6 +9,8 @@ use std::{
     path::{Path, PathBuf},
     process::Command as ProcessCommand,
 };
+
+use common::git_command;
 
 const BD_FAKE: &str = r#"#!/usr/bin/env bash
 set -euo pipefail
@@ -1212,15 +1216,14 @@ fn invoke_push(
 }
 
 fn configure_bd(command: &mut ProcessCommand, fixture: &Fixture, scenario: &str) {
+    common::set_isolated_git_env(command);
     command
         .env("WRIX_BEADS_BD_LOG", &fixture.bd_log)
         .env("WRIX_BEADS_STATE_DIR", &fixture.state_dir)
         .env("WRIX_BEADS_BD_SCENARIO", scenario)
         .env("WRIX_BEADS_REAL_BD", fixture.real_bd())
         .env("WRIX_BEADS_ROOT", fixture.repo())
-        .env("HOME", fixture.home())
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_NOSYSTEM", "1");
+        .env("HOME", fixture.home());
 }
 
 fn bd_command(fixture: &Fixture, scenario: &str) -> ProcessCommand {
@@ -1252,16 +1255,6 @@ fn git_stdout(cwd: &Path, args: &[&str]) -> TestResult<String> {
         String::from_utf8_lossy(&output.stderr)
     );
     Ok(String::from_utf8(output.stdout)?.trim().to_owned())
-}
-
-fn git_command(cwd: &Path, args: &[&str]) -> ProcessCommand {
-    let mut command = ProcessCommand::new("git");
-    command
-        .current_dir(cwd)
-        .args(args)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_NOSYSTEM", "1");
-    command
 }
 
 fn path_with_binary_dirs(extra_paths: &[&Path]) -> TestResult<OsString> {
