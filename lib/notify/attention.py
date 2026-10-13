@@ -25,6 +25,19 @@ def registration(directory, target):
         field = "terminal_app" if sys.platform == "darwin" else "window_id"
         if not isinstance(record.get(field), str) or not record[field]:
             return None
+        if sys.platform != "darwin":
+            route = record.get("linux_route")
+            if not isinstance(route, dict) or not isinstance(route.get("terminal_pid"), int):
+                return None
+            client = route.get("client")
+            if record.get("tmux_target") and (
+                not isinstance(record["tmux_target"], str)
+                or not re.fullmatch(r"%[0-9]+", record["tmux_target"])
+                or not record.get("tmux_socket") or not isinstance(client, dict)
+                or not all(isinstance(client.get(key), str) and client[key] for key in ("name", "tty", "session"))
+                or not isinstance(client.get("pid"), int)
+            ):
+                return None
         if sys.platform == "darwin" and not record.get("terminal_window_title"):
             return None
         for key in ("tmux_target", "tmux_socket", "terminal_window_title"):
@@ -53,9 +66,10 @@ def queue(directory):
 
 
 def route_identity(record):
-    return json.dumps({key: record.get(key) for key in (
-        "focus_target", "window_id", "terminal_app", "terminal_window_title", "tmux_target", "tmux_socket"
-    )}, sort_keys=True)
+    fields = ["focus_target", "window_id", "terminal_app", "terminal_window_title", "tmux_target", "tmux_socket"]
+    if sys.platform != "darwin":
+        fields.append("linux_route")
+    return json.dumps({key: record.get(key) for key in fields}, sort_keys=True)
 
 
 def enqueue(directory, target):
@@ -76,13 +90,13 @@ def run(args):
         return None
 
 
-def navigate(record):
+def validate(record):
     if sys.platform != "darwin":
         windows = run(["niri", "msg", "-j", "windows"])
         if windows is None:
             return "retry"
         try:
-            if not any(str(window["id"]) == record["window_id"] for window in json.loads(windows)):
+            if not any(str(window["id"]) == record["window_id"] and window.get("pid") == record["linux_route"]["terminal_pid"] for window in json.loads(windows)):
                 return "stale"
         except (ValueError, TypeError, KeyError):
             return "retry"
@@ -91,10 +105,56 @@ def navigate(record):
         tmux = ["tmux"]
         if record.get("tmux_socket"):
             tmux += ["-S", record["tmux_socket"]]
-        state = run(tmux + ["display-message", "-p", "-t", tmux_target,
-                           "#{session_name}:#{window_index}.#{pane_index} #{pane_dead}"])
-        if state != tmux_target + " 0":
-            return "stale"
+        if sys.platform != "darwin":
+            client = record["linux_route"]["client"]
+            clients = run(tmux + ["list-clients", "-F", "#{client_name}\t#{client_pid}\t#{client_tty}\t#{session_id}"])
+            if clients is None:
+                return "retry"
+            attached = [line.split("\t") for line in clients.splitlines() if line.split("\t")[-1] == client["session"]]
+            if attached != [[client["name"], str(client["pid"]), client["tty"], client["session"]]]:
+                return "stale"
+            if not client_origin_matches(client, record["linux_route"]["terminal_pid"]):
+                return "stale"
+            panes = run(tmux + ["list-panes", "-a", "-F", "#{pane_id}\t#{session_id}"])
+            if panes is None:
+                return "retry"
+            sessions = [line.split("\t")[1:] for line in panes.splitlines() if line.split("\t")[0] == tmux_target]
+            if sessions != [[client["session"]]]:
+                return "stale"
+            state = run(tmux + ["display-message", "-p", "-t", tmux_target, "#{pane_id} #{pane_dead} #{session_id}"])
+            if state != tmux_target + " 0 " + client["session"]:
+                return "stale"
+        else:
+            state = run(tmux + ["display-message", "-p", "-t", tmux_target,
+                               "#{session_name}:#{window_index}.#{pane_index} #{pane_dead}"])
+            if state != tmux_target + " 0":
+                return "stale"
+    return "success"
+
+
+def client_origin_matches(client, terminal_pid):
+    try:
+        if str(Path(f"/proc/{client['pid']}/fd/0").readlink()) != client["tty"]:
+            return False
+        pid = client["pid"]
+        ancestors = set()
+        while pid > 1 and pid not in ancestors and len(ancestors) < 128:
+            ancestors.add(pid)
+            status = Path(f"/proc/{pid}/status").read_text()
+            pid = int(next(line.split()[1] for line in status.splitlines() if line.startswith("PPid:")))
+        return terminal_pid in ancestors
+    except (OSError, ValueError, StopIteration):
+        return False
+
+
+def navigate(record):
+    result = validate(record)
+    if result != "success":
+        return result
+    tmux_target = record.get("tmux_target")
+    tmux = ["tmux"]
+    if record.get("tmux_socket"):
+        tmux += ["-S", record["tmux_socket"]]
     if sys.platform == "darwin":
         result = run(["osascript", "-e", '''on run argv
  tell application "System Events"
@@ -137,11 +197,32 @@ def focus(directory):
                 return
 
 
+def is_focused(directory, target):
+    record = registration(directory, target)
+    if record is None or validate(record) != "success":
+        return False
+    windows = run(["niri", "msg", "-j", "windows"])
+    try:
+        focused = any(str(window["id"]) == record["window_id"] and window.get("is_focused") for window in json.loads(windows))
+    except (ValueError, TypeError, KeyError):
+        return False
+    if not focused:
+        return False
+    if record.get("tmux_target"):
+        state = run(["tmux", "-S", record["tmux_socket"], "display-message", "-p", "-t", record["tmux_target"],
+                     "#{window_active} #{pane_active}"])
+        return state == "1 1"
+    return True
+
+
 def main():
     parser = argparse.ArgumentParser(description="Visit the newest pending agent terminal.")
     parser.add_argument("--enqueue", metavar="TARGET")
+    parser.add_argument("--is-focused", metavar="TARGET")
     args = parser.parse_args()
     try:
+        if args.is_focused is not None:
+            return 0 if is_focused(session_directory(), args.is_focused) else 1
         if args.enqueue is not None:
             enqueue(session_directory(), args.enqueue)
         else:

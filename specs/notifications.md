@@ -80,20 +80,61 @@ delivery and navigation serialize queue transactions, including navigation, so a
 newly delivered notification cannot be lost by a previous visit.
 [system](verify:notifications.attention-navigation)
 
-Linux navigation requires niri and focuses the registered window after selecting
-the registered host tmux window/pane through its registered socket. Darwin uses
-System Events accessibility to raise a uniquely named registered terminal
-window, then selects its host tmux window/pane. The launcher records the
-foreground terminal window title on Darwin. Accessibility permission is needed
-for both registration and navigation; missing permission leaves notification
-delivery intact. App-only legacy registrations are not navigable. Changed or
-duplicate window titles are deliberately skipped rather than activating an
-arbitrary Alacritty window. This is best-effort title-based macOS routing, not
-stable window-ID routing; Linux/niri does not have that limitation. For multiple
-Alacritty windows on Darwin, use unique stable window titles (disable dynamic
-titles in the consuming Alacritty configuration). Live macOS window raising
-requires validation on the consuming desktop; the portable verifier covers
-argument routing, not macOS Accessibility itself.
+Linux registration never uses desktop focus. It maps the originating stable tmux
+pane ID (`TMUX_PANE`) to a single session and exactly one attached client in
+that session, checks the client's PID/TTY, follows that client's process
+ancestry (not the tmux server ancestry of the launching shell), and matches a
+unique ancestor PID against niri's window list. Without tmux it follows the
+launcher ancestry. Missing process/window information, multiple windows sharing
+a terminal PID, linked panes in multiple sessions, and multi-client sessions
+omit navigation routing while retaining notification delivery. Clients in other
+sessions do not make an otherwise unique originating client ambiguous.
+[test](../crates/wrix-sandbox/src/command/launch/linux_terminal.rs#changing_focus_and_unrelated_application_do_not_change_origin)
+[test](../crates/wrix-sandbox/src/command/launch/linux_terminal.rs#multiple_terminal_clients_are_resolved_by_session)
+[test](../crates/wrix-sandbox/src/command/launch/linux_terminal.rs#multi_client_session_is_ambiguous)
+[test](../crates/wrix-sandbox/src/command/launch/linux_terminal.rs#linked_pane_sessions_are_ambiguous)
+
+Automatic Linux focus keys include the tmux socket and stable pane ID, since
+pane IDs are unique only within one server; consumer overrides remain opaque.
+[test](../crates/wrix-sandbox/src/command/launch/linux_terminal.rs#pane_routing_keys_are_scoped_to_the_tmux_socket)
+
+Linux routes carry `linux_route` provenance (terminal PID and, for tmux, client
+name/PID/TTY/session ID). Additional registrations preserve an already proven
+route rather than overwriting it with current focus. Navigation validates the
+window PID, recorded client ancestry, uniquely attached session client, socket,
+stable pane ID, session membership and live pane before selecting the window and
+pane and focusing niri. Renaming/reindexing does not retarget a pane. A detached
+client, a client switched to another session, or a newly ambiguous session
+invalidates navigation; Wrix never switches an arbitrary client.
+`select-window`/`select-pane` do not switch clients between sessions.
+[system](verify:notifications.attention-navigation)
+[system](verify:notifications.focus-target-registration)
+
+Old Linux registrations lacking provenance are ignored by navigation and focus
+suppression, including previously queued routes. A later registration clears an
+unproven window and installs a proven route only if origin can be resolved;
+overlap reference counts remain intact. Existing sandboxes are not refreshed by
+rebuilding: update the host launcher and focus package, restart the consuming
+desktop's notification daemon (and reload its keybinding/package reference),
+then restart sandboxes from their intended host terminals to recreate routes.
+Old index-keyed registrations can remain until their launcher exits, but cannot
+navigate under the updated helper. No queue/database migration or destructive
+session-directory cleanup is required.
+[system](verify:notifications.attention-navigation)
+[system](verify:notifications.focus-target-registration)
+
+Darwin uses System Events accessibility to raise a uniquely named registered
+terminal window, then selects its host tmux window/pane. The launcher records
+the foreground terminal window title on Darwin. Accessibility permission is
+needed for both registration and navigation; missing permission leaves
+notification delivery intact. App-only legacy registrations are not navigable.
+Changed or duplicate window titles are deliberately skipped rather than
+activating an arbitrary Alacritty window. This is best-effort title-based macOS
+routing, not stable window-ID routing; Linux/niri does not have that limitation.
+For multiple Alacritty windows on Darwin, use unique stable window titles
+(disable dynamic titles in the consuming Alacritty configuration). Live macOS
+window raising requires validation on the consuming desktop; the portable
+verifier covers argument routing, not macOS Accessibility itself.
 [system](verify:notifications.attention-navigation)
 
 Navigation happens only on explicit host invocation, never on delivery. Unrouted

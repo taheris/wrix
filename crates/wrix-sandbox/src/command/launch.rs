@@ -1,4 +1,5 @@
 mod execution_metadata;
+mod linux_terminal;
 mod pi_auth;
 
 use pi_auth::Storage as PiAuth;
@@ -387,6 +388,12 @@ impl FocusTarget {
     }
 
     fn parse_tmux(value: &str) -> Result<Self, FocusTargetParseError> {
+        if value
+            .strip_prefix('%')
+            .is_some_and(|id| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()))
+        {
+            return Self::parse(value);
+        }
         let valid = value.rsplit_once(':').is_some_and(|(session, target)| {
             !session.is_empty()
                 && !session.chars().any(char::is_control)
@@ -443,6 +450,8 @@ struct FocusRecord {
     #[serde(default)]
     window_id: Option<String>,
     #[serde(default)]
+    linux_route: Option<linux_terminal::Route>,
+    #[serde(default)]
     terminal_app: Option<String>,
     #[serde(default)]
     terminal_window_title: Option<String>,
@@ -467,6 +476,7 @@ impl FocusRecord {
             tmux_target: tmux_target.cloned(),
             tmux_socket,
             window_id,
+            linux_route: None,
             terminal_window_title: terminal_app.as_deref().and_then(terminal_window_title),
             terminal_app,
             registration_count: 1,
@@ -483,12 +493,13 @@ impl FocusRecord {
             .checked_add(1)
             .ok_or(LaunchError::FocusRegistrationOverflow)?;
         match (platform, focus) {
-            (Platform::Linux, Some(window_id)) => self.window_id = Some(window_id),
+            // Linux routes are immutable once proven; additional registrations
+            // cannot replace them with a different terminal.
+            (Platform::Linux, _) | (_, None) => {}
             (Platform::Darwin, Some(terminal_app)) => {
                 self.terminal_window_title = terminal_window_title(&terminal_app);
                 self.terminal_app = Some(terminal_app);
             }
-            (_, None) => {}
         }
         Ok(())
     }
@@ -523,10 +534,13 @@ impl FocusRegistration {
         };
         fs::create_dir_all(directory)?;
         let path = directory.join(target.file_name());
+        let linux = (platform == Platform::Linux)
+            .then(|| linux_terminal::discover(tmux_target))
+            .flatten();
         let focus = terminal_focus(platform);
         let tmux_socket = tmux_target.and_then(|_| tmux_socket_from_env());
         with_focus_lock(&path, || {
-            let record = if path.try_exists()? {
+            let mut record = if path.try_exists()? {
                 match read_focus_record(&path) {
                     Ok(mut record) if &record.focus_target == target => {
                         record.add_registration(platform, focus)?;
@@ -565,6 +579,17 @@ impl FocusRegistration {
             } else {
                 FocusRecord::new(target, tmux_target, tmux_socket, platform, focus)
             };
+            if platform == Platform::Linux && record.linux_route.is_none() {
+                // Legacy focus snapshots are not evidence of origin. Clear them
+                // even when this launch cannot establish a replacement route.
+                record.window_id = None;
+                if let Some((window, route)) = linux {
+                    record.window_id = Some(window);
+                    record.linux_route = Some(route);
+                    record.tmux_target = tmux_target.cloned();
+                    record.tmux_socket = tmux_socket_from_env();
+                }
+            }
             write_focus_record(&path, &record)
         })?;
         Ok(Self::Active {
@@ -763,7 +788,15 @@ impl<'a> Plan<'a> {
         };
 
         let host_tmux_target = tmux_focus_target();
-        let focus_target = resolve_focus_target(&spawn_env, host_tmux_target.as_ref())?;
+        let default_target = if Platform::CURRENT == Platform::Linux {
+            host_tmux_target.as_ref().and_then(|pane| {
+                let socket = tmux_socket_from_env()?;
+                linux_terminal::focus_key(pane, &socket)
+            })
+        } else {
+            host_tmux_target.clone()
+        };
+        let focus_target = resolve_focus_target(&spawn_env, default_target.as_ref())?;
 
         Ok(Self {
             request,
@@ -2542,6 +2575,13 @@ fn parse_tmux_socket(value: &str) -> Option<PathBuf> {
 
 fn tmux_focus_target() -> Option<FocusTarget> {
     env::var_os("TMUX")?;
+    if cfg!(target_os = "linux") {
+        let pane = env::var("TMUX_PANE").ok()?;
+        if !pane.starts_with('%') {
+            return None;
+        }
+        return FocusTarget::parse_tmux(&pane).ok();
+    }
     let pane = match env::var("TMUX_PANE") {
         Ok(value) => Some(value),
         Err(env::VarError::NotPresent) => None,
@@ -2622,66 +2662,33 @@ fn terminal_window_title(app: &str) -> Option<String> {
 }
 
 fn terminal_focus(platform: Platform) -> Option<String> {
-    let (program, args): (&str, &[&str]) = match platform {
-        Platform::Linux => ("niri", &["msg", "-j", "focused-window"]),
-        Platform::Darwin => (
-            "osascript",
-            &[
-                "-e",
-                "tell application \"System Events\" to name of first process whose frontmost is true",
-            ],
-        ),
-    };
-    let output = match run_output(program, args) {
+    if platform == Platform::Linux {
+        return None; // Linux origin is resolved by PID, never desktop focus.
+    }
+    let program = "osascript";
+    let output = match run_output(
+        program,
+        &[
+            "-e",
+            "tell application \"System Events\" to name of first process whose frontmost is true",
+        ],
+    ) {
         Ok(output) => output,
         Err(error) => {
-            tracing::warn!(program = %program, error = %error, "could not query focus target");
+            tracing::warn!(program, error = %error, "could not query focus target");
             return None;
         }
     };
     if !output.status.success() {
-        tracing::warn!(
-            program = %program,
-            status = ?output.status.code(),
-            stderr = %String::from_utf8_lossy(&output.stderr),
-            "focus target query failed"
-        );
+        tracing::warn!(program, status = ?output.status.code(), "focus target query failed");
         return None;
     }
-    match platform {
-        Platform::Linux => {
-            let value = match serde_json::from_slice::<Value>(&output.stdout) {
-                Ok(value) => value,
-                Err(error) => {
-                    tracing::warn!(program = %program, error = %error, "focus target returned invalid JSON");
-                    return None;
-                }
-            };
-            if value.is_null() {
-                return None;
-            }
-            match value.get("id") {
-                Some(Value::String(text)) => Some(text.clone()),
-                Some(Value::Number(number)) => Some(number.to_string()),
-                Some(value) => {
-                    tracing::warn!(program = %program, ?value, "focus target returned an invalid window identifier");
-                    None
-                }
-                None => {
-                    tracing::warn!(program = %program, "focus target omitted the window identifier");
-                    None
-                }
-            }
-        }
-        Platform::Darwin => {
-            let target = trim_stdout(&output.stdout);
-            if target.is_empty() {
-                tracing::warn!(program = %program, "focus target returned an empty application name");
-                None
-            } else {
-                Some(target)
-            }
-        }
+    let target = trim_stdout(&output.stdout);
+    if target.is_empty() {
+        tracing::warn!(program, "focus target returned an empty application name");
+        None
+    } else {
+        Some(target)
     }
 }
 
@@ -3290,9 +3297,20 @@ mod test {
 
     #[test]
     fn tmux_focus_target_accepts_only_host_pane_shape() {
+        assert!(FocusTarget::parse_tmux("%0").is_ok());
         assert!(FocusTarget::parse_tmux("main:2.1").is_ok());
         assert!(FocusTarget::parse_tmux("space.name:with:colons:20.11").is_ok());
-        for invalid in ["", "main", ":2.1", "main:x.1", "main:2.x", "main:2.1.0"] {
+        for invalid in [
+            "",
+            "%",
+            "%x",
+            "%1.2",
+            "main",
+            ":2.1",
+            "main:x.1",
+            "main:2.x",
+            "main:2.1.0",
+        ] {
             assert!(
                 FocusTarget::parse_tmux(invalid).is_err(),
                 "accepted {invalid}"

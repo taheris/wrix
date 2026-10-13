@@ -4,6 +4,7 @@ import concurrent.futures
 import importlib.util
 import json
 import os
+import pty
 from pathlib import Path
 import shutil
 import socket
@@ -31,7 +32,7 @@ class AttentionTests(unittest.TestCase):
         self.bin.mkdir()
         self.log = self.root / "log"
         self.state = self.root / "windows"
-        self.state.write_text(json.dumps([{"id": i} for i in range(1, 101)]))
+        self.state.write_text(json.dumps([{"id": i, "pid": os.getpid(), "is_focused": i == 99} for i in range(1, 101)]))
         niri = self.bin / "niri"
         niri.write_text(f'''#!{sys.executable}
 import json, os, sys
@@ -55,7 +56,7 @@ else:
         self.addCleanup(self.platform.stop)
 
     def register(self, target, window=1, **fields):
-        record = dict(focus_target=target, window_id=str(window), **fields)
+        record = dict(focus_target=target, window_id=str(window), linux_route={"terminal_pid": os.getpid(), "client": None}, **fields)
         name = attention.re.sub(rb"[^A-Za-z0-9_-]", b"-", target.encode()).decode()
         (self.directory / (name + ".json")).write_text(json.dumps(record))
         return self.directory / (name + ".json")
@@ -96,6 +97,24 @@ else:
         attention.enqueue(self.directory, "missing")
         self.assertEqual(self.pending(), [])
 
+    def test_legacy_linux_route_is_invalidated_without_navigation(self):
+        path = self.register("legacy", 99)
+        record = json.loads(path.read_text())
+        del record["linux_route"]
+        path.write_text(json.dumps(record))
+        attention.enqueue(self.directory, "legacy")
+        self.assertEqual(self.pending(), [])
+        self.assertFalse(attention.is_focused(self.directory, "legacy"))
+        self.assertFalse(self.log.exists())
+
+    def test_window_pid_mismatch_cannot_focus_unrelated_application(self):
+        self.register("agent")
+        attention.enqueue(self.directory, "agent")
+        self.state.write_text(json.dumps([{"id": 1, "pid": os.getpid() + 1, "is_focused": True}]))
+        attention.focus(self.directory)
+        self.assertEqual(self.pending(), [])
+        self.assertFalse(self.log.exists())
+
     def test_failed_navigation_retains_entry(self):
         self.register("a")
         attention.enqueue(self.directory, "a")
@@ -114,14 +133,47 @@ else:
         call("new-window", "-t", "host:1", "sleep 300")
         call("split-window", "-d", "-t", "host:1", "sleep 300")
         call("select-window", "-t", "host:0")
-        self.register("agent", tmux_target="host:1.1", tmux_socket=socket)
+        pane = call("display-message", "-p", "-t", "host:1.1", "#{pane_id}")
+        session = call("display-message", "-p", "-t", pane, "#{session_id}")
+        master, slave = pty.openpty()
+        self.addCleanup(lambda: os.close(master))
+        self.addCleanup(lambda: os.close(slave))
+        client_process = subprocess.Popen(tmux + ["attach-session", "-t", "host"],
+                                          stdin=slave, stdout=slave, stderr=slave,
+                                          env=dict(os.environ, TERM="xterm"))
+        def stop_client():
+            client_process.terminate()
+            client_process.wait(timeout=5)
+        self.addCleanup(stop_client)
+        deadline = time.monotonic() + 3
+        while not (clients := call("list-clients", "-F", "#{client_name}\t#{client_pid}\t#{client_tty}\t#{session_id}")):
+            self.assertLess(time.monotonic(), deadline)
+            time.sleep(0.01)
+        name, pid, tty, session = clients.split("\t")
+        path = self.register("agent", tmux_target=pane, tmux_socket=socket)
+        record = json.loads(path.read_text())
+        record["linux_route"]["client"] = dict(name=name, pid=int(pid), tty=tty, session=session)
+        path.write_text(json.dumps(record))
+        # Mutable names and indexes no longer identify the pane.
+        call("rename-session", "-t", "host", "renamed")
+        call("move-window", "-s", "renamed:1", "-t", "renamed:5")
         attention.enqueue(self.directory, "agent")
         attention.focus(self.directory)
-        self.assertEqual(call("display-message", "-p", "-t", "host", "#{window_index}.#{pane_index}"), "1.1")
-        call("set-option", "-w", "-t", "host:1", "remain-on-exit", "on")
-        call("respawn-pane", "-k", "-t", "host:1.1", "exit 0")
+        self.assertEqual(call("display-message", "-p", "-t", "renamed", "#{window_index}.#{pane_index}"), "5.1")
+        # select-window/select-pane cannot switch a client between sessions.
+        # A moved client invalidates the route instead of switching any client.
+        call("new-session", "-d", "-s", "other", "sleep 300")
+        call("switch-client", "-c", name, "-t", "other")
+        attention.enqueue(self.directory, "agent")
+        attention.focus(self.directory)
+        self.assertEqual(self.pending(), [])
+        self.assertEqual(call("display-message", "-p", "-c", name, "#{session_name}"), "other")
+        self.assertEqual(self.log.read_text().splitlines(), ["1"])
+        call("switch-client", "-c", name, "-t", "renamed")
+        call("set-option", "-w", "-t", pane, "remain-on-exit", "on")
+        call("respawn-pane", "-k", "-t", pane, "exit 0")
         deadline = time.monotonic() + 3
-        while call("display-message", "-p", "-t", "host:1.1", "#{pane_dead}") != "1":
+        while call("display-message", "-p", "-t", pane, "#{pane_dead}") != "1":
             self.assertLess(time.monotonic(), deadline)
             time.sleep(0.01)
         attention.enqueue(self.directory, "agent")

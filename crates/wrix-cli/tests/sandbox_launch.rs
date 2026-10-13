@@ -750,7 +750,7 @@ impl Fixture {
                 "niri",
                 r#"#!/usr/bin/env bash
 set -euo pipefail
-[[ "$*" == 'msg -j focused-window' ]] || exit 91
+[[ "$*" == 'msg -j windows' ]] || exit 91
 printf '%s\n' "$WRIX_TEST_FOCUS"
 "#,
             ),
@@ -759,8 +759,8 @@ printf '%s\n' "$WRIX_TEST_FOCUS"
                 r#"#!/usr/bin/env bash
 set -euo pipefail
 case "$*" in
-  'display-message -p #{session_name}:#{window_index}.#{pane_index}') printf '%s\n' 'test:1.0' ;;
-  'display-message -p -t %7 #{session_name}:#{window_index}.#{pane_index}') printf '%s\n' 'test:1.7' ;;
+  '-S /tmp/fixture-tmux.sock list-panes -a -F #{pane_id}'*) printf '%s\n' $'%0\t$0' $'%7\t$7' ;;
+  '-S /tmp/fixture-tmux.sock list-clients -F #{client_name}'*) : ;;
   *) exit 91 ;;
 esac
 "#,
@@ -798,7 +798,7 @@ esac
             .env("HOME", self.root.path().join("home"))
             .env("XDG_RUNTIME_DIR", self.root.path().join("runtime"))
             .env("TMUX", "/tmp/fixture-tmux.sock,123,0")
-            .env_remove("TMUX_PANE")
+            .env("TMUX_PANE", "%0")
             .env("NO_COLOR", "1")
             .env("WRIX_TEST_FOCUS", reply)
             .env("WRIX_TEST_DIGEST", format!("sha256:{}", "a".repeat(64)))
@@ -848,14 +848,14 @@ fn spawn_without_focused_window_keeps_stdout_clean_and_does_not_warn() -> TestRe
     let record: Value =
         serde_json::from_slice(&fs::read(fixture.root.path().join("session.json"))?)?;
     assert!(record["window_id"].is_null());
-    assert_eq!(record["focus_target"], "test:1.0");
+    assert_eq!(record["focus_target"], "tmux:/tmp/fixture-tmux.sock:%0");
     assert!(record.get("session_id").is_none());
     Ok(())
 }
 
 #[cfg(target_os = "linux")]
 #[test]
-fn spawn_focus_warnings_go_to_stderr_without_corrupting_rpc_stdout() -> TestResult {
+fn unavailable_origin_keeps_rpc_stdout_clean() -> TestResult {
     let fixture = Fixture::new(None)?;
     let output = fixture.focus_spawn("not JSON")?.output()?;
     assert!(
@@ -865,13 +865,13 @@ fn spawn_focus_warnings_go_to_stderr_without_corrupting_rpc_stdout() -> TestResu
     );
     let response: Value = serde_json::from_slice(&output.stdout)?;
     assert_eq!(response["command"], "get_state");
-    assert!(String::from_utf8_lossy(&output.stderr).contains("focus target returned invalid JSON"));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("WARN"));
     Ok(())
 }
 
 #[cfg(target_os = "linux")]
 #[test]
-fn spawn_registers_focused_window_from_niri_reply() -> TestResult {
+fn spawn_without_attached_client_omits_navigation_despite_desktop_focus() -> TestResult {
     let fixture = Fixture::new(None)?;
     let output = fixture.focus_spawn(r#"{"id":42}"#)?.output()?;
     assert!(
@@ -881,11 +881,64 @@ fn spawn_registers_focused_window_from_niri_reply() -> TestResult {
     );
     let record: Value =
         serde_json::from_slice(&fs::read(fixture.root.path().join("session.json"))?)?;
-    assert_eq!(record["window_id"], "42");
-    assert_eq!(record["focus_target"], "test:1.0");
-    assert_eq!(record["tmux_target"], "test:1.0");
+    assert!(record["window_id"].is_null());
+    assert_eq!(record["focus_target"], "tmux:/tmp/fixture-tmux.sock:%0");
+    assert_eq!(record["tmux_target"], "%0");
     assert_eq!(record["tmux_socket"], "/tmp/fixture-tmux.sock");
     assert!(record.get("session_id").is_none());
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn launcher_maps_origin_pid_even_when_game_is_focused() -> TestResult {
+    let fixture = Fixture::new(None)?;
+    let pid = std::process::id();
+    let windows = json!([
+        {"id":42, "pid":pid, "is_focused":false},
+        {"id":276, "pid":1, "is_focused":true}
+    ]);
+    let output = fixture
+        .focus_spawn(&windows.to_string())?
+        .env_remove("TMUX")
+        .env("WRIX_FOCUS_TARGET", "origin")
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let record: Value =
+        serde_json::from_slice(&fs::read(fixture.root.path().join("session.json"))?)?;
+    assert_eq!(record["window_id"], "42");
+    assert_eq!(record["linux_route"]["terminal_pid"], pid);
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn launcher_clears_legacy_window_when_origin_is_unavailable() -> TestResult {
+    let fixture = Fixture::new(None)?;
+    let mut command = fixture.focus_spawn(r#"{"id":276}"#)?;
+    let directory = fixture.root.path().join("runtime/wrix/sessions");
+    fs::create_dir_all(&directory)?;
+    let path = directory.join("tmux--tmp-fixture-tmux-sock--0.json");
+    fs::write(
+        &path,
+        serde_json::to_vec(&json!({
+            "focus_target":"tmux:/tmp/fixture-tmux.sock:%0", "tmux_target":"%0", "window_id":"276", "registration_count":2
+        }))?,
+    )?;
+    let output = command.output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let remaining: Value = serde_json::from_slice(&fs::read(&path)?)?;
+    assert!(remaining["window_id"].is_null());
+    assert!(remaining["linux_route"].is_null());
+    assert_eq!(remaining["registration_count"], 2);
     Ok(())
 }
 
@@ -904,8 +957,8 @@ fn launcher_registers_originating_tmux_pane_instead_of_default_client() -> TestR
     );
     let record: Value =
         serde_json::from_slice(&fs::read(fixture.root.path().join("session.json"))?)?;
-    assert_eq!(record["focus_target"], "test:1.7");
-    assert_eq!(record["tmux_target"], "test:1.7");
+    assert_eq!(record["focus_target"], "tmux:/tmp/fixture-tmux.sock:%7");
+    assert_eq!(record["tmux_target"], "%7");
     assert_eq!(record["tmux_socket"], "/tmp/fixture-tmux.sock");
     Ok(())
 }
@@ -915,12 +968,12 @@ fn launcher_registers_originating_tmux_pane_instead_of_default_client() -> TestR
 fn launcher_discards_obsolete_focus_registrations_without_warning() -> TestResult {
     for mode in ["run", "spawn"] {
         for obsolete in [
-            json!({"session_id": "test:1.0", "window_id": "old", "registration_count": 4}),
-            json!({"session_id": "test:1.0", "terminal_app": "OldTerminal", "registration_count": 4}),
-            json!({"session_id": "test:1.0"}),
+            json!({"session_id": "%0", "window_id": "old", "registration_count": 4}),
+            json!({"session_id": "%0", "terminal_app": "OldTerminal", "registration_count": 4}),
+            json!({"session_id": "%0"}),
             json!({}),
             json!({"focus_target": 42}),
-            json!({"focus_target": "test:1.0", "registration_count": "obsolete"}),
+            json!({"focus_target": "tmux:/tmp/fixture-tmux.sock:%0", "registration_count": "obsolete"}),
         ] {
             let fixture = Fixture::new(None)?;
             let mut command = fixture.focus_spawn(r#"{"id":42}"#)?;
@@ -937,7 +990,7 @@ fn launcher_discards_obsolete_focus_registrations_without_warning() -> TestResul
             }
             let directory = fixture.root.path().join("runtime/wrix/sessions");
             fs::create_dir_all(&directory)?;
-            let path = directory.join("test-1-0.json");
+            let path = directory.join("tmux--tmp-fixture-tmux-sock--0.json");
             fs::write(&path, serde_json::to_vec(&obsolete)?)?;
 
             let output = command.output()?;
@@ -948,9 +1001,9 @@ fn launcher_discards_obsolete_focus_registrations_without_warning() -> TestResul
             assert_eq!(response["command"], "get_state");
             let record: Value =
                 serde_json::from_slice(&fs::read(fixture.root.path().join("session.json"))?)?;
-            assert_eq!(record["focus_target"], "test:1.0");
-            assert_eq!(record["tmux_target"], "test:1.0");
-            assert_eq!(record["window_id"], "42");
+            assert_eq!(record["focus_target"], "tmux:/tmp/fixture-tmux.sock:%0");
+            assert_eq!(record["tmux_target"], "%0");
+            assert!(record["window_id"].is_null());
             assert!(record["terminal_app"].is_null());
             assert_eq!(record["registration_count"], 1);
             assert!(record.get("session_id").is_none());
@@ -968,7 +1021,7 @@ fn launcher_still_warns_when_focus_registration_json_is_corrupt() -> TestResult 
         let mut command = fixture.focus_spawn(r#"{"id":42}"#)?;
         let directory = fixture.root.path().join("runtime/wrix/sessions");
         fs::create_dir_all(&directory)?;
-        let path = directory.join("test-1-0.json");
+        let path = directory.join("tmux--tmp-fixture-tmux-sock--0.json");
         fs::write(&path, corrupt)?;
 
         let output = command.output()?;
@@ -982,7 +1035,7 @@ fn launcher_still_warns_when_focus_registration_json_is_corrupt() -> TestResult 
         assert_eq!(response["command"], "get_state");
         let record: Value =
             serde_json::from_slice(&fs::read(fixture.root.path().join("session.json"))?)?;
-        assert_eq!(record["focus_target"], "test:1.0");
+        assert_eq!(record["focus_target"], "tmux:/tmp/fixture-tmux.sock:%0");
         assert_eq!(record["registration_count"], 1);
         assert!(!path.exists());
     }
@@ -996,12 +1049,14 @@ fn launcher_preserves_current_focus_registration_ownership() -> TestResult {
     let mut command = fixture.focus_spawn(r#"{"id":42}"#)?;
     let directory = fixture.root.path().join("runtime/wrix/sessions");
     fs::create_dir_all(&directory)?;
-    let path = directory.join("test-1-0.json");
+    let path = directory.join("tmux--tmp-fixture-tmux-sock--0.json");
     fs::write(
         &path,
         serde_json::to_vec(&json!({
-            "focus_target": "test:1.0", "tmux_target": "test:1.0",
-            "window_id": "old", "registration_count": 2
+            "focus_target": "tmux:/tmp/fixture-tmux.sock:%0", "tmux_target": "%0",
+            "window_id": "old", "registration_count": 2,
+            "linux_route": {"terminal_pid": 123, "client": null},
+            "tmux_socket": "/tmp/fixture-tmux.sock"
         }))?,
     )?;
 
@@ -1014,8 +1069,9 @@ fn launcher_preserves_current_focus_registration_ownership() -> TestResult {
     assert_eq!(record["registration_count"], 3);
     let remaining: Value = serde_json::from_slice(&fs::read(&path)?)?;
     assert_eq!(remaining["registration_count"], 2);
-    assert_eq!(remaining["focus_target"], "test:1.0");
+    assert_eq!(remaining["focus_target"], "tmux:/tmp/fixture-tmux.sock:%0");
     assert_eq!(remaining["tmux_socket"], "/tmp/fixture-tmux.sock");
+    assert_eq!(remaining["window_id"], "old");
     Ok(())
 }
 
@@ -1122,7 +1178,7 @@ fn spawn_focus_override_registers_routing_separately_from_host_tmux() -> TestRes
             assert!(record.is_null());
         } else {
             assert_eq!(record["focus_target"], target);
-            assert_eq!(record["tmux_target"], "test:1.0");
+            assert_eq!(record["tmux_target"], "%0");
         }
     }
     Ok(())

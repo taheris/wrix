@@ -115,6 +115,17 @@ let
         if [[ "$VERBOSE" == "1" ]]; then echo "notifyd: registration target mismatch" >&2; fi
         return 1
       fi
+      ${
+        if isDarwin then
+          ""
+        else
+          ''
+            # Validate origin, client, socket and stable pane before suppression.
+            if [[ "$VERBOSE" == "1" ]]; then echo "notifyd: checking proven origin for $focus_target" >&2; fi
+            ${focus}/bin/wrix-focus-notification --is-focused "$focus_target"
+            return "$?"
+          ''
+      }
       if ! check_app_focused "$session_file"; then
         return 1
       fi
