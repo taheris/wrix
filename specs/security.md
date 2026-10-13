@@ -292,6 +292,14 @@ The record contains:
 - `focus_target` — the optional opaque terminal target used by the notification
   system, or null; never used as an execution or conversation identifier
 
+Notification navigation uses only host-owned terminal registrations. Payloads
+carry opaque lookup keys, not executable commands or host socket/window routes.
+Delivery never moves focus; the operator invokes `wrix-focus-notification` to
+visit pending attention. The unauthenticated Darwin transport permits spoofed
+attention for known keys, but cannot introduce a new host navigation route.
+`notifications.md` owns queue behavior and platform limitations.
+[test](../tests/standalone/test_attention.py)
+
 Completion updates the same file atomically. `"completed"` means the launcher
 recorded the end of its attempt, not that the attempt succeeded or that Wrix
 independently verified every container process stopped. A setup/launch failure

@@ -26,6 +26,11 @@ let
 
     : "''${WRIX_NOTIFY_TEST_DISPATCH_CAPTURE:?}"
     ${bridgeContract}
+    if [[ -n "''${WRIX_NOTIFY_TEST_FAIL_TITLE:-}" && "${
+      if pkgs.stdenv.hostPlatform.isDarwin then "$2" else "$1"
+    }" == "$WRIX_NOTIFY_TEST_FAIL_TITLE" ]]; then
+      exit 1
+    fi
     if [[ -n "''${WRIX_NOTIFY_TEST_DISPATCH_TIME_CAPTURE:-}" ]]; then
       ${pkgs.coreutils}/bin/date +%s%N > "$WRIX_NOTIFY_TEST_DISPATCH_TIME_CAPTURE"
     fi

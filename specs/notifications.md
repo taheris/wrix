@@ -66,13 +66,57 @@ not suppress an otherwise valid notification.
 diagnostic logging, and `WRIX_NOTIFY_TCP=host:port` overrides the client's TCP
 endpoint.
 
+## Pending Attention Navigation
+
+Install the host package `wrix-focus-notification` and invoke it from a
+consumer-owned keybinding. Desktop keybindings are not part of Wrix.
+
+After successful native dispatch, the daemon records usable registered targets
+in a host-local pending queue. Suppressed notifications are not queued. Repeated
+targets move to the front; navigation visits newest first and consumes only
+successful navigation or stale entries. Missing registrations, changed routes,
+closed niri windows, and missing/dead tmux panes are discarded. Concurrent
+delivery and navigation serialize queue transactions, including navigation, so a
+newly delivered notification cannot be lost by a previous visit.
+[test](../tests/standalone/test_attention.py)
+
+Linux navigation requires niri and focuses the registered window after selecting
+the registered host tmux window/pane through its registered socket. Darwin uses
+System Events accessibility to raise a uniquely named registered terminal
+window, then selects its host tmux window/pane. The launcher records the
+foreground terminal window title on Darwin. Accessibility permission is needed
+for both registration and navigation; missing permission leaves notification
+delivery intact. App-only legacy registrations are not navigable. Changed or
+duplicate window titles are deliberately skipped rather than activating an
+arbitrary Alacritty window. This is best-effort title-based macOS routing, not
+stable window-ID routing; Linux/niri does not have that limitation. For multiple
+Alacritty windows on Darwin, use unique stable window titles (disable dynamic
+titles in the consuming Alacritty configuration). Live macOS window raising
+requires validation on the consuming desktop; the portable verifier covers
+argument routing, not macOS Accessibility itself.
+[test](../tests/standalone/test_attention.py)
+
+Navigation happens only on explicit host invocation, never on delivery. Unrouted
+notifications still dispatch normally. Queue storage failures are diagnosed
+without failing notification delivery. Native dispatch failures do not enqueue
+attention and do not stop later notifications.
+[system](verify:notifications.attention-navigation)
+[system](verify:notifications.focus-target-registration)
+
 ## Security
 
 The Darwin listener binds to the vmnet gateway (`192.168.64.1:5959`), not
 `0.0.0.0`. The protocol has no authentication; it carries cosmetic desktop
-notifications, not commands to execute. Linux socket filesystem permissions
-provide transport access control. Notification failure does not terminate agent
-work, but failures are reported through diagnostics rather than hidden.
+notifications, not commands to execute. A payload may refresh an existing
+host-registered attention key, but cannot supply navigation commands, tmux
+sockets, or window identities. Navigation resolves those fields from host
+registrations and invokes fixed commands with separate arguments. The SQLite
+queue is host-local, created with mode 0600, and not mounted into sandboxes. An
+unauthenticated sender can spoof attention for a known registered key; explicit
+host invocation is still required to move focus. Linux socket filesystem
+permissions provide transport access control. Notification failure does not
+terminate agent work, but failures are reported through diagnostics rather than
+hidden.
 
 ## Success Criteria
 

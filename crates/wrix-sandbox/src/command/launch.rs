@@ -444,6 +444,8 @@ struct FocusRecord {
     window_id: Option<String>,
     #[serde(default)]
     terminal_app: Option<String>,
+    #[serde(default)]
+    terminal_window_title: Option<String>,
     #[serde(default = "initial_registration_count")]
     registration_count: u64,
 }
@@ -465,6 +467,7 @@ impl FocusRecord {
             tmux_target: tmux_target.cloned(),
             tmux_socket,
             window_id,
+            terminal_window_title: terminal_app.as_deref().and_then(terminal_window_title),
             terminal_app,
             registration_count: 1,
         }
@@ -481,7 +484,10 @@ impl FocusRecord {
             .ok_or(LaunchError::FocusRegistrationOverflow)?;
         match (platform, focus) {
             (Platform::Linux, Some(window_id)) => self.window_id = Some(window_id),
-            (Platform::Darwin, Some(terminal_app)) => self.terminal_app = Some(terminal_app),
+            (Platform::Darwin, Some(terminal_app)) => {
+                self.terminal_window_title = terminal_window_title(&terminal_app);
+                self.terminal_app = Some(terminal_app);
+            }
             (_, None) => {}
         }
         Ok(())
@@ -2590,6 +2596,31 @@ fn session_directory(platform: Platform) -> PathBuf {
         .join("wrix/sessions")
 }
 
+fn terminal_window_title(app: &str) -> Option<String> {
+    let script = "on run argv\ntell application \"System Events\" to tell process (item 1 of argv) to get name of first window\nend run";
+    let output = match run_output("osascript", &["-e", script, app]) {
+        Ok(output) if output.status.success() => output,
+        Ok(output) => {
+            tracing::debug!(status = ?output.status.code(), "terminal window title unavailable");
+            return None;
+        }
+        Err(error) => {
+            tracing::debug!(error = %error, "could not query terminal window title");
+            return None;
+        }
+    };
+    match String::from_utf8(output.stdout) {
+        Ok(title) => {
+            let title = title.trim_end_matches('\n');
+            (!title.is_empty()).then(|| title.to_owned())
+        }
+        Err(error) => {
+            tracing::warn!(error = %error, "terminal window title is not valid UTF-8");
+            None
+        }
+    }
+}
+
 fn terminal_focus(platform: Platform) -> Option<String> {
     let (program, args): (&str, &[&str]) = match platform {
         Platform::Linux => ("niri", &["msg", "-j", "focused-window"]),
@@ -3314,6 +3345,21 @@ mod test {
         }))
         .unwrap();
         assert!(legacy.tmux_socket.is_none());
+        assert!(legacy.terminal_window_title.is_none());
+    }
+
+    #[test]
+    fn darwin_window_title_round_trips_without_changing_focus_identity() {
+        let record: super::FocusRecord = serde_json::from_value(serde_json::json!({
+            "focus_target": "host:2.1",
+            "terminal_app": "Alacritty",
+            "terminal_window_title": r#"agent "quoted" window"#,
+            "tmux_target": "host:2.1"
+        }))
+        .unwrap();
+        let value = serde_json::to_value(record).unwrap();
+        assert_eq!(value["terminal_window_title"], r#"agent "quoted" window"#);
+        assert_eq!(value["focus_target"], "host:2.1");
     }
 
     #[test]

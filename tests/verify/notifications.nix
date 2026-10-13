@@ -17,6 +17,7 @@ let
     [
       fixture.client
       fixture.daemon
+      (import ../../lib/notify/focus.nix { inherit pkgs; })
       pkgs.netcat
       pkgs.python3
       pkgs.socat
@@ -51,6 +52,11 @@ in
   "notifications.claude-stop-hook-config" = nixEval "notifications.claude-stop-hook-config";
 
   "notifications.focus-target-envelope" = notifyTest "test_focus_target_envelope";
+
+  "notifications.attention-navigation" = ''
+    export PATH="${notifyPath}:$PATH"
+    python3 "$(repo_root)/tests/standalone/test_attention.py"
+  '';
 
   "notifications.focus-target-registration" = ''
     export PATH="${notifyPath}:$PATH"

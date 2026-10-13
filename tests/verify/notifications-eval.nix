@@ -31,6 +31,8 @@ let
       coreutils = "coreutils";
       jq = "jq";
       socat = "socat";
+      python3 = "python3";
+      tmux = "tmux";
       terminal-notifier = "terminal-notifier";
       libnotify = "libnotify";
       writeShellApplication = args: args.text;

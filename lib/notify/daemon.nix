@@ -18,6 +18,7 @@
 let
   inherit (pkgs.stdenv.hostPlatform) isDarwin;
   tcpPort = "5959";
+  focus = import ./focus.nix { inherit pkgs; };
 
   # Platform-specific session directory
   sessionDir =
@@ -159,7 +160,13 @@ let
         fi
       fi
 
-      ${notifyCmd}
+      if { ${notifyCmd} }; then
+        if [[ -n "$focus_target" ]]; then
+          ${focus}/bin/wrix-focus-notification --enqueue "$focus_target" || true # best-effort: queue failure must not prevent notification delivery.
+        fi
+      else
+        echo "notifyd: native notification dispatch failed" >&2
+      fi
     done
   '';
 

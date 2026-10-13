@@ -148,6 +148,7 @@ _:
           wrix-cache-serve = wrix.rustPackage.cacheServe;
           wrix-service-image = wrix.serviceImage;
           wrix-notifyd = import ../../lib/notify/daemon.nix { inherit pkgs; };
+          wrix-focus-notification = import ../../lib/notify/focus.nix { inherit pkgs; };
         }
         // (
           if isDarwin then { wrix-builder = import ../../lib/builder { inherit pkgs linuxPkgs; }; } else { }
