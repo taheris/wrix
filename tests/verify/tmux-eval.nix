@@ -27,6 +27,7 @@ let
   lock = fromTOML (readFile (root + "/Cargo.lock"));
   verifiers = import ./default.nix {
     inherit pkgs system;
+    focusBinary = lib.rustPackage.focusNotification;
     linuxPkgs = imagePkgs;
   };
   sources = map (path: readFile (root + "/${path}")) [
