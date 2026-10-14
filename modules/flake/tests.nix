@@ -39,7 +39,12 @@
         inherit test;
       };
 
-      inherit (test) checks;
+      checks =
+        test.checks
+        // (import ../../tests/notify/client.nix {
+          inherit pkgs linuxPkgs;
+          darwinHostClient = self.packages.aarch64-darwin.wrix-notify-host;
+        });
       legacyPackages.ciChecks = test.ciChecks;
       legacyPackages.ciApps = test.ciAppDerivations;
       legacyPackages.systemTests = test.systemTests;
