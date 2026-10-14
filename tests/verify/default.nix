@@ -2,6 +2,7 @@
   pkgs,
   system,
   linuxPkgs,
+  focusBinary,
 }:
 
 let
@@ -40,7 +41,7 @@ let
     (import ./cli.nix { inherit pkgs system; })
     (import ./images.nix { inherit pkgs system; })
     (import ./linux-builder.nix { inherit pkgs system linuxPkgs; })
-    (import ./notifications.nix { inherit pkgs system; })
+    (import ./notifications.nix { inherit pkgs system focusBinary; })
     (import ./playwright-mcp.nix { inherit pkgs system; })
     (import ./prek.nix { inherit pkgs system; })
     (import ./profiles.nix { inherit pkgs system; })

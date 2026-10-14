@@ -13,12 +13,15 @@
 #   See specs/notifications.md for full security analysis.
 #
 # Usage: nix run .#wrix-notifyd
-{ pkgs }:
+{ pkgs, focusBinary }:
 
 let
   inherit (pkgs.stdenv.hostPlatform) isDarwin;
   tcpPort = "5959";
-  focus = import ./focus.nix { inherit pkgs; };
+  focus = import ./focus.nix {
+    inherit pkgs;
+    binary = focusBinary;
+  };
 
   # Platform-specific notification command
   notifyCmd =

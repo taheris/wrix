@@ -166,7 +166,10 @@ let
     wrix-rust-nextest = wrix.rustPackage.nextest;
   };
 
-  verify = import ./verify { inherit pkgs system linuxPkgs; };
+  verify = import ./verify {
+    inherit pkgs system linuxPkgs;
+    focusBinary = wrix.rustPackage.focusNotification;
+  };
 
   systemTests = optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
     beads-live-system = import ./services/beads-system.nix {
@@ -897,7 +900,10 @@ let
     environment = securityCiEnvironment;
   };
 
-  notifyFixture = import ./standalone/notify-fixture.nix { inherit pkgs; };
+  notifyFixture = import ./standalone/notify-fixture.nix {
+    inherit pkgs;
+    focusBinary = wrix.rustPackage.focusNotification;
+  };
 
   testNotify = writeShellScriptBin "test-notify" ''
     set -euo pipefail

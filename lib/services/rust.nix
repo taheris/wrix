@@ -22,6 +22,7 @@ let
       "crates/wrix-cache/tests" = ../../crates/wrix-cache/tests;
       "crates/wrix-cli/tests" = ../../crates/wrix-cli/tests;
       "crates/wrix-core/tests" = ../../crates/wrix-core/tests;
+      "crates/wrix-notify/tests" = ../../crates/wrix-notify/tests;
       "crates/wrix-sandbox/tests" = ../../crates/wrix-sandbox/tests;
       "crates/wrix-service/tests" = ../../crates/wrix-service/tests;
       ".config/nextest.toml" = ../../.config/nextest.toml;
@@ -121,6 +122,7 @@ in
         pkgs.jq
         pkgs.nix
         pkgs.openssh
+        pkgs.python3
         pkgs.tmux
       ];
       preCheck = preCheck + ''
@@ -135,6 +137,7 @@ in
   testFixtures = fixtures.bundle;
   package = workspace.bin;
   wrix = wrixPackage;
+  focusNotification = mkBinaryPackage "wrix-focus-notification";
   cacheHook = mkBinaryPackage "wrix-cache-hook";
   cachePublish = mkBinaryPackage "wrix-cache-publish";
   cacheServe = mkBinaryPackage "wrix-cache-serve";

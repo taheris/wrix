@@ -25,13 +25,18 @@ let
 
   ensure = condition: message: if condition then true else throw "verify:${target}: ${message}";
   daemonText = import "${rootString}/lib/notify/daemon.nix" {
+    focusBinary = "focus-binary";
     pkgs = {
       stdenv.hostPlatform.isDarwin = true;
       bash = "bash";
       coreutils = "coreutils";
       jq = "jq";
       socat = "socat";
-      python3 = "python3";
+      makeBinaryWrapper = "binary-wrapper";
+      lib.makeBinPath = _: "tmux/bin";
+      runCommand =
+        _: _: _:
+        "focus-package";
       tmux = "tmux";
       terminal-notifier = "terminal-notifier";
       libnotify = "libnotify";

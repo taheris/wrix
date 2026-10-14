@@ -1,9 +1,14 @@
-{ pkgs, system, ... }:
+{
+  pkgs,
+  system,
+  focusBinary,
+  ...
+}:
 
 let
   inherit (pkgs.lib) escapeShellArg makeBinPath optionals;
   inherit (import ../lib/verifier.nix) darwinLive linuxLive live;
-  fixture = import ../standalone/notify-fixture.nix { inherit pkgs; };
+  fixture = import ../standalone/notify-fixture.nix { inherit pkgs focusBinary; };
   pi = import ../../lib/sandbox/pi.nix { inherit pkgs; };
   piNotify = import ../../lib/notify/pi.nix { inherit pkgs; };
   piTestEnv = ''
@@ -21,7 +26,10 @@ let
         host = true;
       })
       fixture.daemon
-      (import ../../lib/notify/focus.nix { inherit pkgs; })
+      (import ../../lib/notify/focus.nix {
+        inherit pkgs;
+        binary = focusBinary;
+      })
       pkgs.netcat
       pkgs.python3
       pkgs.socat
@@ -59,6 +67,7 @@ in
 
   "notifications.attention-navigation" = ''
     export PATH="${notifyPath}:$PATH"
+    nix build --no-link --no-warn-dirty "$(repo_root)#legacyPackages.${system}.ciChecks.wrix-rust-nextest"
     python3 "$(repo_root)/tests/standalone/test_attention.py"
   '';
 

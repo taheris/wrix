@@ -40,6 +40,7 @@ hatch.
 ```
 crates/
 ├── wrix-core/           # Shared Rust types: paths, workspace identity, config schemas, errors
+├── wrix-notify/         # Host attention queue, focus checks, and terminal navigation
 ├── wrix-cli/            # Human-facing `wrix` binary: run, spawn, service, beads
 ├── wrix-sandbox/        # Rust host orchestration for container launch
 ├── wrix-service/        # Per-workspace service lifecycle and endpoint metadata

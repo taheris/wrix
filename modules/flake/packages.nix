@@ -151,8 +151,14 @@ _:
             inherit pkgs;
             host = true;
           };
-          wrix-notifyd = import ../../lib/notify/daemon.nix { inherit pkgs; };
-          wrix-focus-notification = import ../../lib/notify/focus.nix { inherit pkgs; };
+          wrix-notifyd = import ../../lib/notify/daemon.nix {
+            inherit pkgs;
+            focusBinary = wrix.rustPackage.focusNotification;
+          };
+          wrix-focus-notification = import ../../lib/notify/focus.nix {
+            inherit pkgs;
+            binary = wrix.rustPackage.focusNotification;
+          };
         }
         // (
           if isDarwin then { wrix-builder = import ../../lib/builder { inherit pkgs linuxPkgs; }; } else { }

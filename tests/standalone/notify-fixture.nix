@@ -1,4 +1,4 @@
-{ pkgs }:
+{ pkgs, focusBinary }:
 
 let
   bridgeName = if pkgs.stdenv.hostPlatform.isDarwin then "terminal-notifier" else "notify-send";
@@ -58,5 +58,8 @@ in
     # one accidentally exercises Linux-only default-gateway discovery.
     ipCommand = "${pkgs.coreutils}/bin/false";
   };
-  daemon = import ../../lib/notify/daemon.nix { pkgs = daemonPkgs; };
+  daemon = import ../../lib/notify/daemon.nix {
+    pkgs = daemonPkgs;
+    inherit focusBinary;
+  };
 }
