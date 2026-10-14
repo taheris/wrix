@@ -1,13 +1,12 @@
 {
   pkgs,
   linuxPkgs,
-  darwinNixpkgs,
+  darwinPkgs,
   darwinHostClient,
 }:
 
 let
   inherit (builtins)
-    all
     attrNames
     elem
     getContext
@@ -59,10 +58,7 @@ in
   notify-host-darwin-eval =
     assert isString darwinHostClient.drvPath;
     assert hostIsGatewayIndependent { inherit pkgs; };
-    assert all (system: hostIsGatewayIndependent { pkgs = import darwinNixpkgs { inherit system; }; }) [
-      "aarch64-darwin"
-      "x86_64-darwin"
-    ];
+    assert hostIsGatewayIndependent { pkgs = darwinPkgs; };
     assert elem linuxPkgs.iproute2.drvPath (attrNames (getContext linuxClient.text));
     pkgs.runCommand "notify-host-darwin-eval" { } ''
       set -euo pipefail
