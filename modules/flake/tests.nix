@@ -43,6 +43,7 @@
         test.checks
         // (import ../../tests/notify/client.nix {
           inherit pkgs linuxPkgs;
+          darwinNixpkgs = inputs.nixpkgs-darwin-tests;
           darwinHostClient = self.packages.aarch64-darwin.wrix-notify-host;
         });
       legacyPackages.ciChecks = test.ciChecks;

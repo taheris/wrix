@@ -4,6 +4,12 @@
   inputs = {
     nixpkgs.url = "git+https://github.com/NixOS/nixpkgs.git?ref=nixpkgs-unstable&shallow=1";
 
+    # Evaluation fixtures need the last release supporting both Darwin architectures.
+    nixpkgs-darwin-tests = {
+      url = "git+https://github.com/NixOS/nixpkgs.git?ref=nixpkgs-26.05-darwin&shallow=1";
+      flake = false;
+    };
+
     crane = {
       url = "git+https://github.com/ipetkov/crane.git?ref=master&shallow=1";
     };

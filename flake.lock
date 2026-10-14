@@ -97,6 +97,24 @@
         "url": "https://github.com/NixOS/nixpkgs.git"
       }
     },
+    "nixpkgs-darwin-tests": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1791678325,
+        "narHash": "sha256-yH6Su6IXtj1DUC6/Fpl1rmGpOFH1vtozMGOqaA6Yknk=",
+        "ref": "nixpkgs-26.05-darwin",
+        "rev": "240fddad86d7a0520319f21d8be1b43db426b18d",
+        "shallow": true,
+        "type": "git",
+        "url": "https://github.com/NixOS/nixpkgs.git"
+      },
+      "original": {
+        "ref": "nixpkgs-26.05-darwin",
+        "shallow": true,
+        "type": "git",
+        "url": "https://github.com/NixOS/nixpkgs.git"
+      }
+    },
     "root": {
       "inputs": {
         "crane": "crane",
@@ -104,6 +122,7 @@
         "flake-parts": "flake-parts",
         "loom-src": "loom-src",
         "nixpkgs": "nixpkgs",
+        "nixpkgs-darwin-tests": "nixpkgs-darwin-tests",
         "treefmt-nix": "treefmt-nix"
       }
     },

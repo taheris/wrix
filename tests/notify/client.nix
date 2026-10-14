@@ -1,11 +1,13 @@
 {
   pkgs,
   linuxPkgs,
+  darwinNixpkgs,
   darwinHostClient,
 }:
 
 let
   inherit (builtins)
+    all
     attrNames
     elem
     getContext
@@ -15,19 +17,28 @@ let
     inherit pkgs;
     host = true;
   };
-  noGatewayPkgs = pkgs // {
-    iproute2 = throw "host clients must not evaluate iproute2";
-    gawk = throw "host clients must not evaluate gateway parsing";
-  };
-  hostDefaultGateway = import ../../lib/notify/client.nix {
-    pkgs = noGatewayPkgs;
-    host = true;
-  };
-  hostInjectedGateway = import ../../lib/notify/client.nix {
-    pkgs = noGatewayPkgs;
-    host = true;
-    ipCommand = throw "host clients must not evaluate ipCommand";
-  };
+  hostIsGatewayIndependent =
+    { pkgs }:
+    let
+      client = import ../../lib/notify/client.nix {
+        inherit pkgs;
+        host = true;
+      };
+      noGatewayPkgs = pkgs // {
+        iproute2 = throw "host clients must not evaluate iproute2";
+        gawk = throw "host clients must not evaluate gateway parsing";
+      };
+      hostDefaultGateway = import ../../lib/notify/client.nix {
+        pkgs = noGatewayPkgs;
+        host = true;
+      };
+      hostInjectedGateway = import ../../lib/notify/client.nix {
+        pkgs = noGatewayPkgs;
+        host = true;
+        ipCommand = throw "host clients must not evaluate ipCommand";
+      };
+    in
+    hostDefaultGateway.drvPath == client.drvPath && hostInjectedGateway.drvPath == client.drvPath;
   linuxClient = import ../../lib/notify/client.nix {
     pkgs = linuxPkgs;
   };
@@ -47,8 +58,11 @@ in
 {
   notify-host-darwin-eval =
     assert isString darwinHostClient.drvPath;
-    assert hostDefaultGateway.drvPath == hostClient.drvPath;
-    assert hostInjectedGateway.drvPath == hostClient.drvPath;
+    assert hostIsGatewayIndependent { inherit pkgs; };
+    assert all (system: hostIsGatewayIndependent { pkgs = import darwinNixpkgs { inherit system; }; }) [
+      "aarch64-darwin"
+      "x86_64-darwin"
+    ];
     assert elem linuxPkgs.iproute2.drvPath (attrNames (getContext linuxClient.text));
     pkgs.runCommand "notify-host-darwin-eval" { } ''
       set -euo pipefail
