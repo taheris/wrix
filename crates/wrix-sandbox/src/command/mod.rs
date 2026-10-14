@@ -2,7 +2,9 @@ mod config;
 mod launch;
 
 pub use config::{MountMode, ProfileMount, SpawnMount};
-pub use launch::{DarwinBindMount, DarwinMountPlan, LaunchError, classify_darwin_mounts};
+pub use launch::{
+    DarwinBindMount, DarwinMountPlan, LaunchError, classify_darwin_mounts, run_notification_command,
+};
 
 use std::{
     io::{self, Write},

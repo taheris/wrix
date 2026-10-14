@@ -39,6 +39,7 @@ pub fn run(
             stdout,
             stderr,
         ),
+        Some(Invocation::Notify(args)) => run_notify(&args, stdout, stderr),
         Some(Invocation::Service(args)) => run_service(&args, stdout, stderr),
         Some(Invocation::Beads(args)) => run_beads(&args, stdout, stderr),
         Some(Invocation::Init(args)) => {
@@ -60,6 +61,7 @@ struct RootInvocation {
 enum Invocation {
     Run(Vec<String>),
     Spawn(Vec<String>),
+    Notify(Vec<String>),
     Service(Vec<String>),
     Beads(Vec<String>),
     Init(Vec<String>),
@@ -75,6 +77,7 @@ fn parse_root(args: &[String]) -> Result<RootInvocation, clap::Error> {
     let invocation = match matches.subcommand() {
         Some(("run", _matches)) => Some(Invocation::Run(run_args.to_vec())),
         Some(("spawn", matches)) => Some(Invocation::Spawn(passthrough_values(matches))),
+        Some(("notify", matches)) => Some(Invocation::Notify(passthrough_values(matches))),
         Some(("service", matches)) => Some(Invocation::Service(passthrough_values(matches))),
         Some(("beads", matches)) => Some(Invocation::Beads(passthrough_values(matches))),
         Some(("init", matches)) => Some(Invocation::Init(passthrough_values(matches))),
@@ -139,6 +142,23 @@ fn run_sandbox(
         return Ok(ExitCode::SUCCESS);
     }
     wrix_sandbox::command::run(command, profile_config, args, stdout, stderr)
+}
+
+const NOTIFY_HELP: &str = "Run a native command with notification routing.\n\nUsage: wrix notify run -- COMMAND [ARGS ...]\n\nExports WRIX_FOCUS_TARGET to COMMAND and releases registration on exit.\nRegistration failures do not prevent COMMAND from running.\n";
+fn run_notify(
+    args: &[String],
+    stdout: &mut impl Write,
+    stderr: &mut impl Write,
+) -> io::Result<ExitCode> {
+    if args.is_empty() || is_help(&args[0]) {
+        write!(stdout, "{NOTIFY_HELP}")?;
+        return Ok(ExitCode::SUCCESS);
+    }
+    if args.len() < 3 || args[0] != "run" || args[1] != "--" {
+        write!(stderr, "{NOTIFY_HELP}")?;
+        return Ok(ExitCode::FAILURE);
+    }
+    wrix_sandbox::command::run_notification_command(&args[2..]).map_err(io::Error::other)
 }
 
 fn run_service(
@@ -244,6 +264,7 @@ fn write_delegated_help(
         return Ok(ExitCode::SUCCESS);
     };
     match topic.as_str() {
+        "notify" => write!(stdout, "{NOTIFY_HELP}")?,
         "run" => wrix_sandbox::command::write_run_help(stdout)?,
         "spawn" => wrix_sandbox::command::write_spawn_help(stdout)?,
         "service" => write_service_topic_help(&args[1..], stdout)?,
@@ -303,6 +324,7 @@ fn root_command() -> ClapCommand {
                 .disable_help_flag(true)
                 .disable_help_subcommand(true),
         )
+        .subcommand(passthrough_command("notify", "Run a native command with notification routing.", NOTIFY_HELP))
         .subcommand(passthrough_command(
             "spawn",
             "Spawn a programmatic sandbox.",

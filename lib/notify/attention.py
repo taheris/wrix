@@ -2,6 +2,7 @@
 
 import argparse
 import contextlib
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -25,6 +26,8 @@ def registration(directory, target):
         record = json.loads((directory / (name + ".json")).read_text())
         if record.get("focus_target") != target:
             return None
+        if record.get("leased") is True and not lease_active(directory / (name + ".lease")):
+            return None
         field = "terminal_app" if sys.platform == "darwin" else "window_id"
         if not isinstance(record.get(field), str) or not record[field]:
             return None
@@ -38,6 +41,18 @@ def registration(directory, target):
         return record
     except (OSError, ValueError, AttributeError):
         return None
+
+
+def lease_active(path):
+    try:
+        with path.open("rb") as lease:
+            try:
+                fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+            return False
+    except OSError:
+        return False
 
 
 def linux_record_valid(record):
@@ -175,8 +190,9 @@ def validate(record, returning=False):
             if state != expected:
                 return "stale"
         else:
-            state = run(tmux + ["display-message", "-p", "-t", tmux_target,
-                               "#{session_name}:#{window_index}.#{pane_index} #{pane_dead}"])
+            pane_format = ("#{pane_id} #{pane_dead}" if re.fullmatch(r"%[0-9]+", tmux_target)
+                           else "#{session_name}:#{window_index}.#{pane_index} #{pane_dead}")
+            state = run(tmux + ["display-message", "-p", "-t", tmux_target, pane_format])
             if state != tmux_target + " 0":
                 return "stale"
     return "success"

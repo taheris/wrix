@@ -1,6 +1,7 @@
 """Exercise persistent attention routing with real tmux and desktop IPC fixtures."""
 
 import concurrent.futures
+import fcntl
 import importlib.util
 import json
 import os
@@ -74,6 +75,50 @@ else:
         name = attention.re.sub(rb"[^A-Za-z0-9_-]", b"-", target.encode()).decode()
         (self.directory / (name + ".json")).write_text(json.dumps(record))
         return self.directory / (name + ".json")
+
+    def test_native_lease_lifecycle_and_navigation(self):
+        target = "native-fixture"
+        path = self.register(target, leased=True)
+        lease = self.directory / (target + ".lease")
+        lease.write_bytes(b"")
+        with lease.open("rb") as owner:
+            fcntl.flock(owner, fcntl.LOCK_EX)
+            self.assertIsNotNone(attention.registration(self.directory, target))
+            self.assertFalse(attention.is_focused(self.directory, target))
+            attention.enqueue(self.directory, target)
+            self.assertEqual(self.pending(), [target])
+            attention.focus(self.directory)
+            self.assertEqual(self.pending(), [])
+            self.assertTrue(attention.is_focused(self.directory, target))
+            self.assertEqual(attention.return_to_origin(self.directory), 0)
+            self.assertFalse(attention.is_focused(self.directory, target))
+            attention.enqueue(self.directory, target)
+        self.assertTrue(path.exists())
+        self.assertIsNone(attention.registration(self.directory, target))
+        attention.focus(self.directory)
+        self.assertEqual(self.pending(), [])
+        lease.unlink()
+        self.assertIsNone(attention.registration(self.directory, target))
+
+    def test_native_lease_process_exit_invalidates_route(self):
+        target = "native-exited"
+        self.register(target, leased=True)
+        lease = self.directory / (target + ".lease")
+        process = subprocess.Popen([sys.executable, "-c",
+            "import fcntl,sys,time; f=open(sys.argv[1], 'wb'); "
+            "fcntl.flock(f, fcntl.LOCK_EX); print('ready', flush=True); time.sleep(60)",
+            str(lease)], stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(process.stdout.readline().strip(), "ready")
+            self.assertIsNotNone(attention.registration(self.directory, target))
+            attention.enqueue(self.directory, target)
+        finally:
+            process.kill()
+            process.wait()
+            process.stdout.close()
+        self.assertIsNone(attention.registration(self.directory, target))
+        attention.focus(self.directory)
+        self.assertEqual(self.pending(), [])
 
     def pending(self):
         with attention.queue(self.directory) as db:
@@ -601,6 +646,70 @@ os.close(slave)
         self.assertEqual(self.focused_window(), 99)
         self.assertIsNone(self.saved_origin())
         self.assertEqual(self.log.read_text().splitlines(), ["1", "99"])
+
+    @unittest.skipUnless(sys.platform == "linux" and os.environ.get("WRIX_NATIVE_TEST_BIN")
+                         and shutil.which("wrix-notify-host") and shutil.which("wrix-notifyd"),
+                         "native host packages unavailable")
+    def test_native_launch_host_delivery_and_navigation(self):
+        runtime = self.root / "runtime"
+        self.directory = runtime / "wrix/sessions"
+        self.desktop({"id":1, "pid":os.getpid(), "is_focused":True},
+                     {"id":99, "pid":os.getpid() + 1, "is_focused":False})
+        capture = self.root / "dispatch"
+        output = self.root / "target"
+        release = self.root / "release"
+        env = dict(os.environ, XDG_RUNTIME_DIR=str(runtime),
+                   WRIX_NOTIFY_TEST_DISPATCH_CAPTURE=str(capture),
+                   WRIX_NOTIFY_TCP="invalid:1", OUTPUT=str(output), RELEASE=str(release))
+        missing = subprocess.run(["wrix-notify-host", "missing daemon", "complete"],
+                                 env=env, capture_output=True, text=True, timeout=5)
+        self.assertEqual(missing.returncode, 0)
+        self.assertIn("socket not found", missing.stderr)
+        env.pop("TMUX", None)
+        env.pop("TMUX_PANE", None)
+        log = (self.root / "native-daemon.log").open("w")
+        self.addCleanup(log.close)
+        daemon = subprocess.Popen(["wrix-notifyd"], env=env, stdout=log, stderr=log)
+        agent = subprocess.Popen([os.environ["WRIX_NATIVE_TEST_BIN"], "notify", "run", "--",
+            "sh", "-c", 'printf "%s" "$WRIX_FOCUS_TARGET" > "$OUTPUT"; '
+            'while [ ! -f "$RELEASE" ]; do sleep 0.02; done'], env=env)
+        def stop():
+            release.touch()
+            agent.wait(timeout=5)
+            daemon.terminate()
+            daemon.wait(timeout=5)
+        self.addCleanup(stop)
+        def wait_for(predicate):
+            deadline = time.monotonic() + 10
+            while not predicate():
+                self.assertLess(time.monotonic(), deadline, log.name)
+                time.sleep(0.02)
+        wait_for(lambda: output.exists() and output.read_text()
+                 and (runtime / "wrix/notify.sock").exists())
+        target = output.read_text()
+        record = attention.registration(self.directory, target)
+        self.assertEqual(record["window_id"], "1")
+        self.assertTrue(record["leased"])
+        env["WRIX_FOCUS_TARGET"] = target
+        subprocess.run(["wrix-notify-host", "suppressed", "complete"], env=env, check=True)
+        time.sleep(0.5)
+        self.assertFalse(capture.exists())
+        self.assertEqual(self.pending(), [])
+        self.desktop({"id":1, "pid":os.getpid(), "is_focused":False},
+                     {"id":99, "pid":os.getpid() + 1, "is_focused":True})
+        subprocess.run(["wrix-notify-host", "Codex", "complete"], env=env, check=True)
+        wait_for(lambda: self.pending() == [target])
+        self.assertEqual(json.loads(capture.read_text()), ["Codex", "complete"])
+        subprocess.run(["wrix-focus-notification"], env=env, check=True)
+        self.assertEqual(self.focused_window(), 1)
+        subprocess.run(["wrix-focus-notification", "--return"], env=env, check=True)
+        self.assertEqual(self.focused_window(), 99)
+        release.touch()
+        self.assertEqual(agent.wait(timeout=5), 0)
+        self.assertIsNone(attention.registration(self.directory, target))
+        subprocess.run(["wrix-notify-host", "exited", "complete"], env=env, check=True)
+        wait_for(lambda: len(capture.read_text().splitlines()) == 2)
+        self.assertEqual(self.pending(), [])
 
     def darwin_focus_registration(self, target="mac"):
         title = 'Alacritty "quoted"; do shell script "bad"'

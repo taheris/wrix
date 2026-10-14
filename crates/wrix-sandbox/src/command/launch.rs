@@ -457,6 +457,8 @@ struct FocusRecord {
     terminal_window_title: Option<String>,
     #[serde(default = "initial_registration_count")]
     registration_count: u64,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    leased: bool,
 }
 
 impl FocusRecord {
@@ -480,6 +482,7 @@ impl FocusRecord {
             terminal_window_title: terminal_app.as_deref().and_then(terminal_window_title),
             terminal_app,
             registration_count: 1,
+            leased: false,
         }
     }
 
@@ -528,6 +531,16 @@ impl FocusRegistration {
         tmux_target: Option<&FocusTarget>,
         platform: Platform,
         directory: &Path,
+    ) -> Result<Self, LaunchError> {
+        Self::create_in_with_lease(target, tmux_target, platform, directory, false)
+    }
+
+    fn create_in_with_lease(
+        target: Option<&FocusTarget>,
+        tmux_target: Option<&FocusTarget>,
+        platform: Platform,
+        directory: &Path,
+        leased: bool,
     ) -> Result<Self, LaunchError> {
         let Some(target) = target else {
             return Ok(Self::Absent);
@@ -590,6 +603,7 @@ impl FocusRegistration {
                     record.tmux_socket = tmux_socket_from_env();
                 }
             }
+            record.leased = leased;
             write_focus_record(&path, &record)
         })?;
         Ok(Self::Active {
@@ -625,6 +639,81 @@ impl FocusRegistration {
                 fs::remove_file(&path).map_err(LaunchError::from)
             }
         })
+    }
+}
+
+/// Run a native command with a launch-time, host-owned notification route.
+pub fn run_notification_command(args: &[String]) -> Result<ExitCode, LaunchError> {
+    let Some(program) = args.first() else {
+        return Err(
+            io::Error::new(io::ErrorKind::InvalidInput, "expected a command after --").into(),
+        );
+    };
+    let registration = NativeRegistration::create();
+    let mut command = ProcessCommand::new(program);
+    command.args(&args[1..]).env_remove("WRIX_FOCUS_TARGET");
+    if let Ok(active) = &registration {
+        command.env("WRIX_FOCUS_TARGET", active.target.as_str());
+    } else if let Err(error) = &registration {
+        tracing::warn!(%error, "native notification registration unavailable; running without routing");
+    }
+    let result = command.status();
+    if let Ok(active) = registration {
+        active.remove();
+    }
+    status_to_exit(result?)
+}
+
+struct NativeRegistration {
+    target: FocusTarget,
+    registration: FocusRegistration,
+    lease: tempfile::NamedTempFile,
+}
+
+impl NativeRegistration {
+    fn create() -> Result<Self, LaunchError> {
+        let directory = session_directory(Platform::CURRENT);
+        fs::create_dir_all(&directory)?;
+        let lease = tempfile::Builder::new()
+            .prefix("native-")
+            .suffix(".lease")
+            .tempfile_in(&directory)?;
+        FileExt::lock_exclusive(lease.as_file())?;
+        let name = lease
+            .path()
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .ok_or(LaunchError::InvalidFocusTarget)?;
+        let target = FocusTarget::parse(name).map_err(|_| LaunchError::InvalidFocusTarget)?;
+        let pane = env::var("TMUX_PANE")
+            .ok()
+            .filter(|pane| pane.starts_with('%'))
+            .and_then(|pane| FocusTarget::parse_tmux(&pane).ok());
+        let registration = FocusRegistration::create_in_with_lease(
+            Some(&target),
+            pane.as_ref(),
+            Platform::CURRENT,
+            &directory,
+            true,
+        )?;
+        Ok(Self {
+            target,
+            registration,
+            lease,
+        })
+    }
+
+    fn remove(self) {
+        if let Err(error) = self.registration.remove() {
+            tracing::warn!(%error, "native notification registration cleanup failed");
+        }
+        let lock = self.lease.path().with_extension("lock");
+        if let Err(error) = fs::remove_file(&lock) {
+            tracing::warn!(%error, "native notification lock cleanup failed");
+        }
+        if let Err(error) = self.lease.close() {
+            tracing::warn!(%error, "native notification lease cleanup failed");
+        }
     }
 }
 

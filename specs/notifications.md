@@ -32,6 +32,83 @@ separate from this routing value.
 and sandbox-stage skip acceptance. A platform or runtime skip is not evidence of
 notification delivery; live transport checks remain in the host-test stage.
 
+## Native host agents
+
+Install the host packages `wrix`, `wrix-notify-host`, `wrix-notifyd`, and
+`wrix-focus-notification`. Start the daemon in the desktop user session. The
+supported registration interface is supervised execution:
+
+```sh
+wrix notify run -- COMMAND [ARGS ...]
+```
+
+Wrix captures origin **before** starting COMMAND, exports an opaque
+`WRIX_FOCUS_TARGET` to COMMAND and its descendants, waits for COMMAND, then
+releases the registration. No profile config, sandbox, or workspace is required.
+An external launcher can read the target in its child environment; it must not
+parse it, construct one, or register from a completion callback. Incoming
+`WRIX_FOCUS_TARGET` is deliberately replaced, not trusted as origin. Arguments,
+standard streams, and ordinary exit codes pass through unchanged.
+Registration/cleanup errors are diagnosed but never prevent COMMAND from running
+or replace its exit status.
+[test](native_notify::registration_failure_still_runs_command_without_inherited_routing)
+[test](native_notify::spawn_failure_releases_registration)
+
+Each supervised launch has an independent random target and host-held lease,
+even when launches share a terminal/pane. The route uses the same registration,
+origin discovery, focus detection and queue as sandbox launches. Tmux routes use
+stable pane IDs from `TMUX_PANE`, scoped to the socket from `TMUX`. Reindexing
+panes does not redirect attention. Missing/ambiguous origin still allows
+notifications, without suppression or navigation.
+[test](native_notify::concurrent_launches_at_shared_origin_have_independent_lifetimes)
+[system](verify:notifications.attention-navigation)
+
+Run foreground commands that remain alive for the agent's entire lifetime; do
+not daemonize or `exec` over the Wrix supervisor. Normal exit releases
+registration. If the supervisor is killed, its lease is released by the OS, so
+leftover registrations cannot suppress, enqueue or navigate. They may remain on
+disk until runtime-directory cleanup; stale queue entries are discarded by
+existing navigation. An agent surviving its supervisor can still notify but
+loses routing. Targets are not persistent agent identities.
+[system](verify:notifications.attention-navigation)
+
+`wrix-notify-host TITLE MESSAGE [SOUND]` copies the exported target and sends
+through the host-local Unix socket
+`${XDG_RUNTIME_DIR:-$HOME/.local/share}/wrix/notify.sock` on both platforms. It
+uses the same envelope and best-effort transport as `wrix-notify`, but does
+**not** use `WRIX_NOTIFY_TCP` or the container gateway. The container-only
+`wrix-notify` continues using the mounted socket on Linux and TCP on Darwin; do
+not use it for native host callbacks.
+
+Minimal consumer-owned native wrapper:
+
+```sh
+#!/bin/sh
+exec wrix notify run -- codex "$@"
+```
+
+Configure Codex's notify command to invoke a callback such as:
+
+```sh
+#!/bin/sh
+# Codex supplies one JSON argument; other event types are not attention.
+if printf '%s\n' "${1:-}" |
+    jq -e '.type == "agent-turn-complete"' >/dev/null 2>&1; then
+    wrix-notify-host "Codex" "Turn complete" || :
+fi
+exit 0
+```
+
+The callback only reads the inherited target; it does not discover focus,
+register an origin, or provide navigation commands. Wrapper/callback
+installation and Codex configuration belong to the consumer, not Wrix. Missing
+daemon/socket and transport failures are best-effort and diagnosed, never agent
+failures. Linux suppression/navigation requires niri and provable process/client
+ancestry. Darwin retains Accessibility and unique-title limitations; launch from
+the intended terminal, with a stable unique title. Darwin supports attention
+jumps but not `--return`. No desktop keybinding changes are required.
+[system](verify:notifications.native-host)
+
 ## Wire Protocol
 
 `wrix-notify <title> <message> [sound]` sends one newline-delimited JSON

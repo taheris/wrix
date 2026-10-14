@@ -10,12 +10,18 @@
 {
   pkgs,
   ipCommand ? "${pkgs.iproute2}/bin/ip",
+  host ? false,
 }:
 
-pkgs.writeShellScriptBin "wrix-notify" ''
+pkgs.writeShellScriptBin (if host then "wrix-notify-host" else "wrix-notify") ''
   set -euo pipefail
 
-  SOCKET="/run/wrix/notify.sock"
+  SOCKET=${
+    if host then
+      ''"''${XDG_RUNTIME_DIR:-$HOME/.local/share}/wrix/notify.sock"''
+    else
+      ''"/run/wrix/notify.sock"''
+  }
   TCP_PORT=5959
   VERBOSE="''${WRIX_NOTIFY_VERBOSE:-0}"
   title="''${1:-Claude Code}"
@@ -49,7 +55,7 @@ pkgs.writeShellScriptBin "wrix-notify" ''
     ${ipCommand} route | ${pkgs.gawk}/bin/awk '/default/ {print $3; exit}'
   }
 
-  tcp_endpoint="''${WRIX_NOTIFY_TCP:-}"
+  tcp_endpoint=${if host then ''""'' else ''"''${WRIX_NOTIFY_TCP:-}"''}
   if [[ -n "$tcp_endpoint" ]]; then
     if [[ "$tcp_endpoint" == "1" ]]; then
       tcp_host=$(resolve_default_gateway)

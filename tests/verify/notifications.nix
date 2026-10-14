@@ -16,6 +16,10 @@ let
   notifyPath = makeBinPath (
     [
       fixture.client
+      (import ../../lib/notify/client.nix {
+        inherit pkgs;
+        host = true;
+      })
       fixture.daemon
       (import ../../lib/notify/focus.nix { inherit pkgs; })
       pkgs.netcat
@@ -56,6 +60,12 @@ in
   "notifications.attention-navigation" = ''
     export PATH="${notifyPath}:$PATH"
     python3 "$(repo_root)/tests/standalone/test_attention.py"
+  '';
+
+  "notifications.native-host" = linuxLive ''
+    export PATH="${notifyPath}:$PATH"
+    export WRIX_NATIVE_TEST_BIN="$(build_flake_package wrix)/bin/wrix"
+    python3 "$(repo_root)/tests/standalone/test_attention.py" AttentionTests.test_native_launch_host_delivery_and_navigation
   '';
 
   "notifications.focus-target-registration" = ''
