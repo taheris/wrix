@@ -37,7 +37,7 @@ pub fn parser() -> Command {
             Arg::new("return")
                 .long("return")
                 .action(ArgAction::SetTrue)
-                .help("Restore the position before the last successful jump (Linux/niri)."),
+                .help("Restore the position before the last successful jump."),
         )
         .group(
             ArgGroup::new("mode")
@@ -73,14 +73,18 @@ pub fn session_directory(
     platform: Platform,
     variable: impl Fn(&str) -> Option<OsString>,
 ) -> Result<PathBuf, Error> {
-    let name = if platform == Platform::Darwin {
-        "XDG_DATA_HOME"
-    } else {
-        "XDG_RUNTIME_DIR"
-    };
-    let root = match variable(name) {
+    let runtime = (platform == Platform::Linux)
+        .then(|| variable("XDG_RUNTIME_DIR"))
+        .flatten()
+        .filter(|value| !value.is_empty());
+    let root = match runtime {
         Some(root) => PathBuf::from(root),
-        None => PathBuf::from(variable("HOME").ok_or(Error::MissingHome)?).join(".local/share"),
+        None => PathBuf::from(
+            variable("HOME")
+                .filter(|home| !home.is_empty())
+                .ok_or(Error::MissingHome)?,
+        )
+        .join(".local/share"),
     };
     Ok(root.join("wrix/sessions"))
 }

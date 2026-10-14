@@ -42,6 +42,7 @@ wrix-beads = { path = "crates/wrix-beads" }
 wrix-cache = { path = "crates/wrix-cache" }
 wrix-cli = { path = "crates/wrix-cli" }
 wrix-core = { path = "crates/wrix-core" }
+wrix-notify = { path = "crates/wrix-notify" }
 wrix-sandbox = { path = "crates/wrix-sandbox" }
 wrix-service = { path = "crates/wrix-service" }
 

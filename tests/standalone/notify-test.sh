@@ -210,7 +210,7 @@ start_notify_daemon() {
 
   mkdir -p "$runtime_dir/wrix" "$runtime_dir/data"
   : >"$capture"
-  XDG_DATA_HOME="$runtime_dir/data" \
+  HOME="$runtime_dir/home" XDG_DATA_HOME="$runtime_dir/data" \
     XDG_RUNTIME_DIR="$runtime_dir" \
     WRIX_NOTIFY_ALWAYS="$always" \
     WRIX_NOTIFY_VERBOSE="$verbose" \
@@ -682,17 +682,25 @@ EOF
       export WRIX_NOTIFY_TEST_TERMINAL_PID="$$"
       ;;
     Darwin)
-      session_dir="$runtime_dir/data/wrix/sessions"
+      session_dir="$runtime_dir/home/.local/share/wrix/sessions"
       mkdir -p "$session_dir"
-      jq -n --arg focus_target "$focus_target" --arg terminal_app "FocusedTerminal" \
-        '{focus_target: $focus_target, terminal_app: $terminal_app, terminal_window_title: "Origin window"}' >"$session_dir/$safe_id.json"
-      cat >"$bin_dir/osascript" <<'EOF'
+      jq -n --arg focus_target "$focus_target" --argjson pid "$$" \
+        '{focus_target:$focus_target,omniwm_route:{window:"ow_focus",terminal_pid:$pid,client:null}}' >"$session_dir/$safe_id.json"
+      cat >"$bin_dir/omniwmctl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-[[ "$#" -eq 4 && "$1" == '-e' && "$3" == 'FocusedTerminal' && "$4" == 'Origin window' ]] || exit 91
-printf '%s\n' "$(<"$WRIX_NOTIFY_TEST_WINDOW_FOCUS")"
+focused=$(<"$WRIX_NOTIFY_TEST_WINDOW_FOCUS")
+window=$(jq -cn --argjson pid "$WRIX_NOTIFY_TEST_TERMINAL_PID" '{id:"ow_focus",pid:$pid}')
+case "$*" in
+  'query windows --fields id,pid --json')
+    jq -cn --argjson window "$window" '{ok:true,status:"success",result:{kind:"windows",payload:{windows:[$window]}}}' ;;
+  'query focused-window --json')
+    jq -cn --argjson window "$window" --argjson focused "$focused" '{ok:true,status:"success",result:{kind:"focused-window",payload:{window:(if $focused then $window else null end)}}}' ;;
+  *) exit 91 ;;
+esac
 EOF
-      chmod +x "$bin_dir/osascript"
+      chmod +x "$bin_dir/omniwmctl"
+      export WRIX_OMNIWMCTL="$bin_dir/omniwmctl" WRIX_NOTIFY_TEST_TERMINAL_PID="$$"
       ;;
     *) skip "unsupported platform: $(uname -s)" ;;
   esac
@@ -710,9 +718,9 @@ EOF
 write_host_focus_commands() {
   local bin_dir="$1"
   local command
-  export WRIX_NOTIFY_TEST_TERMINAL_PID="$$" WRIX_NOTIFY_TEST_FOCUS_BIN="$bin_dir"
+  export WRIX_NOTIFY_TEST_TERMINAL_PID="$$" WRIX_NOTIFY_TEST_FOCUS_BIN="$bin_dir" WRIX_OMNIWMCTL="$bin_dir/omniwmctl"
   mkdir -p "$bin_dir"
-  for command in niri osascript tmux; do
+  for command in niri omniwmctl tmux; do
     cat >"$bin_dir/$command" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -723,22 +731,14 @@ case "$(basename "$0")" in
     [[ ! -f "$state/fail-window" ]] || exit 1
     jq --argjson pid "$WRIX_NOTIFY_TEST_TERMINAL_PID" '[. | if . == null then . else . + {pid:$pid,is_focused:true} end]' "$state/window"
     ;;
-  osascript)
-    [[ "$1" == '-e' ]] || exit 91
+  omniwmctl)
+    [[ "$*" == 'query windows --fields id,pid --json' || "$*" == 'query focused-window --json' ]] || exit 91
     [[ ! -f "$state/fail-window" ]] || exit 1
-    if [[ "$#" -eq 2 ]]; then
-      cat "$state/app"
-    elif [[ "$#" -eq 3 ]]; then
-      cat "$state/title"
-    elif [[ "$#" -eq 4 ]]; then
-      [[ "$3" == 'FocusedTerminal' && "$4" == 'Origin window' ]] || exit 91
-      if [[ "$(<"$state/app")" == "$3" && "$(<"$state/title")" == "$4" && ! -f "$state/duplicate-title" ]]; then
-        printf '%s\n' true
-      else
-        printf '%s\n' false
-      fi
+    window=$(jq --argjson pid "$WRIX_NOTIFY_TEST_TERMINAL_PID" 'if . == null then null else {id:("ow_" + (.id|tostring)),pid:$pid} end' "$state/window")
+    if [[ "$2" == windows ]]; then
+      jq -cn --argjson window "$window" '{ok:true,status:"success",result:{kind:"windows",payload:{windows:[$window]|map(select(.!=null))}}}'
     else
-      exit 91
+      jq -cn --argjson window "$window" '{ok:true,status:"success",result:{kind:"focused-window",payload:{window:$window}}}'
     fi
     ;;
   tmux)
@@ -779,7 +779,7 @@ start_registered_launcher() {
   local endpoint="$6"
   local title="${7:-$mode attention}"
   local -a args host_env=()
-  if [[ "$(uname -s)" == "Linux" ]]; then host_env=(env -u TMUX -u TMUX_PANE); fi
+  host_env=(env -u TMUX -u TMUX_PANE)
   mkdir -p "$directory/workspace"
   if [[ "$mode" == "spawn" ]]; then
     args=(spawn --spawn-config "$directory/spawn.json")
@@ -787,7 +787,7 @@ start_registered_launcher() {
     args=(run "$directory/workspace" true)
   fi
   PATH="$bin_dir:$PATH" XDG_RUNTIME_DIR="$runtime_dir" XDG_DATA_HOME="$runtime_dir/data" \
-    XDG_CACHE_HOME="$directory/cache" HOME="$directory/home" \
+    XDG_CACHE_HOME="$directory/cache" HOME="$runtime_dir/home" WRIX_OMNIWMCTL="$bin_dir/omniwmctl" \
     WRIX_NOTIFY_TEST_FOCUS_STATE="$state" WRIX_TEST_DIGEST="sha256:$(printf 'a%.0s' {1..64})" \
     WRIX_TEST_CAPTURE="$directory/record.json" WRIX_NOTIFY_TEST_ENV_CAPTURE="$directory/env.json" \
     WRIX_NOTIFY_TEST_SESSION_DIR="$directory/sessions" WRIX_NOTIFY_TEST_CLIENT=1 \
@@ -817,7 +817,7 @@ assert_focus_runtime_fixture_conformance() {
   local bin_dir="$1"
   local command
   local rc
-  for command in podman container niri osascript tmux route; do
+  for command in podman container niri omniwmctl tmux route; do
     rc=0
     "$bin_dir/$command" unexpected arguments >"$TEST_TMP/fixture.out" 2>&1 || rc="$?"
     [[ "$rc" == "91" ]] || fail "external $command fixture accepted unsupported arguments"
@@ -857,8 +857,7 @@ test_pi_focus_routing() {
       ;;
     *) skip "unsupported notification platform" ;;
   esac
-  local repo_root bin_dir target host_tmux='"host:2.1"'
-  if [[ "$(uname -s)" == "Linux" ]]; then host_tmux=null; fi
+  local repo_root bin_dir target host_tmux=null
   repo_root=$(resolve_repo_root)
   bin_dir="$TEST_TMP/host-bin"
   target=$' host/é:terminal\n'
@@ -881,15 +880,15 @@ test_pi_focus_routing() {
     state="$directory/focus-state"
     capture="$directory/dispatch.jsonl"
     daemon_log="$directory/daemon.log"
-    mkdir -p "$state" "$directory/workspace" "$directory/home/.pi/agent"
-    printf '{}\n' >"$directory/home/.pi/agent/auth.json"
+    mkdir -p "$state" "$directory/workspace" "$runtime_dir/home/.pi/agent"
+    printf '{}\n' >"$runtime_dir/home/.pi/agent/auth.json"
     printf '{"id":42}\n' >"$state/window"
     printf 'FocusedTerminal\n' >"$state/app"
     printf 'Origin window\n' >"$state/title"
     printf 'host:2.1\n' >"$state/pane"
     case "$(uname -s)" in
       Linux) session_dir="$runtime_dir/wrix/sessions" ;;
-      Darwin) session_dir="$runtime_dir/data/wrix/sessions" ;;
+      Darwin) session_dir="$runtime_dir/home/.local/share/wrix/sessions" ;;
     esac
     ln -s "$session_dir" "$directory/sessions"
     jq -n --arg workspace "$directory/workspace" '{workspace: $workspace, env: [], agent_args: []}' >"$directory/spawn.json"
@@ -984,12 +983,8 @@ EOF
   }' >"$TEST_TMP/profile.json"
 
   local mode case_name directory runtime_dir state capture daemon_log session_dir target endpoint
-  local host_tmux='"host:2.1"'
-  local -a cases=(focused opaque window-unfocused same-app-background duplicate-title title-missing pane-unfocused pane-unknown pane-empty window-unknown window-missing absent empty)
-  if [[ "$(uname -s)" == "Linux" ]]; then
-    host_tmux=null
-    cases=(focused opaque window-unfocused window-unknown window-missing absent empty)
-  fi
+  local host_tmux=null
+  local -a cases=(focused opaque window-unfocused window-unknown window-missing absent empty)
   local daemon_pid relay_pid launcher_pid port second_directory second_pid colliding_target
   for mode in run spawn; do
     for case_name in "${cases[@]}"; do
@@ -1010,7 +1005,7 @@ EOF
       if [[ "$case_name" == 'title-missing' ]]; then : >"$state/title"; fi
       case "$(uname -s)" in
         Linux) session_dir="$runtime_dir/wrix/sessions" ;;
-        Darwin) session_dir="$runtime_dir/data/wrix/sessions" ;;
+        Darwin) session_dir="$runtime_dir/home/.local/share/wrix/sessions" ;;
       esac
       ln -s "$session_dir" "$directory/sessions"
       target="host:2.1"
@@ -1043,7 +1038,7 @@ EOF
           opaque) export WRIX_FOCUS_TARGET="$target" TMUX=/tmp/notify-tmux.sock,123,0 ;;
           *) unset WRIX_FOCUS_TARGET; export TMUX=/tmp/notify-tmux.sock,123,0 ;;
         esac
-        if [[ "$(uname -s)" == "Linux" && -n "$target" ]]; then export WRIX_FOCUS_TARGET="$target"; fi
+        if [[ -n "$target" ]]; then export WRIX_FOCUS_TARGET="$target"; fi
         start_registered_launcher "$directory" "$mode" "$runtime_dir" "$state" "$bin_dir" "$endpoint"
         launcher_pid="${BACKGROUND_PIDS[-1]}"
         if ! wait_for_capture "$directory/record.json"; then
@@ -1166,7 +1161,7 @@ env["TMUX_TMPDIR"] = str(root / "default-server")
 named_socket = str(root / "named socket,focus")
 clients = []
 suppressions = 0
-session_dir = runtime / ("data/wrix/sessions" if sys.platform == "darwin" else "wrix/sessions")
+session_dir = runtime / ("home/.local/share/wrix/sessions" if sys.platform == "darwin" else "wrix/sessions")
 record_path = session_dir / "visible-0-0.json"
 record = json.loads(record_path.read_text())
 record.update(tmux_target="visible:0.0", tmux_socket=named_socket)
@@ -1186,14 +1181,10 @@ def wait_for(predicate):
 
 
 def attach(server, session, count):
-    if sys.platform == "darwin":
-        client = subprocess.Popen(["tmux", *server, "-C", "attach-session", "-t", session], env=env,
-                                  stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    else:
-        master, slave = pty.openpty()
-        ptys.extend([master, slave])
-        client = subprocess.Popen(["tmux", *server, "attach-session", "-t", session],
-                                  env=dict(env, TERM="xterm"), stdin=slave, stdout=slave, stderr=slave)
+    master, slave = pty.openpty()
+    ptys.extend([master, slave])
+    client = subprocess.Popen(["tmux", *server, "attach-session", "-t", session],
+                              env=dict(env, TERM="xterm"), stdin=slave, stdout=slave, stderr=slave)
     clients.append(client)
     wait_for(lambda: len(tmux(server, "list-clients", "-F", "#{client_session}").splitlines()) == count)
     return client
@@ -1238,12 +1229,11 @@ try:
     time.sleep(1.1)
     attach(named, "other", 2)
     assert tmux(named, "display-message", "-p", "#{session_name}") == "other"
-    if sys.platform != "darwin":
-        record["tmux_target"] = tmux(named, "display-message", "-p", "-t", "visible:0.0", "#{pane_id}")
-        rows = tmux(named, "list-clients", "-F", "#{client_name}\t#{client_pid}\t#{client_tty}\t#{session_id}").splitlines()
-        session = tmux(named, "display-message", "-p", "-t", "visible:0.0", "#{session_id}")
-        name, pid, tty, session = next(row.split("\t") for row in rows if row.split("\t")[-1] == session)
-        record["linux_route"]["client"] = dict(name=name, pid=int(pid), tty=tty, session=session)
+    record["tmux_target"] = tmux(named, "display-message", "-p", "-t", "visible:0.0", "#{pane_id}")
+    rows = tmux(named, "list-clients", "-F", "#{client_name}\t#{client_pid}\t#{client_tty}\t#{session_id}").splitlines()
+    session = tmux(named, "display-message", "-p", "-t", "visible:0.0", "#{session_id}")
+    name, pid, tty, session = next(row.split("\t") for row in rows if row.split("\t")[-1] == session)
+    record["omniwm_route" if sys.platform == "darwin" else "linux_route"]["client"] = dict(name=name, pid=int(pid), tty=tty, session=session)
     check("focused target ignores another client and the default server", True)
     window_focus = Path(os.environ["WRIX_NOTIFY_TEST_WINDOW_FOCUS"])
     window_focus.write_text("false\n")

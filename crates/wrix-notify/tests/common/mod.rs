@@ -17,13 +17,17 @@ use wrix_notify::{
     route::{Platform, Route, Target},
 };
 
+pub fn omni_response(kind: &str, payload: &Value) -> Value {
+    json!({"ok":true,"status":"success","kind":"query","result":{"kind":kind,"payload":payload}})
+}
+
 #[derive(Default)]
 pub struct Desktop {
     pub windows: Value,
     pub calls: Vec<(String, Vec<String>)>,
     pub failures: Vec<Vec<String>>,
     pub responses: HashMap<Vec<String>, String>,
-    pub ax: Option<String>,
+    pub status_responses: HashMap<Vec<String>, String>,
 }
 
 #[derive(Clone)]
@@ -36,6 +40,13 @@ impl Runner for Stub {
         state.calls.push((program.to_owned(), args.clone()));
         if state.failures.contains(&args) {
             return Err(Error::Timeout);
+        }
+        if let Some(response) = state.status_responses.get(&args) {
+            use std::os::unix::process::ExitStatusExt;
+            return Err(Error::Status(
+                std::process::ExitStatus::from_raw(256),
+                response.clone(),
+            ));
         }
         if let Some(response) = state.responses.get(&args) {
             return Ok(response.clone());
@@ -54,15 +65,26 @@ impl Runner for Stub {
                 }
                 Ok(String::new())
             }
-            ("osascript", ["-e", script, _, _]) => Ok(state.ax.clone().unwrap_or_else(|| {
-                if script.contains("AXRaise") {
-                    "success"
-                } else {
-                    "true"
+            ("omniwmctl", ["query", "windows", "--fields", "id,pid", "--json"]) => {
+                Ok(omni_response("windows", &json!({"windows":state.windows})).to_string())
+            }
+            ("omniwmctl", ["query", "focused-window", "--json"]) => {
+                let focused = state
+                    .windows
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|w| w["is_focused"] == true);
+                Ok(omni_response("focused-window", &json!({"window":focused})).to_string())
+            }
+            ("omniwmctl", ["window", "navigate", id, "--json"]) => {
+                for window in state.windows.as_array_mut().unwrap() {
+                    window["is_focused"] = json!(window["id"] == *id);
                 }
-                .to_owned()
-            })),
-            ("tmux", [_, _, "list-clients", ..]) => Ok(String::new()),
+                Ok(json!({"ok":true,"kind":"window","status":"executed"}).to_string())
+            }
+            ("lsof", ["-n", "-P", "-a", "-U", "-c", "tmux", "-Fn"])
+            | ("tmux", [_, _, "list-clients", ..]) => Ok(String::new()),
             _ => Err(Error::Io(std::io::Error::other(format!(
                 "unconfigured fixture: {program} {args:?}"
             )))),
@@ -99,6 +121,11 @@ impl Fixture {
             ]),
             ..Desktop::default()
         }));
+        if platform == Platform::Darwin {
+            for window in state.lock().unwrap().windows.as_array_mut().unwrap() {
+                window["id"] = json!(format!("ow_{}", window["id"]));
+            }
+        }
         let navigator = Navigator::new(Stub(state.clone()), proc);
         Self {
             root,
@@ -125,12 +152,12 @@ impl Fixture {
         path
     }
 
-    pub fn mac(&self, target: &str, title: &str) -> PathBuf {
+    pub fn mac(&self, target: &str, id: &str) -> PathBuf {
         let path = self.directory.join(Self::target(target).filename());
         fs::write(
             &path,
-            json!({"focus_target":target, "terminal_app":"Alacritty",
-            "terminal_window_title":title})
+            json!({"focus_target":target, "omniwm_route":{
+                "window":id,"terminal_pid":if id == "ow_2" {20} else {10}, "client":null}})
             .to_string(),
         )
         .unwrap();
@@ -146,10 +173,16 @@ impl Fixture {
     }
 
     pub fn focus(&self) {
-        attention::focus(&self.directory, self.platform, &self.navigator).unwrap();
+        if let Err(error) = attention::focus(&self.directory, self.platform, &self.navigator) {
+            assert!(matches!(error, attention::Error::Navigation));
+        }
     }
     pub fn returning(&self) {
-        attention::return_to_origin(&self.directory, self.platform, &self.navigator).unwrap();
+        if let Err(error) =
+            attention::return_to_origin(&self.directory, self.platform, &self.navigator)
+        {
+            assert!(matches!(error, attention::Error::Navigation));
+        }
     }
     pub fn focused(&self, target: &str) -> bool {
         attention::is_focused(

@@ -42,24 +42,67 @@ fn default_and_explicit_modes_parse_without_changing_opaque_targets() {
 }
 
 #[test]
-fn session_directory_preserves_platform_roots_and_home_fallback() {
-    for (platform, name) in [
-        (Platform::Linux, "XDG_RUNTIME_DIR"),
-        (Platform::Darwin, "XDG_DATA_HOME"),
-    ] {
+fn gui_and_shell_use_the_same_darwin_session_directory() {
+    for xdg in [None, Some("/custom/data"), Some("")] {
         assert_eq!(
-            command::session_directory(platform, |key| (key == name)
-                .then(|| OsString::from("/runtime")))
+            command::session_directory(Platform::Darwin, |key| match key {
+                "HOME" => Some(OsString::from("/Users/user")),
+                "XDG_DATA_HOME" => xdg.map(OsString::from),
+                _ => None,
+            })
             .unwrap(),
-            PathBuf::from("/runtime/wrix/sessions")
-        );
-        assert_eq!(
-            command::session_directory(platform, |key| (key == "HOME")
-                .then(|| OsString::from("/home/user")))
-            .unwrap(),
-            PathBuf::from("/home/user/.local/share/wrix/sessions")
+            PathBuf::from("/Users/user/.local/share/wrix/sessions")
         );
     }
+    assert!(command::session_directory(Platform::Darwin, |_| None).is_err());
+}
+
+#[test]
+fn linux_session_directory_preserves_runtime_and_home_fallback() {
+    assert_eq!(
+        command::session_directory(Platform::Linux, |key| (key == "XDG_RUNTIME_DIR")
+            .then(|| OsString::from("/runtime")))
+        .unwrap(),
+        PathBuf::from("/runtime/wrix/sessions")
+    );
+    assert_eq!(
+        command::session_directory(Platform::Linux, |key| (key == "HOME")
+            .then(|| OsString::from("/home/user")))
+        .unwrap(),
+        PathBuf::from("/home/user/.local/share/wrix/sessions")
+    );
+}
+
+#[test]
+fn omniwm_cli_resolution_does_not_require_shell_path() {
+    let bundled = PathBuf::from("/Applications/OmniWM.app/Contents/MacOS/omniwmctl");
+    assert_eq!(
+        process::executable("omniwmctl", |_| None, |path| path == bundled),
+        bundled
+    );
+    assert_eq!(
+        process::executable(
+            "omniwmctl",
+            |key| (key == "HOME").then(|| "/Users/user".into()),
+            |path| path.starts_with("/Users/user")
+        ),
+        PathBuf::from("/Users/user/Applications/OmniWM.app/Contents/MacOS/omniwmctl")
+    );
+    assert_eq!(
+        process::executable(
+            "omniwmctl",
+            |key| (key == "WRIX_OMNIWMCTL").then(|| "/custom/omniwmctl".into()),
+            |_| true
+        ),
+        PathBuf::from("/custom/omniwmctl")
+    );
+}
+
+#[test]
+fn subprocess_keeps_json_errors_written_to_stdout() {
+    assert!(matches!(process::execute(Command::new("sh").args(["-c",
+        r#"printf '%s' '{"ok":false,"code":"stale_window_id"}'; exit 1"#]),
+        Duration::from_secs(3)), Err(Error::Status(_, output)) if output.contains("stale_window_id")));
 }
 
 #[test]
@@ -96,6 +139,51 @@ fn subprocess_failures_and_invalid_utf8_are_errors() {
         ),
         Err(Error::Utf8(_))
     ));
+}
+
+#[test]
+fn shortcut_command_failures_are_visible_without_debug_logging() {
+    use std::{fs, os::unix::fs::PermissionsExt};
+    let root = tempfile::tempdir().unwrap();
+    let directory = command::session_directory(Platform::host(), |name| match name {
+        "HOME" | "XDG_RUNTIME_DIR" => Some(root.path().as_os_str().to_owned()),
+        _ => None,
+    })
+    .unwrap();
+    fs::create_dir_all(&directory).unwrap();
+    fs::write(directory.join("target.json"), serde_json::json!({
+        "focus_target":"target", "window_id":"1","linux_route":{"terminal_pid":10,"client":null},
+        "omniwm_route":{"window":"ow_target","terminal_pid":10,"client":null}
+    }).to_string()).unwrap();
+    let backend = root.path().join("niri");
+    fs::write(
+        &backend,
+        "#!/bin/sh\nprintf 'backend fixture failure' >&2\nexit 77\n",
+    )
+    .unwrap();
+    fs::set_permissions(&backend, fs::Permissions::from_mode(0o700)).unwrap();
+    let configured = || {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_wrix-focus-notification"));
+        command
+            .env("HOME", root.path())
+            .env("XDG_RUNTIME_DIR", root.path())
+            .env("PATH", root.path())
+            .env("WRIX_OMNIWMCTL", &backend);
+        command
+    };
+    assert!(
+        configured()
+            .args(["--enqueue", "target"])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let output = configured().output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("backend fixture failure"), "{stderr}");
+    assert!(stderr.contains("attention command failed"), "{stderr}");
 }
 
 #[test]

@@ -1,6 +1,7 @@
 #![cfg(test)]
 
 mod common;
+mod darwin;
 
 use common::{Fixture, edit_json};
 use serde_json::{Value, json};
@@ -243,130 +244,6 @@ fn malformed_saved_origin_is_discarded() {
         assert!(f.saved().is_none());
         assert_eq!(f.calls().len(), 0);
     }
-}
-
-#[test]
-fn darwin_return_is_explicitly_unsupported_and_does_not_change_state() {
-    let f = Fixture::new(Platform::Darwin);
-    attention::open(&f.directory)
-        .unwrap()
-        .execute(
-            "INSERT INTO return_position VALUES (1,?)",
-            ["{\"window_id\":\"2\"}"],
-        )
-        .unwrap();
-    let saved = f.saved();
-    assert!(matches!(
-        attention::return_to_origin(&f.directory, f.platform, &f.navigator),
-        Err(attention::Error::UnsupportedReturn)
-    ));
-    assert_eq!(f.saved(), saved);
-    assert_eq!(f.calls().len(), 0);
-}
-
-#[test]
-fn darwin_focused_origin_window_suppresses_and_title_is_data() {
-    let f = Fixture::new(Platform::Darwin);
-    let title = "Alacritty \"quoted\"; do shell script \"bad\"";
-    f.mac("mac", title);
-    assert!(f.focused("mac"));
-    let calls = f.calls();
-    let (program, args) = &calls[0];
-    assert_eq!(program, "osascript");
-    assert_eq!(&args[2..], ["Alacritty", title]);
-    assert!(!args[1].contains(title));
-    assert!(args[1].contains("AXFocusedWindow"));
-}
-
-#[test]
-fn darwin_background_window_and_unexpected_focus_responses_do_not_suppress() {
-    let f = Fixture::new(Platform::Darwin);
-    f.mac("mac", "Origin");
-    for response in ["false", "unknown", "stale", ""] {
-        f.state.lock().unwrap().ax = Some(response.into());
-        assert!(!f.focused("mac"));
-    }
-}
-
-#[test]
-fn darwin_unavailable_accessibility_does_not_suppress() {
-    let f = Fixture::new(Platform::Darwin);
-    f.mac("mac", "Origin");
-    assert!(f.focused("mac"));
-    let args = f.calls()[0].1.clone();
-    f.state.lock().unwrap().failures.push(args);
-    assert!(!f.focused("mac"));
-}
-
-#[test]
-fn darwin_missing_origin_title_does_not_suppress_or_enqueue() {
-    let f = Fixture::new(Platform::Darwin);
-    let path = f.mac("mac", "Origin");
-    edit_json(&path, |v| {
-        v.as_object_mut().unwrap().remove("terminal_window_title");
-    });
-    f.enqueue("mac");
-    assert!(!f.focused("mac"));
-    assert_eq!(f.pending().len(), 0);
-    assert_eq!(f.calls().len(), 0);
-}
-
-#[test]
-fn darwin_unique_window_required_and_navigation_title_is_data() {
-    let f = Fixture::new(Platform::Darwin);
-    let title = "title; \"quoted\"";
-    f.mac("mac", title);
-    f.enqueue("mac");
-    f.focus();
-    assert_eq!(f.pending().len(), 0);
-    assert_eq!(&f.calls()[0].1[2..], ["Alacritty", title]);
-    assert!(!f.calls()[0].1[1].contains(title));
-    assert!(f.calls()[0].1[1].contains("AXRaise"));
-    f.state.lock().unwrap().ax = Some("stale".into());
-    f.enqueue("mac");
-    f.focus();
-    assert_eq!(f.pending().len(), 0);
-    f.state.lock().unwrap().ax = Some("unknown".into());
-    f.enqueue("mac");
-    f.focus();
-    assert_eq!(f.pending(), ["mac"]);
-}
-
-#[test]
-fn darwin_only_active_attached_pane_in_focused_window_suppresses() {
-    let f = Fixture::new(Platform::Darwin);
-    let path = f.mac("mac", "Origin");
-    edit_json(&path, |v| {
-        v["tmux_socket"] = json!("/socket");
-        v["tmux_target"] = json!("mac:0.0");
-    });
-    f.response(
-        &[
-            "-S",
-            "/socket",
-            "display-message",
-            "-p",
-            "-t",
-            "mac:0.0",
-            "#{session_name}:#{window_index}.#{pane_index} #{pane_dead}",
-        ],
-        "mac:0.0 0",
-    );
-    let args = [
-        "-S",
-        "/socket",
-        "display-message",
-        "-p",
-        "-t",
-        "mac:0.0",
-        "#{window_active} #{pane_active} #{?session_attached,1,0}",
-    ];
-    for response in ["0 1 1", "1 0 1", "1 1 0", "unknown", ""] {
-        f.response(&args, response);
-        assert!(!f.focused("mac"));
-    }
-    f.response(&args, "1 1 1");
-    assert!(f.focused("mac"));
 }
 
 #[test]
@@ -767,52 +644,4 @@ fn native_lease_process_exit_invalidates_route() {
     assert!(registration(&f.directory, &target, f.platform).is_none());
     f.focus();
     assert_eq!(f.pending().len(), 0);
-}
-
-#[test]
-fn darwin_native_stable_pane_is_validated_without_mutable_session_names() {
-    let f = Fixture::new(Platform::Darwin);
-    let path = f.mac("native", "Origin");
-    edit_json(&path, |value| {
-        value["tmux_target"] = json!("%0");
-        value["tmux_socket"] = json!("/socket");
-    });
-    f.response(
-        &[
-            "-S",
-            "/socket",
-            "display-message",
-            "-p",
-            "-t",
-            "%0",
-            "#{pane_id} #{pane_dead}",
-        ],
-        "%0 0",
-    );
-    f.response(
-        &[
-            "-S",
-            "/socket",
-            "display-message",
-            "-p",
-            "-t",
-            "%0",
-            "#{window_active} #{pane_active} #{?session_attached,1,0}",
-        ],
-        "1 1 1",
-    );
-    assert!(f.focused("native"));
-    f.response(
-        &[
-            "-S",
-            "/socket",
-            "display-message",
-            "-p",
-            "-t",
-            "%0",
-            "#{pane_id} #{pane_dead}",
-        ],
-        "%0 1",
-    );
-    assert!(!f.focused("native"));
 }

@@ -56,22 +56,14 @@ identifier!(WindowId, nonempty);
 identifier!(ClientName, nonempty);
 identifier!(Tty, nonempty);
 identifier!(Socket, nonempty);
-identifier!(App, nonempty);
-identifier!(Title, nonempty);
-identifier!(MacPane, nonempty);
+identifier!(OmniId, |v: &str| v.starts_with("ow_")
+    && v.len() > 3
+    && v.as_bytes()[3..]
+        .iter()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-')));
 identifier!(PaneId, |v: &str| stable(v, '%'));
 identifier!(TmuxWindow, |v: &str| stable(v, '@'));
 identifier!(SessionId, |v: &str| stable(v, '$'));
-
-impl MacPane {
-    pub fn live_format(&self) -> &'static str {
-        if stable(self.as_str(), '%') {
-            "#{pane_id} #{pane_dead}"
-        } else {
-            "#{session_name}:#{window_index}.#{pane_index} #{pane_dead}"
-        }
-    }
-}
 
 impl Target {
     pub fn filename(&self) -> String {
@@ -100,17 +92,18 @@ pub struct Client {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct LinuxTmux {
+pub struct Tmux {
     pub socket: Socket,
     pub pane: PaneId,
     pub client: Client,
     pub window: Option<TmuxWindow>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct MacTmux {
-    pub socket: Option<Socket>,
-    pub pane: MacPane,
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OmniWindow {
+    pub window: OmniId,
+    pub terminal_pid: NonZeroU32,
+    pub client: Option<Client>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -118,12 +111,11 @@ pub enum Route {
     Linux {
         window: WindowId,
         terminal: NonZeroU32,
-        tmux: Option<LinuxTmux>,
+        tmux: Option<Tmux>,
     },
     Darwin {
-        app: App,
-        title: Title,
-        tmux: Option<MacTmux>,
+        origin: OmniWindow,
+        tmux: Option<Tmux>,
     },
 }
 
@@ -152,8 +144,7 @@ struct RawLinux {
 #[derive(Deserialize)]
 struct Raw {
     window_id: Option<WindowId>,
-    terminal_app: Option<String>,
-    terminal_window_title: Option<String>,
+    omniwm_route: Option<OmniWindow>,
     tmux_target: Option<String>,
     tmux_socket: Option<String>,
     tmux_window: Option<TmuxWindow>,
@@ -169,7 +160,7 @@ impl Route {
                     .linux_route
                     .ok_or(Error::Invalid("missing Linux provenance"))?;
                 let tmux = match raw.tmux_target.filter(|v| !v.is_empty()) {
-                    Some(pane) => Some(LinuxTmux {
+                    Some(pane) => Some(Tmux {
                         socket: raw
                             .tmux_socket
                             .ok_or(Error::Invalid("missing tmux socket"))?
@@ -187,27 +178,26 @@ impl Route {
                 })
             }
             Platform::Darwin => {
+                let origin = raw.omniwm_route.ok_or(Error::Invalid(
+                    "missing OmniWM identity; enable OmniWM IPC and restart the sandbox",
+                ))?;
                 let tmux = match raw.tmux_target.filter(|v| !v.is_empty()) {
-                    Some(pane) => Some(MacTmux {
+                    Some(pane) => Some(Tmux {
                         pane: pane.try_into()?,
-                        socket: match raw.tmux_socket.filter(|v| !v.is_empty()) {
-                            Some(socket) => Some(socket.try_into()?),
-                            None => None,
-                        },
+                        socket: raw
+                            .tmux_socket
+                            .ok_or(Error::Invalid("missing tmux socket"))?
+                            .try_into()?,
+                        client: origin
+                            .client
+                            .clone()
+                            .ok_or(Error::Invalid("missing tmux client"))?,
+                        window: raw.tmux_window,
                     }),
-                    None => None,
+                    None if origin.client.is_none() => None,
+                    None => return Err(Error::Invalid("missing tmux pane")),
                 };
-                Ok(Self::Darwin {
-                    app: raw
-                        .terminal_app
-                        .ok_or(Error::Invalid("missing application"))?
-                        .try_into()?,
-                    title: raw
-                        .terminal_window_title
-                        .ok_or(Error::Invalid("missing title"))?
-                        .try_into()?,
-                    tmux,
-                })
+                Ok(Self::Darwin { origin, tmux })
             }
         }
     }
@@ -229,10 +219,11 @@ impl Route {
                 }
                 value
             }
-            Self::Darwin { app, title, tmux } => json!({
-                "terminal_app": app, "terminal_window_title": title,
+            Self::Darwin { origin, tmux } => json!({
+                "omniwm_route": origin,
                 "tmux_target": tmux.as_ref().map(|t| &t.pane),
-                "tmux_socket": tmux.as_ref().and_then(|t| t.socket.as_ref()),
+                "tmux_socket": tmux.as_ref().map(|t| &t.socket),
+                "tmux_window": tmux.as_ref().and_then(|t| t.window.as_ref()),
             }),
         }
     }
@@ -293,18 +284,25 @@ pub fn registration(directory: &Path, target: &Target, platform: Platform) -> Op
         }
     };
     let mut identity = json!({});
-    for key in [
-        "focus_target",
-        "window_id",
-        "terminal_app",
-        "terminal_window_title",
-        "tmux_target",
-        "tmux_socket",
-    ] {
+    let keys: &[&str] = match platform {
+        Platform::Linux => &[
+            "focus_target",
+            "window_id",
+            "terminal_app",
+            "terminal_window_title",
+            "tmux_target",
+            "tmux_socket",
+        ],
+        Platform::Darwin => &["focus_target", "tmux_target", "tmux_socket"],
+    };
+    for &key in keys {
         identity[key] = value.get(key).cloned().unwrap_or(Value::Null);
     }
-    if platform == Platform::Linux {
-        identity["linux_route"] = value.get("linux_route").cloned().unwrap_or(Value::Null);
-    }
+    let provenance = if platform == Platform::Linux {
+        "linux_route"
+    } else {
+        "omniwm_route"
+    };
+    identity[provenance] = value.get(provenance).cloned().unwrap_or(Value::Null);
     Some(Registration { route, identity })
 }

@@ -18,8 +18,8 @@ pub enum Error {
     Sqlite(#[from] rusqlite::Error),
     /// attention serialization failed: {0}
     Json(#[from] serde_json::Error),
-    /// --return requires Linux/niri
-    UnsupportedReturn,
+    /// navigation failed; pending attention or return position retained for retry; see the warnings above
+    Navigation,
 }
 
 pub fn open(directory: &Path) -> Result<Connection, Error> {
@@ -45,6 +45,9 @@ pub fn enqueue(directory: &Path, target: &Target, platform: Platform) -> Result<
     if let Some(record) = registration(directory, target, platform) {
         tx.execute("INSERT OR REPLACE INTO pending VALUES (?, ?, (SELECT COALESCE(MAX(sequence), 0) + 1 FROM pending))",
             params![target.as_str(), serde_json::to_string(&record.identity)?])?;
+    } else {
+        tracing::warn!(target = target.as_str(), path = %directory.display(),
+            "attention target is not navigable; update the launcher/daemon and restart the sandbox from its terminal (Darwin requires OmniWM IPC)");
     }
     tx.commit()?;
     Ok(())
@@ -63,6 +66,10 @@ pub fn focus<R: Runner>(
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })?
         .collect::<Result<Vec<_>, _>>()?;
+    if entries.is_empty() {
+        tracing::warn!(path = %directory.display(), "no pending attention; check daemon delivery and shared session directory");
+    }
+    let mut failed = false;
     for (target, identity) in entries {
         let record = match Target::try_from(target.clone()) {
             Ok(target) => registration(directory, &target, platform),
@@ -80,11 +87,7 @@ pub fn focus<R: Runner>(
         };
         let (result, origin) = match record.filter(|_| matches) {
             Some(record) => {
-                let origin = if platform == Platform::Linux {
-                    navigator.capture_origin(directory)
-                } else {
-                    None
-                };
+                let origin = navigator.capture_position(directory, platform);
                 (navigator.navigate(&record.route, false), origin)
             }
             None => (Outcome::Stale, None),
@@ -92,20 +95,28 @@ pub fn focus<R: Runner>(
         if result != Outcome::Retry {
             tx.execute("DELETE FROM pending WHERE target = ?", [&target])?;
         }
+        if result == Outcome::Stale {
+            tracing::warn!(%target, "discarded stale attention target; restart its sandbox to register a live route");
+        }
+        failed |= result == Outcome::Retry;
         if result == Outcome::Success {
-            if platform == Platform::Linux {
-                tx.execute("DELETE FROM return_position", [])?;
-                if let Some(origin) = origin {
-                    tx.execute(
-                        "INSERT INTO return_position VALUES (1, ?)",
-                        [serde_json::to_string(&origin.saved())?],
-                    )?;
-                }
+            failed = false;
+            tx.execute("DELETE FROM return_position", [])?;
+            if let Some(origin) = origin {
+                tx.execute(
+                    "INSERT INTO return_position VALUES (1, ?)",
+                    [serde_json::to_string(&origin.saved())?],
+                )?;
+            } else {
+                tracing::warn!(%target, "attention visited but origin was ambiguous/unavailable; previous return position cleared");
             }
             break;
         }
     }
     tx.commit()?;
+    if failed {
+        return Err(Error::Navigation);
+    }
     Ok(())
 }
 
@@ -114,9 +125,6 @@ pub fn return_to_origin<R: Runner>(
     platform: Platform,
     navigator: &Navigator<R>,
 ) -> Result<(), Error> {
-    if platform == Platform::Darwin {
-        return Err(Error::UnsupportedReturn);
-    }
     let mut db = open(directory)?;
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let text = tx
@@ -126,22 +134,32 @@ pub fn return_to_origin<R: Runner>(
             |row| row.get::<_, String>(0),
         )
         .optional()?;
-    if let Some(text) = text {
+    let failed = if let Some(text) = text {
         let route = serde_json::from_str(&text)
             .map_err(crate::route::Error::from)
             .and_then(|value| Route::parse(&value, platform));
         let result = match route {
             Ok(route) => navigator.navigate(&route, true),
             Err(error) => {
-                tracing::debug!(%error, "stale saved origin");
+                tracing::warn!(%error, "discarding stale saved origin");
                 Outcome::Stale
             }
         };
         if result != Outcome::Retry {
             tx.execute("DELETE FROM return_position", [])?;
         }
-    }
+        if result == Outcome::Stale {
+            tracing::warn!(path = %directory.display(), "saved origin is stale; return discarded without selecting another window/client");
+        }
+        result == Outcome::Retry
+    } else {
+        tracing::warn!(path = %directory.display(), "no saved return position; a successful attention jump with an unambiguous origin is required");
+        false
+    };
     tx.commit()?;
+    if failed {
+        return Err(Error::Navigation);
+    }
     Ok(())
 }
 

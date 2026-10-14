@@ -1,5 +1,7 @@
 use std::{
+    ffi::OsString,
     io::{self, Read, Seek, SeekFrom},
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     time::Duration,
 };
@@ -26,9 +28,40 @@ pub trait Runner {
 
 pub struct Host;
 
+/// GUI callers need neither a login shell nor a CLI symlink in their PATH.
+pub fn executable(
+    program: &str,
+    variable: impl Fn(&str) -> Option<OsString>,
+    exists: impl Fn(&Path) -> bool,
+) -> PathBuf {
+    if program == "omniwmctl" {
+        if let Some(path) = variable("WRIX_OMNIWMCTL").filter(|path| !path.is_empty()) {
+            return path.into();
+        }
+        let mut candidates = vec![PathBuf::from(
+            "/Applications/OmniWM.app/Contents/MacOS/omniwmctl",
+        )];
+        if let Some(home) = variable("HOME") {
+            candidates
+                .push(PathBuf::from(home).join("Applications/OmniWM.app/Contents/MacOS/omniwmctl"));
+        }
+        if let Some(path) = candidates.into_iter().find(|path| exists(path)) {
+            return path;
+        }
+    }
+    if program == "ps" {
+        return "/bin/ps".into();
+    }
+    if program == "lsof" {
+        return "/usr/sbin/lsof".into();
+    }
+    program.into()
+}
+
 impl Runner for Host {
     fn run(&self, program: &str, args: &[&str]) -> Result<String, Error> {
-        execute(Command::new(program).args(args), Duration::from_secs(3))
+        let executable = executable(program, |name| std::env::var_os(name), Path::exists);
+        execute(Command::new(executable).args(args), Duration::from_secs(3))
     }
 }
 
@@ -55,12 +88,15 @@ pub fn execute(command: &mut Command, timeout: Duration) -> Result<String, Error
         }
     };
     if !status.success() {
+        stdout.seek(SeekFrom::Start(0))?;
+        let mut output = String::new();
+        stdout.read_to_string(&mut output)?;
         stderr.seek(SeekFrom::Start(0))?;
         let mut bytes = Vec::new();
         stderr.read_to_end(&mut bytes)?;
         return Err(Error::Status(
             status,
-            String::from_utf8_lossy(&bytes).into_owned(),
+            format!("{output}{}", String::from_utf8_lossy(&bytes)),
         ));
     }
     stdout.seek(SeekFrom::Start(0))?;

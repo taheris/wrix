@@ -104,9 +104,10 @@ register an origin, or provide navigation commands. Wrapper/callback
 installation and Codex configuration belong to the consumer, not Wrix. Missing
 daemon/socket and transport failures are best-effort and diagnosed, never agent
 failures. Linux suppression/navigation requires niri and provable process/client
-ancestry. Darwin retains Accessibility and unique-title limitations; launch from
-the intended terminal, with a stable unique title. Darwin supports attention
-jumps but not `--return`. No desktop keybinding changes are required.
+ancestry. Darwin can use consumer-provided OmniWM IPC and captures the focused
+managed launch window with proven caller/client ancestry. Both backends support
+attention and `--return`; desktop bindings remain consumer-owned. See
+[Darwin setup and validation](../docs/darwin-attention.md).
 [system](verify:notifications.native-host)
 
 ## Wire Protocol
@@ -134,25 +135,23 @@ inside the container.
 
 The launcher registers the host terminal target at container start using the
 same runtime-file naming as the daemon. Linux/niri records its proven
-originating window ID and PID; Darwin records its terminal application and
-window title. The host daemon suppresses only when that terminal window is
-focused and, for a tmux origin, the registered pane and tmux window are active
-in an attached session. An inactive pane or an active pane in a background
-terminal window still notifies. Missing origin metadata, ambiguous windows,
-malformed focus responses, or failed focus queries leave notification delivery
-unchanged. [system](verify:notifications.focus-target-registration)
+originating window ID and PID; Darwin's OmniWM route records the session-scoped
+opaque window ID and PID in `omniwm_route`. The host daemon suppresses only when
+that terminal window is focused and, for a tmux origin, the registered pane and
+tmux window are active in an attached session. An inactive pane or an active
+pane in a background terminal window still notifies. Missing origin metadata,
+ambiguous windows, malformed focus responses, or failed focus queries leave
+notification delivery unchanged.
+[system](verify:notifications.focus-target-registration)
 [system](verify:notifications.attention-navigation)
 
 Linux focus suppression currently requires niri IPC and a provable origin; other
-compositors/desktops still receive notifications normally. Darwin uses System
-Events Accessibility to check the frontmost application's `AXFocusedWindow`
-against a unique registered title, not merely the application name.
-Accessibility permission is required; app-only registrations, changed or
-duplicate titles, and unavailable focused-window attributes do not suppress.
-Darwin registration captures the foreground terminal at launch, so launch from
-the intended terminal window. Stable unique terminal titles are recommended for
-multi-window macOS use. Live Accessibility behavior requires validation on the
-consuming macOS desktop; portable tests cover command routing and query failure.
+compositors/desktops still receive notifications normally. Darwin's optional
+OmniWM backend compares the focused-window query's exact ID and PID. Legacy
+title-only registrations and unavailable IPC do not suppress. Launch from the
+intended focused managed terminal; titles are not routing inputs. Live macOS
+focus and permissions require validation on the consuming desktop; portable
+tests mock OmniWM's external commands and responses.
 [system](verify:notifications.focus-target-registration)
 [system](verify:notifications.attention-navigation)
 
@@ -221,19 +220,39 @@ session-directory cleanup is required.
 [system](verify:notifications.attention-navigation)
 [system](verify:notifications.focus-target-registration)
 
-Darwin uses System Events accessibility to raise a uniquely named registered
-terminal window, then selects its host tmux window/pane. The launcher records
-the foreground terminal window title on Darwin. Accessibility permission is
-needed for both registration and navigation; missing permission leaves
-notification delivery intact. App-only legacy registrations are not navigable.
-Changed or duplicate window titles are deliberately skipped rather than
-activating an arbitrary Alacritty window. This is best-effort title-based macOS
-routing, not stable window-ID routing; Linux/niri does not have that limitation.
-For multiple Alacritty windows on Darwin, use unique stable window titles
-(disable dynamic titles in the consuming Alacritty configuration). Live macOS
-window raising requires validation on the consuming desktop; the portable
-verifier covers argument routing, not macOS Accessibility itself.
-[system](verify:notifications.attention-navigation)
+Darwin can validate a consumer-provided OmniWM opaque window ID/PID against
+current managed windows, select the proven host tmux position if present, and
+invoke `omniwmctl window navigate <id> --json` across workspaces. Focus is
+confirmed through the focused-window query after the layout transition.
+IPC-session restarts invalidate IDs; closed windows or PID mismatches do not
+retarget an application. There is no System Events/title fallback. Wrix does not
+package, pin or install OmniWM; provision and permissions belong to the
+consumer.
+[test](darwin::opaque_window_navigation_and_return_ignore_titles_and_restore_origin)
+[test](darwin::closed_reused_or_previous_ipc_session_id_is_discarded_without_focus)
+
+Darwin tmux routes use the explicit socket, stable pane ID and proven attached
+client. Launch checks the focused terminal's caller/client ancestry; linked
+panes, multi-client sessions and ambiguous shared terminal PIDs omit routing.
+Overlapping registrations preserve proven identities. Unavailable IPC or origin
+metadata leaves notification delivery intact. Update all host packages, restart
+the daemon and relaunch sandboxes/native wrappers to replace legacy routes.
+[test](darwin::tmux_launch_captures_stable_pane_and_proven_client_not_server_ancestry)
+[test](command::launch::tests::darwin_identity_persists_and_is_immutable_across_overlapping_launches)
+
+Darwin launch, daemon lookup/enqueue, and shortcut invocation share
+`$HOME/.local/share/wrix/sessions`, independent of shell-only XDG settings.
+Warnings/errors, stale targets and empty queues are diagnosed without debug
+logging. Retryable navigation/return failures retain state and exit nonzero; the
+packaged Darwin helper also attempts a native failure alert.
+[test](gui_and_shell_use_the_same_darwin_session_directory)
+[test](darwin::failed_or_malformed_queries_retain_attention_and_saved_origin)
+
+[OmniWM setup, permissions, compatibility and live validation](../docs/darwin-attention.md)
+describe the required same-user IPC access, bundled CLI discovery and optional
+explicit path/socket overrides. OmniWM owns Accessibility/Input Monitoring; Wrix
+does not use System Events Automation. Portable tests are mocked desktop
+validation, not evidence of live macOS workspace switching or TCC behavior.
 
 Navigation happens only on explicit host invocation, never on delivery. Unrouted
 notifications still dispatch normally. Queue storage failures are diagnosed
@@ -244,14 +263,15 @@ attention and do not stop later notifications.
 
 ### Return to the previous position
 
-On Linux/niri, `wrix-focus-notification --return` restores the position before
-the last successful attention jump. Desktop bindings remain consumer-owned:
-invoke the ordinary command for attention and invoke it with `--return` for
-return. The host remembers the originating niri window ID and PID; when tmux is
-present it also records the explicitly resolved client name/PID/TTY, socket,
-stable session/window IDs and stable pane ID. Capture resolves host-owned tmux
-listeners and client ancestry using the same route validation as navigation; the
-originating pane need not itself have an agent registration.
+With Linux/niri or Darwin/OmniWM, `wrix-focus-notification --return` restores
+the position before the last successful attention jump. Desktop bindings remain
+consumer-owned: invoke the ordinary command for attention and invoke it with
+`--return` for return. The host remembers the originating desktop window ID and
+PID; when tmux is present it also records the explicitly resolved client
+name/PID/TTY, socket, stable session/window IDs and stable pane ID. Capture
+resolves host-owned tmux listeners and client ancestry using the same route
+validation as navigation (Linux procfs; Darwin lsof/ps); the originating pane
+need not itself have an agent registration.
 [system](verify:notifications.attention-navigation)
 
 Every successful jump replaces the single saved origin, including moves within
@@ -265,7 +285,7 @@ leaving a misleading destination.
 
 Return validates the saved window/PID, client identity and ancestry, session,
 window and live pane, then restores only that explicitly identified client to
-the saved session, selects the saved window/pane and focuses the saved niri
+the saved session, selects the saved window/pane and focuses the saved desktop
 window. It does not switch any other client. Ambiguous shared session state,
 closed windows, exited/replaced clients, missing sessions/windows, and
 dead/missing/moved panes are discarded safely. Successful returns consume the
@@ -275,13 +295,16 @@ neither consumes attention entries nor saves a new origin.
 
 Attention navigation, return, and saved-position updates serialize under the
 pending queue's SQLite transaction. The return table is added automatically to
-the existing host-local database; there is no manual migration or sandbox
-restart for this feature. Update the consuming desktop's focus package and
-reload its command references to enable return. Delivery still never captures or
-changes desktop focus. Darwin's existing attention navigation is unchanged;
-`--return` is unsupported on Darwin and reports that limitation without moving
-focus or changing the queue/return state.
-[system](verify:notifications.attention-navigation)
+the existing host-local database; there is no manual database migration.
+Darwin's legacy registrations need relaunching as described above. Update the
+consuming desktop's focus package and reload its command references to enable
+return. Delivery still never captures or changes desktop focus. Darwin's return
+uses the same queue/return transaction and origin replacement/consumption
+semantics as Linux. [system](verify:notifications.attention-navigation)
+[test](darwin::latest_success_replaces_origin_even_within_the_same_workspace)
+[test](darwin::tmux_return_restores_only_the_identified_client_session_window_and_pane)
+[test](darwin::return_capture_discovers_unregistered_custom_tmux_server_with_lsof)
+[test](darwin::stale_return_does_not_consume_attention_or_save_another_origin)
 
 ## Security
 

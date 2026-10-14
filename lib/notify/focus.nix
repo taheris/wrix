@@ -8,5 +8,9 @@ pkgs.runCommand "wrix-focus-notification"
   ''
     mkdir -p "$out/bin"
     makeWrapper ${binary}/bin/wrix-focus-notification "$out/bin/wrix-focus-notification" \
-      --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.tmux ]}
+      --prefix PATH : ${
+        pkgs.lib.makeBinPath (
+          [ pkgs.tmux ] ++ pkgs.lib.optional pkgs.stdenv.hostPlatform.isDarwin pkgs.terminal-notifier
+        )
+      }
   ''

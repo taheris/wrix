@@ -40,6 +40,7 @@ let
   handlerScript = ''
     set -euo pipefail
 
+    # The helper owns session-path resolution; do not derive a second XDG path here.
     VERBOSE="''${WRIX_NOTIFY_VERBOSE:-0}"
 
     check_terminal_focused() {

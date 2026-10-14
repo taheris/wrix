@@ -12,7 +12,8 @@ use serde_json::Value;
 use crate::{
     process::Runner,
     route::{
-        Client, ClientName, LinuxTmux, PaneId, Route, SessionId, Socket, TmuxWindow, Tty, WindowId,
+        Client, ClientName, PaneId, Platform, Route, SessionId, Socket, Tmux, TmuxWindow, Tty,
+        WindowId,
     },
 };
 
@@ -20,30 +21,7 @@ use crate::{
 pub const CLIENT_FORMAT: &str =
     "#{client_name}|#{client_pid}|#{client_tty}|#{session_id}|#{window_id}|#{pane_id}";
 
-const RAISE: &str = r#"on run argv
- tell application "System Events"
-  if not (exists process (item 1 of argv)) then return "stale"
-  tell process (item 1 of argv)
-   set matches to windows whose name is (item 2 of argv)
-   if (count of matches) is not 1 then return "stale"
-   perform action "AXRaise" of item 1 of matches
-   set frontmost to true
-  end tell
- end tell
- return "success"
-end run"#;
-
-const FOCUSED: &str = r#"on run argv
- tell application "System Events"
-  if not (exists process (item 1 of argv)) then return false
-  tell process (item 1 of argv)
-   if not frontmost then return false
-   set matches to windows whose name is (item 2 of argv)
-   if (count of matches) is not 1 then return false
-   return (name of (value of attribute "AXFocusedWindow")) is (item 2 of argv)
-  end tell
- end tell
-end run"#;
+mod omniwm;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Outcome {
@@ -199,7 +177,13 @@ impl<R: Runner> Navigator<R> {
             .is_some_and(|ancestors| ancestors.contains(&terminal.get()))
     }
 
-    fn validate_tmux(&self, tmux: &LinuxTmux, terminal: NonZeroU32, returning: bool) -> Outcome {
+    fn validate_tmux(
+        &self,
+        tmux: &Tmux,
+        terminal: NonZeroU32,
+        returning: bool,
+        platform: Platform,
+    ) -> Outcome {
         let Some(clients) = self.clients(&tmux.socket) else {
             return Outcome::Retry;
         };
@@ -229,7 +213,10 @@ impl<R: Runner> Navigator<R> {
         } {
             return Outcome::Stale;
         }
-        if !self.client_origin_matches(&tmux.client, terminal) {
+        if !(match platform {
+            Platform::Linux => self.client_origin_matches(&tmux.client, terminal),
+            Platform::Darwin => self.darwin_client_matches(&tmux.client, terminal),
+        }) {
             return Outcome::Stale;
         }
         let Some(panes) = self.tmux(
@@ -262,7 +249,10 @@ impl<R: Runner> Navigator<R> {
             Some(&tmux.socket),
             &["display-message", "-p", "-t", tmux.pane.as_str(), &format],
         );
-        if state.as_deref() == Some(&expected) {
+        let Some(state) = state else {
+            return Outcome::Retry;
+        };
+        if state == expected {
             Outcome::Success
         } else {
             Outcome::Stale
@@ -285,26 +275,17 @@ impl<R: Runner> Navigator<R> {
                     return Outcome::Stale;
                 }
                 tmux.as_ref().map_or(Outcome::Success, |tmux| {
-                    self.validate_tmux(tmux, *terminal, returning)
+                    self.validate_tmux(tmux, *terminal, returning, Platform::Linux)
                 })
             }
-            Route::Darwin { tmux, .. } => {
-                if let Some(tmux) = tmux {
-                    let state = self.tmux(
-                        tmux.socket.as_ref(),
-                        &[
-                            "display-message",
-                            "-p",
-                            "-t",
-                            tmux.pane.as_str(),
-                            tmux.pane.live_format(),
-                        ],
-                    );
-                    if state.as_deref() != Some(&format!("{} 0", tmux.pane.as_str())) {
-                        return Outcome::Stale;
-                    }
+            Route::Darwin { origin, tmux } => {
+                let outcome = self.validate_omni(origin);
+                if outcome != Outcome::Success {
+                    return outcome;
                 }
-                Outcome::Success
+                tmux.as_ref().map_or(Outcome::Success, |tmux| {
+                    self.validate_tmux(tmux, origin.terminal_pid, returning, Platform::Darwin)
+                })
             }
         }
     }
@@ -314,44 +295,27 @@ impl<R: Runner> Navigator<R> {
         if result != Outcome::Success {
             return result;
         }
-        let (socket, pane) = match route {
-            Route::Darwin { app, title, tmux } => {
-                match self
-                    .run("osascript", &["-e", RAISE, app.as_str(), title.as_str()])
-                    .as_deref()
-                {
-                    Some("success") => {}
-                    Some("stale") => return Outcome::Stale,
-                    _ => return Outcome::Retry,
-                }
-                (
-                    tmux.as_ref().and_then(|t| t.socket.as_ref()),
-                    tmux.as_ref().map(|t| t.pane.as_str()),
-                )
-            }
-            Route::Linux { tmux, .. } => {
-                if let Some(tmux) = tmux.as_ref().filter(|_| returning)
-                    && self
-                        .tmux(
-                            Some(&tmux.socket),
-                            &[
-                                "switch-client",
-                                "-c",
-                                tmux.client.name.as_str(),
-                                "-t",
-                                tmux.client.session.as_str(),
-                            ],
-                        )
-                        .is_none()
-                {
-                    return Outcome::Retry;
-                }
-                (
-                    tmux.as_ref().map(|t| &t.socket),
-                    tmux.as_ref().map(|t| t.pane.as_str()),
-                )
-            }
+        let tmux = match route {
+            Route::Linux { tmux, .. } | Route::Darwin { tmux, .. } => tmux.as_ref(),
         };
+        if let Some(tmux) = tmux.filter(|_| returning)
+            && self
+                .tmux(
+                    Some(&tmux.socket),
+                    &[
+                        "switch-client",
+                        "-c",
+                        tmux.client.name.as_str(),
+                        "-t",
+                        tmux.client.session.as_str(),
+                    ],
+                )
+                .is_none()
+        {
+            return Outcome::Retry;
+        }
+        let socket = tmux.map(|t| &t.socket);
+        let pane = tmux.map(|t| t.pane.as_str());
         if let Some(pane) = pane {
             for command in ["select-window", "select-pane"] {
                 if self.tmux(socket, &[command, "-t", pane]).is_none() {
@@ -369,6 +333,9 @@ impl<R: Runner> Navigator<R> {
         {
             return Outcome::Retry;
         }
+        if let Route::Darwin { origin, .. } = route {
+            return self.focus_omni(origin);
+        }
         Outcome::Success
     }
 
@@ -377,11 +344,9 @@ impl<R: Runner> Navigator<R> {
             return false;
         }
         let (focused, socket, pane) = match route {
-            Route::Darwin { app, title, tmux } => (
-                self.run("osascript", &["-e", FOCUSED, app.as_str(), title.as_str()])
-                    .as_deref()
-                    == Some("true"),
-                tmux.as_ref().and_then(|t| t.socket.as_ref()),
+            Route::Darwin { origin, tmux } => (
+                self.focused_omni(origin),
+                tmux.as_ref().map(|t| &t.socket),
                 tmux.as_ref().map(|t| t.pane.as_str()),
             ),
             Route::Linux {
@@ -556,7 +521,7 @@ impl<R: Runner> Navigator<R> {
                 if windows.iter().filter(|w| w.pid == Some(terminal)).count() != 1 {
                     return None;
                 }
-                Some(LinuxTmux {
+                Some(Tmux {
                     socket: socket.clone(),
                     pane: client.pane.clone(),
                     client: client.identity.clone(),

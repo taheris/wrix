@@ -257,6 +257,7 @@ struct Plan<'a> {
     git_identity: GitIdentity,
     focus_target: Option<FocusTarget>,
     host_tmux_target: Option<FocusTarget>,
+    darwin_origin: Option<wrix_notify::route::OmniWindow>,
 }
 
 const DARWIN_NOTIFY_TCP_ENDPOINT: &str = "192.168.64.1:5959";
@@ -452,6 +453,8 @@ struct FocusRecord {
     #[serde(default)]
     linux_route: Option<linux_terminal::Route>,
     #[serde(default)]
+    omniwm_route: Option<wrix_notify::route::OmniWindow>,
+    #[serde(default)]
     terminal_app: Option<String>,
     #[serde(default)]
     terminal_window_title: Option<String>,
@@ -479,31 +482,20 @@ impl FocusRecord {
             tmux_socket,
             window_id,
             linux_route: None,
-            terminal_window_title: terminal_app.as_deref().and_then(terminal_window_title),
+            omniwm_route: None,
+            terminal_window_title: None,
             terminal_app,
             registration_count: 1,
             leased: false,
         }
     }
 
-    fn add_registration(
-        &mut self,
-        platform: Platform,
-        focus: Option<String>,
-    ) -> Result<(), LaunchError> {
+    fn add_registration(&mut self) -> Result<(), LaunchError> {
         self.registration_count = self
             .registration_count
             .checked_add(1)
             .ok_or(LaunchError::FocusRegistrationOverflow)?;
-        match (platform, focus) {
-            // Linux routes are immutable once proven; additional registrations
-            // cannot replace them with a different terminal.
-            (Platform::Linux, _) | (_, None) => {}
-            (Platform::Darwin, Some(terminal_app)) => {
-                self.terminal_window_title = terminal_window_title(&terminal_app);
-                self.terminal_app = Some(terminal_app);
-            }
-        }
+
         Ok(())
     }
 }
@@ -522,8 +514,15 @@ impl FocusRegistration {
         target: Option<&FocusTarget>,
         tmux_target: Option<&FocusTarget>,
         platform: Platform,
+        darwin_origin: Option<&wrix_notify::route::OmniWindow>,
     ) -> Result<Self, LaunchError> {
-        Self::create_in(target, tmux_target, platform, &session_directory(platform))
+        Self::create_in(
+            target,
+            tmux_target,
+            platform,
+            &session_directory(platform)?,
+            darwin_origin,
+        )
     }
 
     fn create_in(
@@ -531,8 +530,16 @@ impl FocusRegistration {
         tmux_target: Option<&FocusTarget>,
         platform: Platform,
         directory: &Path,
+        darwin_origin: Option<&wrix_notify::route::OmniWindow>,
     ) -> Result<Self, LaunchError> {
-        Self::create_in_with_lease(target, tmux_target, platform, directory, false)
+        Self::create_in_with_lease(
+            target,
+            tmux_target,
+            platform,
+            directory,
+            false,
+            darwin_origin,
+        )
     }
 
     fn create_in_with_lease(
@@ -541,6 +548,7 @@ impl FocusRegistration {
         platform: Platform,
         directory: &Path,
         leased: bool,
+        darwin_origin: Option<&wrix_notify::route::OmniWindow>,
     ) -> Result<Self, LaunchError> {
         let Some(target) = target else {
             return Ok(Self::Absent);
@@ -550,13 +558,13 @@ impl FocusRegistration {
         let linux = (platform == Platform::Linux)
             .then(|| linux_terminal::discover(tmux_target))
             .flatten();
-        let focus = terminal_focus(platform);
+        let focus = None;
         let tmux_socket = tmux_target.and_then(|_| tmux_socket_from_env());
         with_focus_lock(&path, || {
             let mut record = if path.try_exists()? {
                 match read_focus_record(&path) {
                     Ok(mut record) if &record.focus_target == target => {
-                        record.add_registration(platform, focus)?;
+                        record.add_registration()?;
                         if record.tmux_socket.is_none()
                             && record.tmux_target.as_ref() == tmux_target
                         {
@@ -601,6 +609,16 @@ impl FocusRegistration {
                     record.linux_route = Some(route);
                     record.tmux_target = tmux_target.cloned();
                     record.tmux_socket = tmux_socket_from_env();
+                }
+            }
+            if platform == Platform::Darwin && record.omniwm_route.is_none() {
+                if let Some(origin) = darwin_origin {
+                    record.omniwm_route = Some(origin.clone());
+                    record.tmux_target = tmux_target.cloned();
+                    record.tmux_socket = tmux_socket_from_env();
+                } else {
+                    tracing::warn!(path = %path.display(),
+                        "Darwin attention routing unavailable; enable OmniWM IPC, check its Accessibility permission, and launch from the intended managed terminal with an unambiguous tmux client");
                 }
             }
             record.leased = leased;
@@ -672,7 +690,7 @@ struct NativeRegistration {
 
 impl NativeRegistration {
     fn create() -> Result<Self, LaunchError> {
-        let directory = session_directory(Platform::CURRENT);
+        let directory = session_directory(Platform::CURRENT)?;
         fs::create_dir_all(&directory)?;
         let lease = tempfile::Builder::new()
             .prefix("native-")
@@ -689,12 +707,14 @@ impl NativeRegistration {
             .ok()
             .filter(|pane| pane.starts_with('%'))
             .and_then(|pane| FocusTarget::parse_tmux(&pane).ok());
+        let darwin_origin = capture_darwin_launch(pane.as_ref());
         let registration = FocusRegistration::create_in_with_lease(
             Some(&target),
             pane.as_ref(),
             Platform::CURRENT,
             &directory,
             true,
+            darwin_origin.as_ref(),
         )?;
         Ok(Self {
             target,
@@ -877,15 +897,14 @@ impl<'a> Plan<'a> {
         };
 
         let host_tmux_target = tmux_focus_target();
-        let default_target = if Platform::CURRENT == Platform::Linux {
-            host_tmux_target.as_ref().and_then(|pane| {
-                let socket = tmux_socket_from_env()?;
-                linux_terminal::focus_key(pane, &socket)
-            })
-        } else {
-            host_tmux_target.clone()
-        };
+        let default_target = host_tmux_target.as_ref().and_then(|pane| {
+            let socket = tmux_socket_from_env()?;
+            linux_terminal::focus_key(pane, &socket)
+        });
         let focus_target = resolve_focus_target(&spawn_env, default_target.as_ref())?;
+        let darwin_origin = focus_target
+            .as_ref()
+            .and_then(|_| capture_darwin_launch(host_tmux_target.as_ref()));
 
         Ok(Self {
             request,
@@ -905,6 +924,7 @@ impl<'a> Plan<'a> {
             git_identity: GitIdentity::load(),
             focus_target,
             host_tmux_target,
+            darwin_origin,
         })
     }
 
@@ -1041,6 +1061,7 @@ impl<'a> Plan<'a> {
             self.focus_target.as_ref(),
             self.host_tmux_target.as_ref(),
             Platform::CURRENT,
+            self.darwin_origin.as_ref(),
         )?;
         let result = match Platform::CURRENT {
             Platform::Linux => self.launch_linux(services, observed_status),
@@ -2664,121 +2685,64 @@ fn parse_tmux_socket(value: &str) -> Option<PathBuf> {
 
 fn tmux_focus_target() -> Option<FocusTarget> {
     env::var_os("TMUX")?;
-    if cfg!(target_os = "linux") {
-        let pane = env::var("TMUX_PANE").ok()?;
-        if !pane.starts_with('%') {
-            return None;
-        }
-        return FocusTarget::parse_tmux(&pane).ok();
-    }
     let pane = match env::var("TMUX_PANE") {
-        Ok(value) => Some(value),
-        Err(env::VarError::NotPresent) => None,
+        Ok(pane) => pane,
         Err(error) => {
-            tracing::warn!(error = %error, "host tmux pane is not valid UTF-8");
+            tracing::warn!(%error, "host tmux pane is unavailable");
             return None;
         }
     };
-    let mut args = vec!["display-message", "-p"];
-    if let Some(pane) = pane.as_deref().filter(|value| !value.is_empty()) {
-        args.extend(["-t", pane]);
-    }
-    args.push("#{session_name}:#{window_index}.#{pane_index}");
-    let output = match run_output("tmux", &args) {
-        Ok(output) => output,
+    let pane = match wrix_notify::route::PaneId::try_from(pane) {
+        Ok(pane) => pane,
         Err(error) => {
-            tracing::warn!(program = "tmux", error = %error, "could not query host tmux focus target");
+            tracing::warn!(%error, "host tmux pane must be a stable pane ID");
             return None;
         }
     };
-    if !output.status.success() {
-        tracing::warn!(
-            status = ?output.status.code(),
-            stderr = %String::from_utf8_lossy(&output.stderr),
-            "host tmux focus query failed"
-        );
-        return None;
-    }
-    let value = match std::str::from_utf8(&output.stdout) {
-        Ok(value) => value,
-        Err(error) => {
-            tracing::warn!(program = "tmux", error = %error, "host tmux focus target is not valid UTF-8");
-            return None;
-        }
-    };
-    let value = value.strip_suffix('\n').unwrap_or(value);
-    match FocusTarget::parse_tmux(value) {
+    match FocusTarget::parse_tmux(pane.as_str()) {
         Ok(target) => Some(target),
         Err(error) => {
-            tracing::warn!(program = "tmux", error = %error, "tmux returned an invalid focus target");
+            tracing::warn!(%error, "host tmux pane cannot be used as a focus target");
             None
         }
     }
 }
 
-fn session_directory(platform: Platform) -> PathBuf {
-    let base = match platform {
-        Platform::Linux => env::var_os("XDG_RUNTIME_DIR"),
-        Platform::Darwin => env::var_os("XDG_DATA_HOME"),
-    };
-    base.map_or_else(|| home_dir().join(".local/share"), PathBuf::from)
-        .join("wrix/sessions")
-}
-
-fn terminal_window_title(app: &str) -> Option<String> {
-    let script = "on run argv\ntell application \"System Events\" to tell process (item 1 of argv) to get name of first window\nend run";
-    let output = match run_output("osascript", &["-e", script, app]) {
-        Ok(output) if output.status.success() => output,
-        Ok(output) => {
-            tracing::debug!(status = ?output.status.code(), "terminal window title unavailable");
-            return None;
-        }
-        Err(error) => {
-            tracing::debug!(error = %error, "could not query terminal window title");
-            return None;
-        }
-    };
-    match String::from_utf8(output.stdout) {
-        Ok(title) => {
-            let title = title.trim_end_matches('\n');
-            (!title.is_empty()).then(|| title.to_owned())
-        }
-        Err(error) => {
-            tracing::warn!(error = %error, "terminal window title is not valid UTF-8");
-            None
-        }
-    }
-}
-
-fn terminal_focus(platform: Platform) -> Option<String> {
-    if platform == Platform::Linux {
-        return None; // Linux origin is resolved by PID, never desktop focus.
-    }
-    let program = "osascript";
-    let output = match run_output(
-        program,
-        &[
-            "-e",
-            "tell application \"System Events\" to name of first process whose frontmost is true",
-        ],
-    ) {
-        Ok(output) => output,
-        Err(error) => {
-            tracing::warn!(program, error = %error, "could not query focus target");
-            return None;
-        }
-    };
-    if !output.status.success() {
-        tracing::warn!(program, status = ?output.status.code(), "focus target query failed");
+fn capture_darwin_launch(
+    tmux_target: Option<&FocusTarget>,
+) -> Option<wrix_notify::route::OmniWindow> {
+    if Platform::CURRENT != Platform::Darwin {
         return None;
     }
-    let target = trim_stdout(&output.stdout);
-    if target.is_empty() {
-        tracing::warn!(program, "focus target returned an empty application name");
-        None
-    } else {
-        Some(target)
+    let pane = tmux_target
+        .map(|target| wrix_notify::route::PaneId::try_from(target.as_str().to_owned()))
+        .transpose();
+    let socket = tmux_socket_from_env()
+        .map(|path| wrix_notify::route::Socket::try_from(path.to_string_lossy().into_owned()))
+        .transpose();
+    let captured = match (pane, socket) {
+        (Ok(pane), Ok(socket)) if tmux_target.is_some() || env::var_os("TMUX").is_none() => {
+            wrix_notify::navigation::Navigator::new(
+                wrix_notify::process::Host,
+                PathBuf::from("/proc"),
+            )
+            .capture_omni_launch(pane.as_ref(), socket.as_ref(), std::process::id())
+        }
+        _ => None,
+    };
+    match captured {
+        Some(wrix_notify::route::Route::Darwin { origin, .. }) => Some(origin),
+        _ => None,
     }
+}
+
+fn session_directory(platform: Platform) -> Result<PathBuf, LaunchError> {
+    let platform = match platform {
+        Platform::Linux => wrix_notify::route::Platform::Linux,
+        Platform::Darwin => wrix_notify::route::Platform::Darwin,
+    };
+    wrix_notify::command::session_directory(platform, |name| env::var_os(name))
+        .map_err(|error| io::Error::other(error).into())
 }
 
 fn terminal_size() -> Option<(u32, u32)> {
@@ -3456,7 +3420,7 @@ mod test {
     }
 
     #[test]
-    fn darwin_window_title_round_trips_without_changing_focus_identity() {
+    fn legacy_darwin_metadata_still_deserializes_for_cleanup() {
         let record: super::FocusRecord = serde_json::from_value(serde_json::json!({
             "focus_target": "host:2.1",
             "terminal_app": "Alacritty",
@@ -3467,6 +3431,57 @@ mod test {
         let value = serde_json::to_value(record).unwrap();
         assert_eq!(value["terminal_window_title"], r#"agent "quoted" window"#);
         assert_eq!(value["focus_target"], "host:2.1");
+    }
+
+    #[test]
+    fn darwin_identity_persists_and_is_immutable_across_overlapping_launches() {
+        let mut record: super::FocusRecord = serde_json::from_value(serde_json::json!({
+            "focus_target": "opaque",
+            "omniwm_route": {"window":"ow_session","terminal_pid":10,"client":null}
+        }))
+        .unwrap();
+        record.add_registration().unwrap();
+        let value = serde_json::to_value(record).unwrap();
+        assert_eq!(value["registration_count"], 2);
+        let route =
+            wrix_notify::route::Route::parse(&value, wrix_notify::route::Platform::Darwin).unwrap();
+        assert_eq!(route.saved()["omniwm_route"], value["omniwm_route"]);
+    }
+
+    #[test]
+    fn darwin_registration_persists_the_launch_snapshot_not_later_focus() {
+        let root = scratch_dir("darwin-registration");
+        let target = FocusTarget::parse("opaque").unwrap();
+        let original: wrix_notify::route::OmniWindow = serde_json::from_value(serde_json::json!({
+            "window":"ow_launch","terminal_pid":10,"client":null
+        }))
+        .unwrap();
+        let changed: wrix_notify::route::OmniWindow = serde_json::from_value(serde_json::json!({
+            "window":"ow_later","terminal_pid":20,"client":null
+        }))
+        .unwrap();
+        let first = FocusRegistration::create_in(
+            Some(&target),
+            None,
+            Platform::Darwin,
+            &root,
+            Some(&original),
+        )
+        .unwrap();
+        let second = FocusRegistration::create_in(
+            Some(&target),
+            None,
+            Platform::Darwin,
+            &root,
+            Some(&changed),
+        )
+        .unwrap();
+        let value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(root.join("opaque.json")).unwrap()).unwrap();
+        assert_eq!(value["omniwm_route"]["window"], "ow_launch");
+        assert_eq!(value["registration_count"], 2);
+        first.remove().unwrap();
+        second.remove().unwrap();
     }
 
     #[test]
@@ -3487,9 +3502,14 @@ mod test {
     fn focus_registration_uses_daemon_filename_and_removes_current_file() {
         let root = scratch_dir("focus-registration");
         let target = FocusTarget::parse("main:2.1").unwrap();
-        let registration =
-            FocusRegistration::create_in(Some(&target), Some(&target), Platform::Linux, &root)
-                .unwrap();
+        let registration = FocusRegistration::create_in(
+            Some(&target),
+            Some(&target),
+            Platform::Linux,
+            &root,
+            None,
+        )
+        .unwrap();
         let path = root.join("main-2-1.json");
         let value: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
@@ -3509,12 +3529,22 @@ mod test {
     fn overlapping_focus_registrations_remove_file_after_last_cleanup() {
         let root = scratch_dir("overlapping-focus-registration");
         let target = FocusTarget::parse("main:2.1").unwrap();
-        let first =
-            FocusRegistration::create_in(Some(&target), Some(&target), Platform::Linux, &root)
-                .unwrap();
-        let second =
-            FocusRegistration::create_in(Some(&target), Some(&target), Platform::Linux, &root)
-                .unwrap();
+        let first = FocusRegistration::create_in(
+            Some(&target),
+            Some(&target),
+            Platform::Linux,
+            &root,
+            None,
+        )
+        .unwrap();
+        let second = FocusRegistration::create_in(
+            Some(&target),
+            Some(&target),
+            Platform::Linux,
+            &root,
+            None,
+        )
+        .unwrap();
         let path = root.join("main-2-1.json");
 
         let value: serde_json::Value =

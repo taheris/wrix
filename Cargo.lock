@@ -952,6 +952,7 @@ dependencies = [
  "time",
  "tracing",
  "wrix-core",
+ "wrix-notify",
 ]
 
 [[package]]
