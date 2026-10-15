@@ -203,11 +203,10 @@ additionally include `wrix.profile.name=<name>` plus
 `wrix.agent.kind=<direct|claude|pi>`. Service images use
 `wrix.image.kind=service`; other support images include their own kind-specific
 labels as named by their specs. Wrix does not relabel third-party/user-provided
-images, and automatic cleanup may target only images that are labelled
-wrix-managed or legacy refs explicitly named by the cleanup spec. Cleanup policy
-and runtime image retention live in `sandbox.md` and sibling runtime specs; this
-spec owns only that image outputs expose enough metadata for safe wrix-scoped
-cleanup.
+images. [Sandbox Image Cleanup](sandbox.md#image-retention-and-cleanup) owns
+runtime retention, collection triggers, eligibility and usage protections. This
+spec owns the image-output metadata consumed by that policy, not a separate
+cleanup rule or legacy-reference exception.
 
 ## In-Container Nix Store Consistency
 
@@ -465,14 +464,11 @@ missing tools on `PATH`, or maintain a hook-id skip list.
     registration rides as a single DB file in the leaf customisation layer — it
     copies up no store path and does not perturb the provenance-tiered graph.
     Runtime acceptance is owned by `sandbox.md`.
-11. **Image labels** — wrix-managed images carry labels so cleanup can
-    distinguish wrix-owned images from user images. All such images include
-    `wrix.managed=true` and `wrix.image.kind=<kind>`; profile images use
-    `wrix.image.kind=profile` and include `wrix.profile.name` plus
-    `wrix.agent.kind`; service/support images include kind-specific identity
-    labels. Third-party/user-provided images are not relabelled by wrix and are
-    not eligible for automatic wrix cleanup unless they already carry
-    wrix-managed labels or match an explicitly documented legacy ref rule.
+11. **Image labels** — outputs follow
+    [Image Ownership Labels](#image-ownership-labels), without relabelling
+    third-party/user images. Runtime collection policy belongs to
+    [Sandbox Image Cleanup](sandbox.md#image-retention-and-cleanup), not a
+    separate automatic-cleanup or legacy-reference rule here.
 
 ### Non-Functional
 

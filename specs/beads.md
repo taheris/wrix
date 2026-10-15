@@ -16,37 +16,48 @@ correctness gate loom's ability to make progress.
 Beads is an external CLI (`bd`) backed by a Dolt SQL database. Wrix provides:
 
 - The shared service lifecycle and identity contract defined by `services.md`.
-  Beads consumes that service's published Dolt endpoint for `.beads/dolt`.
+  Beads consumes its workspace namespace's published Dolt endpoint and managed
+  database/sync-worktree storage.
 - A **shellHook** that ensures the service container is running and exports
   `BEADS_DOLT_SERVER_*` env vars so `bd` connects through the Dolt service
   rather than embedding Dolt in-process.
 - **Wrix CLI integration** on the devShell PATH: `cli.md` owns the root command
   grammar; `services.md` owns `wrix service ...` service lifecycle and Dolt
-  endpoint diagnostics; this spec owns the behavior behind `wrix beads push`
-  session-close branch sync.
+  endpoint diagnostics; this spec owns bare `wrix beads` information and
+  `wrix beads push` session-close branch sync.
 - A validated issue-identifier boundary between Dolt query output and the
   pull-fallback workflow, so snapshot queries and diagnostics cannot consume
   malformed raw identifiers.
 
 ## Command Surface
 
-`bd …` commands are upstream beads. `wrix beads push` is the Wrix-provided
-session-close wrapper; `cli.md` owns its CLI placement and this spec owns its
-sync behavior.
+`bd …` commands are upstream beads. `cli.md` owns Wrix command placement; this
+spec owns bare `wrix beads` information and explicit `wrix beads push`
+session-close synchronization.
 
-| Command                                                         | Purpose                                                        | Verifier                                 |
-| --------------------------------------------------------------- | -------------------------------------------------------------- | ---------------------------------------- |
-| `bd ready`                                                      | Show issues ready to work (no blockers)                        | [system](test-ci:test-beads-live-system) |
-| `bd list --status=<state>`                                      | List issues by status                                          | [system](test-ci:test-beads-live-system) |
-| `bd show <id>`                                                  | Issue details with dependencies                                | [system](test-ci:test-beads-live-system) |
-| `bd create --title=… --type=task --priority=N`                  | Create an issue                                                | [system](test-ci:test-beads-live-system) |
-| `bd update <id> --status=in_progress`                           | Claim work                                                     | [system](test-ci:test-beads-live-system) |
-| `bd update <id> --add-label=<label>` / `--remove-label=<label>` | Manage labels                                                  | [system](test-ci:test-beads-live-system) |
-| `bd update <id> --notes=…`                                      | Set issue notes                                                | [system](test-ci:test-beads-live-system) |
-| `bd close <id>`                                                 | Close an issue                                                 | [system](test-ci:test-beads-live-system) |
-| `bd dep add <issue> <depends-on>`                               | Add a dependency                                               | [system](test-ci:test-beads-live-system) |
-| `bd dolt pull` / `bd dolt push`                                 | Sync the local Dolt database against the remote                | [system](test-ci:test-beads-live-system) |
-| `wrix beads push`                                               | Synchronize session-close state and the configured sync branch | [system](test-ci:test-beads-live-system) |
+Bare `wrix beads` reports non-secret selected-workspace configuration, its
+configured/defaulted sync branch and existing managed sync-worktree/registration
+information. Missing or stale state is reported, not initialized or recovered;
+configuration alone does not prove database readiness. Inspection does not query
+SQL or synchronize, change export policy, create/repair worktrees or databases,
+register/start/repair services or issue credentials. `wrix beads push` remains
+an explicit action with its existing context guards and sync behavior.
+Acceptance: [Information Acceptance](#information-acceptance).
+
+| Command                                                         | Purpose                                                         | Verifier                                          |
+| --------------------------------------------------------------- | --------------------------------------------------------------- | ------------------------------------------------- |
+| `bd ready`                                                      | Show issues ready to work (no blockers)                         | [system](test-ci:test-beads-live-system)          |
+| `bd list --status=<state>`                                      | List issues by status                                           | [system](test-ci:test-beads-live-system)          |
+| `bd show <id>`                                                  | Issue details with dependencies                                 | [system](test-ci:test-beads-live-system)          |
+| `bd create --title=… --type=task --priority=N`                  | Create an issue                                                 | [system](test-ci:test-beads-live-system)          |
+| `bd update <id> --status=in_progress`                           | Claim work                                                      | [system](test-ci:test-beads-live-system)          |
+| `bd update <id> --add-label=<label>` / `--remove-label=<label>` | Manage labels                                                   | [system](test-ci:test-beads-live-system)          |
+| `bd update <id> --notes=…`                                      | Set issue notes                                                 | [system](test-ci:test-beads-live-system)          |
+| `bd close <id>`                                                 | Close an issue                                                  | [system](test-ci:test-beads-live-system)          |
+| `bd dep add <issue> <depends-on>`                               | Add a dependency                                                | [system](test-ci:test-beads-live-system)          |
+| `bd dolt pull` / `bd dolt push`                                 | Sync the local Dolt database against the remote                 | [system](test-ci:test-beads-live-system)          |
+| `wrix beads`                                                    | Read selected-workspace and sync configuration without mutation | [Information Acceptance](#information-acceptance) |
+| `wrix beads push`                                               | Synchronize session-close state and the configured sync branch  | [system](test-ci:test-beads-live-system)          |
 
 Issue types are task, bug, feature, epic, chore, and decision. Priority levels
 range from 0 (critical) to 4 (backlog); the `P0`–`P4` form is accepted as an
@@ -54,33 +65,46 @@ alias [system](test-ci:test-beads-live-system).
 
 ## Storage
 
-Beads splits state across the main worktree and the dedicated sync-branch
-worktree:
+Acceptance: [Managed Storage Acceptance](#managed-storage-acceptance).
 
-- **Main worktree `.beads/`** holds the tracked ignore policy (`.gitignore`),
-  repository config (`config.yaml`), and database metadata (`metadata.json`) —
-  the only files git tracks under `.beads/`. The ignore policy is the durable
-  source of truth that keeps all remaining state local: the Dolt database
-  (`dolt/`, served by the per-workspace service container), the JSONL backup
-  (`backup/`), and runtime state (`bd.sock`, lock/log files, sync state).
-- **Sync-branch worktree** at `.git/beads-worktrees/<branch>/.beads/` holds
-  `dolt-remote/`, the canonical Dolt remote committed on the branch selected by
-  `sync-branch`.
+The repository's main `.beads/` retains tracked ignore policy, `config.yaml` and
+`metadata.json`, plus non-authoritative backup/runtime artifacts. Live Dolt
+state belongs to the workspace namespace beneath the service-visible data root
+defined by `services.md`, not to a repository-local `.beads/dolt` directory.
 
-`bd dolt pull` / `bd dolt push` move data between the local `dolt/` and the
-remote (on disk in the sync-branch worktree). `bd dolt push` alone does not move
-the configured sync branch to GitHub — that's the role of `wrix beads push` (see
-_Session-Close Sync_).
+Within that managed namespace:
 
-The shellHook exports the connection info `bd` uses to reach the Dolt service
-inside the repository-root `<repo>-service`: `BEADS_DOLT_SERVER_SOCKET` on
-Linux, `BEADS_DOLT_SERVER_HOST` and `BEADS_DOLT_SERVER_PORT` on Darwin.
+- `dolt/` contains the authoritative live workspace database.
+- `beads-sync/<branch>/` is the canonical worktree of this repository's
+  configured sync branch; its `.beads/dolt-remote/` is the file remote committed
+  and published through Git.
 
-Sandbox launchers stage only the beads files needed to locate the Dolt-backed
-workspace (`config.yaml` and `metadata.json`). They do not stage
-`.beads/issues.jsonl`; JSONL is a backup/export artefact, not a live recovery
-source for sandboxed clients. A sandbox whose Dolt service endpoint is missing
-fails loudly rather than falling back to JSONL import or embedded Dolt.
+The repository retains its Git branch/admin ownership. The service can access
+the database and remote without repository/home mounts. Host Git uses the
+managed worktree; sandbox Git receives only its own narrowly mapped worktree and
+uses context-correct repository/admin coordinates without rewriting shared Git
+pointers for another caller.
+
+Service registration establishes a canonical namespace-local Dolt `origin`. Host
+and sandbox `bd dolt pull/push` use that same remote, without temporary
+host-versus-container path overrides. Incorrect origins cannot redirect sync
+outside the selected namespace. Remote mutation and Git sync coordinate through
+a workspace-scoped lock, never a host-wide serialization lock.
+
+The shellHook exports the namespace-bound endpoint and scoped SQL authorization
+from `services.md`: Unix socket on Linux when available, TCP on Darwin. Sandbox
+staging remains limited to public beads config/metadata; it does not import
+JSONL or expose another workspace's managed data. Missing registered state or
+endpoints fail loudly rather than creating an unrelated empty database,
+embedding Dolt, or importing backups.
+
+Host-managed migration preserves existing issue contents, Dolt history and
+remotes, configured sync branch, branch commits and uncommitted remote contents.
+It relocates live database and canonical worktree together, validates the new
+view before switching clients, coordinates concurrent users, and never exposes
+two independently writable authoritative databases. Interrupted migration is
+recoverable without overwriting newer state. Normal operation does not maintain
+a second synchronized remote snapshot merely to preserve the old layout.
 
 ## Configuration
 
@@ -109,12 +133,12 @@ downstream "land the plane" instructions.
 
 - **Loom-managed bead clone (`$LOOM_INSIDE` set).** Full no-op: no git or dolt
   operation runs and `wrix beads push` exits 0 with a one-line notice. Inside a
-  loom clone `origin` points at the driver workdir (not GitHub) and
-  `.git/beads-worktrees/<branch>` does not exist; the loom driver publishes
-  `main` + `beads` after a Clean review verdict, and the worker's `bd` writes
-  are already authoritative through the bind-mounted Dolt socket. Running
-  `bd dolt push` here would target the wrong remote and add a second writer
-  racing the driver, so `wrix beads push` declines entirely.
+  loom clone `origin` points at the driver workdir (not GitHub); the canonical
+  managed beads worktree and publication belong to the driver, not the worker.
+  The loom driver publishes `main` + `beads` after a Clean review verdict, and
+  the worker's scoped `bd` writes already reach the authoritative database.
+  Running `bd dolt push` here would target the wrong remote and add a second
+  writer racing the driver, so `wrix beads push` declines entirely.
 - **Unresolvable repository (`$LOOM_INSIDE` unset).** When
   `git rev-parse --show-toplevel` does not resolve a workspace root,
   `wrix beads push` fails fast with an actionable stderr message naming the
@@ -175,10 +199,11 @@ does not exist and when it exists but is no longer a valid git worktree — e.g.
 its admin directory `.git/worktrees/<branch>` was pruned or removed, leaving a
 dangling gitdir pointer. In the invalid case `wrix beads push` prunes the stale
 worktree registration, removes the directory, and re-adds the worktree relative
-to the current `$ROOT` (falling back to `origin/<branch>`, or skipping with a
-notice when no `<branch>` exists). Rebuilding relative to the running `$ROOT`
-keeps the pointers correct from both host and container contexts — the checkout
-is bind-mounted, so worktree admin files store context-dependent absolute paths.
+to the current repository's managed workspace namespace (falling back to
+`origin/<branch>`, or skipping with a notice when no branch exists). Host and
+sandbox views retain correct Git admin/worktree mapping without moving the
+canonical files back into `.git/` or leaving caller-specific pointers in shared
+state.
 
 Recovery preserves the canonical Dolt remote contents and the sync branch's
 commits. An invalid worktree is not treated as an alternate source of bead
@@ -186,8 +211,8 @@ state, and successful recovery leaves the branch ready for the same pull,
 commit, and push behavior as an existing valid worktree.
 
 The sync branch is parsed as a relative Git branch name before mutation.
-Recovery rejects symlinked directory components beneath the repository root,
-including `.git`, the worktree, and the staged-remote paths. It checks these
+Recovery rejects symlinked components in the repository's Git administration and
+the selected managed workspace/worktree/staged-remote paths. It checks these
 paths before mutation and again after checkout, so a symlinked `.beads`
 directory in the sync branch cannot redirect restoration into unrelated data.
 When restoration is unsafe, the staged Dolt remote remains available for
@@ -267,9 +292,9 @@ not by this spec.
   without attempting remote repair
   [test](../crates/wrix-cli/tests/beads_push.rs::unavailable_database_does_not_trigger_remote_repair)
 
-- An existing current-checkout `file://` Dolt remote remains unchanged during
-  `wrix beads push`
-  [test](../crates/wrix-cli/tests/beads_push.rs::existing_file_remote_is_preserved)
+- A canonical managed namespace `file://` remote remains unchanged during normal
+  host and sandbox synchronization
+  [test?](../crates/wrix-cli/tests/beads_managed_storage.rs::canonical_remote_is_stable_across_caller_contexts)
 
 - Git tracks exactly `.beads/.gitignore`, `.beads/config.yaml`, and
   `.beads/metadata.json` under the main worktree's `.beads/` directory
@@ -279,14 +304,13 @@ not by this spec.
   beads config plus the shared Dolt service, with no fallback to a per-container
   embedded Dolt or JSONL import [system](test-ci:test-beads-live-system)
 
-- Direct `bd dolt pull` / `bd dolt push` inside a Linux sandbox temporarily use
-  the container-visible `/workspace` beads-worktree remote when the persisted
-  Dolt `origin` points at the host checkout path, and restore the persisted
-  remote after the command [system](test-ci:test-beads-live-system)
+- Direct host and Linux sandbox `bd dolt pull/push` reach the same canonical
+  managed remote without path remapping or a second authoritative database.
+  [system?](test-ci:test-beads-managed-storage-system)
 
-- The Darwin sandbox entrypoint applies the same temporary Dolt `origin`
-  remapping and restoration around direct `bd dolt pull` / `bd dolt push`
-  commands [system](verify:beads.darwin-remote-remap)
+- Direct Darwin sandbox `bd dolt pull/push` use the same managed remote and
+  correctly scoped database endpoint without host-path remapping.
+  [system?](verify:beads.darwin-managed-remote)
 
 - `beads.shellHook` fails non-zero with a stderr message on Linux and Darwin
   when the selected container runtime is unavailable, before service startup
@@ -328,22 +352,19 @@ not by this spec.
   message or write `.beads/issues.jsonl`
   [system](test-ci:test-beads-live-system)
 
-- On host invocations, `wrix beads push` repairs a missing or stale Dolt
-  `origin` remote to the current checkout's host-path beads worktree remote
-  before Dolt sync
-  [test](../crates/wrix-cli/tests/beads_push.rs::repairs_host_dolt_origin)
+- Trusted registration repairs a missing/stale remote only to the selected
+  namespace's canonical file remote, never an arbitrary caller-supplied path
+  [test?](../crates/wrix-cli/tests/beads_managed_storage.rs::remote_initialization_is_namespace_scoped)
 
-- Sandbox/container invocations of `wrix beads push` temporarily point Dolt
-  `origin` at the current checkout's beads worktree remote for the sync and
-  restore the prior remote before exit, so a `/workspace` path is not left in
-  shared Beads config
-  [test](../crates/wrix-cli/tests/beads_push.rs::restores_sandbox_dolt_origin_after_temporary_override)
+- Host and sandbox invocations share canonical service-local remote coordinates
+  without leaving caller-specific `/workspace` or host-path origins
+  [test?](../crates/wrix-cli/tests/beads_managed_storage.rs::sync_does_not_rewrite_origin_for_caller_paths)
 
 - When `$LOOM_INSIDE` is set, `wrix beads push` performs no git or dolt
   operation and exits 0 with a one-line notice, so a consumer may invoke it
   unconditionally inside a loom-managed bead clone — where `origin` points at
-  the driver workdir and `.git/beads-worktrees/<branch>` is absent — without
-  error and without a second writer racing the driver
+  the driver workdir and beads publication belongs to the driver — without error
+  and without a second publisher racing the driver
   [test](../crates/wrix-cli/tests/beads_push.rs::loom_inside_is_noop)
 
 - When `$LOOM_INSIDE` is unset and `git rev-parse --show-toplevel` does not
@@ -360,13 +381,10 @@ not by this spec.
   have unstaged changes"
   [test](../crates/wrix-cli/tests/beads_push.rs::pre_pull_cleanup_uses_canonical_dirty_detection)
 
-- When the beads worktree directory exists but is no longer a valid git worktree
-  (its `.git/worktrees/<branch>` admin directory was pruned or removed, leaving
-  a dangling gitdir), `wrix beads push` prunes, removes, and recreates the
-  worktree relative to the current `$ROOT`, then completes the sync-branch sync
-  — exiting 0, printing `wrix beads push: synced to GitHub`, and advancing
-  `origin/<branch>` with no `fatal: not a git repository: (null)` error
-  [test](../crates/wrix-cli/tests/beads_push.rs::recovers_orphaned_worktree_relative_to_root)
+- An invalid managed sync worktree recovers its repository/admin mapping,
+  preserves the canonical remote, and completes branch synchronization without
+  invalid-repository errors
+  [test?](../crates/wrix-cli/tests/beads_managed_storage.rs::managed_worktree_recovery_preserves_remote_and_admin_mapping)
 
 - An absolute `sync-branch` is rejected before any `bd` operation or config
   write, without deleting unrelated filesystem data
@@ -401,6 +419,38 @@ not by this spec.
   `No prek.toml … found` error from the config-less sync branch
   [test](../crates/wrix-cli/tests/beads_push.rs::git_sync_invocations_skip_prek)
 
+### Information Acceptance
+
+- Bare `wrix beads` reports non-secret selected-workspace configuration,
+  configured/defaulted sync branch and existing managed-worktree/registration
+  information, without presenting missing/stale metadata as database readiness.
+  [test?](../crates/wrix-cli/tests/information_defaults.rs::bare_beads_reports_workspace_and_sync_configuration)
+- Bare information does not query SQL, synchronize, change export policy,
+  initialize/recover worktrees or databases, register/start/repair services or
+  issue credentials, including with absent or stopped infrastructure.
+  [test?](../crates/wrix-cli/tests/information_defaults.rs::bare_beads_information_never_starts_queries_or_repairs)
+
+### Managed Storage Acceptance
+
+- Migration relocates database and sync worktree while preserving issue data,
+  Dolt history/remotes, branch commits and uncommitted remote contents.
+  [test?](../crates/wrix-cli/tests/beads_managed_storage.rs::migration_preserves_database_history_and_sync_worktree)
+- Interrupted or competing migration never overwrites newer state or exposes two
+  writable authoritative databases.
+  [test?](../crates/wrix-cli/tests/beads_managed_storage.rs::migration_is_recoverable_and_single_writer)
+- Host and sandbox Git use their own namespace's canonical worktree with correct
+  repository/admin mapping and no shared caller-specific pointer writes.
+  [system?](test-ci:test-beads-managed-storage-system)
+- Database/remote/Git-sync mutation uses workspace-scoped coordination, while
+  independent workspaces can synchronize concurrently.
+  [test?](../crates/wrix-cli/tests/beads_managed_storage.rs::sync_coordination_is_workspace_scoped)
+- Missing registered data fails without empty replacement databases, embedded
+  startup or backup import.
+  [test?](../crates/wrix-cli/tests/beads_managed_storage.rs::missing_registered_data_never_creates_a_replacement)
+- Migration/recovery validates both repository-admin and managed-root paths and
+  rejects symlink escape while preserving recoverable remote contents.
+  [test?](../crates/wrix-cli/tests/beads_managed_storage.rs::managed_paths_reject_symlink_escape_without_losing_remote)
+
 ## Requirements
 
 ### Functional
@@ -413,8 +463,9 @@ not by this spec.
    Contract content.
 4. **Sync** — `bd dolt pull` / `bd dolt push` operate over the Dolt remote in
    the configured sync-branch worktree.
-5. **Shared Dolt service** — `beads.shellHook` reaches Dolt through the endpoint
-   published by the workspace service defined in `services.md`.
+5. **Shared Dolt service** — `beads.shellHook` reaches its managed database
+   through the namespace-scoped endpoint of the host-user service in
+   `services.md`.
 6. **Session-close sync** — `wrix beads push` attempts `bd dolt push` before
    `bd dolt pull`; on the pull-fallback path it snapshots local `status` and
    `labels` intent before pulling and refuses to overwrite divergent rows.
@@ -422,14 +473,9 @@ not by this spec.
    hook on every invocation past the context guard (idempotent); the pre-pull
    cleanup in the beads worktree uses `git status --porcelain` so any dirt the
    rebase would refuse is committed first.
-8. **Dolt origin remote handling** — on host invocations, `wrix beads push`
-   repairs a missing or stale Dolt `origin` remote to the current checkout's
-   host-path beads worktree remote before Dolt sync. The repair updates the SQL
-   Dolt remote directly rather than writing `sync.remote`, so it cannot commit
-   host-local absolute paths into `.beads/config.yaml`. Sandbox/container
-   invocations use the same current-checkout remote only as a temporary sync
-   override and restore the prior `origin` before exit, so they do not leave
-   `/workspace` paths in shared config.
+8. **Canonical remote** — registration establishes the namespace-local file
+   remote beside the managed sync worktree. Host/container commands use it
+   without caller-specific remapping; invalid origins cannot escape the tenant.
 9. **Context-aware invocation** — `wrix beads push` is safe to invoke
    unconditionally. Under `$LOOM_INSIDE` it is a full no-op (exit 0); when the
    git root is unresolvable it fails fast with an actionable message; otherwise
@@ -437,19 +483,20 @@ not by this spec.
    guard around the call.
 10. **Beads-worktree resilience** — the sync-branch sync recreates the beads
     worktree when it is absent or present-but-invalid (dangling gitdir after the
-    admin directory was pruned/removed), rebuilding relative to the current
-    `$ROOT` so host and container paths stay correct; and every git invocation
-    in that section, including the recreating `git worktree add`, skips prek so
-    the config-less sync branch does not abort the sync.
+    admin directory was pruned/removed), rebuilding in the managed namespace
+    with correct host/container Git admin mapping; and every git invocation in
+    that section, including the recreating `git worktree add`, skips prek so the
+    config-less sync branch does not abort the sync.
 11. **Sandbox config staging** — sandbox launchers stage beads config and
     metadata only. They do not stage `.beads/issues.jsonl`, and they do not
     permit JSONL auto-import or embedded Dolt fallback when the Dolt service is
     unavailable.
-12. **Sandbox Dolt remote mapping** — direct `bd dolt pull` / `bd dolt push`
-    inside a sandbox temporarily remap Dolt `origin` to the container-visible
-    `/workspace/.git/beads-worktrees/<branch>/.beads/dolt-remote` for the
-    command and restore the persisted host-path remote afterwards, so the same
-    database works from host and container contexts.
+12. **Managed storage** — live Dolt and the canonical sync worktree use the
+    service-data namespace; migration preserves data/history/branch state and
+    concurrent synchronization remains workspace-scoped.
+13. **Information default** — bare `wrix beads` follows
+    [Command Surface](#command-surface), with passive configuration inspection
+    covered by [Information Acceptance](#information-acceptance).
 
 ### Non-Functional
 
@@ -484,7 +531,8 @@ not by this spec.
   loom driver owns that after a Clean review verdict; `wrix beads push`
   deliberately no-ops under `$LOOM_INSIDE` rather than publishing
 - Container runtime selection (covered by `sandbox.md`)
-- Non-beads services in `<repo>-service` (covered by `services.md`)
+- Non-beads services in the shared host-user container (covered by `services.md`
+  and `proxy.md`)
 - Opt-in / legacy ordering flag for `wrix beads push` — push-before-pull is the
   unconditional default
 - Conflict detection on columns other than `status` and `labels`

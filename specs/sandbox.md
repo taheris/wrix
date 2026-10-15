@@ -57,9 +57,10 @@ profile-agnostic Rust `wrix` launcher performs host runtime dispatch at
 execution time: Linux constructs the Podman invocation, and Darwin constructs
 the Apple `container` invocation.
 
-The **runtime image installer** is the shared host-side image install and
-cleanup path used by `wrix run`, `wrix spawn`, and `wrix service start`; it is
-not a separate public CLI.
+The **runtime image installer** is the shared host-side install path used by
+`wrix run`, `wrix spawn` and `wrix service start`; it is not a separate public
+CLI. Broad image pruning is separate from installation and follows
+[Image Retention and Cleanup](#image-retention-and-cleanup).
 
 ### Image Install Path
 
@@ -77,8 +78,8 @@ owned by `image-builder.md`:
 - The Linux descriptor source names a prebuilt OCI layout. The runtime installer
   reads that descriptor and copies `oci:<oci_layout>:<oci_ref>` into
   `containers-storage:<ref>` with skopeo (or an equivalent wrix-owned copy
-  path). Digest preflight runs before the copy; on a miss, wrix delegates the
-  copy to the destination store's content-addressed transport.
+  path). The digest-presence check runs before the copy; on a miss, wrix
+  delegates the copy to the destination store's content-addressed transport.
 - The Darwin tar-loadable source is converted to a temporary OCI archive before
   `container image load --input <oci-archive>`. Apple's `container` CLI surfaces
   no per-blob-dedup install path at this time; see `image-builder.md` § Out of
@@ -87,29 +88,71 @@ owned by `image-builder.md`:
 Both platforms rely on the provenance-tiered graph (see `image-builder.md` §
 Provenance-Tiered Layering) to keep volatile changes isolated. Linux realizes
 the cache contract through descriptor-level layer reuse; Darwin keeps a tar/load
-fallback plus digest-skip preflight until a per-blob Apple path is verified.
+fallback plus the digest-presence check until a per-blob Apple path is verified.
+This installer check establishes image presence, not launch readiness; read-only
+[Launch Preflight](#read-only-launch-preflight) is the separate preview
+contract.
 
 ### Image Retention and Cleanup
 
-The wrix runtime image cleanup path maintains a bounded wrix image keep set
-across workspaces, stored under the user's wrix cache (implementation-owned
-path, file name `image-mru.json`) rather than under a single repo. It keeps the
-image selected for the current operation, images used by existing containers,
-and the eight most recently used wrix image records written by any
-workspace/direnv. Each MRU record includes the image ref plus the resolved
-content digest and image ID when available; cleanup keeps an image if any
-recorded identifier matches. Cleanup consults that shared MRU before deleting so
-a launch in one repo does not remove another repo's recently cached image.
-Wrix-managed images outside that keep set are pruned. New images are labelled by
-`image-builder.md` so dangling cleanup can target wrix-owned images without
-touching user images. On Darwin, a successful archive load is tagged with its
-stable wrix ref and its temporary Apple `untagged@sha256:<digest>` load ref is
-removed immediately. Retention also recognizes historical untagged records as
-cleanup candidates when their image variant satisfies the wrix-managed label
-contract owned by `image-builder.md`. On Linux, legacy tagged `localhost/wrix-*`
-images may be removed when outside the keep set. Unlabelled dangling images are
-not automatically removed on either platform because ownership is ambiguous;
-Wrix may report those images and offer a manual/opt-in cleanup path.
+Acceptance: [Success Criteria](#success-criteria).
+
+Wrix-initiated broad image pruning is an explicit maintenance operation through
+`wrix service gc image`, not part of `run`, `spawn` or service startup. Normal
+operations still use the digest-presence check, reuse matching images and
+install missing images, but do not evict other cached images. There is no
+automatic MRU-eight pruning or automatic disk cap imposed by those operations.
+Cached images may accumulate until explicit cleanup; a launch in one repository
+does not silently prune another repository's warm image.
+
+Bare `wrix service image` provides read-only runtime-image information, without
+installation, pruning or usage/retention bookkeeping writes. CLI grammar belongs
+to [Image Commands](cli.md#image-commands); this spec owns the shared runtime
+mechanics. Image outputs retain the ownership metadata from `image-builder.md`;
+moving the pruning trigger does not relabel third-party images. Combined
+`wrix service gc all` includes this same collector alongside host-user-wide
+Dolt/Celler collection; plain workspace/host data GC does not prune images. The
+`all` selector does not relax image ownership or usage protections. Composition
+and argument admission belong to [CLI Service Scope](cli.md#service-scope) and
+[Service GC Scope](services.md#garbage-collection-scope).
+
+Temporary import-reference cleanup is distinct from broad pruning. On Darwin a
+successful archive load is first tagged with its stable Wrix ref, then its
+operation-created `untagged@sha256:<digest>` load ref is removed. That
+housekeeping must not evict unrelated cached images or remove the installed
+image.
+
+Runtime-unused means no existing container, running or stopped, references or
+depends on the image and no Wrix installation/launch reserves it before
+container creation. Usage checks resolve actual image IDs/digests and runtime
+references; tags such as `latest` or `<none>`, age and configured-profile
+selection alone do not determine usage. A current-but-idle cached image can
+therefore be unused and require another import after collection. Unused does not
+itself establish image ownership or deletion eligibility.
+
+Explicit GC targets all runtime-unused images positively identified as
+Wrix-managed by the
+[image ownership metadata](image-builder.md#image-ownership-labels), across
+profile, service and support kinds. Recency, current-profile selection and the
+former MRU-eight list do not pin an otherwise eligible image. Unlabelled,
+ambiguous and third-party images remain untouched: a Wrix-looking name or
+dangling tag alone is not ownership proof. Collection does not relabel images to
+make them eligible. This is the host user's shared runtime-image store, not a
+per-workspace image pool; selecting a repository does not authorize a different
+image set.
+
+Explicit collection preserves container/in-flight references and does not
+force-remove containers. If usage cannot be established reliably, the image is
+not deleted. Runtime-managed dependencies are not bypassed by manually deleting
+layer files or forcing removal. The previous MRU-eight deletion policy is not a
+required policy for the explicit collector.
+
+Image GC continues other independently safe image units after an inspection or
+removal failure, without deleting a candidate whose safety cannot be
+established. Failures and any completed removals are accumulated for the final
+report/nonzero outcome under
+[GC Failure Handling](services.md#gc-failure-handling); successful removals are
+not rolled back.
 
 ### Boundary Class
 
@@ -127,40 +170,95 @@ Threat-model rationale for these choices lives in `specs/security.md`.
 
 ### Network Posture
 
-`WRIX_NETWORK` selects public egress posture at launch time. The launcher passes
-the mode, merged allowlist, DNS exceptions, and wrix-owned local endpoint
-exceptions into the container via env/config; both platforms use an immutable
-first-stage bootstrap to install an in-sandbox firewall ruleset before any
-workspace setup or agent code runs. Linux Podman uses `nftables` by default.
-Darwin does not use host `pf`; it uses the firewall backend available inside the
-Linux guest/container (`nftables` when supported, otherwise a verified
-equivalent such as iptables).
+Acceptance: [Network Posture Acceptance](#network-posture-acceptance) and
+[Network and Mount Enforcement Acceptance](#network-and-mount-enforcement-acceptance).
 
-Baseline network isolation is always enforced in both modes: no inbound ports,
-IPv6 disabled/blocked for v1, and outbound traffic to
-LAN/private/host-local/VPN/special ranges is blocked. Exact exceptions are
-allowed only for wrix-owned endpoints (for example the project cache
-host-gateway IP/port, Darwin Dolt TCP endpoint) and configured DNS resolvers on
-TCP/UDP port 53.
+`WRIX_NETWORK` selects public egress posture. Both platforms install an
+in-sandbox firewall before workspace setup or agent execution, using immutable,
+image-pinned startup tools. Linux Podman uses nftables by default; Darwin uses
+the available verified guest backend, not host `pf`.
 
-- `open` (default) — public-internet outbound is allowed, but
-  LAN/private/host-local/VPN/special ranges remain blocked.
-- `limit` — outbound is restricted to the profile's merged `networkAllowlist`
-  plus exact wrix-owned local endpoint and DNS exceptions;
-  LAN/private/host-local/VPN/special ranges remain blocked. Any other value
-  errors at the launcher before the container starts.
+Both modes block inbound ports, disable/block IPv6 for v1, and protect
+LAN/private/host-local/VPN/special IPv4 destinations. Only designated Wrix
+data-plane endpoints receive exact address/protocol/port exceptions. Host
+management endpoints are not Wrix data-plane exceptions.
 
-Filtering is fail-closed. Both platforms grant temporary in-container
-`NET_ADMIN` only for trusted startup. The immutable bootstrap uses only
-image-pinned tools, verifies the namespace-local firewall policy, and replaces
-itself through `capsh` with a stage that rejects `NET_ADMIN` in every Linux
-capability set before workspace setup or exit logging is installed. Linux
-rootless Podman uses this sequence for both the default container boundary and
-optional `WRIX_MICROVM=1` boundary; macOS runs in a microVM unconditionally. The
-Darwin host firewall is never mutated. `WRIX_NETWORK=limit` domains are resolved
-once at startup; any unresolvable allowlist domain fails launch instead of being
-silently omitted. If firewall setup, IPv6 disablement, or capability drop cannot
-be verified, launch fails; wrix never falls back to LAN-open networking.
+- `open` remains the default: public-internet outbound is allowed, with the
+  protected-address baseline and exact configured TCP/UDP port 53 resolver
+  exceptions.
+- `limit` requires the authenticated proxy owned by `proxy.md`. The agent
+  firewall permits only the designated proxy TCP endpoint and required Wrix data
+  endpoints, not direct public destinations or public DNS. The proxy owns
+  hostname/port admission and resolution using the structured rules owned by
+  [Profiles Network Allowlist](profiles.md#network-allowlist). There is no third
+  mode or direct-IP allowlist fallback. Unknown mode values fail before startup.
+
+The proxy retains the same protected-address baseline for its connections, with
+only exact required resolver exceptions. These exceptions do not grant agents
+unrestricted DNS access. Resolution failure affects the requested proxy
+connection, not launch merely because an unused allowed hostname is unavailable.
+
+Filtering is fail-closed. Temporary in-container `NET_ADMIN` is granted only for
+trusted startup. The bootstrap verifies policy, then replaces itself through
+`capsh` with a stage rejecting `NET_ADMIN` in every capability set before
+workspace setup, agent execution or exit logging. Rootless Podman, optional krun
+and Apple microVMs share that sequence. Failure to verify firewall setup, IPv6
+blocking or capability drop prevents launch. Missing/unavailable proxy
+infrastructure prevents restricted launch; subsequent failure never enables
+direct egress. Host firewall mutation and LAN-open fallback are excluded.
+
+### Network and Mount Enforcement Verification
+
+Acceptance:
+[Network and Mount Enforcement Acceptance](#network-and-mount-enforcement-acceptance).
+
+Live acceptance exercises the production launcher and workload under each
+supported isolation boundary: Linux rootless Podman, Linux krun with usable KVM,
+and Darwin Apple Container. Shared bootstrap tests supplement rather than
+replace these runtime-specific observations. Each boundary reports its own
+results and prerequisites using `cli.md`'s verifier capability contract;
+unavailable platforms or capabilities do not become passing coverage.
+
+Network controls demonstrate changes in enforcement, not just generated rules.
+The controls compare `open` and `limit` against known-live public and local
+destinations, preserving the existing baseline owned by _Network Posture_.
+Open-mode DNS, restricted-mode proxy and Wrix-managed TCP endpoint exceptions
+allow only the selected address, protocol and port. Restricted-mode controls
+also exercise authorized proxy requests versus direct and public-DNS bypass.
+Controls exercise the permitted endpoint, a known-live wrong-address endpoint, a
+known-live wrong-port endpoint, and the original endpoint with its exception
+removed. Independent positive controls establish endpoint health and
+comparable-path reachability; a dead service, unresolvable name, or unrelated
+routing failure cannot count as a successful policy denial.
+
+Mount controls exercise both profile and `SpawnConfig` declarations for regular
+files and directories. Workload writes fail for read-only declarations and
+succeed for corresponding writable declarations; read-only host sources remain
+unchanged. These controls do not strengthen Darwin's documented directory
+persistence or synchronization semantics.
+
+Built-in language cache preparation follows
+[Tool Cache Data Boundary](profiles.md#tool-cache-data-boundary), rather than
+mounting/copying personal host Cargo/sccache/uv caches. That owner's live
+acceptance covers host-separated tool use and its
+[Shared/Private Modes](profiles.md#shared-and-private-tool-cache-modes). Shared
+mode enables the host-user worker pool across repositories; sharing-off uses
+fresh private writable cache data for the whole launch, not a subset of
+sources/directories. These managed-cache requirements do not change ordinary
+directory staging/synchronization or restore guest Nix persistence. Read-only
+preflight does not allocate/populate either shared or private cache data. Run
+and spawn use the same explicit-choice, selected-workspace repository,
+shared-default resolver from that owner; explicit choices work in both
+directions without rewriting policy. Its
+[Shared Compiler](profiles.md#shared-rust-compiler-service) contract owns
+central sccache execution and requires private caches for restricted Rust;
+central compiler work is not automatically covered by worker resource limits.
+Read-only inspection reports the resolved choice under the same launch policy
+instead of silently replacing a private repository default.
+
+This acceptance scope covers networking and mounts, not a new resource-limit
+policy or workload-level CPU, memory or process-limit assurance. Existing
+resource controls remain delegated to the selected container runtime.
 
 ### Agent Runtime Axis
 
@@ -331,11 +429,14 @@ booleans; omitted fields inherit independently. Invalid policy or override types
 fail before service startup or credential staging. `WRIX_GIT_SIGN` is not a
 policy input.
 
-Before launching the agent container, `wrix` ensures the per-workspace service
-container (`<repo>-service`) is running when beads or the project Nix cache is
-enabled. Dolt endpoints and project-cache `NIX_CONFIG` injection are owned by
-`services.md`; this spec owns only that both launcher subcommands use the same
-container construction path.
+Before launching the agent container, both subcommands ensure the shared
+host-user service and selected workspace namespace when Beads/cache are enabled,
+or the proxy when restricted networking requires it. `services.md` owns
+lifecycle and scoped endpoints; `cache.md` owns cache transport/trust and
+[client publication freshness](cache.md#client-publication-freshness). This spec
+owns their launch-time injection for both modes, including the cache-enabled Nix
+client context. `proxy.md` owns launch traffic grants. Both subcommands use the
+same container construction path.
 
 | Subcommand                                           | Stdio                         | Configuration source                                 | Use case                                            |
 | ---------------------------------------------------- | ----------------------------- | ---------------------------------------------------- | --------------------------------------------------- |
@@ -346,11 +447,24 @@ container construction path.
 returns its observed exit status. It does not allocate a TTY. `--stdio` enables
 container stdin and requests the selected agent's stdio mode; it does not
 detach. Callers may background the launcher themselves, but Wrix does not take
-over its supervision. Execution-record completion follows `security.md`.
+over its supervision. Execution-record completion follows `security.md`. For
+cache-enabled run/spawn, that same waiting launcher owns automatic
+[multi-day credential renewal](cache.md#launcher-owned-renewal) and a private,
+read-only-mounted native Nix credential directory. Runtime/agent completion
+stops renewal; no separate detached owner is introduced. Renewal failure alone
+is not execution completion or permission to alter observed agent exit status.
 
 `ProfileConfig` JSON is generated by Nix into the store and contains the
 immutable profile/image defaults. It is data, not shell code, and the Rust CLI
-validates it before constructing platform container argv. Schema v1:
+validates it before constructing platform container argv. `ProfileConfig`
+remains schema 1, including the strict owned-field and structured network-rule
+contract. Producers and the parser adopt that shape directly; no legacy-shape
+reader or compatibility migration is provided. Unsupported schema versions are
+rejected. Acceptance:
+[Runtime and Configuration Acceptance](#runtime-and-configuration-acceptance)
+and [Strict Configuration Acceptance](#strict-configuration-acceptance).
+
+Schema v1:
 
 ```json
 {
@@ -366,7 +480,7 @@ validates it before constructing platform container argv. Schema v1:
       "/home/wrix/.cargo",
       "/home/wrix/.cache"
     ],
-    "network_allowlist": ["example.org"]
+    "network_allowlist": [{ "host": "example.org", "ports": [443] }]
   },
   "image": {
     "ref": "localhost/wrix-example:sha256-...",
@@ -415,10 +529,14 @@ values. `security.runtime_secrets` maps validated environment names to
 from `SpawnConfig.env` or same-named host env immediately before launch.
 `agent.kind` is one of `direct`, `claude`, or `pi`; callers may not change it
 independently of `image`. `services.beads.enable = "auto"` means start Dolt when
-the workspace has `.beads/dolt`; `services.nix_cache.enable` controls
-project-cache endpoint injection. `network.default_mode` defaults to `open` and
-may be overridden at launch by `WRIX_NETWORK=open|limit`; both modes keep the
-local-network isolation baseline.
+the workspace has Beads configuration and registered managed state as defined by
+`beads.md`, including its safe migration contract; `services.nix_cache.enable`
+controls project-cache endpoint injection. `network.default_mode` defaults to
+`open` and may be overridden at launch by `WRIX_NETWORK=open|limit`; both modes
+keep the local-network isolation baseline. `profile.network_allowlist` preserves
+the structured rules owned by
+[Profiles Network Allowlist](profiles.md#network-allowlist); no hostname-only or
+implicit-port form is accepted.
 
 `SpawnConfig` JSON has stable top-level fields:
 
@@ -432,10 +550,11 @@ local-network isolation baseline.
   `image_source_kind` must also be present, even when it matches the profile
   kind, so source overrides never rely on launcher inference. For an
   `image_source` override, the installer derives and validates the selected
-  image digest from that override source before preflight instead of reusing
-  `ProfileConfig.image.digest`. The installer installs the selected image into
-  the platform store before the launcher invokes the container CLI; preflight +
-  dispatch semantics are documented in _Image install path_ above.
+  image digest from that override source instead of reusing
+  `ProfileConfig.image.digest`. The selected digest informs both read-only
+  launch preview and the installer's digest-presence check. Only actual launch
+  installs a missing image before container creation; installation dispatch is
+  documented in [Image Install Path](#image-install-path).
 - `workspace` — host path bind-mounted at `/workspace`
 - `env` — per-launch `[key, value]` pairs to pass through; pairs matching
   `security.runtime_secrets` are runtime credential sources and never enter Nix
@@ -444,18 +563,173 @@ local-network isolation baseline.
 - `git` — optional object with independently optional boolean `deploy` and
   `sign` overrides; absence inherits repository policy, explicit `false`
   disables the corresponding grant, and explicit `true` enables it
+- `tool_caches` — optional owned object with optional boolean `shared`; omission
+  inherits, `false` selects private launch-local caches and `true` selects the
+  shared worker pool under [Tool Cache Selection](#launch-tool-cache-selection)
 - `mounts` — optional `[{host_path, container_path, read_only}]` list; omitted
   or empty means no per-launch mounts. Additive to `profile.mounts` and
   `mkSandbox.mounts`.
 
-Plus consumer-defined fields the entrypoint reads from the original config
-mounted read-only inside the container at the path named by `WRIX_SPAWN_CONFIG`.
-The schema is part of the launcher runtime contract, and CLI help mirrors it per
-`cli.md`. Per-launch `SpawnConfig` may override launch-time inputs (workspace,
-env allowlist, agent args, Git grants, mounts, image ref/source for
-orchestrators), but it may not change the selected agent independently of the
-image/profile config. `wrix run` errors when no valid `ProfileConfig` is
+- `extensions` — optional object carrying opaque consumer-owned payloads;
+  consumer fields are not permitted alongside Wrix fields at the root.
+
+The original config remains mounted read-only inside the container at the path
+named by `WRIX_SPAWN_CONFIG`. The strict ownership and extension rules are
+specified in
+[Strict Configuration Boundaries](#strict-configuration-boundaries). The schema
+is part of the launcher runtime contract, and CLI help mirrors it per `cli.md`.
+Per-launch `SpawnConfig` may override launch-time inputs (workspace, env
+allowlist, agent args, Git grants, tool-cache sharing, mounts, image ref/source
+for orchestrators), but it may not change the selected agent independently of
+the image/profile config. `wrix run` errors when no valid `ProfileConfig` is
 supplied; there is no implicit default image baked in.
+
+### Launch Tool Cache Selection
+
+Acceptance: [Tool Cache Launch Acceptance](#tool-cache-launch-acceptance).
+
+`wrix run` accepts `--cache` (shared) and `--no-cache` (private) as
+invocation-only launcher options under the existing prefix rule. Supplying both
+before the argument boundary is an error before preparation. After the workspace
+or forwarding `--` boundary, matching tokens remain opaque agent arguments and
+do not change Wrix policy. There are no long-name compatibility aliases.
+
+`wrix spawn` takes the explicit choice from optional
+`SpawnConfig.tool_caches.shared`. The object/key may be omitted to inherit;
+explicit `false` selects private mode and explicit `true` selects shared mode.
+Only the owned optional boolean is supported, not path/source exclusion maps.
+Malformed policy/override shapes and unknown owned fields fail before service
+startup, cache allocation, credential staging or container work, even if another
+input tier would otherwise override them.
+
+Both modes use [Repository Tool Cache Policy](cli.md#tool-cache-controls) and
+the [Profiles Resolver](profiles.md#shared-and-private-tool-cache-modes):
+explicit launch choice, then selected-workspace repo policy read anew, then
+shared default. Choices do not persist or rewrite repository files. Preflight
+reports the effective shared/private choice without preparing either cache mode.
+`--no-cache` does not disable tool operation or Nix/Celler substitution, change
+`[cache].enable`, or introduce a mode environment variable.
+
+[Shared Compiler Selection](profiles.md#shared-rust-compiler-service) delegates
+shared open-mode Rust compilation to the service daemon. Restricted Rust must
+resolve to private mode (`--no-cache` or equivalent inherited/spawn choice).
+Shared-plus-limit is a configuration error, not silent coercion, before service
+startup, cache/input preparation, image work or credential/grant staging.
+Preflight retains the resolvable plan, reports an actionable blocker and exits
+nonzero without mutation. Restricted/private launches receive no shared compiler
+execution route; ordinary Nix-cache/Dolt exceptions do not grant one.
+
+### Strict Configuration Boundaries
+
+Acceptance: [Strict Configuration Acceptance](#strict-configuration-acceptance).
+
+Both `ProfileConfig` and `SpawnConfig` reject unknown fields at their roots and
+throughout Wrix-owned nested objects before launch preparation. Supported fields
+are explicitly recognized and type-checked, including Nix-generated `system`,
+`features`, and service declarations; a field does not become an extension
+merely because a particular launcher does not use it. Existing defaults,
+omission rules, image-source semantics and duplicate-field rejection remain part
+of the parser contract.
+
+Each config has one optional top-level `extensions` object for opaque
+consumer-owned data. Omission means no extension payload; a present value must
+be a JSON object. Its contents are not Wrix launch instructions and cannot
+override agent selection, image, mounts, grants, tool-cache sharing, networking
+or resources. Consumer fields at the root or within Wrix-owned objects are
+errors rather than compatibility aliases. `SpawnConfig`'s original file,
+including `extensions`, remains mounted read-only at the path named by
+`WRIX_SPAWN_CONFIG` for the consumer entrypoint.
+
+For example, consumer prompt and repinning data use this shape:
+
+```json
+{
+  "workspace": "/repo",
+  "env": [],
+  "agent_args": [],
+  "mounts": [],
+  "extensions": {
+    "initial_prompt": "consumer field",
+    "repin": true
+  }
+}
+```
+
+Unknown-field rejection applies to structural fields, not open data-map keys.
+Environment and runtime-secret maps still accept arbitrary names satisfying
+their existing validation and policy rules. Native `agentSettings` remain owned
+by the selected agent, as described in _Per-Agent Configuration_, rather than
+becoming a Wrix-owned settings schema.
+
+Rust parsing is authoritative. Concise field references and examples document
+the wire contract, and acceptance feeds real Nix-generated configuration through
+the Rust parser. Standalone formal schema artifacts and fuzzing infrastructure
+are not part of this contract; focused malformed-input and duplicate-field
+regressions remain required.
+
+### Read-only Launch Preflight
+
+Acceptance: [Launch Preflight Acceptance](#launch-preflight-acceptance).
+
+`wrix run --dry-run` and `wrix spawn --dry-run` inspect a prospective launch
+without preparing or executing it. This is the sole dry-run interface.
+`WRIX_DRY_RUN`, `WRIX_DRY_RUN_SERVICES`, and `WRIX_DRY_RUN_SERVICE_BIN` have no
+effect; there are no aliases, deprecation errors, or compatibility guards.
+
+For `run`, `--dry-run` is a launcher option only before the workspace or `--`;
+an occurrence in the forwarded agent arguments remains an agent argument. For
+`spawn`, it composes with `--spawn-config` and `--stdio`. The same configuration
+parsing, repository policy, and precedence rules as a real launch determine the
+prospective plan.
+
+Output is human-readable by default. With `--dry-run`, `--json` selects one
+schema-versioned JSON report of the same plan and findings, with stable finding
+codes for machine consumers. It is not an agent stdio mode. Without `--dry-run`,
+`--json` in the launcher-option position is an error; both flags obey `run`'s
+existing agent-argument boundary. JSON stdout contains only the report,
+including on readiness failure; incidental probe diagnostics cannot corrupt it.
+Invalid-input reports identify failure without inventing a resolved plan.
+
+Both renderings are purpose-built summaries, not configuration or command dumps.
+They omit all environment values, agent argument contents, opaque
+consumer-defined `SpawnConfig` payloads, and credential-file contents. Findings
+and inspection diagnostics obey the same disclosure boundary; raw input or
+probe-output fragments are not an escape hatch.
+
+Inspection reports the selected profile, agent, image, runtime and isolation
+boundary; workspace and additional mount intents; network mode and allowlist;
+CPU, memory and process limits; independent Git grants and their policy
+provenance; and credential names, source selection and availability without
+credential contents. Unallocated service endpoints and preparation-only mount
+paths remain explicitly unresolved rather than fabricated.
+
+Dry-run performs bounded, non-mutating local readiness checks for the selected
+runtime, requested KVM access, required mount sources, and required credential
+sources. KVM readiness requires access to the virtualization interface, not
+merely existence of `/dev/kvm`. A stopped workspace service is reported as
+needing startup/namespace registration, and required proxy grants remain
+unissued preparation needs. A required incompatible or unverifiable running host
+service is a blocker under
+[Services Compatibility](services.md#compatibility-and-replacement), not a
+request to replace it. An absent interactive Pi fallback auth file is reported
+as needing initialization. Service startup/registration and interactive Pi
+fallback initialization are preparation needs, not blockers by themselves.
+Missing credentials required by a noninteractive spawn remain blockers.
+
+Inspection neither stages private keys or mount contents, creates or migrates Pi
+auth, starts or stops services or containers, installs images, updates image
+retention, repairs host configuration, nor writes an execution record. It is not
+an execution attempt under `security.md`'s evidence contract. This read-only
+guarantee applies to Wrix execution, not builds or downloads performed by a
+surrounding `nix run` invocation.
+
+Detected blockers and inconclusive required readiness checks, including probe
+timeouts, return nonzero while retaining the reportable resolved plan. Invalid
+inputs also return nonzero; inspection does not invent a plan it cannot resolve.
+Probe time and captured output are bounded, and incomplete evidence is not
+reported as successful readiness. Exit zero means no detected blockers, not
+proof of guest firewall enforcement, workload execution, or future launch
+success. Actual launch rechecks prerequisites against current state.
 
 ## Platform Implementations
 
@@ -479,14 +753,15 @@ supplied; there is no implicit default image baked in.
   `krun-init.sh`; argv decoding and libfakeuid activation occur only after the
   capability drop.
 - `--pids-limit 4096` fork-bomb guard
-- `WRIX_MICROVM=1` switches to `podman --runtime krun` when `/dev/kvm` exists
+- `WRIX_MICROVM=1` selects `podman --runtime krun`; requested KVM must be
+  present and usable, not merely an existing device path
 
 ### macOS (Apple `container` CLI)
 
 - Requires macOS 26+ and Apple Silicon
 - Virtualization.framework microVM, always (no separate container-mode path)
 - vmnet networking with the same always-on in-guest firewall policy: no inbound
-  ports, public-internet outbound in `open`, allowlist-only outbound in `limit`,
+  ports, public-internet outbound in `open`, mandatory proxy egress in `limit`,
   LAN/private/host-local/VPN/special ranges blocked in both modes, IPv6
   disabled/blocked for v1. The Darwin host `pf` firewall is not part of the
   sandbox contract.
@@ -497,10 +772,18 @@ supplied; there is no implicit default image baked in.
   exists and `NET_ADMIN` is absent from inheritable, permitted, effective,
   bounding, and ambient capability sets.
 - VirtioFS workspace mount
-- Mount classifier handles `profile.mounts` and `SpawnConfig.mounts` uniformly —
-  directories staged + copied at launch, regular files copy-from-parent-dir,
-  Unix-socket sources rejected at launch
+- The ordinary caller-declared mount classifier handles `profile.mounts` and
+  `SpawnConfig.mounts` uniformly — directories staged + copied at launch,
+  regular files copy-from-parent-dir, Unix-socket sources rejected at launch
 - Entrypoint creates user matching host UID
+
+This copy classifier does not define Wrix-managed credential/cache delivery.
+[Pi credential storage](security.md#agent-api-credentials),
+[launcher-owned Nix credential renewal](cache.md#launcher-owned-renewal) and
+[managed tool-cache modes](profiles.md#shared-and-private-tool-cache-modes)
+retain their own live visibility, durability and concurrency requirements;
+launch-time snapshots alone cannot satisfy those contracts. This distinction
+does not add write-back or synchronization to ordinary caller-declared mounts.
 
 Known-host installation detaches a store-backed `/etc/ssh` directory and
 replaces any known-host file symlink before writing. Runtime SSH setup preserves
@@ -528,11 +811,11 @@ rootfs symlink. [check](nix build
 - The Darwin network bootstrap cannot resolve tools from `/workspace`, verifies
   the firewall before invoking `capsh`, preserves the agent argv, and enters
   stage two only after requesting an irreversible `NET_ADMIN` drop
-  [system](verify:sandbox.darwin-network-bootstrap)
+  [system?](verify:sandbox.darwin-proxy-network-bootstrap)
 - Linux container and krun initialization install the same open/limit policy and
   exact endpoint exceptions with image-pinned tools, preserve argv, and drop
   `NET_ADMIN` before workspace shims run during setup, agent execution, or exit
-  logging [system](verify:sandbox.linux-network-bootstrap)
+  logging [system?](verify:sandbox.linux-proxy-network-bootstrap)
 - Both agent entrypoints reject a missing bootstrap marker or retained
   `NET_ADMIN` before setup or exit logging can run
   [system](verify:sandbox.entrypoint-requires-bootstrap)
@@ -559,6 +842,9 @@ rootfs symlink. [check](nix build
   store-integrity failures. The baked store/database guarantee is owned by
   `image-builder.md` § In-Container Nix Store Consistency
   [system](verify:sandbox.nix-store-verify-clean)
+
+### Network Posture Acceptance
+
 - The launcher accepts exactly `WRIX_NETWORK=open` and `WRIX_NETWORK=limit`
   [test](command::launch::test::network_mode_parse_accepts_only_open_and_limit)
 - Any other `WRIX_NETWORK` value errors through the production CLI before
@@ -574,11 +860,13 @@ rootfs symlink. [check](nix build
   outbound to LAN/private/host-local/VPN/special IPv4 ranges fails except for
   exact DNS and wrix-owned endpoint exceptions
   [system](verify:sandbox.network-open-blocks-lan)
-- In `WRIX_NETWORK=limit`, outbound succeeds only to the merged allowlist plus
-  exact DNS and wrix-owned endpoint exceptions; allowlist domains are resolved
-  once at startup, unresolvable domains fail launch, and non-allowlisted public
-  internet plus LAN/private/host-local/VPN/special ranges fail
-  [system](verify:sandbox.network-limit-allowlist)
+- In `WRIX_NETWORK=limit`, the agent reaches only its designated proxy and exact
+  Wrix data endpoints; authorized proxy traffic succeeds while direct public
+  egress, public DNS and unapproved local destinations fail.
+  [system?](verify:sandbox.network-limit-proxy)
+- Both launch modes require a ready scoped proxy grant in restricted mode,
+  including with Beads/cache disabled, and never select direct-egress fallback.
+  [test?](../crates/wrix-cli/tests/proxy_policy.rs::limit_requires_ready_scoped_proxy_without_direct_fallback)
 - IPv6 egress is disabled or blocked in both network modes for v1
   [system](verify:sandbox.network-ipv6-blocked)
 - If firewall setup, IPv6 disablement, or `NET_ADMIN` drop cannot be verified,
@@ -588,6 +876,23 @@ rootfs symlink. [check](nix build
   `nft flush ruleset` on the nft backend, or the equivalent backend flush
   command, fails inside the running sandbox)
   [system](verify:sandbox.agent-lacks-net-admin)
+
+### Runtime and Configuration Acceptance
+
+- Run and spawn keep cache renewal owned by the original waiting launcher for
+  the runtime child's lifetime, preserving stdio/TTY and observed exit
+  semantics.
+  [test?](../crates/wrix-sandbox/tests/cache_credentials.rs::both_launch_modes_own_renewal_while_waiting_for_runtime)
+- Both modes supply a private read-only credential directory with a stable
+  native Nix file reference that can observe host-side atomic refresh, without
+  embedding tokens or issuer keys in environment values or
+  ProfileConfig/SpawnConfig.
+  [test?](../crates/wrix-sandbox/tests/cache_credentials.rs::both_launch_modes_mount_refreshable_private_auth_directory)
+- Both run and spawn inject the cache-enabled Nix client freshness configuration
+  owned by `cache.md`, without relying on a manual refresh or delivering host
+  publication authority.
+  [test?](../crates/wrix-sandbox/tests/cache_freshness.rs::both_launch_modes_inject_cache_freshness)
+
 - `WRIX_MICROVM=1` selects `podman --runtime krun --userns=keep-id` on Linux
   when `/dev/kvm` is available, enters through the relay, serializes the
   requested command through `WRIX_KRUN_CMD`, passes terminal dimensions for PTY
@@ -608,14 +913,15 @@ rootfs symlink. [check](nix build
   `digest`; the launcher/runtime installer rejects configs where `source_kind`
   is missing or incompatible with the selected platform install path
   [check](test-ci:test-profile-config-image-source-kind)
-- Complete `ProfileConfig` parsing rejects malformed fields before subprocesses
+- Complete `ProfileConfig` parsing rejects malformed fields and unsupported
+  schema versions before subprocesses
   [test](../crates/wrix-cli/tests/sandbox_launch.rs::malformed_profile_config_fails_before_subprocesses)
 - Complete `ProfileConfig` parsing rejects duplicate JSON fields before
   subprocesses
   [test](../crates/wrix-cli/tests/sandbox_launch.rs::duplicate_profile_config_fields_fail_at_the_json_boundary)
-- Complete `ProfileConfig` parsing retains intentional wire extensibility and
-  platform-specific source semantics
-  [test](../crates/wrix-sandbox/src/command/config.rs::profile_boundary_preserves_extension_fields_and_typed_source_semantics)
+- Complete `ProfileConfig` parsing permits opaque metadata only through its
+  explicit `extensions` object and preserves platform-specific source semantics
+  [test?](../crates/wrix-sandbox/tests/config_contract.rs::explicit_profile_extensions_preserve_source_semantics)
 - Image installer construction rejects empty source paths and contradictory
   runtime/source combinations before store operations
   [test](../crates/wrix-sandbox/src/image.rs::installation_constructor_rejects_contradictory_sources)
@@ -641,9 +947,10 @@ rootfs symlink. [check](nix build
 - `SpawnConfig` cannot change the selected agent independently of
   `ProfileConfig`
   [test](../crates/wrix-sandbox/tests/spawn_config.rs::spawn_config_cannot_override_agent)
-- Consumer-defined `SpawnConfig` fields remain available to the in-container
-  entrypoint through the read-only config mount and `WRIX_SPAWN_CONFIG`
-  [test](../crates/wrix-sandbox/tests/spawn_config.rs::consumer_spawn_config_fields_are_mounted_for_entrypoint)
+- Namespaced `SpawnConfig.extensions` payloads remain available unchanged to the
+  in-container entrypoint through the read-only original config mount and
+  `WRIX_SPAWN_CONFIG`
+  [test?](../crates/wrix-sandbox/tests/spawn_config.rs::consumer_extensions_are_mounted_for_entrypoint)
 - On Linux, each `SpawnConfig.mounts` entry becomes a
   `-v <host_path>:<container_path>` podman argument, with `:ro` appended when
   `read_only: true`. A missing or empty `mounts` list produces no additional
@@ -654,9 +961,10 @@ rootfs symlink. [check](nix build
   and only `WRIX_UNSAFE_PODMAN_SOCKET` renders a real socket mount plus
   host-visible `CONTAINER_HOST` / `GC_HOST_*`, failing loudly when the socket is
   absent [system](verify:sandbox.unsafe-podman-socket)
-- On Darwin, the same mount classifier handles `profile.mounts` and
-  `SpawnConfig.mounts` — one mechanism, not two. Directories are staged + copied
-  at launch and regular files copy from their parent directory.
+- On Darwin, the same ordinary caller-declared mount classifier handles
+  `profile.mounts` and `SpawnConfig.mounts` — one mechanism, not two.
+  Directories are staged + copied at launch and regular files copy from their
+  parent directory.
   [test](../crates/wrix-sandbox/tests/darwin_mounts.rs::mount_classifier_handles_profile_and_spawn_mounts_uniformly)
 - On Darwin, mount entries whose `host_path` is a Unix socket fail before the
   container starts because VirtioFS does not pass socket operations
@@ -725,8 +1033,8 @@ rootfs symlink. [check](nix build
   `/workspace/bin` [system](verify:sandbox.workspace-bin-path-absent)
 - Both platform entrypoints implement the `/workspace/bin` PATH prepend
   [system](verify:sandbox.entrypoint-workspace-bin-prepend)
-- The packaged runtime image installer preflight checks whether the selected
-  image source's content digest matches any image already present in the
+- The packaged runtime image installer's digest-presence check determines
+  whether the selected source's content digest matches an image already in the
   platform store before invoking the install pipeline; on a digest hit, no image
   source is executed, no tar bytes are streamed, and no `*-load` CLI is invoked
   [system](test-ci:test-image-install-digest-skip)
@@ -739,25 +1047,46 @@ rootfs symlink. [check](nix build
 - The packaged Linux launcher supplies a readable OCI layout to skopeo with the
   Podman store destination and skips installation when that image is already
   present [system](test-ci:test-image-install-real-skopeo)
-- Digest preflight also works when the digest comes from the descriptor rather
-  than ProfileConfig
+- The digest-presence check also works when the digest comes from the descriptor
+  rather than ProfileConfig
   [test](../crates/wrix-sandbox/tests/image_install.rs::descriptor_digest_preflight_works_without_profile_digest)
 - A second spawn of an already-loaded image performs no writes to the platform
   store's layer directory and does not execute the image source
   [test](../crates/wrix-sandbox/tests/image_install.rs::already_loaded_image_performs_no_store_writes)
-- The runtime image cleanup path records a bounded cross-workspace MRU of eight
-  typed wrix image refs/digests/image IDs, preserves images used by Podman
-  containers, prunes wrix-managed images outside the keep set, and does not
-  automatically remove unlabelled `<none>:<none>` images
-  [test](../crates/wrix-sandbox/tests/image_retention.rs::cleanup_prunes_only_wrix_managed_images_outside_bounded_keep_set)
-- Image MRU serialization preserves typed refs, digests, and IDs while accepting
-  documented legacy empty fields
-  [test](../crates/wrix-sandbox/src/image.rs::mru_round_trips_typed_identifiers_and_accepts_legacy_empty_fields)
+- Run/spawn preserve digest reuse and necessary installation without broadly
+  pruning cached images, including when more than eight images are present.
+  [test?](../crates/wrix-sandbox/tests/image_gc.rs::launch_installation_does_not_prune_cached_images)
+- Image information is read-only: it does not install/prune images or write
+  usage/retention bookkeeping.
+  [test?](../crates/wrix-sandbox/tests/image_gc.rs::image_inventory_is_read_only)
 - Runtime listings parse into typed store targets
   [test](../crates/wrix-sandbox/src/image.rs::podman_rows_parse_typed_references_ids_and_absent_fields)
-- Concurrent launches update the shared MRU without losing either workspace's
-  record or exposing partially-written JSON
-  [test](../crates/wrix-sandbox/tests/image_retention.rs::concurrent_mru_updates_preserve_each_workspace_record)
+- Explicit image collection preserves existing-container references and
+  in-flight install-to-container-create reservations without forced container
+  removal, including concurrent launches from different workspaces.
+  [test?](../crates/wrix-sandbox/tests/image_gc.rs::gc_preserves_existing_container_and_inflight_images)
+- Usage checks include stopped containers, compare real image identities rather
+  than age/tags alone and do not delete when reference information is
+  unreliable; an idle configured image is not automatically considered in use.
+  [test?](../crates/wrix-sandbox/tests/image_gc.rs::unused_checks_use_runtime_identity_and_fail_closed)
+- Image inspection/removal failures are accumulated while other independently
+  safe images are processed; uncertain candidates are not deleted and completed
+  removals are not presented as rolled back.
+  [test?](../crates/wrix-sandbox/tests/image_gc.rs::gc_continues_safe_images_after_inspection_or_removal_failure)
+- Explicit GC selects unused Wrix-owned images across profile/service/support
+  kinds, including recent/current idle images; names, dangling status or the
+  former MRU list do not authorize deletion of ambiguous/unowned images or pin
+  eligible images.
+  [test?](../crates/wrix-sandbox/tests/image_gc.rs::gc_only_selects_owned_unused_images_across_kinds)
+- Image-only GC and combined `gc all` use the same image policy; workspace/host
+  data GC does not silently prune images or widen collection authority.
+  [test?](../crates/wrix-service/tests/host_service.rs::gc_all_combines_host_data_and_same_image_collector)
+- Real Podman image GC removes eligible Wrix images while retaining unrelated,
+  ambiguous and container/in-flight-protected images in an isolated test store.
+  [system?](test-ci:test-image-gc-podman)
+- Real Apple image GC removes eligible Wrix images while retaining unrelated,
+  ambiguous and container/in-flight-protected images in an isolated test store.
+  [system?](test-ci:test-image-gc-apple)
 - Apple `container list` records are parsed for image references and descriptor
   IDs so cleanup preserves images used by existing Apple containers
   [test](image::test::apple_container_list_preserves_images_used_by_existing_containers)
@@ -792,8 +1121,144 @@ rootfs symlink. [check](nix build
 - On Darwin, the runtime image installer converts the Darwin source kind defined
   by `image-builder.md` to a temporary OCI archive before invoking
   `container image load --input <oci-archive>`, then removes the temporary
-  archive and relies on digest-skip preflight while per-blob install remains out
-  of scope [system](verify:sandbox.darwin-image-load)
+  archive and relies on the digest-presence check while per-blob install remains
+  out of scope [system](verify:sandbox.darwin-image-load)
+
+### Tool Cache Launch Acceptance
+
+- Spawn parsing preserves omitted tool-cache sharing as inheritance, explicit
+  false as private and true as shared, with strict owned object/boolean
+  validation before preparation.
+  [test?](../crates/wrix-sandbox/tests/spawn_config.rs::tool_cache_sharing_parses_owned_optional_boolean)
+- Run cache flags obey launcher prefix/conflict rules without interpreting
+  forwarded agent arguments or accepting long-name launcher aliases.
+  [test?](../crates/wrix-cli/tests/tool_cache_controls.rs::run_cache_flags_follow_prefix_and_conflict_rules)
+- Both dry-run renderings report the shared resolver's effective tool-cache mode
+  for run/spawn without creating, reading prewarms into or populating cache
+  data.
+  [test?](../crates/wrix-cli/tests/preflight.rs::preview_reports_effective_tool_cache_mode_without_preparation)
+
+- Restricted Rust with resolved shared mode fails before preparation in
+  run/spawn; effective private mode remains valid with Nix/Celler enabled, and
+  no shared compiler endpoint is granted.
+  [test?](../crates/wrix-cli/tests/tool_cache_controls.rs::restricted_rust_requires_effective_private_tool_caches)
+- Both preflight renderings retain the resolvable plan and explain the
+  restricted Rust/private-cache conflict as a nonzero blocker without starting
+  services, staging credentials or allocating compiler/cache views.
+  [test?](../crates/wrix-cli/tests/preflight.rs::restricted_rust_cache_conflict_is_read_only_and_actionable)
+
+### Strict Configuration Acceptance
+
+- Structured `profile.network_allowlist` host/ports objects round-trip through
+  the Rust boundary, reject unknown rule fields, and match the documented JSON.
+  [test?](../crates/wrix-sandbox/tests/config_contract.rs::profile_network_rule_objects_match_documented_wire)
+- `ProfileConfig` rejects unknown root and Wrix-owned nested fields before
+  preparation while recognizing the complete supported Nix-generated shape.
+  [test?](../crates/wrix-sandbox/tests/config_contract.rs::profile_owned_structures_reject_unknown_fields)
+- `SpawnConfig` rejects unknown root and Wrix-owned nested fields before
+  preparation, including former flat consumer payload fields.
+  [test?](../crates/wrix-sandbox/tests/config_contract.rs::spawn_owned_structures_reject_unknown_fields)
+- Both configs accept an omitted or object-valued top-level `extensions`, reject
+  other extension-container types, and leave its contents opaque.
+  [test?](../crates/wrix-sandbox/tests/config_contract.rs::explicit_extensions_are_optional_opaque_objects)
+- Extension contents cannot alter any resolved Wrix launch field.
+  [test?](../crates/wrix-sandbox/tests/config_contract.rs::extension_payloads_do_not_override_launch_policy)
+- Unknown-field rejection preserves validated open environment/runtime-secret
+  maps, defaults, omission rules and duplicate-field rejection.
+  [test?](../crates/wrix-sandbox/tests/config_contract.rs::strict_boundaries_preserve_existing_map_and_default_semantics)
+- Real Nix-generated built-in configuration is accepted by the Rust parser with
+  the intended declared fields and platform-specific source semantics.
+  [system?](test-ci:test-profile-config-parser-agreement)
+- The documented namespaced `SpawnConfig` example parses through the Rust
+  boundary and requires no formal schema validator.
+  [test?](../crates/wrix-sandbox/tests/config_contract.rs::documented_spawn_example_matches_parser)
+
+### Network and Mount Enforcement Acceptance
+
+- Live rootless Podman launches satisfy the network controls above, including
+  open/limit policy changes, known-live positive and negative controls, and
+  exact open-mode DNS, restricted-mode proxy and Wrix-managed endpoint scope.
+  [system?](verify:sandbox.network-controls-podman)
+- Live krun launches satisfy the same network controls through the production
+  microVM launch path, with their own KVM/runtime prerequisites and results.
+  [system?](verify:sandbox.network-controls-krun)
+- Live Apple Container launches satisfy the same network controls through the
+  production Darwin launch path, with their own host prerequisites and results.
+  [system?](verify:sandbox.network-controls-apple)
+- Live rootless Podman workloads reject writes through read-only profile and
+  spawn file/directory declarations, preserve read-only host sources, and permit
+  corresponding writable controls.
+  [system?](verify:sandbox.mount-controls-podman)
+- Live krun workloads satisfy the same mount controls through the production
+  microVM launch path, with their own KVM/runtime prerequisites and results.
+  [system?](verify:sandbox.mount-controls-krun)
+- Live Apple Container workloads satisfy the same mount controls without
+  claiming new directory write-back persistence, with their own host
+  prerequisites and results. [system?](verify:sandbox.mount-controls-apple)
+
+### Launch Preflight Acceptance
+
+- Default human-readable and explicit `--dry-run --json` output describe the
+  same plan and findings; JSON includes a schema version and stable finding
+  codes and is not mixed with probe output, including on readiness failure.
+  [test?](../crates/wrix-cli/tests/preflight.rs::dry_run_renderings_share_a_versioned_report)
+- `--json` requires `--dry-run` in the launcher-option position and obeys the
+  existing boundary for forwarded agent arguments; it does not select agent
+  stdio behavior.
+  [test?](../crates/wrix-cli/tests/preflight.rs::dry_run_json_is_only_a_preview_rendering_option)
+- Both renderings, findings and inspection diagnostics omit environment values,
+  agent argument contents, opaque consumer payloads and credential contents,
+  including when invalid inputs or probe failures are reported.
+  [test?](../crates/wrix-cli/tests/preflight.rs::dry_run_summaries_do_not_dump_sensitive_inputs)
+- Production `run` recognizes `--dry-run` only in its launcher-option prefix,
+  preserves occurrences in agent arguments, and `spawn` accepts it with
+  `--spawn-config` and `--stdio` without executing the agent.
+  [test?](../crates/wrix-cli/tests/preflight.rs::dry_run_parses_explicit_launch_options)
+- Retired dry-run environment variables neither select inspection nor reject an
+  invocation, and the service-binary override cannot redirect service dispatch.
+  [test?](../crates/wrix-cli/tests/preflight.rs::dry_run_ignores_retired_environment_switches)
+- Inspection and launch resolve the same profile, image, agent, mount intents,
+  network policy, resources and independent Git grants from the same inputs,
+  including repository-policy and invocation-override precedence.
+  [test?](../crates/wrix-cli/tests/preflight.rs::dry_run_reports_launch_policy_and_provenance)
+- Credential inspection reports names, selected sources and availability without
+  reading credential-file contents or disclosing built-in or declared
+  runtime-secret values.
+  [test?](../crates/wrix-cli/tests/preflight.rs::dry_run_reports_credential_availability_without_values)
+- Both inspection modes leave auth storage, private keys, mount contents,
+  workspace records and host configuration unchanged, create no staging
+  directories, and invoke no service/container start or stop, image installation
+  or retention update.
+  [test?](../crates/wrix-cli/tests/preflight.rs::dry_run_is_read_only)
+- Readiness inspects the selected runtime and applicable required mount and
+  credential sources without provisioning them, and reports detected blockers.
+  [test?](../crates/wrix-cli/tests/preflight.rs::dry_run_checks_selected_launch_prerequisites)
+- A requested microVM reports inaccessible or unusable KVM as a blocker even
+  when the device path exists.
+  [test?](../crates/wrix-cli/tests/preflight.rs::dry_run_checks_kvm_access_not_only_presence)
+- Missing services and absent interactive Pi fallback auth are reported as
+  preparation needs rather than automatically provisioned or rejected; missing
+  required noninteractive auth remains a blocker.
+  [test?](../crates/wrix-cli/tests/preflight.rs::dry_run_distinguishes_preparation_from_blockers)
+- A required incompatible/unverifiable running shared service produces a nonzero
+  readiness report without registration, replacement or grant issuance; a
+  missing/stopped service remains a preparation need, and launch rechecks.
+  [test?](../crates/wrix-cli/tests/preflight.rs::dry_run_reports_shared_service_incompatibility_without_repair)
+- Unallocated endpoints and preparation-only paths remain explicitly unresolved
+  rather than fabricated.
+  [test?](../crates/wrix-cli/tests/preflight.rs::dry_run_preserves_unresolved_preparation_details)
+- Invalid inputs, detected blockers and inconclusive required checks return
+  nonzero; blocker reports retain the configuration that could be resolved.
+  [test?](../crates/wrix-cli/tests/preflight.rs::dry_run_reports_blockers_with_nonzero_status)
+- Readiness probes enforce time and captured-output bounds, disclose incomplete
+  evidence, and never turn a timeout or incomplete required check into success.
+  [test?](../crates/wrix-cli/tests/preflight.rs::dry_run_probe_limits_are_enforced_and_reported)
+- A successful preview states that guest enforcement and workload execution
+  remain unverified and does not assert guaranteed launch success.
+  [test?](../crates/wrix-cli/tests/preflight.rs::dry_run_distinguishes_readiness_from_enforcement)
+- Real launches recheck prerequisites against current state rather than trusting
+  an earlier preview.
+  [test?](../crates/wrix-cli/tests/preflight.rs::launch_rechecks_readiness_without_reusing_preview)
 
 ## Requirements
 
@@ -838,28 +1303,31 @@ rootfs symlink. [check](nix build
    construction, including workspace service startup and endpoint injection when
    services are enabled. Wrapper config-generation rules are owned by
    _Architecture > Sandbox Outputs_; workspace service contracts are owned by
-   `services.md`.
+   `services.md`, and project-cache transport/trust and
+   [client freshness](cache.md#client-publication-freshness) by `cache.md`.
 10. **Image source dispatch** — image install dispatches on the explicit source
     kinds owned by `image-builder.md`, not filename or platform guessing. A
     per-launch `image_source` override must carry a matching
     `image_source_kind`; it may not silently inherit an incompatible kind from
     `ProfileConfig`. The selected source's digest is derived or validated before
-    preflight.
-11. **Image retention** — runtime image cleanup is wrix-scoped and bounded: keep
-    the image selected for the current operation, images used by existing
-    containers, and eight shared cross-workspace MRU records (ref plus
-    digest/image ID when available) before pruning; prune wrix-managed images
-    outside the keep set; never automatically delete unlabelled `<none>:<none>`
-    images.
+    the installer's digest-presence query; preview never installs the source.
+11. **Explicit image cleanup** — normal launch/service installation does not
+    broadly prune images. Read-only inventory, manual collection, protected
+    container/in-flight images and import-reference housekeeping follow
+    [Image Retention and Cleanup](#image-retention-and-cleanup); MRU-eight is
+    not an automatic deletion requirement.
 12. **Per-launch mounts via SpawnConfig** — `wrix spawn`'s `SpawnConfig.mounts`
     adds per-launch bind mounts on top of `profile.mounts` and `mkSandbox`'s
     `mounts`. Each entry maps `host_path → container_path` with
     `read_only: true` rendering `:ro`. On Linux this is a literal `-v` flag. On
-    Darwin, `SpawnConfig.mounts` flows through the same mount classifier as
-    `profile.mounts`: directories staged + copied, regular files
+    Darwin, ordinary caller-declared `SpawnConfig.mounts` flows through the same
+    classifier as `profile.mounts`: directories staged + copied, regular files
     copy-from-parent-dir, Unix-socket sources rejected at launch with a clear
-    error (VirtioFS does not pass socket operations). The launcher does not
-    validate that `host_path` exists; podman fails at runtime if it does not.
+    error (VirtioFS does not pass socket operations). Managed credential/cache
+    delivery follows the separate contracts linked in
+    [macOS](#macos-apple-container-cli). Read-only preflight inspects required
+    source availability; actual launch rechecks current prerequisites rather
+    than treating an earlier preview as authorization.
 13. **Workspace `bin/` PATH prepend** — When `/workspace/bin` exists inside the
     container, both Linux and macOS entrypoints prepend it to `PATH` so
     consumer-supplied shims under the workspace's `bin/` resolve ahead of
@@ -887,26 +1355,45 @@ rootfs symlink. [check](nix build
    outside the normal sandbox boundary.
 2. **Boundary class** — macOS is always microVM; Linux defaults to rootless
    container, opts into microVM with `WRIX_MICROVM=1` (see `specs/security.md`).
-3. **Network posture** — no inbound ports on either platform. In both
-   `WRIX_NETWORK=open` and `WRIX_NETWORK=limit`,
-   LAN/private/host-local/VPN/special outbound is blocked with exact DNS and
-   wrix-owned endpoint exceptions only. `open` allows public-internet outbound;
-   `limit` restricts public egress to the merged allowlist. Filtering is
-   fail-closed and drops `NET_ADMIN` before workspace-controlled setup, agent
-   execution, or exit logging.
-4. **Near-native performance** — minimal overhead beyond the container/microVM
-   boundary cost; krun adds ~100MB per microVM.
+3. **Network posture** — modes, exact exceptions, protected addresses and
+   fail-closed startup follow [Network Posture](#network-posture). Restricted
+   destination admission and its TLS limitations belong to `proxy.md`.
 
 ## Out of Scope
 
+- Performance SLAs or fixed per-VM memory-overhead guarantees; runtime costs
+  require measurement and are not promised by this contract
+- Standalone formal `ProfileConfig`/`SpawnConfig` schema artifacts or generation
+  toolchains, including JSON Schema and CUE; Rust parsing and producer-agreement
+  tests are authoritative
+- Fuzzing infrastructure and campaigns; focused malformed-input and
+  duplicate-field regression tests remain required
+- Runtime network-denial telemetry and its collectors, storage or diagnostic
+  lifecycle; this does not remove `security.md`'s generic permission for
+  explicitly enabled component diagnostics
+- Resource-limit policy redesign and new workload-level CPU, memory or
+  process-limit stress/benchmark suites; existing controls are delegated to the
+  selected runtime rather than independently assured by this enforcement pass
+- Host repair or provisioning during launch preflight; inspection reports needs
+  without performing them
+- Proving guest enforcement or workload success through read-only inspection;
+  these require assembled-system execution
+- Compatibility interfaces for retired dry-run environment switches
 - A Wrix-managed detached launch mode or background completion observer; callers
   retain supervision of foreground launchers
+- Wrix-managed persistence/reuse of the guest Nix store and writable database
+  across replacement sandboxes is deferred. Initial rollout retains private,
+  image-seeded disposable Nix state: added outputs and mutations are lost on
+  removal, and fresh clients import cached paths again. Safe bootstrap/state
+  reconciliation and concurrent ownership belong to a later design. This does
+  not change workspace/session persistence or existing profile cache mounts.
 - Windows support
 - GPU passthrough
 - Inbound port forwarding
 - User-defined unsafe networking modes; wrix does not provide a LAN-open escape
   hatch
-- Per-user multi-tenant sharing (sandboxes are single-user-per-host by design)
+- Sharing an agent sandbox between operators; host-user service workspace
+  namespaces are a separate boundary owned by `services.md`
 - Managed-environment APIs, external-harness tool routing, and Pi Durable
   integration; whole-agent sandboxing is the supported model for this scope
 - Wrix-owned codemode interpreters, classifier workflows, and codemode-only

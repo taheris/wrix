@@ -38,7 +38,7 @@ because git passes positional args that `prek run` would mistake for
 hook/project selectors.
 
 `profiles.md` § Prek hook management owns devshell installation, `cli.md` owns
-repository-scoped `wrix init` installation for ordinary host Git and Loom
+repository-scoped `wrix init repo` installation for ordinary host Git and Loom
 clones, and `image-builder.md` § Hook Installation owns profile-image and
 container-entrypoint installation. This spec owns the shared bundle and its
 behavior after those surfaces select it.
@@ -83,14 +83,14 @@ policy.
 [test](../crates/wrix-cli/tests/prek_runtime.rs::stale_binding_does_not_fall_back_to_ambient_runner)
 
 Reloading the updated Wrix devshell repairs the current binding even when
-`core.hooksPath` already matches. Packaged `wrix init` repairs the binding and
-stale hook path when hook policy is enabled; `--no-hooks` remains a passive
+`core.hooksPath` already matches. Packaged `wrix init repo` repairs the binding
+and stale hook path when hook policy is enabled; `--no-hooks` remains a passive
 opt-out. Worker entrypoints bind their image-native runner before installing
 hooks. Existing worker images need rebuilding after a Wrix pin update.
-[test](../crates/wrix-cli/tests/prek_runtime.rs::init_repairs_stale_runner_and_hook_path)
+[test?](../crates/wrix-cli/tests/prek_runtime.rs::repo_init_repairs_stale_runner_and_hook_path)
 
 Repair each independent clone in its own directory: re-enter its updated Wrix
-devshell, or run the updated Nix-packaged `wrix init` with the existing
+devshell, or run the updated Nix-packaged `wrix init repo` with the existing
 repository key/signing policy. No key provisioning or global installation is
 needed. A runner path collected by Nix GC is repaired the same way. Ordinary Git
 operations thereafter need no active devshell.
@@ -189,6 +189,30 @@ pre-commit and pre-push stages dispatch through the shared bundle, and a failing
 hook aborts the Git operation. Optional tools remain explicit at the point of
 use through `skip-if-missing` rather than a wrix-side hook-id skip list.
 
+### Host Build Publication
+
+Acceptance: [Host Publication Acceptance](#host-publication-acceptance).
+
+With cache integration enabled, actually executed host pre-push Nix build steps,
+including configured flake checks and selected verifier/CI realization, use
+[Canonical Host Build Coordination](cache.md#canonical-host-build-pipeline) and
+[Host Entry Publication](cache.md#host-activation-and-pre-push-publication).
+Eligible realized outputs and build-only dependencies populate cache without
+requiring an active devshell or manual publish/warm command. Substitution-only
+success is included; arbitrary non-Nix build directories are not harvested.
+
+Cache-aware realization belongs at the Wrix-managed Nix execution seam after
+existing hook admission, not unconditional generic-wrapper discovery. The shared
+shims and marker/optional-tool wrappers retain their runtime dependency
+contracts. This integration neither changes configured checks or their
+full/scoped selection nor reruns checks skipped by exact-transaction stamps,
+valid markers or Git's `--no-verify` solely to create cache artifacts.
+
+Publication follows cache-owned automatic pending/error rules. Check failures
+still abort Git and cannot mint approval stamps; cache contents/upload success
+are not verification or marker evidence. Worker-local checks remain worker-local
+and do not acquire host publishing credentials through the hook bundle.
+
 ### CI result policy
 
 Selected CI targets execute during pre-push on both Linux and Darwin. A failed
@@ -198,6 +222,10 @@ marker. [system](verify:prek.ci-platform-policy)
 
 ## Success Criteria
 
+- Packaged `wrix init repo` repairs the stale current runner binding before hook
+  selection; bare `wrix init` reports the problem without changing bindings or
+  hook configuration.
+  [test?](../crates/wrix-cli/tests/prek_runtime.rs::repo_init_repairs_but_bare_init_only_reports)
 - The repository's formatter hook passes clean files and rejects files needing
   formatting even when its evaluation cache cannot be opened
   [system](verify:prek.formatter-cache-independent)
@@ -223,8 +251,9 @@ marker. [system](verify:prek.ci-platform-policy)
 - Real Git commit and push dispatch through the installed canonical bundle
   outside a devshell
   [test](../crates/wrix-cli/tests/prek_runtime.rs::git_commit_and_push_use_installed_bundle_with_minimal_path)
-- Missing bindings fail with actionable reload/init instructions
-  [test](../crates/wrix-cli/tests/prek_runtime.rs::missing_binding_fails_with_repair_instructions)
+- Missing bindings fail with actionable reload or `wrix init repo` instructions,
+  not a suggestion that bare verification will repair the binding.
+  [test?](../crates/wrix-cli/tests/prek_runtime.rs::missing_binding_names_repo_init_repair)
 - Missing bootstrap dependencies produce actionable failures
   [test](../crates/wrix-cli/tests/prek_runtime.rs::missing_bootstrap_dependency_reports_actionable_failure)
 - A runner missing its packaged prek dependency fails with repair guidance
@@ -301,6 +330,22 @@ marker. [system](verify:prek.ci-platform-policy)
   failures; result reporting follows `cli.md` § Verifier results and worker
   acceptance [system](verify:prek.ci-batching)
 
+### Host Publication Acceptance
+
+- A real host push outside a devshell runs installed Nix verification through
+  shared build coordination and publishes eligible realized check/runner and
+  build-only outputs for signed substitution by a fresh authorized client.
+  [system?](test-ci:test-cache-pre-push-publication)
+- Stamp/marker and `--no-verify` bypasses do not trigger extra target discovery
+  or builds merely for cache population, or claim newly executed verification.
+  [system?](test-ci:test-cache-pre-push-publication)
+- Cache publication outcomes neither hide a failed hook nor mint approval stamps
+  for failed verification; existing hook and caller error policy is preserved.
+  [system?](test-ci:test-cache-pre-push-publication)
+- Container-context hooks do not acquire host publishing authority as a result
+  of host pre-push cache integration.
+  [system?](test-ci:test-cache-pre-push-publication)
+
 ## Requirements
 
 ### Functional
@@ -310,8 +355,8 @@ marker. [system](verify:prek.ci-platform-policy)
    via `mkDevShell { prekHooks = <derivation>; }`.
 2. **`core.hooksPath` management** — The bundle is the hook path consumed by
    Wrix-owned install surfaces. `profiles.md` owns devshell installation and
-   `cli.md` owns `wrix init`; consumers do not run `prek install` or maintain
-   hook shims themselves.
+   `cli.md` owns `wrix init repo`; consumers do not run `prek install` or
+   maintain hook shims themselves.
 3. **Hook stages** — the shim bundle covers pre-commit, pre-push,
    prepare-commit-msg, post-checkout, and post-merge.
 4. **Stamp-file dance** — pre-push writes `.wrix/push-verified` after a

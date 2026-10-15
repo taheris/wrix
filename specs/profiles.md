@@ -23,10 +23,11 @@ any profile. `rustProfile { toolchain; sha256; ... }` constructs a
 project-pinned Rust profile. Profiles do not expose per-profile builder methods
 such as `withToolchain`.
 
-Workspace-service and project-cache behavior belongs to `services.md`. Devshell
-hook-bundle selection is described below, while `pre-commit.md` owns the bundle
-and hook behavior. `cli.md` owns durable repository initialization. Image layer
-assignment belongs to `image-builder.md`.
+Host-service behavior belongs to `services.md`; project-cache policy and
+integration belong to `cache.md`. Devshell hook-bundle selection is described
+below, while `pre-commit.md` owns the bundle and hook behavior. `cli.md` owns
+durable repository initialization. Image layer assignment belongs to
+`image-builder.md`.
 
 ## Profile Attrset Schema
 
@@ -40,7 +41,7 @@ assignment belongs to `image-builder.md`.
 | `hostEnv`          | string attrset  | Non-secret host defaults                                                                                                                                    |
 | `runtimeSecrets`   | policy attrset  | Validated environment name to `"optional"` or `"required"`; values are runtime-only                                                                         |
 | `mounts`           | mount list      | `{ source, dest, mode, optional }` bind declarations                                                                                                        |
-| `networkAllowlist` | string list     | Domains added in `WRIX_NETWORK=limit`                                                                                                                       |
+| `networkAllowlist` | rule list       | Explicit host/port rules added in `WRIX_NETWORK=limit`; see [Network Allowlist](#network-allowlist)                                                         |
 | `enabledPlugins`   | attrset         | Claude plugin enablement                                                                                                                                    |
 | `shellHook`        | shell snippet   | Internal host-alignment hook consumed by `mkDevShell`                                                                                                       |
 | `writableDirs`     | string list     | Linux tmpfs parents that remain writable when optional mounts are absent                                                                                    |
@@ -56,6 +57,33 @@ image and host defaults; `hostEnv` then overrides only the host. Runtime-secret
 declarations right-merge after validating names and policies. `corePackages`
 passes through unchanged. Other fields use the extension value when supplied and
 otherwise retain the base value.
+
+## Network Allowlist
+
+Acceptance: [Network Allowlist Acceptance](#network-allowlist-acceptance).
+
+`networkAllowlist` is a list of structured rules with exactly `host` and `ports`
+fields. Each host is a nonempty string; ports are a nonempty list of integer TCP
+destination ports in the range 1–65535. For example:
+
+```nix
+networkAllowlist = [
+  { host = "github.com"; ports = [ 22 443 ]; }
+  { host = "registry.example.org"; ports = [ 8443 ]; }
+];
+```
+
+The rules retain these object fields in generated JSON. Hostname-only entries,
+`"host:port"` shorthand, missing/empty ports and unknown rule fields are errors;
+there are no implicit ports, all-port defaults or compatibility aliases. Profile
+constructors validate rules at Nix evaluation. Rust parsing independently
+enforces the owned wire boundary described by `sandbox.md`.
+
+Base, language-profile and consumer rules compose through the existing list
+concatenation semantics. Admission matches a listed host/port pair;
+concatenation does not introduce ports that no constituent rule listed.
+`proxy.md` owns request admission, resolution and enforcement limitations, not
+profile membership.
 
 ## Built-in Profiles
 
@@ -86,8 +114,17 @@ the saved user preference enables them
 
 The base profile has no mounts. It declares `ANTHROPIC_API_KEY`,
 `CLAUDE_CODE_OAUTH_TOKEN`, and `OPENAI_API_KEY` as optional runtime secrets. Its
-limit-mode allowlist is `api.anthropic.com`, `github.com`, `ssh.github.com`, and
-`cache.nixos.org`.
+limit-mode rules are:
+
+| Host                | Explicit TCP ports |
+| ------------------- | ------------------ |
+| `api.anthropic.com` | 443                |
+| `github.com`        | 22, 443            |
+| `ssh.github.com`    | 443                |
+| `cache.nixos.org`   | 443                |
+
+Membership and ports are covered by
+[Network Allowlist Acceptance](#network-allowlist-acceptance).
 
 `whichQuiet` suppresses unsuccessful lookup noise. `treefmt` is the project
 formatter wrapper. Host `~/.claude` is not mounted; project settings remain
@@ -109,24 +146,26 @@ counterparts of all Rust additions.
 The image and host environments align these values with their platform's
 selected derivations:
 
-| Variable                                                 | Contract                                                                                 |
-| -------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `RUSTC`                                                  | Absolute selected compiler path                                                          |
-| `RUST_SRC_PATH`                                          | Selected standard-library source                                                         |
-| `RUSTC_WRAPPER`, `CARGO_BUILD_RUSTC_WRAPPER`             | sccache binary                                                                           |
-| `SCCACHE_DIR`                                            | `/home/wrix/.cache/sccache` in the image; `$HOME/.cache/sccache` default in a host shell |
-| `SCCACHE_CACHE_SIZE`                                     | `50G`                                                                                    |
-| `CARGO_INCREMENTAL`                                      | Unset; Cargo retains its development/test incremental defaults                           |
-| `LIBRARY_PATH`, `OPENSSL_INCLUDE_DIR`, `OPENSSL_LIB_DIR` | Platform-matching library paths                                                          |
+| Variable                                                 | Contract                                                                                                        |
+| -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `RUSTC`                                                  | Absolute selected compiler path                                                                                 |
+| `RUST_SRC_PATH`                                          | Selected standard-library source                                                                                |
+| `RUSTC_WRAPPER`, `CARGO_BUILD_RUSTC_WRAPPER`             | sccache binary                                                                                                  |
+| `SCCACHE_DIR`                                            | `/home/wrix/.cache/sccache` in the image; `$HOME/.cache/sccache` default in a host shell                        |
+| `SCCACHE_CACHE_SIZE`                                     | `50G` for host/private local caches; shared capacity belongs to [Services](services.md#shared-compiler-service) |
+| `CARGO_INCREMENTAL`                                      | Unset; Cargo retains its development/test incremental defaults                                                  |
+| `LIBRARY_PATH`, `OPENSSL_INCLUDE_DIR`, `OPENSSL_LIB_DIR` | Platform-matching library paths                                                                                 |
 
 `CARGO_INCREMENTAL`, `CARGO_HOME`, and `CARGO_TARGET_DIR` remain unset. Cargo
 can incrementally rebuild workspace development/test crates while sccache caches
 eligible dependency compilations. Explicit `CARGO_INCREMENTAL=0` remains a
 caller override; forcing `1` is incompatible with the packaged sccache wrapper.
-The profile optionally mounts `~/.cargo/registry`, `~/.cargo/git`, and
-`~/.cache/sccache` read-write at their `/home/wrix` counterparts.
-`/home/wrix/.cargo` and `/home/wrix/.cache` are writable parents. The Rust
-allowlist adds `crates.io`, `static.crates.io`, and `index.crates.io`.
+Cargo registry/git and sccache use the sandbox-only locations and backing
+defined by [Tool Cache Data Boundary](#tool-cache-data-boundary), not personal
+host caches. `/home/wrix/.cargo` and `/home/wrix/.cache` remain writable
+parents. The Rust allowlist adds explicit port 443 rules for `crates.io`,
+`static.crates.io`, and `index.crates.io`; see
+[Network Allowlist Acceptance](#network-allowlist-acceptance).
 
 `profile.toolchain` is the host-platform combined fenix derivation used by the
 devshell and `buildPackage`. It matches the image toolchain on Linux. Sibling
@@ -161,17 +200,146 @@ compile-time non-Rust inputs. `cargoArtifacts` defaults to a dependency build
 and can be shared across calls. Each call returns one binary package and builds
 for the host platform without cross-compilation.
 
-The builder is Nix-sandboxed. Interactive host/image compilation uses sccache;
-package derivations use `cargoArtifacts`. On Darwin, image cache mounts are
-startup pre-warms because the platform staging path does not synchronize
-container writes back to the host.
+The builder is Nix-sandboxed. Interactive host/image compilation uses separate
+sccache data under [Tool Cache Data Boundary](#tool-cache-data-boundary);
+package derivations use `cargoArtifacts`. General Darwin directory staging does
+not imply managed-cache persistence; no personal-host prewarm is used.
 
 ### Python Profile
 
 Python inherits `python3` from base and adds `uv`, `ruff`, and `ty` to both
-package surfaces. It sets `UV_CACHE_DIR=/home/wrix/.cache/uv`, optionally mounts
-`~/.cache/uv` there read-write, and adds `pypi.org` and `files.pythonhosted.org`
-to the limit-mode allowlist.
+package surfaces. Its image sets `UV_CACHE_DIR=/home/wrix/.cache/uv` with
+sandbox-only backing under
+[Tool Cache Data Boundary](#tool-cache-data-boundary), not the personal host uv
+cache. It adds explicit port 443 rules for `pypi.org` and
+`files.pythonhosted.org` to the limit-mode allowlist; see
+[Network Allowlist Acceptance](#network-allowlist-acceptance).
+
+## Tool Cache Data Boundary
+
+Acceptance: [Tool Cache Isolation Acceptance](#tool-cache-isolation-acceptance),
+[Tool Cache Sharing Acceptance](#tool-cache-sharing-acceptance) and
+[Shared Compiler Acceptance](#shared-compiler-acceptance).
+
+Built-in Rust Cargo registry/git and sccache data, and Python uv cache data, use
+Wrix-managed sandbox-only storage. They are not bind mounts, snapshots or
+prewarm copies of the invoking user's personal host caches, and sandbox writes
+are not synchronized back into those caches. Host tool-cache settings and data
+remain independent. Empty managed caches are not permission to fall back to
+personal host data.
+
+Worker-local tool locations remain `/home/wrix/.cargo/registry`,
+`/home/wrix/.cargo/git`, `/home/wrix/.cache/sccache` and `/home/wrix/.cache/uv`
+for their respective profiles, with writable parents and cache directories.
+Shared Rust uses the service-owned sccache data through
+[Compiler Delegation](#shared-rust-compiler-service), not a shared raw directory
+behind independent worker daemons. Ordinary permitted tool fetches can populate
+cold caches; this does not broaden network or credential grants. Host-cache
+contents are not automatically imported or migrated. Initial cold-cache costs
+are accepted.
+
+### Shared and Private Tool Cache Modes
+
+Acceptance: [Tool Cache Sharing Acceptance](#tool-cache-sharing-acceptance).
+
+The managed tool caches have one all-or-nothing sharing control for a launch. It
+can be selected for one invocation or remembered as optional repository-root
+`wrix.toml` policy. Both run and spawn resolve it from explicit launch choice,
+then the selected workspace's repository preference, then shared mode. Omission
+inherits; an explicit choice can enable or disable sharing regardless of the
+repository preference. Policy is read anew for each launch; outside a repository
+there is no repository tier.
+
+A one-off choice does not rewrite/persist repository policy or create a file to
+record defaults. Repository policy is a workspace-editable preference, not an
+agent-resistant host restriction. This control has no additional environment
+policy input and is independent of Nix-cache enablement/publication policy.
+[CLI Tool Cache Controls](cli.md#tool-cache-controls) defines the remembered
+`tool_caches.shared` boolean;
+[Launch Selection](sandbox.md#launch-tool-cache-selection) uses short run flags
+`--cache` / `--no-cache` or the equivalent optional spawn boolean. These names
+do not make the tool-cache control a Nix-cache switch.
+
+The resolved modes are:
+
+- **Shared (default):** workers of this host user reuse one sandbox-only pool
+  across repositories and Loom clones, rather than retaining separate
+  repository-sized pools. Applicable Cargo registry/git, sccache and uv data
+  participate together. Updates must support subsequent worker reuse; disposable
+  startup copies without retained updates do not satisfy sharing. Concurrent use
+  must preserve normal tool correctness.
+- **Private (sharing off):** every applicable managed cache uses fresh private
+  writable data for that launch. It neither reads nor writes the shared pool,
+  including through prewarm copies, and has no personal-host fallback. The
+  private data is disposable with the sandbox, not a retained per-repository
+  pool. Ordinary tool use still works within existing network/credential grants.
+
+Shared mode deliberately accepts cached-data visibility and artifact influence
+between workers across repositories, including launches with different
+credential grants. Private Git sources, packages and compiled contents can enter
+this pool; native cache keys/checksums/locks are not repository authorization or
+correct-build attestation. Dedicated runtime credential/configuration files and
+management authority are not pooled as cache data.
+
+Use the coarse private mode for workloads whose tool-cache contents must not
+join this worker trust domain. Switching modes does not migrate private data
+into the pool or erase/recall previously shared bytes. This controls built-in
+cache data flow and compiler delegation, not sanitization of arbitrary workspace
+contents or other explicit mounts. Selective directory/Git-source exclusions and
+confidentiality tracking into compiled artifacts are deferred.
+
+This does not create a common Cargo `target/` directory or share guest Nix
+stores/databases, authorize worker Celler uploads, or broaden ordinary Celler
+read grants. Delegated compiler access to its originating outputs is not
+cross-worker Cargo target reuse. Native tool capacity controls remain separate;
+sharing is not a hard aggregate disk quota or a new Wrix budget/eviction
+coordinator. Cargo/uv backing and shared-daemon integration must meet these
+modes without turning ordinary directory staging into a general write-back
+guarantee.
+
+Caller-declared mounts retain the existing explicit mount contract; built-in
+defaults do not make arbitrary consumer mounts safe. `sandbox.md` owns
+launch/mount handling; this spec owns the built-in defaults, modes and tool
+paths.
+
+### Shared Rust Compiler Service
+
+Acceptance: [Shared Compiler Acceptance](#shared-compiler-acceptance).
+
+Shared Rust mode uses one actual sccache daemon in the existing host-user
+service container, alongside Dolt, Celler and the proxy. It is not multiple
+independent daemons writing one local cache directory, an HTTP blob-cache
+replacement, or a separate compiler-only container/VM. Workers retain their
+sccache client/wrapper; eligible cache misses can execute their selected
+compiler in the service. Private mode instead uses worker-local compilation and
+fresh private cache data, without registering inputs or connecting to the shared
+compiler.
+
+A restricted Rust launch must resolve to private mode: `run --no-cache`,
+`SpawnConfig.tool_caches.shared = false`, or an inherited private repository
+preference. A shared result combined with `WRIX_NETWORK=limit` is an actionable
+configuration error before preparation; the launcher does not silently change
+the resolved choice or weaken networking. No restricted launch receives shared
+compiler delegation or a compiler-endpoint exception. Nix/Celler substitution
+and scoped Dolt/proxy access are independent and remain available.
+
+[Services](services.md#shared-compiler-service) owns daemon placement, capacity,
+lifecycle and admitted source/toolchain/output views, with its policy verified
+by [Compiler Service Acceptance](services.md#compiler-service-acceptance).
+Concurrent requests must use the originating checkout, selected guest-platform
+toolchain and output locations, including distinct Loom clones that share a
+canonical repository identity. There is no common mutable Cargo `target/`
+directory. A service-side cache hit must deliver the correct outputs to its
+requesting worker, not merely return success or write another worker's files.
+
+This deliberately moves compiler execution, including worker-supplied procedural
+macros, into the service trust boundary. It does not provide
+compiler/Dolt/Celler/ proxy compromise isolation. Compiler CPU/memory usage is
+in the service runtime budget, not automatically charged to the requesting
+worker's limits. [Security](security.md#shared-service-trust-boundary) owns
+these residual risks. Personal-host cache/store/control access remains excluded;
+full worker/runtime migration and per-job resource-assurance machinery are not
+introduced.
 
 ## Public API
 
@@ -256,8 +424,21 @@ does not accept either override. Composition order is:
 | `shellHook` | internal lifecycle, then `profile.shellHook`, then consumer hook |
 
 The lifecycle runs workspace services, project-cache integration, and hook-path
-selection before the profile and consumer hooks. The cache schema belongs to
-`services.md`.
+selection before the profile and consumer hooks. The cache policy belongs to
+`cache.md`. Cache-enabled activation, including `direnv reload`, runs
+[Host Pull Credential Refresh](cache.md#host-pull-credential-refresh): refresh
+the host-private seven-day token even when the Nix environment is
+unchanged/cached, not by exporting a secret or starting a background renewer.
+Cache opt-out leaves existing credentials unchanged without issuing/refreshing
+them. Enabled runtime activation also invokes
+[Host Entry Publication](cache.md#host-activation-and-pre-push-publication) for
+the selected already-realized environment, including first and cached direnv
+activation. Cache opt-out suppresses this publication; no eager project warm is
+introduced.
+
+Acceptance: [Success Criteria](#success-criteria),
+[Host Cache Credential Acceptance](#host-cache-credential-acceptance) and
+[Host Cache Publication Acceptance](#host-cache-publication-acceptance).
 
 #### Prek hook management
 
@@ -355,10 +536,10 @@ without introducing a reciprocal flake dependency.
 - `wrix.rustProfile {}` (omitting required `toolchain`/`sha256`) errors at
   evaluation rather than silently producing an unpinned profile
   [check](verify:profiles.rust-required-args)
-- Cargo registry/git mounts and the sccache cache parent are writable so cargo
-  can fetch crates and sccache can cache artifacts without
-  `Read-only file system` errors
-  [judge](../tests/judges/profiles.sh#test_cargo_registry_writable)
+- Sandbox-only Cargo registry/git paths and sccache data are writable so Cargo
+  can fetch crates and sccache can cache artifacts without personal-host backing
+  or `Read-only file system` errors.
+  [system?](test-ci:test-profile-tool-cache-isolation-podman)
 - A profile mount with `optional = true` is preserved in the Nix-generated
   `ProfileConfig` [check](test-ci:test-profile-config-wrapper)
 - Both Linux and Darwin launch planners omit an optional profile mount when its
@@ -366,9 +547,9 @@ without introducing a reciprocal flake dependency.
   [test](command::launch::test::missing_optional_profile_mount_is_skipped_by_platform_planners)
 - Python profile can run Python scripts with dependencies
   [judge](../tests/judges/profiles.sh#test_python_profile)
-- uv cache mount is writable so uv can fetch packages not in the pre-warm set
-  without `Read-only file system` errors
-  [judge](../tests/judges/profiles.sh#test_uv_cache_writable)
+- Sandbox-only uv cache data is writable for cache misses without personal-host
+  backing or `Read-only file system` errors.
+  [system?](test-ci:test-profile-tool-cache-isolation-podman)
 - deriveProfile correctly merges image packages, host packages, and environment
   [judge](../tests/judges/profiles.sh#test_derive_profile_merge)
 - Built-in `corePackages` and `packages` equal the exact documented base, Rust,
@@ -516,6 +697,123 @@ without introducing a reciprocal flake dependency.
   toolchain is image-built
   [check](verify:profiles.sandbox-entrypoints-no-rustup)
 
+### Tool Cache Isolation Acceptance
+
+- Evaluated built-in profile defaults declare sandbox-only cache backing instead
+  of personal-host cache mounts/prewarms, retain the guest tool paths and
+  writable parents, and do not redirect host tool defaults into sandbox data.
+  [check?](verify:profiles.tool-cache-boundary)
+- Production run/spawn cache preparation never binds/copies personal-host cache
+  data or writes it back, including when managed data is missing; read-only
+  preflight does not allocate or populate managed cache data.
+  [test?](../crates/wrix-sandbox/tests/tool_cache_isolation.rs::both_launch_modes_keep_tool_cache_preparation_host_separate)
+- Live default Podman Rust/Python launches can populate writable sandbox caches
+  while personal-host cache sentinels are neither visible nor modified.
+  [system?](test-ci:test-profile-tool-cache-isolation-podman)
+- Live krun Rust/Python launches demonstrate the same host-cache separation and
+  writable tool behavior with their own required capability evidence.
+  [system?](test-ci:test-profile-tool-cache-isolation-krun)
+- Live Apple Rust/Python launches demonstrate the same host-cache separation and
+  writable tool behavior, without personal-host prewarm copies and with their
+  own required runtime/capability evidence.
+  [system?](test-ci:test-profile-tool-cache-isolation-apple)
+
+### Tool Cache Sharing Acceptance
+
+- Both launch modes resolve explicit selection before selected-workspace repo
+  policy before shared default, preserving omitted inheritance and both
+  directions of explicit override, including re-enabling sharing over a private
+  repo default.
+  [test?](../crates/wrix-sandbox/tests/tool_cache_isolation.rs::mode_precedence_follows_launch_repo_shared_default)
+- One-off selections do not create/rewrite repository policy or persist as
+  future defaults; later launches inherit their own current repository policy
+  anew.
+  [test?](../crates/wrix-sandbox/tests/tool_cache_isolation.rs::launch_mode_overrides_do_not_write_repository_policy)
+
+- Shared mode selects this host user's worker pool across repository/clone
+  identities, not separate per-repository or personal-host cache backing.
+  [test?](../crates/wrix-sandbox/tests/tool_cache_isolation.rs::shared_mode_uses_host_user_pool_across_repositories)
+- Sharing-off applies to every applicable managed cache in both launch modes,
+  using fresh private writable data without shared-pool reads/writes/prewarms or
+  retained per-repository cache allocation.
+  [test?](../crates/wrix-sandbox/tests/tool_cache_isolation.rs::private_mode_is_fresh_and_all_or_nothing)
+- Mode changes neither promote private cache contents into the shared pool nor
+  delete/recall previously shared data.
+  [test?](../crates/wrix-sandbox/tests/tool_cache_isolation.rs::mode_changes_do_not_migrate_or_delete_cache_data)
+- Shared backing does not expose per-launch credential/configuration files or
+  host/service management state as part of the cache pool.
+  [test?](../crates/wrix-sandbox/tests/tool_cache_isolation.rs::shared_backing_excludes_credentials_and_control_state)
+- Live Podman workers from different repositories reuse compatible pooled tool
+  data while concurrent use preserves correct tool results.
+  [system?](test-ci:test-profile-tool-cache-isolation-podman)
+- Live krun workers demonstrate cross-repository pooled reuse and correct
+  concurrent tool results with their own required capability evidence.
+  [system?](test-ci:test-profile-tool-cache-isolation-krun)
+- Live Apple workers demonstrate cross-repository pooled reuse and correct
+  concurrent tool results; copied startup data without retained updates is
+  insufficient. [system?](test-ci:test-profile-tool-cache-isolation-apple)
+- A sharing-off Podman launch can populate every applicable private cache while
+  shared-pool sentinels are inaccessible and its private writes do not reach the
+  pool. [system?](test-ci:test-profile-tool-cache-isolation-podman)
+- A sharing-off krun launch demonstrates the same all-cache private data
+  boundary with its own required capability evidence.
+  [system?](test-ci:test-profile-tool-cache-isolation-krun)
+- A sharing-off Apple launch demonstrates the same all-cache private data
+  boundary, without shared-pool snapshots or personal-host fallback.
+  [system?](test-ci:test-profile-tool-cache-isolation-apple)
+
+### Shared Compiler Acceptance
+
+- Shared Rust selects one service-owned compiler daemon; private mode keeps
+  compilation/cache data local and never registers or connects to that daemon.
+  [test?](../crates/wrix-sandbox/tests/tool_cache_isolation.rs::rust_modes_select_shared_service_or_private_local_compilation)
+- Run/spawn reject restricted Rust with resolved shared mode before preparation,
+  preserve normal precedence without silent coercion, and accept effective
+  private selection without disabling Nix/Celler.
+  [test?](../crates/wrix-cli/tests/tool_cache_controls.rs::restricted_rust_requires_effective_private_tool_caches)
+- Live Podman workers use the actual shared daemon for cache misses/hits and
+  output delivery; concurrent distinct checkouts/toolchains do not mix results,
+  private mode stays local, and ordinary compiler errors do not terminate
+  services. [system?](test-ci:test-profile-sccache-service-podman)
+- Live krun workers demonstrate the same real daemon reuse, request/output
+  separation, private-mode behavior and compiler-error handling with honest KVM
+  evidence. [system?](test-ci:test-profile-sccache-service-krun)
+- Live Apple workers demonstrate the same real shared-daemon behavior across
+  separate worker VMs; copied prewarms or merely sharing directory names do not
+  pass. [system?](test-ci:test-profile-sccache-service-apple)
+
+### Host Cache Credential Acceptance
+
+- Both profile-only and sandbox-bound devshells trigger runtime host credential
+  refresh on entry/`direnv reload`, including unchanged/cached Nix environments,
+  before consumer hooks without embedding token values in generated/exported
+  data. [system?](test-ci:test-cache-host-credential-refresh)
+- Cache-disabled devshell activation does not issue/refresh host credentials,
+  delete an existing credential or create a background token-renewal worker.
+  [system?](test-ci:test-cache-host-credential-refresh)
+
+### Host Cache Publication Acceptance
+
+- Both devshell constructors invoke automatic selected-environment publication
+  on first and actual cached/unchanged activation without extra package/check
+  builds. [system?](test-ci:test-cache-devshell-publication)
+- Cache-disabled activation does not register/publish environment artifacts or
+  provision cache-only services for this publication path.
+  [system?](test-ci:test-cache-devshell-publication)
+
+### Network Allowlist Acceptance
+
+- Base, derived and project-pinned profile constructors accept structured
+  `{ host, ports }` rules and reject bare strings, shorthand, unknown fields,
+  empty hosts and missing/empty/non-integer/out-of-range ports.
+  [check?](verify:profiles.network-rule-contract)
+- Built-in base/Rust/Python rules contain exactly the documented hosts and
+  explicit ports, with no implicit web/SSH or all-port permissions.
+  [check?](verify:profiles.builtin-network-ports)
+- Nested derivation and Rust constructor extensions preserve structured rules
+  through list concatenation without adding unlisted host/port permissions.
+  [check?](verify:profiles.network-rule-extension)
+
 ## Requirements
 
 ### Functional
@@ -562,9 +860,14 @@ without introducing a reciprocal flake dependency.
 - IDE configuration beyond Claude Code
 - Auto-detection of `rust-toolchain.toml` at runtime (must be passed explicitly
   via `rustProfile`)
-- Automatic pruning of cargo registry / git / uv caches — operators are expected
-  to clean `~/.cargo/{registry,git}` and `~/.cache/uv` manually if they grow
-  unbounded; sccache is self-capped via `SCCACHE_CACHE_SIZE`.
+- Selective directory, Git-repository or dependency exclusions; automatic
+  private-source classification and tracking confidentiality into compiled
+  artifacts. Use the coarse all-cache private mode instead.
+- Automatic pruning of Cargo registry/git and uv sandbox caches, a hard
+  aggregate disk quota or a custom budget coordinator. Native sccache capacity
+  control remains `SCCACHE_CACHE_SIZE`, owned once by the service for shared
+  mode and independently by local caches; it is not an all-tool filesystem
+  quota. No personal-host cache maintenance or migration is authorized.
 - Tracking nightly rust-analyzer in the default profile. Building
   `fenix.packages.${system}.rust-analyzer` from source pulls a matching nightly
   cargo/rustc/rust-std closure into every consumer's flake on each input update;

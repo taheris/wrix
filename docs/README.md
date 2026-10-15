@@ -12,57 +12,58 @@ Wrix provides sandboxed containers for AI-driven development. See
 
 [Verifier input discovery and measurements](verifier-inputs.md) describes
 checked resource projections, conservative scope, and measured worker costs.
-[Sandbox build and cache measurements](sandbox-build-performance.md) records the
-OCI rebuild investigation, Podman experiments, and remaining cache-lifetime
-work.
 
 ## Specs
 
 Individual spec files live in `specs/`. This table is the session-start pin —
 keep it current when specs land or retire.
 
-| Spec                                         | Code                                                                                 | Beads    | Purpose                                                                  |
-| -------------------------------------------- | ------------------------------------------------------------------------------------ | -------- | ------------------------------------------------------------------------ |
-| [beads](../specs/beads.md)                   | [`.beads/`](../.beads/)                                                              | wx-v7m8n | Issue tracking with dependency support                                   |
-| [cli](../specs/cli.md)                       | [`crates/wrix-cli/`](../crates/wrix-cli/), `.#verify`                                | —        | Wrix command surface, repository initialization, and shared verifier app |
-| [image-builder](../specs/image-builder.md)   | [`lib/sandbox/image.nix`](../lib/sandbox/image.nix)                                  | wx-nf6eu | Nix-based OCI image source creation                                      |
-| [linux-builder](../specs/linux-builder.md)   | [`lib/builder/default.nix`](../lib/builder/default.nix)                              | wx-ope   | Remote Nix builds for macOS                                              |
-| [notifications](../specs/notifications.md)   | [`lib/notify/`](../lib/notify/)                                                      | wx-q6x   | Agent-neutral desktop attention notifications with focus suppression     |
-| [playwright-mcp](../specs/playwright-mcp.md) | [`lib/mcp/playwright/`](../lib/mcp/playwright/)                                      | wx-9mvh  | Browser automation for frontend development                              |
-| [pre-commit](../specs/pre-commit.md)         | [`.pre-commit-config.yaml`](../.pre-commit-config.yaml)                              | wx-t6rh  | Git hooks for treefmt, shellcheck, and integration tests                 |
-| [profiles](../specs/profiles.md)             | [`lib/sandbox/profiles.nix`](../lib/sandbox/profiles.nix)                            | wx-1thzk | Pre-configured development environments                                  |
-| [sandbox](../specs/sandbox.md)               | [`lib/sandbox/default.nix`](../lib/sandbox/default.nix)                              | wx-fzop9 | Platform-agnostic container isolation                                    |
-| [security](../specs/security.md)             | [`crates/wrix-sandbox/`](../crates/wrix-sandbox/), [`lib/sandbox/`](../lib/sandbox/) | wx-1dhkm | Explicit credential grants, network isolation, and execution evidence    |
-| [services](../specs/services.md)             | `crates/wrix-service/`, `crates/wrix-cache/`                                         | wx-fvr1x | Per-workspace service container and project Nix cache                    |
-| [tmux](../specs/tmux.md)                     | [`lib/sandbox/profiles.nix`](../lib/sandbox/profiles.nix)                            | wx-4f3g  | Native tmux CLI debugging and caller-owned session lifecycle             |
+| Spec                                         | Code                                                                                 | Beads    | Purpose                                                                    |
+| -------------------------------------------- | ------------------------------------------------------------------------------------ | -------- | -------------------------------------------------------------------------- |
+| [beads](../specs/beads.md)                   | [`.beads/`](../.beads/)                                                              | wx-v7m8n | Issue tracking with dependency support                                     |
+| [cache](../specs/cache.md)                   | `crates/wrix-cache/`, Celler                                                         | —        | Scoped Celler Nix cache, automatic host publication and age-based eviction |
+| [cli](../specs/cli.md)                       | [`crates/wrix-cli/`](../crates/wrix-cli/), `.#verify`                                | —        | Wrix command surface, repository initialization, and scoped verification   |
+| [image-builder](../specs/image-builder.md)   | [`lib/sandbox/image.nix`](../lib/sandbox/image.nix)                                  | wx-nf6eu | Nix-based OCI image source creation                                        |
+| [linux-builder](../specs/linux-builder.md)   | [`lib/builder/default.nix`](../lib/builder/default.nix)                              | wx-ope   | Remote Nix builds for macOS                                                |
+| [notifications](../specs/notifications.md)   | [`lib/notify/`](../lib/notify/)                                                      | wx-q6x   | Agent-neutral desktop attention notifications with focus suppression       |
+| [playwright-mcp](../specs/playwright-mcp.md) | [`lib/mcp/playwright/`](../lib/mcp/playwright/)                                      | wx-9mvh  | Browser automation for frontend development                                |
+| [pre-commit](../specs/pre-commit.md)         | [`.pre-commit-config.yaml`](../.pre-commit-config.yaml)                              | wx-t6rh  | Git hooks for treefmt, shellcheck, and integration tests                   |
+| [profiles](../specs/profiles.md)             | [`lib/sandbox/profiles.nix`](../lib/sandbox/profiles.nix)                            | wx-1thzk | Host/sandbox environments and managed tool caches                          |
+| [proxy](../specs/proxy.md)                   | `crates/wrix-service/`, `lib/services/`                                              | —        | Enforced HTTP/CONNECT admission for restricted egress                      |
+| [sandbox](../specs/sandbox.md)               | [`lib/sandbox/default.nix`](../lib/sandbox/default.nix)                              | wx-fzop9 | Container isolation, launch preflight and explicit image GC                |
+| [security](../specs/security.md)             | [`crates/wrix-sandbox/`](../crates/wrix-sandbox/), [`lib/sandbox/`](../lib/sandbox/) | wx-1dhkm | Explicit credential grants, network isolation, and execution evidence      |
+| [services](../specs/services.md)             | `crates/wrix-service/`                                                               | wx-fvr1x | Host-user Dolt/Celler/proxy/sccache container with scoped workspace access |
+| [tmux](../specs/tmux.md)                     | [`lib/sandbox/profiles.nix`](../lib/sandbox/profiles.nix)                            | wx-4f3g  | Native tmux CLI debugging and caller-owned session lifecycle               |
 
 [Darwin attention setup and validation](darwin-attention.md) covers the
 optional, consumer-provided OmniWM CLI integration and desktop shortcuts.
 
 ## Terminology Index
 
-| Term                  | Definition                                                                                                                                                                  |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **bd**                | CLI for the beads issue tracker                                                                                                                                             |
-| **beads**             | Persistent issue tracker (used by the `bd` CLI)                                                                                                                             |
-| **deploy key**        | Repo-scoped SSH key for Git operations from host and container contexts                                                                                                     |
-| **dolt**              | SQL database backing beads; shared via the workspace service container                                                                                                      |
-| **execution**         | One sandbox launch attempt, distinct from an agent conversation and its terminal focus target                                                                               |
-| **focus-aware**       | Notification suppression when terminal is focused                                                                                                                           |
-| **focus target**      | Opaque host terminal/tmux target used for notification routing, not an execution or conversation ID                                                                         |
-| **Git grant**         | Independent effective `deploy` or `sign` permission to deliver a Wrix-managed key to a sandbox                                                                              |
-| **image source**      | Platform image input produced by Nix: Linux `nix-descriptor`, Darwin `docker-archive`                                                                                       |
-| **loom**              | External Rust workflow orchestrator that drives wrix sandboxes ([taheris/loom](https://github.com/taheris/loom))                                                            |
-| **pasta**             | Linux userspace networking for Podman containers                                                                                                                            |
-| **playwright-mcp**    | MCP server wrapping @playwright/mcp for browser automation in sandboxes                                                                                                     |
-| **prek**              | Rust-based pre-commit framework (drop-in replacement for pre-commit)                                                                                                        |
-| **project Nix cache** | Per-workspace local binary cache for Nix derivations scoped to a repository                                                                                                 |
-| **profile**           | Pre-configured set of packages and environment variables                                                                                                                    |
-| **ProfileConfig**     | Immutable Nix-generated JSON config consumed by the Rust `wrix` launcher                                                                                                    |
-| **sandbox**           | Isolated container environment for running Pi, Claude, or a consumer-supplied agent runner                                                                                  |
-| **service container** | Per-workspace `<repo>-service` container hosting shared local services                                                                                                      |
-| **tmux**              | Upstream terminal multiplexer used directly through shell tools for persistent debugging processes                                                                          |
-| **verify target**     | Logical verifier ID of the form `verify:<domain>.<check-id>`; `.#verify --list` is the authoritative ID inventory and runner config batches selected IDs through `.#verify` |
-| **virtio-fs**         | Shared filesystem for macOS container VMs                                                                                                                                   |
-| **wrix init**         | Repo-local bootstrap command that configures and verifies Wrix-managed Git transport, signing, and hooks                                                                    |
-| **wrix.toml**         | Optional repo-root Wrix policy override file; absent when defaults are sufficient                                                                                           |
+| Term                              | Definition                                                                                                                                                                        |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **bd**                            | CLI for the beads issue tracker                                                                                                                                                   |
+| **beads**                         | Persistent issue tracker (used by the `bd` CLI)                                                                                                                                   |
+| **canonical host build pipeline** | Shared coordination for Wrix-managed host Nix target realization; [cache](../specs/cache.md#canonical-host-build-pipeline) owns scoped publication and in-flight store protection |
+| **deploy key**                    | Repo-scoped SSH key for Git operations from host and container contexts                                                                                                           |
+| **dolt**                          | SQL database backing beads; workspace namespaces hosted in the shared host-user service container                                                                                 |
+| **execution**                     | One sandbox launch attempt, distinct from an agent conversation and its terminal focus target                                                                                     |
+| **focus-aware**                   | Notification suppression when terminal is focused                                                                                                                                 |
+| **focus target**                  | Opaque host terminal/tmux target used for notification routing, not an execution or conversation ID                                                                               |
+| **Git grant**                     | Independent effective `deploy` or `sign` permission to deliver a Wrix-managed key to a sandbox                                                                                    |
+| **image source**                  | Platform image input produced by Nix: Linux `nix-descriptor`, Darwin `docker-archive`                                                                                             |
+| **loom**                          | External Rust workflow orchestrator that drives wrix sandboxes ([taheris/loom](https://github.com/taheris/loom))                                                                  |
+| **pasta**                         | Linux userspace networking for Podman containers                                                                                                                                  |
+| **playwright-mcp**                | MCP server wrapping @playwright/mcp for browser automation in sandboxes                                                                                                           |
+| **prek**                          | Rust-based pre-commit framework (drop-in replacement for pre-commit)                                                                                                              |
+| **project Nix cache**             | Celler-backed authorized read set of canonical repository-private and approved common public-dependency views; archives may be physically shared and age-evicted                  |
+| **profile**                       | Pre-configured set of packages and environment variables                                                                                                                          |
+| **ProfileConfig**                 | Immutable Nix-generated JSON config consumed by the Rust `wrix` launcher                                                                                                          |
+| **sandbox**                       | Isolated container environment for running Pi, Claude, or a consumer-supplied agent runner                                                                                        |
+| **service container**             | One container per host user cohosting Dolt, Celler, proxy and shared sccache execution with logical workspace namespaces and per-launch policies                                  |
+| **tmux**                          | Upstream terminal multiplexer used directly through shell tools for persistent debugging processes                                                                                |
+| **tool cache**                    | Wrix-managed sandbox-only Cargo registry/git, sccache or uv data; shared among workers or private to one launch, distinct from the project Nix cache                              |
+| **verify target**                 | Logical verifier ID of the form `verify:<domain>.<check-id>`; `.#verify --list` is the authoritative ID inventory and runner config batches selected IDs through `.#verify`       |
+| **virtio-fs**                     | Shared filesystem for macOS container VMs                                                                                                                                         |
+| **wrix init**                     | Repo-local init namespace: bare verification, deploy-key provisioning, and explicit repo setup for Git/signing/hooks                                                              |
+| **wrix.toml**                     | Optional repo-root Wrix policy override file; absent when defaults are sufficient                                                                                                 |

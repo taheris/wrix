@@ -1,138 +1,403 @@
-# Workspace Services
+# Host Services
 
-Per-workspace service container for shared local infrastructure used by the host
-devshell and wrix sandboxes: beads' Dolt server and the project-scoped Nix
-binary cache.
+One service container per host user, hosting logically isolated workspace Dolt
+and project Nix caches, a shared compiler daemon and per-launch egress policies.
 
 ## Problem Statement
 
 Wrix workspaces need long-lived local services that are shared by host commands
 and sandboxed containers without exposing the host filesystem, host
-`/nix/store`, or host Nix daemon to agents. The service lifecycle hosts Dolt and
-a project-scoped Nix binary cache so cold sandboxes can substitute project
-derivations instead of rebuilding them, while cache contents remain bounded to
-the current project.
+`/nix/store`, or host Nix daemon to agents. The service lifecycle hosts Dolt,
+Celler-backed workspace cache views, the enforced egress proxy and the shared
+sccache compiler daemon. Nix-cache transport/signing/publication/retention
+belong to `cache.md`; tool-cache modes and compiler selection belong to
+`profiles.md`.
 
 ## Architecture
 
-`cli.md` owns the root `wrix` command grammar and dispatch. This spec owns the
-behavior behind `wrix service ...`: a per-workspace service container named
-`<repo>-service` plus the Dolt and project-cache operations exposed through that
-service group. The workspace identity is the canonical repository root when the
-current path is inside a Git checkout, including Loom-managed paths under
-`.loom/`; outside a checkout it falls back to the canonical current path. The
-human-readable container name uses the repository basename, while ports, state
-paths, labels, and locks derive from a hash of the identity path so multiple
-checkouts of the same repository do not collide.
+`cli.md` owns root command grammar and dispatch. This spec owns one shared
+service-container identity per host user and the operations behind
+`wrix service ...`; it is not a machine-wide multi-user service. Physical
+container ownership is independent of repository paths. Workspace namespaces
+remain keyed by canonical repository identity, with Loom bead/integration clones
+using the outer repository identity and non-repository paths using their
+canonical path. Namespace ports, state and locks remain distinct. Repository
+cache trust remains private except for the common dependency view explicitly
+authorized by [Cache Visibility](cache.md#cache-visibility).
 
-The service container owns two service families:
+Acceptance: [Host Service Acceptance](#host-service-acceptance) and
+[Compiler Service Acceptance](#compiler-service-acceptance).
+
+The service container owns four service families:
 
 - **Dolt for beads** — the Dolt SQL server for the Beads-owned workspace
   database. `beads.md` owns issue tracking and database storage; this spec owns
   only the shared container lifecycle and endpoint publication.
-- **Project Nix cache** — a kiss-cache-compatible flat binary cache. Host Nix
-  reads/writes the cache through the local filesystem; sandboxes read the same
-  cache through a read-only HTTP server in the service container. The cache is
-  an explicit project cache, not a host-store server: only paths published by
-  wrix's project-scoped publishing rules are present.
+- **Project Nix cache** — Celler runs inside this container, with scoped
+  read-only client views and host-authorized publishing. `cache.md` owns cache
+  contents, transport, signing, publication and retention; this spec owns
+  placement, namespace isolation and endpoints.
+
+- **Egress proxy** — shared HTTP/CONNECT infrastructure with isolated per-launch
+  grants. `proxy.md` owns request admission, authentication and network safety;
+  this spec owns its placement and service lifecycle.
+- **Shared compiler** — one actual sccache daemon for eligible shared Rust
+  launches under [Shared Compiler Service](#shared-compiler-service), not a
+  generic HTTP blob-cache backend or full worker-runtime migration.
+
+### Shared Compiler Service
+
+Acceptance: [Compiler Service Acceptance](#compiler-service-acceptance).
+
+The actual shared sccache daemon is cohosted with Dolt, Celler and the proxy,
+with service-owned persistent compiler-cache data. It does not use personal-host
+sccache data, another HTTP cache backend, or an additional compiler
+container/VM.
+[Profiles Shared Compiler](profiles.md#shared-rust-compiler-service) owns
+shared/private selection and the restricted-Rust admission rule. One native LRU
+cache defaults to `SCCACHE_CACHE_SIZE=50G` for the host-user daemon. Its
+capacity is service-owned, not a per-workspace allocation or reconfiguration
+from worker/compiler environment, repo preference or spawn input. Local private
+and personal-host cache settings remain independent; no new public budget setter
+or aggregate tool-cache quota is introduced.
+
+Admitted requests need the selected guest-platform compiler/toolchain, correct
+source/working-directory/environment view and writable originating outputs.
+Simultaneous workspaces and distinct clones must not collide in a common
+`/workspace` or output mapping. This is not a common Cargo target directory.
+Input/output registration must preserve the narrow host mount boundary: no
+physical-host store/daemon, runtime socket, blanket home/worktree parent or
+host-private issuer/publishing/management state. Selected compiler views do not
+authorize arbitrary host paths or personal-cache imports.
+
+Shared-compiler compatibility is part of required-interface admission, without
+allowing one workspace to replace a running shared container. Private/restricted
+launches do not register compiler inputs or receive its execution endpoint.
+Read-only information/preflight does not start the daemon or allocate its data.
+Workspace retirement removes only its compiler access/work; it does not stop the
+shared daemon, clear pooled data or interrupt other workspaces' requests.
+Explicit host shutdown affects all shared compiler availability like the other
+service families.
+
+Configure the managed daemon for caller-independent service lifetime rather than
+native idle exit tearing down the shared infrastructure. A compiler job's normal
+nonzero result is not a daemon failure and must not stop Dolt/Celler/proxy.
+Unexpected active-daemon exit follows the shared fail-fast contract.
+[Security](security.md#shared-service-trust-boundary) owns the explicitly
+accepted compiler-code/service-state compromise boundary; no separate compiler
+isolation or worker-equivalent per-job resource accounting is promised.
 
 ### State layout
 
-Mutable service state lives outside the git worktree except for the existing
-beads database. Wrix uses platform-native locations:
+Acceptance: [Host Service Acceptance](#host-service-acceptance).
 
-| Platform | Durable state root                                                        | Bulky cache root                                                                 |
-| -------- | ------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| Linux    | `${XDG_STATE_HOME:-$HOME/.local/state}/wrix/workspaces/<workspace-hash>/` | `${XDG_CACHE_HOME:-$HOME/.cache}/wrix/workspaces/<workspace-hash>/binary-cache/` |
-| Darwin   | `$HOME/Library/Application Support/wrix/workspaces/<workspace-hash>/`     | `$HOME/Library/Caches/wrix/workspaces/<workspace-hash>/binary-cache/`            |
+Host-private management, publishing and credential-issuer state is separate from
+service-visible workspace data and Celler's delegated cache-signing state.
+Workspace-private state roots remain platform-native:
 
-Durable state:
+| Platform | Durable state root                                                        |
+| -------- | ------------------------------------------------------------------------- |
+| Linux    | `${XDG_STATE_HOME:-$HOME/.local/state}/wrix/workspaces/<workspace-hash>/` |
+| Darwin   | `$HOME/Library/Application Support/wrix/workspaces/<workspace-hash>/`     |
 
-```text
-<state-root>/
-├── cache.lock              # publish/prune/rotate lock
-├── cache-status.json       # dirty flag, last publish/prune status, last error
-├── gcroots/                # retention markers per publish root
-├── keys/
-│   ├── cache.secret        # host-only signing key; never mounted into sandboxes
-│   └── cache.pub           # public key distributed to host/sandbox Nix config
-├── pending/                # deferred post-build candidates
-│   └── <timestamp>-<pid>-<drv-hash>.json
-├── publish-roots.json      # authoritative project-root manifest for publishing
-└── services.json           # endpoint metadata, port leases, schema version
-```
+`<state-root>/services.json` records namespace endpoint metadata, port leases
+and its metadata schema version. `cache.md` owns host-private namespace
+publication/pending/status state, public-key metadata and the separately managed
+Celler signing/archive data.
 
-Bulky cache:
+Service-visible workspace data roots are:
 
-```text
-<cache-root>/
-├── nix-cache-info
-├── *.narinfo
-├── nar/
-└── log/                    # optional
-```
+| Platform | Workspace service-data root                                                            |
+| -------- | -------------------------------------------------------------------------------------- |
+| Linux    | `${XDG_STATE_HOME:-$HOME/.local/state}/wrix/service-data/workspaces/<workspace-hash>/` |
+| Darwin   | `$HOME/Library/Application Support/wrix/service-data/workspaces/<workspace-hash>/`     |
 
-`beads.md` owns the Dolt database location and branch-sync state. The service
-container may mount that database and mounts `<cache-root>` read-only for HTTP
-serving. Sandboxes do not receive the durable state root, cache signing key,
-host `/nix/store`, host Nix daemon socket, or any authoritative cache publish
-manifest. Workspace-local `.wrix` may contain non-authoritative endpoint/debug
-pointers, but not cache signing keys, publish manifests, or trusted state.
+`beads.md` owns the live database and canonical sync-worktree children beneath
+this root. The shared container mounts managed service data and Celler's
+persistent metadata/archive data plus admitted compiler input/output views, not
+arbitrary repository trees or the host home. Celler's managed mounts permit its
+own metadata/signing/archive writes. New workspaces register without replacing
+the container or changing its mount set. Tenant-facing APIs expose only
+authorized workspace data and endpoints; a shared parent mount is not permission
+for clients to traverse other tenants.
+
+Celler receives cache-signing authority in this shared boundary under
+[Cache Authority](cache.md#cache-authority). Authoritative publish manifests,
+host publishing/management credentials and credential-issuer private authority
+remain outside service-visible mounts. Direct sandbox mounts and ordinary
+endpoint/credential delivery expose neither Celler signing state nor those
+host-private roots, other workspace filesystem roots, the host `/nix/store` or
+the host Nix daemon socket. Authorized common-cache reads are API access, not
+mounts of peer workspace data. These delivery/API guarantees do not isolate
+service-visible state from delegated compiler code under
+[Security](security.md#shared-service-trust-boundary). A sandbox may receive its
+own narrow Beads sync-worktree mapping under the contract in `beads.md`, not the
+all-workspaces service-data root. Workspace-local `.wrix` pointers are
+non-authoritative and contain no management credentials.
 
 ### Lifecycle
 
-`mkDevShell` starts the service container by default because the project Nix
-cache is default-on. `cache.enable = false` in `wrix.toml` or `nixCache = false`
-opts out of cache service/integration but still starts the service container
-when the Beads-owned workspace database exists. `wrix run` and `wrix spawn` call
-`wrix service start` as an idempotent ensure/health-check before launching the
-agent container; if the service is already healthy, this is a no-op.
+Acceptance: [Host Service Acceptance](#host-service-acceptance).
 
-The service container has a caller-independent lifecycle invariant: stopping the
-shell, editor, or service that evaluated shellHook does not tear down or SIGKILL
-the workspace service container. `wrix service stop` removes only the selected
-workspace's service container. Cache-only service startup is suppressed for
-temp-directory scratch workspaces, so `/tmp` test or integration directories do
-not create persistent service containers. Loom bead clones and the independent
-integration clone under `.loom/` share the outer repository's service identity
-instead of starting persistent `*-service` containers named after the internal
-path.
+`mkDevShell` ensures the shared service and registers the selected namespace
+when its project cache is enabled or Beads is configured. Nix-cache opt-out does
+not disable Beads, proxy or shared compiler use. Both sandbox launch modes
+ensure required namespace services; shared Rust also requires its compiler
+service even when the Nix cache/Beads are off. `limit` requires the shared
+proxy, with Rust using private tool caches rather than shared compiler
+delegation. Registration and shared-container creation are concurrency-safe and
+idempotent. A malformed registration cannot overwrite another workspace's state
+or policy.
+
+Service lifetime is caller-independent: shell/editor exit does not kill the
+shared container. Ordinary `wrix service stop` retires only the selected
+workspace's services and proxy grants, leaving other workspaces and shared
+common dependency view available. `wrix service stop --host` is the explicit
+host-user-wide shutdown and revokes all service availability and proxy grants.
+Bare `wrix service` reports the selected workspace; `wrix service --host`
+reports shared-container state without requiring a repository. Both information
+defaults are read-only even when infrastructure is absent/stopped: no namespace
+registration, managed-state creation, image installation, service startup/repair
+or grant issuance. Logs and endpoint queries remain workspace-scoped. Host
+operations select the current user's shared infrastructure, not another machine
+or elevated authority. The container remains available until explicit host
+shutdown; no idle timer is introduced.
+
+Cache-only registration remains suppressed for temporary scratch workspaces.
+Loom clones share their outer repository namespace without creating separate
+containers. A requested restricted launch may still use shared proxy
+infrastructure in a scratch workspace. Proxy startup/registration failure
+prevents restricted agent launch; later proxy failure never enables direct
+egress.
+
+### Compatibility and Replacement
+
+Acceptance: [Compatibility Acceptance](#compatibility-acceptance).
+
+Ordinary workspace startup (`mkDevShell`, `run`, `spawn` and
+`wrix service start`) reuses a compatible running host service. Compatibility
+must be positively established for the required service interfaces and policy
+features; unknown or unverifiable compatibility is not permission to replace it.
+
+An incompatible running service causes nonzero failure with explicit host-wide
+remediation. Startup does not remove/recreate it, install a replacement image,
+alter managed database/cache data, rewrite endpoints or revoke peer proxy
+grants. A workspace stop does not authorize host replacement. The explicit
+replacement flow is `wrix service stop --host`, then `wrix service start`; the
+shutdown is deliberately disruptive to all namespaces, but retains managed
+workspace data and valid Celler signing state plus host-private
+publishing/management authority. Old traffic grants do not survive replacement.
+
+Creating a missing or fully stopped service is normal startup, not replacement
+of a running service. Read-only launch preflight reports a required incompatible
+service as a blocker without repair; a stopped service remains a preparation
+need. Compatibility is rechecked by actual startup, not authorized by a prior
+preview.
 
 ### Service image source
 
-The `<repo>-service` container image is a wrix-managed Nix-built image.
+Acceptance: [Host Service Acceptance](#host-service-acceptance).
+
+The shared host-user service image is a wrix-managed Nix-built image.
 `image-builder.md` owns its source metadata and ownership labels, while
-`sandbox.md` owns installation and retention through the shared runtime image
-path. This spec owns only the service lifecycle's use of that image path.
+`sandbox.md` owns installation and explicit image collection through shared
+runtime-image mechanics. Service startup still installs/reuses required images
+but does not initiate broad pruning or impose an MRU-eight eviction threshold.
+Temporary import-reference cleanup remains installer housekeeping. This spec
+owns only the service lifecycle's use of the shared installer; image commands
+belong to [CLI Image Commands](cli.md#image-commands).
 
 ### Service operations
 
-`cli.md` owns public command placement, root help behavior, and the packaged
-binary surface. This spec owns the operations delegated to its service command
-group:
+Acceptance: [Host Service Acceptance](#host-service-acceptance).
 
-- lifecycle and diagnostics: `start`, `stop`, `status`, `logs`, `endpoints`;
-- Dolt endpoint and maintenance operations: `status`, `socket`, `port`, `host`,
-  `attach`, `gc`, `wait`, `sandbox-endpoint`;
-- project-cache operations: `config`, `status`, `publish`, `warm`, `prune`,
-  `rotate-key`.
+`cli.md` owns public command placement, root help behavior and the packaged
+binary surface. This spec owns workspace information/start/stop/GC, explicit
+host information/stop/GC, logs/endpoints, bare Dolt information and Dolt
+endpoint/readiness operations (`socket`, `port`, `host`, `wait`,
+`sandbox-endpoint`). [CLI Dolt Information](cli.md#dolt-information) owns the
+information default replacing status and the print-only attach helper.
+[CLI Service Scope](cli.md#service-scope) owns information defaults and the
+`--host` selector for dual-scope operations, including data GC. The duplicated
+host namespace and retired status/cleanup spellings are not aliases. Ordinary
+workspace start remains the ensure path, including after explicit host shutdown;
+the scope flag adds no host-start/logs/endpoints workflow or management
+authority.
 
-The delegated implementation is Rust-first. Service internals are proper Rust
-crates and helper binaries:
+`cache.md` owns `config`, `status`, `publish`, `warm`, `rotate-key` and
+[Retention Control](cache.md#retention-control) under `wrix service cache ...`.
+Retention information/set/reset default to the canonical workspace's private
+policy; `--host` selects only common policy without requiring a repository.
+Information is passive; setters preserve cache-owned persistence/activation and
+authority boundaries. [CLI Retention Commands](cli.md#cache-retention-commands)
+owns grammar.
 
-- `wrix-service` — service-container lifecycle, endpoint metadata, port leasing,
-  Dolt service management.
-- `wrix-cache` — project-cache library plus helper binaries `wrix-cache-hook`,
-  `wrix-cache-publish`, and `wrix-cache-serve`; the HTTP cache server lives here
-  rather than in a separate crate.
+Service implementation is Rust-first: `wrix-service` owns shared-container
+lifecycle, workspace registration, endpoint metadata, port leasing and
+Dolt/proxy/cache hosting integration. Cache library/helpers and their immutable
+Nix entry points belong to `cache.md`.
 
-Nix may install immutable helper binaries for privileged hook/static-server
-entry points.
+### Garbage Collection Scope
+
+Acceptance: [GC Scope Acceptance](#gc-scope-acceptance).
+
+`wrix service gc` collects Dolt garbage only in the selected canonical
+workspace. It does not dispatch Celler collection or use that workspace as a
+filter for a host-wide cache collector. Other workspaces, cache data and valid
+proxy grants are unaffected; Celler availability is not a prerequisite for this
+Dolt-only scope.
+
+`wrix service gc --host` selects this host user's managed Dolt databases and one
+host-wide native Celler collection cycle, independently of the current
+repository. There is no per-workspace Celler maintenance path. It does not
+target another host user's services or data. Age policy still protects unexpired
+view references and native in-flight data; physical deduplication does not
+authorize deleting those references. Collection is not namespace retirement,
+shutdown, rotation or proxy-grant revocation and does not change host-management
+authorization.
+
+`wrix service gc --host` does not collect runtime images. `wrix service gc all`
+combines that host-user-wide Dolt/Celler collection with the same
+unused-Wrix-image collector as `wrix service gc image`, independently of the
+current repository. The latter is image-only: it does not collect Dolt/Celler
+data, register a workspace or start the shared service container. `all` does not
+widen ownership, retention or protected-image eligibility, nor authorize other
+users' stores, unrelated images, host Nix GC, volume removal or key deletion.
+CLI validation precedes maintenance; the superseded `--image` flag and
+`service host gc` / `service image gc` spellings are not compatibility surfaces.
+
+The data-collection families are Dolt and Celler. Dolt collection uses native
+full garbage collection through the already-running service against each
+selected database. Full collection includes both old and new storage
+generations, rather than collecting only the new generation; it does not broaden
+workspace/database scope. It reclaims unreferenced storage objects without
+deleting issue rows or reachable history; [Beads](beads.md) remains the
+database/history owner. Only host/all scope invokes Celler collection. It uses
+native age eligibility under
+[Cache Eviction](cache.md#cache-commands-locking-and-retention) and
+[Retention Control](cache.md#retention-control), without current-target pins or
+root-aware deletion. Unexpired view/native in-flight references and valid
+signing/issuer authority remain protected. Native batching can leave eligible
+garbage after a successful cycle; storage errors/incomplete execution must not
+be hidden as success or an exhaustive drain. Neither family authorizes host
+`/nix/store` GC, whole-volume removal, credential/key deletion or raw-file
+cleanup.
+
+Runtime-image pruning has explicit `gc image` and combined `gc all` entry points
+under [CLI Image Commands](cli.md#image-commands), with mechanics owned by
+[Sandbox Image Cleanup](sandbox.md#image-retention-and-cleanup), not automatic
+service startup. The former `wrix service dolt gc` only printed a database
+location; it is retired, not a compatibility alias or a substitute for
+maintenance.
+
+### GC Availability
+
+Acceptance: [GC Scope Acceptance](#gc-scope-acceptance).
+
+The `gc`, `gc --host`, `gc image` and `gc all` commands do not automatically
+start shared infrastructure or stopped backend components. They do not register
+or reactivate namespaces, install service images, repair/restart/replace the
+service or launch a substitute maintenance container merely to enable
+collection. Ordinary development/launch flows and explicit service startup
+retain their separate lifecycle contracts.
+
+Data collection uses already-running, compatible and authorized backend access.
+A required absent, stopped or otherwise unusable backend makes the affected
+collection units unavailable/incomplete, not successfully collected. No data
+collection is dispatched for a unit known to be unavailable. Missing service
+availability is not evidence that managed data contains no eligible garbage, and
+it does not authorize raw-file cleanup or an offline fallback.
+
+`gc all` still attempts independently safe image collection when data services
+are unavailable, provided the runtime image store is accessible. It reports the
+unavailable data work alongside actual image results and returns nonzero under
+[GC Failure Handling](#gc-failure-handling). Image-only GC does not depend on
+Dolt/Celler availability. A positively established empty or inapplicable data
+scope is a normal no-op without provisioning; unknown state must not be reported
+as empty merely because a service cannot be contacted.
+
+### GC Contention
+
+Acceptance: [GC Scope Acceptance](#gc-scope-acceptance).
+
+When another operation holds required maintenance access, GC waits within a
+finite budget that defaults to 30 seconds for the affected collection unit. This
+is a per-unit wait, not a whole-command deadline. Repeated acquisition attempts
+do not reset that unit's deadline. If access becomes available within the
+budget, collection may proceed after its normal safety checks. Otherwise the
+unit is reported as incomplete and remaining independently safe work continues.
+
+A parsed zero duration, such as `--wait 0s`, permits one immediate acquisition
+attempt without waiting. Available units still collect after their safety
+checks; contended units are incomplete, and other independently safe work
+continues. Zero must not skip the initial attempt or suppress collection of free
+units.
+
+The caller may override this budget with `--wait <duration>` for one invocation;
+all selected units use that invocation's budget. The override does not persist
+or change a later command's 30-second default. No persistent GC setting is
+introduced, and repository/cache-policy environment overrides do not select this
+GC budget. Existing cache commands retain their own lock-timeout settings.
+[CLI Service Scope](cli.md#service-scope) owns the option's parsing/help.
+
+Contention never authorizes lock bypass/stealing or stopping peer work/services
+to force progress. A contention timeout is incomplete requested work, not a
+successful skip for an in-use/protected resource; final status follows
+[GC Failure Handling](#gc-failure-handling). This budget bounds acquiring
+maintenance access, not the duration of full collection after access is
+obtained.
+
+### GC Failure Handling
+
+Acceptance: [GC Scope Acceptance](#gc-scope-acceptance).
+
+After arguments and authorized scope are validated, all GC modes continue
+remaining independently safe requested work after a collection-unit failure. A
+failure in one workspace, backend or image does not suppress other units whose
+authority, eligibility and backend consistency can still be established. Failed
+checks never authorize deletion, bypass locks or weaken reference/retention
+protection. If a shared prerequisite fails, dependent work cannot proceed, but
+independent work can. Invalid arguments or an untrusted/ambiguous invocation
+scope abort before deletion rather than being treated as ordinary unit failures.
+
+Failures are accumulated and reported at the end alongside completed work,
+including partial completion; the command must not report only the last error.
+Any failed or incomplete requested collection work yields nonzero status. Having
+no eligible garbage, or retaining resources because they are in use/unowned or
+protected by policy, is not itself a failure. Completed reclamation is not
+rolled back or described as transactional all-or-nothing cleanup.
+
+This maintenance error policy does not change fail-fast supervision of the
+shared service processes, permit disruptive service replacement or revoke valid
+grants.
 
 ### Dolt service
 
-The Dolt service exposes the same logical endpoint surfaces that beads uses
-today:
+Acceptance: [Host Service Acceptance](#host-service-acceptance).
+
+Dolt runs inside the shared host-user service container alongside the egress
+proxy, not as a host-native database daemon.
+
+Bare `wrix service dolt` reports only the selected workspace's Dolt information:
+enabled/configured status, available transport/endpoint metadata and a
+connection command/template. It distinguishes configured endpoints from observed
+service state; metadata alone is not authenticated SQL readiness. Absent/stopped
+or disabled services can be described without provisioning or registration. The
+summary never starts/repairs infrastructure, allocates ports, issues
+credentials, changes database state or opens an interactive SQL client.
+
+Connection output omits passwords, bearer tokens and private credential
+material. The command/template correctly quotes endpoint arguments for supported
+host shells, including paths with spaces or shell metacharacters. It uses only
+the selected workspace's published client scope, never another tenant's endpoint
+or shared SQL-administrator authority. Endpoint selectors remain useful for
+scripts; status/attach are not retained as duplicate information commands.
+
+Dolt access is bound to the selected workspace namespace, including database
+selection, SQL authorization and file-remote access. A tenant-facing SQL
+endpoint cannot expose another workspace or act as an unrestricted filesystem,
+network or host-management deputy. A shared SQL administrator is not a sandbox
+credential. The service preserves the logical transport distinction:
 
 - Linux host and sandbox clients use the workspace Dolt Unix socket when
   available.
@@ -143,501 +408,375 @@ When Darwin or another fallback needs Dolt TCP, the service binds only a
 host-loopback port and publishes the exact endpoint through `services.json` /
 `wrix service endpoints`. Linux does not publish a Dolt TCP port by default.
 
-TCP service startup provisions the workspace's default SQL login for forwarded
-connections, including when an existing privileges database contains only a
-localhost login. Startup preserves database contents, unrelated users/grants,
-and existing passwords. Services created without this initialization are
-recreated on the next `wrix service start`, using the same mounted database. TCP
-readiness requires a successful authenticated SQL query through the published
-endpoint; accepting a TCP connection alone is insufficient.
+TCP startup provisions scoped workspace authorization for forwarded clients and
+preserves database contents, unrelated users/grants and existing passwords.
+Published endpoint and credential selection identify the workspace, not merely a
+reachable shared server. Readiness requires an authenticated query in that
+namespace; accepting TCP or authenticating against another tenant is
+insufficient.
 
-### Project Nix cache transport
+### Cache Endpoints
 
-The project cache uses the Nix binary-cache protocol with different host and
-sandbox transports:
+Acceptance: [Host Service Acceptance](#host-service-acceptance).
 
-- **Host reads** use `file://<cache-root>` as an extra substituter plus the
-  generated project cache public key. Host Nix does not need a cache HTTP port.
-- **Host writes** copy selected store paths into `<cache-root>` with the
-  host-only signing key, update matching GC markers, and mark the cache dirty.
-- **Sandbox reads** use a launcher-resolved HTTP URL for the service container's
-  static read-only cache server. The launcher injects that URL, the public key,
-  and `builders-use-substitutes = true` into container `NIX_CONFIG`.
-- **Sandbox writes** are out of scope for v1: sandboxes receive no cache signing
-  key and no write-capable endpoint.
+Cache authorization/endpoint separation exposes only the workspace's authorized
+read set: its repository-private view and the common dependency view under
+[Cache Visibility](cache.md#cache-visibility). A shared Celler listener/archive
+store does not authorize unrelated private views. Published agent-facing
+endpoints permit only that authorized read set. Host publishing/management uses
+a separately authorized interface that is not a sandbox exception or proxy
+destination. `cache.md` owns HTTP admission, runtime credentials, signing and
+publication, including the
+[Native Pull Credential Lifecycle](cache.md#native-pull-credentials).
 
-The service container serves `<cache-root>` with a Rust static HTTP helper
-mounted read-only. The server accepts GET/HEAD only, disables directory listing,
-rejects path traversal, and serves only Nix binary-cache paths
-(`nix-cache-info`, `*.narinfo`, `nar/...`, optional `log/...`). Wrix does not
-rely on container DNS. The service publishes a host-loopback port
-(`127.0.0.1:<cache-port> -> service-container:8080`), persists the selected
+The service publishes a host-loopback port
+(`127.0.0.1:<cache-port> -> workspace cache listener`), persists the selected
 endpoint in `services.json`, and launchers inject the resolved sandbox-visible
-URL. Preferred host ports are deterministic from the workspace hash: cache HTTP
-uses `21000–22999`, and Darwin/fallback Dolt TCP uses `23000–24999`. If a
-preferred port is busy, wrix probes within the matching range, persists the
-chosen port, and reuses it while available. Service startup fails if the runtime
-cannot bind required service ports to loopback only.
+URL without relying on container DNS. Preferred host ports are deterministic
+from the workspace hash: cache HTTP uses `21000–22999`, and Darwin/fallback Dolt
+TCP uses `23000–24999`. If a preferred port is busy, wrix probes within the
+matching range, persists the chosen port, and reuses it while available. Startup
+fails if required host ports cannot be bound to loopback only.
 
-HTTP clients are isolated from each other and from the accept loop. The helper
-admits at most 32 concurrent requests, bounds headers to 8 KiB and 32 fields
-within five seconds, and bounds writes to 30 seconds of inactivity and five
-minutes total. GET streams files with bounded memory; HEAD reads only metadata.
-When cache and Dolt share the service container, either process exiting
-terminates the other and fails the container rather than hiding a failed
-service.
-
-HTTP is the only container-facing cache transport. Unix-socket cache
-substituters, host Nix daemon sockets, shared mutable `/nix/store` volumes,
-Harmonia, nix-serve, and other host-store-serving caches are excluded.
-
-### Project scope and root sets
-
-A path is publishable only when it is reachable from a configured root of the
-current workspace flake. Wrix distinguishes **publishable roots** from **warm
-roots**:
-
-- Default publishable roots: current-system `packages`, current-system `checks`,
-  and the selected `devShell`. If a user runs `nix flake check`, check outputs
-  may enter the project cache.
-- Default warm roots: current-system `packages` and the selected `devShell`.
-  Checks are built by proactive warm only when explicitly requested (for example
-  `wrix service cache warm --checks` or matching config).
-
-`nixCache` attrset form lets consumers add/remove roots with symmetric
-`includeRoots` / `excludeRoots`; excludes win. Root entries are flake
-installables or explicit flake attr paths, not arbitrary `/nix/store` paths.
-
-Before copying, publishing computes the eligible root closure and subtracts
-paths already available from configured upstream substituters. Upstream
-availability queries are batched (at most 256 paths per subprocess); JSON null
-misses remain publishable, and successful entries survive a partial query
-failure.
-[test](../crates/wrix-cache/tests/publisher.rs::publish_batches_upstream_queries_and_retains_null_misses)
-[test](../crates/wrix-cache/tests/publisher.rs::publish_uses_successful_upstream_entries_even_on_partial_query_failure)
-It then copies the remaining paths with `--no-recursive`, so the project cache
-contains project-specific misses while dependencies still available from
-upstream caches stay upstream-owned.
-
-### Cache policy
-
-The invoked repository's optional root-level `[cache]` section in `wrix.toml`
-supplies cache overrides, including outside a devshell. Missing files and keys
-leave built-in defaults intact. Settings resolve field-by-field from built-ins,
-then repository policy, then explicitly set environment variables; invocation
-flags such as `warm --checks` and `service --no-cache` take precedence. An
-explicit built-in value or empty root list still overrides repository policy.
-The policy file is read from the nearest invoked repository, independently of
-Loom's shared service identity. Configuration reads do not provision services or
-mutate repository files.
-[test](../crates/wrix-cli/tests/cache_config.rs::cache_config_reads_repository_policy_outside_direnv_without_mutation)
-
-Supported keys:
-
-- `enable` and `require_trusted_nix` default to true; environment overrides are
-  `WRIX_NIX_CACHE_ENABLE` and `WRIX_NIX_CACHE_REQUIRE_TRUSTED`. Disabling cache
-  integration does not disable Dolt or prohibit explicit cache maintenance.
-  [test](../crates/wrix-cache/tests/config.rs::omitted_cache_policy_uses_documented_defaults)
-- `publish` and `warm` each accept `packages`, `checks`, `dev_shell`,
-  `include_roots`, and `exclude_roots`. Publish enables all three categories;
-  warm enables packages and devShell but not checks. Both root lists default to
-  empty. Overrides use the existing `WRIX_CACHE_PUBLISH_*` and
-  `WRIX_CACHE_WARM_*` variables; root-list variables are newline-separated.
-  [test](../crates/wrix-cache/tests/config.rs::repository_cache_policy_overrides_only_specified_fields)
-- `warn_size` defaults to `"50G"`, `pending_ttl` to `"7d"`, and `prune_interval`
-  to `"24h"`. Overrides are `WRIX_CACHE_SOFT_LIMIT_BYTES`,
-  `WRIX_CACHE_PENDING_RETENTION_SECS`, and `WRIX_CACHE_PRUNE_INTERVAL_SECS`.
-  [test](../crates/wrix-cache/tests/config.rs::omitted_cache_policy_uses_documented_defaults)
-- `lock_timeout` defaults to `"30s"`; `explicit_lock_timeout` follows it unless
-  independently overridden. Their environment overrides are
-  `WRIX_CACHE_LOCK_TIMEOUT_MS` and `WRIX_CACHE_EXPLICIT_LOCK_TIMEOUT_MS`.
-  [test](../crates/wrix-cache/tests/config.rs::omitted_cache_policy_uses_documented_defaults)
-- Sizes accept nonnegative byte counts or strings with binary `K`, `M`, `G`, or
-  `T` suffixes. Durations accept nonnegative second counts or strings with `s`,
-  `m`, `h`, or `d` suffixes.
-  [test](../crates/wrix-core/tests/repository_policy.rs::cache_quantities_accept_documented_units_and_plain_numbers)
-- Unknown keys, malformed values, and overflow fail rather than silently falling
-  back.
-  [test](../crates/wrix-core/tests/repository_policy.rs::invalid_cache_quantities_and_wrong_typed_roots_are_rejected)
-
-`mkDevShell` retains its `nixCache` argument as an explicit-override adapter.
-Default or empty configuration exports no cache-policy variables; an attrset
-exports only supplied keys, including explicit default values and empty lists.
-`nixCache = false` emits an explicit disable override. The Nix adapter does not
-fill in an independent copy of runtime defaults.
-[check](verify:services.cache-devshell-overrides)
-
-`wrix service cache config` prints the complete resolved settings as JSON
-without creating cache state.
-[test](../crates/wrix-cli/tests/cache_config.rs::cache_config_reads_repository_policy_outside_direnv_without_mutation)
-
-### Host Nix integration and publish hook
-
-By default, `mkDevShell` configures host Nix to pull from the project cache and
-to publish successful project-scoped builds back to it. This requires a trusted
-Nix daemon setup because `post-build-hook` and trusted substituter/key settings
-are privileged Nix options. Host setup is one-time per machine/user/group (for
-example adding the user or a wrix group to Nix `trusted-users` and restarting
-the daemon), not per repository. If host Nix ignores the required substituter,
-trusted public key, `builders-use-substitutes`, or post-build hook, devshell
-entry fails loud with remediation; `nixCache = false` is the explicit opt-out.
-
-The hook is a project-specific immutable wrapper in the Nix store. It bakes in
-the workspace hash, workspace owner uid/gid, state root, cache root, manifest
-path, immutable publisher-helper path, and a complete resolved cache-settings
-snapshot in the same immutable store output. When the Nix daemon invokes it as
-root (Linux and normal multi-user Darwin), the wrapper performs only static
-validation and portable privilege drop to the workspace owner, then execs the
-user-owned publisher helper. The wrapper and publisher never evaluate Nix roots
-as root, source shell code, execute repo files, or read authoritative publish
-data from the workspace. The user-owned publisher reads the immutable settings
-snapshot after privilege drop; it does not resolve repository policy or depend
-on the Nix daemon inheriting direnv's cache variables. Policy or override
-changes require devshell re-entry to install a matching hook snapshot.
-[test](../crates/wrix-cache/tests/publisher.rs::daemon_publisher_uses_snapshot_without_ambient_config_or_repository_reads)
-
-The workspace state retains GC roots for the installed wrapper and its hook,
-publisher, and interpreter store outputs so garbage collection cannot remove the
-configured post-build hook while the workspace is active.
-[system](verify:services.host-nix-config)
-
-Automatic post-build publishing is scoped by `<state-root>/publish-roots.json`.
-The publisher acts only when `DRV_PATH` matches a configured publish-root
-derivation for this workspace; when it matches, the publisher copies that root's
-realized closure. It does not publish every derivation built under a project
-devshell. `wrix service cache publish` and `wrix service cache warm` refresh the
-manifest and repair stale state. Shell entry does not eagerly evaluate all
-roots; if the manifest is missing or stale, it prints a short reminder unless
-`WRIX_NIX_CACHE_REMINDER=0` is set.
-
-Nix supports one `post-build-hook` per invocation. If a non-wrix hook is already
-configured, wrix fails loud by default rather than replacing or chaining
-arbitrary root-run hooks.
-
-### Cache commands, locking, and retention
-
-`wrix service cache publish` is realized-only: it evaluates configured publish
-roots, refreshes `publish-roots.json`, publishes roots already realized in the
-host store, drains matching pending candidates, updates GC markers, prunes
-unreachable cache entries, and reports unrealized roots without building them.
-
-`wrix service cache warm` is explicit/manual only: wrix does not run warm
-automatically in devshell entry or sandbox launch. Warm builds configured warm
-roots, publishes them, updates GC markers, and prunes. `--checks` (or config)
-includes checks in proactive warm. Explicit cache commands fail nonzero on real
-errors.
-
-All publish/prune/rotate operations take `<state-root>/cache.lock`. The
-post-build publisher waits for the lock and prints a waiting message on
-contention. If the wait times out, it records the hook's `DRV_PATH`/`OUT_PATHS`
-as a durable JSON file under `pending/`, prints a warning, and exits 0 so the
-completed Nix build is not failed solely by lock contention. Automatic publish
-failures after lock acquisition record status and warn; explicit cache commands
-remain strict. Pending records have a default retention of seven days and are
-reported by `wrix service cache status`.
-
-GC markers under `gcroots/` govern retention. Updating a root replaces that
-root's marker with current outputs. Successful explicit publish/warm reconciles
-marker ownership against the full configured publishable-root set before
-pruning: removed or excluded roots lose their markers, while configured but
-unrealized roots retain theirs. Warm refreshes the full publish manifest, not
-just its build subset, and publishes only roots in the publishable set.
-Automatic publishing does not reconcile unrelated markers. Full prune runs after
-explicit `publish` / `warm` / `prune`, and on service startup only when the
-cache is dirty and the last prune is older than the configured interval (default
-24h). The hook does not run a full prune in the hot path.
-
-`wrix service cache rotate-key` takes the cache lock, invalidates/wipes the
-local project cache, generates a new keypair, updates metadata, and leaves
-repopulation to post-build publishing or explicit warm. V1 does not support
-old+new keyrings or in-place re-signing.
-
-`wrix service cache status` reports cache size, pending count/age, last
-publish/prune status, dirty state, current endpoints, and warnings. The default
-soft size warning is 50 GiB; it is not a hard cap, and prune does not delete
-reachable current-root entries solely to satisfy the warning threshold.
-
-### Remote builders
-
-Direct remote-builder access to the local project cache is out of scope for v1.
-Remote builders may build normally; after outputs are available in the host
-store, host-side publishing can publish eligible outputs into the local project
-cache for later sandbox substitution. Wrix does not bind the project cache to
-LAN/VPN addresses or configure remote builder trust for the local cache by
-default.
+Unexpected exit of an active proxy, Dolt, Celler or shared sccache daemon fails
+the shared container rather than hiding an unavailable component. Intentional
+namespace retirement is not a failure. This fail-fast physical boundary can
+affect other workspaces; logical tenancy is not independent container-level
+fault isolation.
 
 ## Success Criteria
 
-- Devshells export only explicit cache overrides and preserve explicit resets.
-  [check](verify:services.cache-devshell-overrides)
-- Cache commands read repository policy outside direnv without mutation.
-  [test](../crates/wrix-cli/tests/cache_config.rs::cache_config_reads_repository_policy_outside_direnv_without_mutation)
-- Repository cache opt-out suppresses startup; environment overrides and
-  explicit service flags take precedence.
-  [test](../crates/wrix-cli/tests/service_cache.rs::repository_cache_opt_out_suppresses_startup_and_environment_can_override_it)
-- Automatic publishing uses immutable resolved settings without consulting
-  repository policy or ambient cache configuration.
-  [test](../crates/wrix-cache/tests/publisher.rs::daemon_publisher_uses_snapshot_without_ambient_config_or_repository_reads)
-- Warm reads repository check policy, while `--checks` overrides environment.
-  [test](../crates/wrix-cache/tests/publisher.rs::warm_reads_repository_policy_and_checks_flag_overrides_environment)
-- Explicit environment values, including built-in defaults and empty lists,
-  override repository cache policy.
-  [test](../crates/wrix-cache/tests/config.rs::environment_can_reset_repository_policy_to_builtin_values_and_empty_lists)
-- Cache policy resolves from the invoked repository independently of shared Loom
-  service identity.
-  [test](../crates/wrix-cache/tests/config.rs::cache_policy_reader_uses_nearest_repository_not_shared_loom_service_identity)
-- Repository pending TTL controls expiration outside direnv.
-  [test](../crates/wrix-cache/tests/publisher.rs::repository_pending_ttl_expires_records_without_direnv)
-- Service startup pruning honors the repository's configured interval.
-  [test](../crates/wrix-cli/tests/service_cache.rs::service_startup_pruning_uses_repository_interval)
+### Compiler Service Acceptance
+
+- The shared daemon uses one service-owned native LRU cache defaulting to `50G`;
+  ordinary worker/repository/spawn settings cannot resize it, while host/private
+  local caches remain independent and other disk data is not claimed as capped.
+  [test?](../crates/wrix-service/tests/compiler_service.rs::shared_compiler_capacity_is_service_owned_and_defaults_to_fifty_g)
+
+- Service planning/image integration hosts one actual sccache daemon alongside
+  the other service families, without an extra compiler container/VM or HTTP
+  blob-cache backend.
+  [test?](../crates/wrix-service/tests/compiler_service.rs::shared_compiler_is_one_managed_cohosted_daemon)
+- Compiler registration/request plans keep originating checkout, selected guest
+  toolchain and writable outputs distinct, including concurrent clones of one
+  canonical repository, without a common mutable Cargo target directory.
+  [test?](../crates/wrix-service/tests/compiler_service.rs::compiler_requests_keep_origin_contexts_distinct)
+- Compiler input/output admission preserves narrow host views and excludes
+  personal caches, host store/daemon/control sockets and private
+  issuer/publishing roots rather than solving paths with broad host mounts.
+  [test?](../crates/wrix-service/tests/compiler_service.rs::compiler_registration_preserves_host_private_mount_boundary)
+- Workspace retirement does not stop the host-user daemon, clear pooled data or
+  interrupt peer requests; private/restricted launches register no compiler
+  work.
+  [test?](../crates/wrix-service/tests/compiler_service.rs::workspace_lifecycle_preserves_peer_compilation)
+- Managed daemon idle behavior preserves caller-independent services; ordinary
+  compile failures are job results, while unexpected daemon exit retains shared
+  fail-fast behavior.
+  [test?](../crates/wrix-service/tests/compiler_service.rs::compiler_lifetime_preserves_idle_and_fail_fast_contracts)
+
+### Host Service Acceptance
+
+- Bare Dolt information is scoped to the selected workspace and excludes
+  passwords/tokens, private credential material and shared SQL-admin authority.
+  [test?](../crates/wrix-service/tests/host_service.rs::dolt_information_is_scoped_and_secret_free)
+- Dolt information describes enabled/disabled or absent/stopped state without
+  provisioning, port allocation, credential issuance, database writes or
+  interactive SQL-client execution; metadata alone never claims SQL readiness.
+  [test?](../crates/wrix-service/tests/host_service.rs::dolt_information_is_read_only_and_honest_about_state)
+- Printed connection commands/templates preserve endpoint arguments containing
+  spaces or shell metacharacters without exposing secrets or widening scope.
+  [test?](../crates/wrix-service/tests/host_service.rs::dolt_connection_commands_quote_arguments_without_secrets)
+
 - Dolt endpoint payloads preserve Unix/TCP metadata shapes, and TCP endpoints
   carry a nonzero port rather than optional or sentinel port state
   [test](../crates/wrix-service/src/lifecycle/mod.rs::endpoint_payloads_serialize_without_missing_or_zero_tcp_ports)
-- Project cache public keys parse as a safe name and a base64-encoded 32-byte
-  Ed25519 key; padded and unpadded keys remain supported, while malformed
-  encodings and configuration injection fail before launcher trust rendering
-  [test](../crates/wrix-sandbox/src/command/launch.rs::launcher_cache_key_reader_rejects_malformed_encoding_and_config_injection)
-- Existing valid cache keys are reused; invalid old keys are regenerated, and
-  invalid generator output leaves the old pair intact and removes temporary
-  files
-  [test](../crates/wrix-core/tests/cache_key.rs::keypair_reuse_and_regeneration_preserve_valid_state)
 
-- Concurrent service starts for the same workspace are serialized and create at
-  most one replacement service container
-  [test](../crates/wrix-cli/tests/service_lifecycle.rs::concurrent_service_starts_share_one_lifecycle_owner)
+- Concurrent starts across workspaces create at most one host-user service
+  container and independently register each requested namespace
+  [test?](../crates/wrix-cli/tests/host_service.rs::concurrent_workspaces_share_one_host_service)
 
 - `wrix service dolt sandbox-endpoint` returns the running Apple service VM's
   non-loopback TCP host and internal SQL port, or fails if no guest-visible
   address exists; host publication remains loopback-only
   [test](../crates/wrix-cli/tests/service_lifecycle.rs::apple_sandbox_endpoint_uses_service_vm_instead_of_host_loopback)
 
-- A workspace that starts services gets a container named `<repo>-service`; the
-  same service identity path yields the same container name, preferred service
-  ports, state roots, and cache root, while two different checkout paths do not
-  collide
-  [test](../crates/wrix-service/tests/lifecycle.rs::workspace_identity_is_stable_and_collision_resistant)
+- Workspace identity produces stable namespaces, port leases, workspace
+  control/data roots and locks without a container identity per checkout
+  [test?](../crates/wrix-service/tests/host_service.rs::workspace_namespaces_are_stable_and_distinct)
+
 - `mkDevShell` starts the service container by default for the project cache,
   `nixCache = false` suppresses cache-only startup, and any service container
   survives the process that evaluated the shell hook
   [system](test-ci:test-services-devshell-start-independent)
-- `wrix service start` delegates service-image installation to the shared
-  runtime image installer using the source metadata defined by
-  `image-builder.md`, with no service-specific install path
-  [test](../crates/wrix-cli/tests/service_cache.rs::service_start_uses_shared_image_digest_preflight_and_retention)
+
+- `wrix service start` delegates image installation/digest reuse to the shared
+  installer using `image-builder.md` source metadata without broad image
+  pruning, MRU-eight eviction or a separate service-specific installer
+  [test?](../crates/wrix-cli/tests/service_cache.rs::service_start_uses_shared_image_digest_preflight_without_pruning)
+
 - Cache-only service startup is suppressed for temp-directory scratch
-  workspaces, so tests and integration runs do not accumulate `tmp.*-service`
-  containers
+  workspaces, so tests and integration runs do not create infrastructure solely
+  for scratch cache use
   [test](../crates/wrix-cli/tests/service_cache.rs::temp_cache_only_start_never_creates_a_service_container)
-- Loom bead clone paths under `.loom/beads/<id>` use the outer repository
-  service identity, so launches do not accumulate bead-named `*-service`
-  containers
+
+- Loom bead clone paths under `.loom/beads/<id>` select the outer repository
+  identity rather than a bead-specific workspace identity
   [test](../crates/wrix-service/tests/lifecycle.rs::loom_bead_workspace_uses_repo_service_identity)
-- Loom's independent clone under `.loom/integration` uses the outer repository
-  service identity, so devshell entry does not accumulate integration-named
-  `*-service` containers
+
+- Loom's independent clone under `.loom/integration` selects the outer
+  repository identity rather than an integration-specific workspace identity
   [test](../crates/wrix-service/tests/lifecycle.rs::loom_integration_workspace_uses_repo_service_identity)
-- Rust packaging exposes the explicit `wrix-cache-hook`, `wrix-cache-publish`,
-  and `wrix-cache-serve` helper binaries from `wrix-cache`
-  [check](verify:services.rust-helper-binaries)
+
 - Linux beads clients reach Dolt through the workspace Unix socket, while Darwin
   beads clients receive the service container's TCP host/port endpoint
   [system](test-ci:test-services-dolt-platform-transport)
-- Fresh TCP Dolt services accept the default SQL login for forwarded connections
-  [test](lifecycle::dolt::test::fresh_tcp_service_provisions_a_forwarded_root_login)
+
+- TCP Dolt clients use scoped authorization for their selected workspace
+  [test?](../crates/wrix-service/tests/host_service.rs::forwarded_sql_authorization_is_workspace_scoped)
+
 - TCP startup repairs persisted localhost-only grants idempotently without
   losing database contents or unrelated users/grants
   [test](lifecycle::dolt::test::tcp_bootstrap_repairs_persisted_localhost_grants_without_losing_state)
+
 - TCP startup does not reset an existing SQL login password
   [test](lifecycle::dolt::test::tcp_bootstrap_does_not_reset_an_existing_root_password)
-- Existing TCP services without authentication initialization are recreated once
-  against the same database on service startup
-  [test](../crates/wrix-cli/tests/service_lifecycle.rs::apple_start_recreates_legacy_tcp_services_for_authentication_bootstrap)
+
+- Workspace authentication initialization preserves the managed database and
+  does not replace the shared container beneath unrelated users
+  [test?](../crates/wrix-cli/tests/host_service.rs::tenant_auth_initialization_preserves_other_workspaces)
+
 - TCP Dolt readiness rejects a reachable server that refuses SQL authentication
   [test](lifecycle::dolt::test::sql_probe_rejects_a_reachable_server_with_invalid_credentials)
+
 - TCP Dolt readiness fails within a bounded startup budget when a listener
   accepts connections but never speaks SQL
   [test](../crates/wrix-cli/tests/service_lifecycle.rs::tcp_wait_rejects_a_listener_without_sql_authentication)
-- Default `mkDevShell` cache enablement creates Linux XDG state/cache roots or
-  Darwin Library state/cache roots, plus GC-root directory, signing key, public
-  key, publish-root manifest, pending directory, lock file, status file, and
-  endpoint metadata outside `/workspace`; `nixCache = false` does not create
-  cache state solely for cache use
-  [test](../crates/wrix-cli/tests/service_cache.rs::cache_layout_uses_exact_platform_roots_and_opt_out_creates_no_cache)
-- Host devshell Nix uses `file://<cache-root>` as the project cache substituter,
-  trusts the generated public key, enables `builders-use-substitutes`, installs
-  a project-specific immutable post-build hook, and fails loudly when the host
-  Nix daemon ignores any required setting
-  [system](verify:services.host-nix-config)
-- `wrix run` and `wrix spawn` inject container `NIX_CONFIG` that points at the
-  project cache HTTP endpoint, trusts only the generated public key for that
-  cache, and enables `builders-use-substitutes`
-  [system](test-ci:test-services-limit-mode-cache-endpoint)
-- The service cache HTTP endpoint is a Rust static read-only server for
-  `<cache-root>`, uses an explicit persisted loopback host port in the
-  `21000–22999` range, serves only Nix binary-cache paths, and does not require
-  container DNS for sandbox substitution
-  [system](test-ci:test-services-limit-mode-cache-endpoint)
-- An idle cache client does not block independent requests
-  [test](../crates/wrix-cache/tests/helper_server.rs::idle_clients_do_not_block_other_requests)
-- Disconnected or reset cache clients cannot terminate the HTTP helper
-  [test](../crates/wrix-cache/tests/helper_server.rs::disconnected_clients_do_not_terminate_service)
-- Cache request headers are bounded and parsed completely before serving
-  [test](../crates/wrix-cache/tests/helper_server.rs::request_headers_are_bounded_and_complete)
-- Trickle-fed request headers cannot extend the request deadline
-  [test](../crates/wrix-cache/tests/helper_server.rs::partial_request_deadline_is_not_extended_by_trickling)
-- Stalled response writes obey a bounded deadline
-  [test](helper::server::test::stalled_body_writes_obey_the_response_deadline)
-- HEAD uses metadata only and large GET responses stream within bounded memory
-  [test](../crates/wrix-cache/tests/helper_server.rs::head_reads_only_metadata_and_get_streams_large_files)
-- Legacy combined cache/Dolt containers are recreated once with child
-  supervision on service start
-  [test](../crates/wrix-cli/tests/service_lifecycle.rs::legacy_combined_services_are_recreated_with_child_supervision)
-- A combined cache/Dolt service fails and stops its sibling when either child
-  exits
-  [test](lifecycle::supervisor::test::either_service_exit_stops_its_sibling_and_fails_the_container)
-- Sandboxes receive no cache signing key, no durable state root mount, no host
-  `/nix/store` mount, and no host Nix daemon socket as part of project-cache
-  integration [system](test-ci:test-services-limit-mode-cache-endpoint)
-- With `WRIX_NETWORK=limit`, sandbox Nix can reach exactly the project cache
-  endpoint while unrelated host-local services remain outside the generated
-  allowlist [system](test-ci:test-services-limit-mode-cache-endpoint)
-- The post-build hook drops privileges before publishing, never executes
-  workspace files, and publishes only when `DRV_PATH` matches a configured
-  publish-root derivation in `<state-root>/publish-roots.json`
-  [test](../crates/wrix-cache/tests/hook.rs::post_build_hook_scopes_publish_to_manifest_roots)
-- A failed publisher ownership switch prevents any publisher execution
-  [test](../crates/wrix-cache/tests/hook.rs::post_build_hook_never_publishes_when_owner_switch_fails)
-- `wrix service cache publish` refreshes the publish manifest, publishes only
-  already-realized configured roots, drains matching pending records, updates GC
-  markers, and does not build missing roots
-  [test](../crates/wrix-cache/tests/publisher.rs::publish_realized_roots_drains_pending_and_updates_gc_markers)
-- `wrix service cache warm` builds default warm roots (packages plus selected
-  devShell), excludes checks by default, includes checks with `--checks`, then
-  publishes and prunes
-  [test](../crates/wrix-cache/tests/publisher.rs::warm_roots_include_checks_only_when_requested)
-- Publishing copies only paths reachable from configured current-workspace flake
-  roots, subtracts paths already available from upstream substituters, and never
-  publishes an arbitrary host store path outside that scoped closure
-  [test](../crates/wrix-cache/tests/publisher.rs::publish_filters_to_current_workspace_closure)
-- Publishing uses the flat Nix binary-cache layout with signed narinfos and
-  `--no-recursive` copies of the filtered path set
-  [test](../crates/wrix-cache/tests/publisher.rs::publish_uses_flat_signed_cache_with_nonrecursive_copies)
-- Lock contention in the automatic publisher prints a waiting message; lock
-  timeout writes a pending JSON record and warning, and a later explicit publish
-  drains matching pending records
-  [test](../crates/wrix-cache/tests/publisher.rs::lock_timeout_records_pending_and_explicit_publish_drains)
-- Explicit publishing removes markers and unreachable payloads for removed,
-  renamed, excluded, or empty root sets without removing unrelated pending
-  records
-  [test](../crates/wrix-cache/tests/publisher.rs::publishing_reconciles_removed_renamed_excluded_and_empty_root_sets)
-- Marker reconciliation preserves temporarily unrealized current roots and
-  payloads shared with retained roots
-  [test](../crates/wrix-cache/tests/publisher.rs::reconciliation_preserves_unrealized_roots_and_shared_payloads)
-- Warming a subset keeps the full publish manifest and retains configured check
-  roots, while respecting publish exclusions
-  [test](../crates/wrix-cache/tests/publisher.rs::warm_subsets_preserve_full_publish_manifest_and_check_retention)
-- Automatic publishing does not remove unrelated root markers
-  [test](../crates/wrix-cache/tests/publisher.rs::automatic_publish_does_not_reconcile_other_root_markers)
-- Updating a root to a new output replaces that root's GC marker and prunes
-  cache entries no longer reachable from any marker on explicit
-  prune/publish/warm, so repeated publishes do not grow the cache indefinitely
-  [test](../crates/wrix-cache/tests/publisher.rs::prune_keeps_only_paths_reachable_from_current_markers)
-- `wrix service cache rotate-key` invalidates the local cache, generates a new
-  keypair, updates metadata, and requires republishing rather than trusting old
-  and new keys simultaneously
-  [test](../crates/wrix-cache/tests/publisher.rs::rotate_key_invalidates_cache_and_replaces_trust_root)
-- `wrix service cache status` reports cache size and warns above the default 50
-  GiB soft threshold without deleting reachable entries solely to satisfy that
-  threshold
-  [test](../crates/wrix-cache/tests/publisher.rs::status_warns_above_soft_size_without_pruning)
-- Cache status reports pending work, previous publish/prune results, errors, and
-  endpoints without changing those records
-  [test](../crates/wrix-cache/tests/publisher.rs::status_reports_pending_work_and_previous_results_without_mutation)
-- The container-facing cache transport is HTTP only; wrix does not configure
-  Unix-socket cache substituters, host Nix daemon sockets, shared mutable
-  `/nix/store`, or host-store-serving tools for sandbox cache reads
-  [check](verify:services.cache-transport-http-only)
+
+- The shared service starts its registered proxy/Dolt/cache components under
+  intentional-stop-aware supervision
+  [test?](../crates/wrix-cli/tests/host_service.rs::shared_components_have_intentional_stop_aware_supervision)
+
+- Unexpected active-component exit fails the shared container; intentional
+  retirement of one namespace does not terminate other namespaces
+  [test?](../crates/wrix-service/tests/host_service.rs::unexpected_component_exit_fails_shared_service)
+
+- Cache HTTP and fallback Dolt TCP host ports use their deterministic workspace
+  ranges; busy-port fallback is persisted/reused while available, and inability
+  to bind loopback-only causes startup failure.
+  [test?](../crates/wrix-service/tests/host_service.rs::workspace_port_leases_are_scoped_persisted_and_loopback_only)
+
+- Two independent workspaces share one host-user container without replacing it
+  when a new workspace registers; their workspace control roots/endpoints remain
+  distinct.
+  [test?](../crates/wrix-cli/tests/host_service.rs::new_workspace_registers_without_container_replacement)
+- Linux and Darwin managed Dolt/Celler data is narrowly mounted, including
+  delegated cache-signing state, while host publishing/issuer/control roots,
+  manifests and arbitrary host trees remain unmounted.
+  [test?](../crates/wrix-cli/tests/host_service.rs::shared_mounts_separate_service_data_from_private_authority)
+- Workspace information and stop/logs/endpoints select one workspace, preserving
+  peer/common availability on stop. Information/stop with `--host` select shared
+  infrastructure independently of repository context.
+  [test?](../crates/wrix-cli/tests/host_service.rs::workspace_and_host_operations_have_distinct_scope)
+- Workspace and host information do not register namespaces, create managed
+  state, install images, start/repair services or issue grants when absent,
+  stopped or running.
+  [test?](../crates/wrix-service/tests/host_service.rs::scoped_information_never_provisions_or_mutates)
+- Shell exit does not kill shared infrastructure, scratch cache-only
+  registration is suppressed, and restricted launches ensure proxy availability
+  even with Beads/cache disabled.
+  [test?](../crates/wrix-cli/tests/host_service.rs::shared_startup_tracks_required_features_not_shell_lifetime)
+- Invalid or concurrent registrations do not overwrite peer namespace state.
+  [test?](../crates/wrix-service/tests/host_service.rs::namespace_registration_is_atomic_and_isolated)
+- The packaged service image cohosts the proxy, Dolt and Celler through the
+  existing image-source/install contract, without a host-native cache daemon.
+  [system?](test-ci:test-services-host-image)
+- Ordinary tenant SQL/file/cache/proxy interfaces deny access to peer SQL
+  data/file remotes, unauthorized cache views and management authority, and
+  cannot be used as unfiltered network/filesystem deputies. Delegated compiler
+  execution follows the separate shared-service trust boundary.
+  [system?](test-ci:test-services-host-tenancy)
+- Cache endpoint publication includes only the private/common views authorized
+  by host management, never implicit access to peer private caches.
+  [test?](../crates/wrix-service/tests/host_service.rs::cache_endpoints_publish_only_host_authorized_views)
+- Live sandbox service integration exposes through direct mounts and ordinary
+  endpoint/credential delivery only authorized namespace/cache read scope and
+  its narrow sync-worktree view, never all-workspace roots, Celler signing state
+  or host publishing/management authority.
+  [system?](test-ci:test-services-host-sandbox-isolation)
+
+### GC Scope Acceptance
+
+- Maintenance-access waiting defaults to 30 seconds per collection unit, not a
+  whole-command or running-GC time limit.
+  [test?](../crates/wrix-service/tests/host_service.rs::gc_access_wait_defaults_to_thirty_seconds)
+- An explicit `--wait` supplies each selected unit's acquisition budget only for
+  that invocation; later invocations use the default, unaffected by prior runs
+  or workspace/cache-policy overrides.
+  [test?](../crates/wrix-service/tests/host_service.rs::gc_wait_override_is_per_invocation_not_workspace_policy)
+- Zero wait attempts maintenance access once immediately: available units still
+  collect normally, while busy units are incomplete without waiting and other
+  independently safe units continue.
+  [test?](../crates/wrix-service/tests/host_service.rs::gc_zero_wait_attempts_once_without_skipping_free_units)
+- Busy required maintenance access uses one finite waiting budget per collection
+  unit; retries do not restart the deadline, and timely acquisition permits
+  normal collection after safety checks.
+  [test?](../crates/wrix-service/tests/host_service.rs::gc_waits_for_access_with_one_finite_unit_budget)
+- Contention timeout reports the affected unit incomplete, without lock bypass,
+  lock stealing or stopping peer work/services, and independently safe work
+  continues under the final nonzero failure policy.
+  [test?](../crates/wrix-service/tests/host_service.rs::gc_access_timeout_preserves_locks_and_continues_safe_work)
+- GC does not start/provision stopped or absent infrastructure, reactivate
+  namespaces, install service images, repair/replace services or launch a
+  substitute maintenance container to make collection possible.
+  [test?](../crates/wrix-service/tests/host_service.rs::gc_does_not_start_or_prepare_unavailable_services)
+- Required data units with unavailable backends are reported as incomplete,
+  without dispatching their collection or treating unknown state as empty.
+  [test?](../crates/wrix-service/tests/host_service.rs::gc_reports_unavailable_data_units_without_collecting)
+- With unavailable data services and an accessible image runtime, `gc all` still
+  attempts safe image collection and returns nonzero with both kinds of results.
+  [test?](../crates/wrix-service/tests/host_service.rs::gc_all_still_attempts_images_when_data_services_unavailable)
+- A positively established empty/inapplicable data scope succeeds as a no-op
+  without provisioning infrastructure.
+  [test?](../crates/wrix-service/tests/host_service.rs::gc_known_empty_scope_is_noop_without_provisioning)
+- A collection-unit failure does not suppress remaining independently safe
+  requested work across workspaces/backends/images, including combined GC.
+  [test?](../crates/wrix-service/tests/host_service.rs::gc_continues_independently_safe_units_after_failure)
+- Failed checks/shared prerequisites prevent affected work without authorizing
+  unsafe deletion or disabling independent units; existing service supervision
+  and valid grants are not weakened to continue GC.
+  [test?](../crates/wrix-service/tests/host_service.rs::gc_failures_preserve_safety_and_dependency_boundaries)
+- Invalid arguments or untrusted/ambiguous invocation scope prevent all deletion
+  rather than allowing a partial run against guessed targets.
+  [test?](../crates/wrix-service/tests/host_service.rs::gc_invalid_invocation_scope_prevents_deletion)
+- Final GC reporting includes all observed failures and completed work without
+  rollback promises or hiding earlier failures behind the last error.
+  [test?](../crates/wrix-cli/tests/host_service.rs::gc_reports_completed_work_and_all_failures_at_end)
+- GC returns nonzero for failed/incomplete work and distinguishes ordinary
+  protected/empty collection from failure.
+  [test?](../crates/wrix-cli/tests/host_service.rs::gc_exit_status_reflects_failed_or_incomplete_work)
+- Host GC collects only data; `gc all` combines host-user-wide data collection
+  with the same protected Wrix-image collector as image-only GC, independent of
+  cwd and without widening retention, ownership or deletion authority.
+  [test?](../crates/wrix-service/tests/host_service.rs::gc_all_combines_host_data_and_same_image_collector)
+- Dolt collection selects the authorized workspace database and requests its
+  native full collection through the already-running service, not
+  default/shallow collection or direct filesystem maintenance.
+  [test?](../crates/wrix-service/tests/host_service.rs::dolt_gc_requests_full_collection_in_selected_database)
+- Real scoped Dolt full collection reclaims unreferenced objects from both old
+  and new generations while keeping issue data and reachable history usable.
+  [system?](test-ci:test-services-gc-data)
+- Real host-wide native Celler collection expires eligible private/common
+  entries even for current targets, preserves unexpired/native in-flight data
+  and valid signing keys, and does not remove host store paths, volumes or
+  credentials. [system?](test-ci:test-services-gc-data)
+- Workspace GC selects only its canonical Dolt database, including Loom's outer
+  repository identity, without collecting peer data or dispatching/probing
+  Celler.
+  [test?](../crates/wrix-service/tests/host_service.rs::workspace_gc_is_dolt_only_and_namespace_scoped)
+- Host/all GC invokes one host-user-wide native Celler cycle, not per-workspace
+  filtering or repeated cache collection for each database.
+  [test?](../crates/wrix-service/tests/host_service.rs::celler_gc_runs_once_only_in_host_or_all_scope)
+- Celler storage/collection errors and incomplete native execution yield failed
+  work even when a backend entry point would otherwise hide an internal error;
+  completed batches are not reported as an exhaustive drain.
+  [test?](../crates/wrix-service/tests/host_service.rs::native_celler_gc_outcomes_are_truthful_and_batch_bounded)
+- Host GC enumerates this host user's managed namespaces independently of the
+  current repository, never another user's managed service roots.
+  [test?](../crates/wrix-service/tests/host_service.rs::host_gc_is_repository_independent_and_host_user_scoped)
+- GC preserves unexpired shared-view/native in-flight data and valid proxy
+  grants instead of treating deduplication, shutdown or rotation as deletion
+  authority.
+  [test?](../crates/wrix-service/tests/host_service.rs::gc_preserves_unexpired_inflight_data_and_valid_grants)
+
+### Compatibility Acceptance
+
+- Compatible running host infrastructure is reused without runtime removal,
+  recreation or image installation.
+  [test?](../crates/wrix-cli/tests/host_service.rs::compatible_shared_service_is_reused)
+- Service start and both launch modes reject incompatible/unverifiable running
+  infrastructure without changing managed data, endpoints or peer proxy grants.
+  [test?](../crates/wrix-cli/tests/host_service.rs::workspace_start_rejects_incompatible_service_without_mutation)
+- Packaged devshell startup propagates incompatibility instead of silently
+  replacing shared infrastructure.
+  [system?](test-ci:test-services-nondisruptive-startup)
+- Explicit host stop followed by startup may create the selected service while
+  preserving managed databases, Celler cache data/valid signing keys and
+  host-private publishing/management authority.
+  [test?](../crates/wrix-cli/tests/host_service.rs::explicit_host_replacement_preserves_managed_workspace_state)
+- Missing or fully stopped services can initialize normally; stopping only a
+  workspace does not authorize replacement of an incompatible running service.
+  [test?](../crates/wrix-cli/tests/host_service.rs::workspace_stop_is_not_host_replacement_authorization)
 
 ## Requirements
 
+Acceptance: [Host Service Acceptance](#host-service-acceptance),
+[GC Scope Acceptance](#gc-scope-acceptance),
+[Compiler Service Acceptance](#compiler-service-acceptance) and
+[Compatibility Acceptance](#compatibility-acceptance).
+
 ### Functional
 
-1. **Workspace identity** — services are keyed by the canonical repository root
-   for paths inside a Git checkout, and by the canonical current path otherwise.
-   Container names use `<repo>-service`; ports and state/cache roots derive from
-   the identity path hash. Loom-managed paths under `.loom/` use the outer
-   repository identity.
-2. **Service operations** — the service command group provides lifecycle,
-   diagnostics, Dolt endpoint maintenance, and project-cache operations.
-   Separable internals are proper Rust crates and helper binaries.
-3. **Lifecycle management** — `wrix service start` is idempotent and
-   caller-independent; `stop`, `status`, `logs`, and endpoint queries operate on
-   the selected workspace only. Cache-only starts in temp-directory scratch
-   workspaces are no-ops rather than persistent service containers.
-4. **Service image source** — `wrix service start` installs the selected service
-   image through the shared runtime image installer. `image-builder.md` owns
-   source metadata and labels; `sandbox.md` owns install dispatch and image
-   retention.
-5. **Dolt hosting** — when the Beads-owned workspace database exists, the
-   service container runs its Dolt SQL server and publishes the endpoint in the
-   shape `beads.md` expects.
-6. **Cache enablement** — `mkDevShell` enables the standard project cache by
-   default; repository `cache.enable = false`, explicit `nixCache = false`, or
-   `service --no-cache` disables integration according to policy precedence.
-7. **Host cache pull** — enabled host devshells configure Nix to use
-   `file://<cache-root>` plus the generated public key and
-   `builders-use-substitutes = true`.
-8. **Host cache push** — successful host builds of manifest-matching workspace
-   roots publish the filtered path set into the project cache with the host-only
-   signing key.
-9. **Sandbox cache pull** — `wrix run` and `wrix spawn` pass the resolved
-   project cache HTTP endpoint and public key into the container so in-container
-   Nix substitutes from the cache before building.
-10. **No sandbox cache push** — containers do not receive the signing key or
-    write-capable cache endpoint. Container publishing is out of scope for v1.
-11. **Project-scoped publishing** — publishing starts from configured
-    current-workspace flake roots and subtracts upstream-substitutable paths
-    before copying. The host store is never scanned as a source of publish
-    candidates.
-12. **Bounded retention** — root markers, explicit prune, dirty/stale startup
-    prune, pending TTL, and key rotation keep cache state bounded and
-    explainable.
-13. **HTTP-only sandbox reads** — sandbox-facing cache reads use HTTP. Unix
-    sockets, host Nix daemon sockets, shared mutable `/nix/store` volumes, and
-    host-store-serving caches are excluded.
+1. **Host and workspace identity** — one container belongs to the host user;
+   namespaces follow [Architecture](#architecture) without data/access/port/lock
+   collisions.
+2. **Service operations** — lifecycle and Dolt operations follow
+   [Service Operations](#service-operations); explicit collection scope follows
+   [Garbage Collection Scope](#garbage-collection-scope),
+   [GC Availability](#gc-availability) and [GC Contention](#gc-contention).
+   Cache semantics belong to `cache.md`.
+3. **Lifecycle management** — shared creation, namespace registration, read-only
+   information and scoped stop follow [Lifecycle](#lifecycle), independently of
+   caller lifetime.
+4. **Compatibility and replacement** — reuse, failure and explicit host
+   replacement follow
+   [Compatibility and Replacement](#compatibility-and-replacement).
+5. **Service image source** — creation uses the shared installer described in
+   [Service Image Source](#service-image-source), not a service-specific path.
+6. **Endpoint publication** — selected-workspace SQL and cache access follow
+   [Dolt Service](#dolt-service) and [Cache Endpoints](#cache-endpoints).
+7. **Shared compiler** — admitted job context, the single native cache budget,
+   lifecycle and trust boundary follow
+   [Shared Compiler Service](#shared-compiler-service).
 
 ### Non-Functional
 
-1. **Project isolation** — each service identity path has an independent service
-   container, state root, cache root, signing key, port leases, and retention
-   marker set.
-2. **Host-store isolation** — sandboxes can substitute signed project-cache
-   narinfos, but they cannot read the host `/nix/store`, talk to the host Nix
-   daemon, or mount durable cache state.
-3. **Local-first operation** — the project cache is local to the developer
-   machine by default. Hosted binary caches are optional upstreams, not required
-   for the wrix-managed cache.
-4. **Bounded growth** — cache size is governed by current root markers, pending
-   TTL, and pruning rather than session count or historical build count; 50 GiB
-   is a default warning threshold, not a hard cap.
-5. **Fail-loud trust configuration** — when host Nix cannot honor required cache
-   settings because system trust is missing, wrix reports that fact instead of
-   pretending host pull/push is active.
-6. **No DNS dependency** — sandbox cache access is through a launcher-injected
-   resolved endpoint, not a container-name DNS convention.
+1. **Logical project isolation** — host-private authority, delegated Celler
+   signing state and service-visible tenant views follow
+   [State Layout](#state-layout); cohosting is not independent container-level
+   compromise/fault isolation.
+2. **Host-store isolation** — no broad host filesystem, store or daemon mounts
+   follow [State Layout](#state-layout).
+3. **Caller independence** — infrastructure persists until explicit host stop,
+   as defined by [Lifecycle](#lifecycle).
+4. **Fail-fast supervision** — unexpected component failure versus intentional
+   namespace retirement follows [Cache Endpoints](#cache-endpoints).
 
 ## Out of Scope
 
-- A singleton per-host service container. Per-workspace containers remain the
-  isolation model for this version.
-- Host-store-backed sandbox cache designs beyond the project-cache boundary
-  cross-referenced by `security.md`.
-- Hosted cache management (Cachix, Attic, niks3, S3, or GHCR). They may be
-  user-configured upstream substituters, but wrix's project cache is local.
-- Direct remote-builder access to the local project cache. Remote-built outputs
-  may be published after they are available in the host store.
-- Sandboxed cache publishing or host-validated promotion. Sandboxes are
-  read-only cache consumers in v1.
-- Non-Nix build artefacts such as `target/`, cargo registry/git caches, sccache
-  objects, Python virtualenvs, or uv caches. Those remain profile/tool-specific
-  cache surfaces.
+- An invasive sccache fork or replacement of its native compiler/cache
+  semantics, a shared worker-runtime migration, or a custom dynamic mount broker
+  solely to make compiler delegation work. Thin transport/path adapters are
+  allowed within the existing host/worker/service boundaries; inability to
+  satisfy those boundaries calls for a new design decision, not silent scope
+  expansion.
+
+- Machine-wide multi-user hosting, unpartitioned global Beads trust, implicit
+  union of private cache views/keys, and broad host-home or repository-tree
+  mounts. The approved common dependency audience belongs to `cache.md`.
+- Per-workspace Celler collection and sharing-group management/publication;
+  cache eviction is native and manual collection is host-wide.
+- Moving full worker runtimes into this service container or adopting a shared
+  containerd/nix-snapshotter execution appliance. That runtime migration is
+  deferred; explicitly delegated compiler jobs are the separate agreed
+  exception.
+- Independent container-level compromise/fault isolation between cohosted
+  service components or workspace tenants.
+- Host-native Dolt and host OS account/module provisioning for a native Dolt
+  daemon. Moving only Dolt does not eliminate the proxy's service container and
+  would add a separate privileged setup and lifecycle.
+- Automatic replacement/upgrade of a running host service from an ordinary
+  workspace startup; explicit host shutdown is required first.
+- Automatic idle shutdown, background execution reconciliation or recovery of
+  agent work; host-wide shutdown is explicit.
+- Cache contents, transport/signing/publication/retention and cache exclusions
+  beyond hosting/namespace/endpoint duties; those belong to `cache.md`.

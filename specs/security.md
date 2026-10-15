@@ -10,11 +10,11 @@ AI coding agents running inside wrix sandboxes may receive repository deploy
 keys, commit signing keys, and agent API credentials, reach network destinations
 governed by wrix's `open` / `limit` egress policy, and produce session artefacts
 the operator can later inspect. The per-component specs (`sandbox.md`,
-`image-builder.md`, `linux-builder.md`, `profiles.md`) own the _mechanics_ of
-each surface; this spec owns the cross-cutting _trust model_ that ties them
-together — what the threat is, why each mitigation is fit for that threat, and
-which invariants must hold across components. Component-specific facts are
-cross-referenced, not duplicated.
+`proxy.md`, `services.md`, `cache.md`, `image-builder.md`, `linux-builder.md`,
+`profiles.md`) own the _mechanics_ of each surface; this spec owns the
+cross-cutting _trust model_ that ties them together — what the threat is, why
+each mitigation is fit for that threat, and which invariants must hold across
+components. Component-specific facts are cross-referenced, not duplicated.
 
 ## Architecture
 
@@ -44,11 +44,109 @@ not adversarial_ — one that does not deliberately hide its actions from the
 transcript. An adversarial-agent model (agent attempts to evade its own logging)
 is a different problem class and out of scope.
 
+### Shared Service Trust Boundary
+
+Acceptance:
+[Shared Service and Proxy Trust Acceptance](#shared-service-and-proxy-trust-acceptance).
+
+The host-user service is trusted infrastructure, not an agent sandbox.
+`services.md` owns workspace namespace isolation and private-authority
+separation; `proxy.md` owns per-launch traffic grants and host-management
+separation. Logical tenancy limits ordinary client access but does not preserve
+the compromise/fault isolation of separate service containers. A compromised
+cohosted component can affect shared service-visible state and policy, including
+Celler's delegated cache-signing authority under
+[Cache Authority](cache.md#cache-authority). That authority is inside the shared
+compromise boundary, not a host-private key protected from its components. The
+shared sccache daemon also intentionally executes eligible worker compiler jobs
+here, including procedural macros. These jobs participate in that trust boundary
+rather than receiving compiler-only isolation: they can affect service-visible
+Dolt/proxy/Celler state and signing authority without a worker sandbox escape.
+This can undermine host-cache integrity even though direct worker Nix uploads
+remain disabled. Removing personal-host cache sharing is not a claim of strictly
+stronger isolation in every dimension. Host publishing/management credential
+files, issuer private keys and authoritative manifests remain outside its
+mounts. Authorized requests cross the service boundary, so a service compromise
+may observe their scoped runtime credentials; unmounted files do not imply
+runtime credential isolation. General host filesystem access and the host Nix
+daemon remain excluded.
+
+Service, cache and proxy client credentials authorize only their declared scope.
+They are runtime delivery, not provider credentials or permission to manage the
+host service. Their confidentiality boundary follows the component contracts;
+traffic/pull credentials are not host-management, cache-signing or publishing
+authority. Sandbox cache access does not require granting an agent
+root-equivalent trusted-user authority over the host or any shared Nix daemon.
+
+[Cache Visibility](cache.md#cache-visibility) authorizes the common
+approved-public dependency view and the client's own canonical private
+repository view, not an implicit union of private data or a sharing-group
+service. Host management is the view and publication-audience authority: unlike
+mutable repository Git policy, repository edits or agent configuration cannot
+broaden cache access. Physical deduplication and knowledge of a private hash are
+not read permissions; approved common reads still import into the client's own
+private store. Cache grants are native bearer capabilities under
+[Native Pull Credentials](cache.md#native-pull-credentials): one day for
+launcher-renewed sandbox tokens and seven days for host-private tokens refreshed
+on activation/`direnv reload`. The host lifetime has a longer residual exposure
+if stolen or after authorization withdrawal. Current policy constrains new
+issuance/renewal, not already-valid tokens; immediate revocation and recall of
+imported data are not promised. Native cache expiry does not revoke or delete
+artifacts already installed in a client's store.
+
+Host cache trust does not extend to direct sandbox uploads. A valid server
+signature on an input-addressed output authenticates accepted bytes, not correct
+execution of the claimed derivation. Sharing a repository does not authorize
+workers to supply host-trusted artifacts or cached build-time check results.
+[Signing and Repair](cache.md#signing-and-repair) keeps any future
+sandbox-upload views/keys separate from Wrix host trust; current workers remain
+pull-only.
+
+[Tool Cache Data Boundary](profiles.md#tool-cache-data-boundary) also separates
+built-in sandbox Cargo registry/git, sccache and uv data from personal host
+caches: no default bind, prewarm copy or write-back. This prevents those
+defaults from reintroducing a host/agent data bridge independently of Celler.
+[Shared Tool Cache Modes](profiles.md#shared-and-private-tool-cache-modes)
+deliberately accept one cross-repository worker cache trust domain when sharing
+is enabled, even across different credential grants. Private cached sources and
+compiled contents may be read or influenced by peers; locks/checksums do not
+supply repository authorization or build attestation. Runtime credential files
+and host/service management authority are not shared cache backing.
+
+The coarse opt-out keeps all applicable tool caches fresh and private for that
+launch without pool reads/writes/prewarms or host fallback. It neither recalls
+previously shared contents nor sanitizes arbitrary workspace data or explicit
+caller mounts. Selective-source privacy and tracking private code into compiled
+cache outputs are deferred. Ordinary Celler API audiences and host trust
+configuration remain unchanged; this is not a worker Nix-upload feature. Private
+tool mode does not protect Celler-private data or other service state against
+code already executing in the privileged shared compiler boundary.
+
+Tool-cache sharing can be remembered in repository `wrix.toml` or selected for
+one launch. Explicit launch selection wins in both directions, including
+enabling sharing over a private repository default; an invocation does not
+rewrite that policy. As with other trusted repository launch input, workspace
+writers can change future inherited choices. This is not an immutable
+host-enforced privacy restriction, an extra environment policy channel or a
+change to Celler authority.
+
+Full agent/Cargo runtimes remain in their existing worker boundaries; selected
+compiler work is the explicit service-side exception under
+[Shared Rust Compiler](profiles.md#shared-rust-compiler-service). Its CPU/memory
+use belongs to the service runtime budget, not automatically the worker's
+limits. Restricted Rust requires private/local tool caches and receives no
+shared compiler execution route; this prevents its own compiler code bypassing
+the worker's network policy. Proxy guarantees still assume the shared service is
+trusted, not compromised by another cohosted compiler job. No shared parent Nix
+daemon/store or containerd/nix-snapshotter worker migration is introduced.
+
 ### Credential Surfaces
 
-The credentials crossing the host-container boundary are the deploy key, the
-signing key, and the agent's API credentials (claude's OAuth token, or a
-non-claude agent's provider API key / auth file).
+The agent credential surfaces include the deploy key, the commit signing key,
+and the agent's API credentials (claude's OAuth token, or a non-claude agent's
+provider API key / auth file). Scoped infrastructure credentials follow
+[Shared Service Trust Boundary](#shared-service-trust-boundary); cache signing
+state is not an agent credential.
 
 #### Deploy & Signing Keys
 
@@ -106,12 +204,12 @@ invariant is that the selected host source path never crosses the boundary and
 every launch applies that same delivery contract, which makes nested wrix
 launches recursively composable.
 
-**Host and repository Git bootstrap.** `cli.md` owns the `wrix init` command
-that applies repo-local Git config for host shells, devshells, containers, and
-Loom clones when invoked in each repository. The security invariant is that
-Wrix-managed Git transport uses only the context-resolved deploy key:
-`WRIX_DEPLOY_KEY` when the launcher supplied an in-container path, or
-`$HOME/.ssh/deploy_keys/<name>` on the host. If neither exists, the operation
+**Host and repository Git bootstrap.** `cli.md` owns the `wrix init repo`
+command that applies repo-local Git config for host shells, devshells,
+containers, and Loom clones when invoked in each repository. The security
+invariant is that Wrix-managed Git transport uses only the context-resolved
+deploy key: `WRIX_DEPLOY_KEY` when the launcher supplied an in-container path,
+or `$HOME/.ssh/deploy_keys/<name>` on the host. If neither exists, the operation
 fails instead of trying the user's default SSH identities, SSH agent keys, or
 `~/.ssh/config` identities.
 
@@ -246,14 +344,22 @@ The **base allowlist** every profile inherits for `limit` mode is enumerated by
 base-allowlist entry must either pair with a specific credential (the exfil risk
 is accepted for the agent autonomy that credential enables) or be credentialless
 (the exfil risk is bounded by what an anonymous request can leak). The
-entry-to-domain mapping stays in `profiles.md` so the allowlist has a single
+entry-to-host/port mapping stays in `profiles.md` so the allowlist has a single
 source of truth.
 
 Per-profile additions must satisfy the same rubric and are owned by
-`profiles.md`. Network mechanics (`open` vs `limit`, in-sandbox firewall setup,
-exact local endpoint exceptions, DNS exceptions, one-time startup domain
-resolution, IPv6 policy, and fail-closed `capsh` capability drop) are owned by
-`sandbox.md`. Darwin host `pf` is not part of the sandbox network contract.
+`profiles.md`. Network modes, guest firewall, exact local endpoints, IPv6 policy
+and fail-closed capability drop belong to `sandbox.md`; authenticated restricted
+egress and request-time DNS/connect admission belong to `proxy.md`. Darwin host
+`pf` is not part of the sandbox contract.
+
+Acceptance:
+[Shared Service and Proxy Trust Acceptance](#shared-service-and-proxy-trust-acceptance).
+
+Without TLS inspection, proxy authority admission is not enforcement of
+encrypted application identity or content. Allowlist membership accepts the
+remaining leakage risk, including approved-service exfiltration and shared-IP
+virtual hosting; it does not promise an exfiltration-proof environment.
 
 ### Audit Trail
 
@@ -354,9 +460,11 @@ section is a reference index only.
 
 - **Boundary class and network mechanics** — `sandbox.md`
 - **Base and per-profile network allowlists** — `profiles.md`
+- **Restricted proxy admission and TLS limits** — `proxy.md`
+- **Host-user service tenancy and managed data** — `services.md`
 - **In-container Nix build policy** — `image-builder.md`
 - **Builder credentials and trust** — `linux-builder.md`
-- **Project Nix cache boundary** — `services.md`
+- **Project Nix cache boundary** — `cache.md`
 - **Host repository Git bootstrap** — `cli.md`
 - **Unsafe host container-runtime control** — `sandbox.md`
 
@@ -441,12 +549,14 @@ section is a reference index only.
 - Host provider credentials declared through `runtimeSecrets` reach the selected
   runtime while `ProfileConfig` and assembled image content contain no secret
   values [system](test-ci:test-security-provider-credential-env)
-- Launcher dry-run output identifies built-in provider credential env names but
-  redacts their values
-  [test](../crates/wrix-sandbox/tests/launch.rs::host_provider_credentials_reach_run_environment)
-- A custom provider name declared through `runtimeSecrets` resolves from the
-  host environment and is redacted in launcher dry-run output
-  [test](../crates/wrix-sandbox/tests/launch.rs::declared_custom_runtime_secret_reaches_run_environment)
+- Production `run --dry-run` human and JSON reports identify built-in provider
+  credential names without exposing their environment values in reports or
+  diagnostics.
+  [test?](../crates/wrix-cli/tests/preflight.rs::dry_run_redacts_builtin_provider_credentials)
+- Production `run --dry-run` resolves a custom `runtimeSecrets` declaration from
+  the host environment and reports its name/availability without exposing its
+  value in either rendering or diagnostics.
+  [test?](../crates/wrix-cli/tests/preflight.rs::dry_run_redacts_custom_runtime_secrets)
 - A missing `"required"` runtime-secret source fails before the container starts
   [test](../crates/wrix-sandbox/tests/launch.rs::required_runtime_secret_fails_before_container_start)
 - `profile.env`, `profile.hostEnv`, `mkSandbox.env`, and agent-settings env
@@ -457,9 +567,10 @@ section is a reference index only.
   validated identifiers and reject malformed names before launch-plan
   construction
   [test](../crates/wrix-sandbox/tests/spawn_config.rs::invalid_environment_names_fail_before_launch)
-- A declared runtime secret supplied through `SpawnConfig.env` satisfies
-  required-source policy and is redacted in launcher dry-run output
-  [test](../crates/wrix-sandbox/tests/spawn_config.rs::provider_credentials_in_spawn_config_are_redacted)
+- Production `spawn --dry-run` recognizes a declared runtime secret supplied
+  through `SpawnConfig.env` as satisfying required-source policy without
+  exposing its value in human/JSON reports or diagnostics.
+  [test?](../crates/wrix-cli/tests/preflight.rs::spawn_dry_run_redacts_declared_secret_overrides)
 - Both platforms expose only durable Pi credential storage, preserve completed
   writes before exit, share refreshes across overlapping containers and
   repositories, and retain credentials after killed launchers and restarts.
@@ -482,6 +593,37 @@ section is a reference index only.
   as non-exhaustive evidence without promising intermediate codemode outcomes,
   automatic recovery, or adversarial-agent detection
   [judge](../tests/judges/security-execution.sh#test_execution_and_transcript_evidence_limits)
+
+### Shared Service and Proxy Trust Acceptance
+
+- Security documentation distinguishes namespace authorization from the shared
+  compromise/fault boundary, explicitly places Celler cache-signing authority
+  within that boundary, and separates ordinary traffic/pull delivery from
+  signing/publishing/issuer/host management. It explicitly treats delegated
+  compiler/procedural-macro code as service-trusted execution that can affect
+  service signing/data and host-cache integrity, not compiler-only isolation or
+  a universal security improvement. It distinguishes service versus worker
+  resource budgets, restricted-Rust local compilation and the trusted-service
+  assumption; private tool mode is not protection from privileged service code.
+  [judge?](../tests/judges/security-proxy-trust.md#shared-service-boundary)
+- Cache trust documentation distinguishes the common approved-public audience
+  from canonical private contents, keeps authority outside mutable repository
+  policy/agent requests, and states native one-day sandbox/seven-day host bearer
+  residual exposure after authorization withdrawal, without group-service
+  claims. It also distinguishes signed acceptance from correct build execution
+  and keeps direct sandbox-upload views/keys outside host trust, including
+  within one repository. Built-in tool caches likewise exclude personal-host
+  bind/prewarm/write-back channels while disclosing enabled-mode
+  cross-repository peer-data/artifact trust, the all-cache private opt-out and
+  its no-recall/non-sanitization limits. It does not claim safety for arbitrary
+  caller mounts or selective-source privacy. It treats repository tool-sharing
+  policy as an editable default, with explicit invocation choice taking
+  precedence in both directions without policy writes.
+  [judge?](../tests/judges/security-proxy-trust.md#cache-sharing-authority)
+- The allowlist rubric accepts credential/credentialless leakage risks without
+  claiming encrypted identity/content enforcement or prevention of exfiltration
+  through approved services.
+  [judge?](../tests/judges/security-proxy-trust.md#proxy-enforcement-limits)
 
 ## Requirements
 
@@ -547,8 +689,8 @@ section is a reference index only.
 - **Image signing** and supply-chain verification of pulled artefacts.
 - **Serving the host `/nix/store` to sandboxes** via Harmonia, nix-serve, or
   equivalent host-store-backed binary-cache tools. Wrix's project cache is an
-  explicit cache populated by project-scoped publish rules, not a host-store
-  view.
+  explicit cache with authorized private/common views, not a host-store view.
+  View approval does not itself authorize new population sources.
 - **Multi-tenant sharing** of a sandbox between operators.
 - **Credential brokering or a host-side agent supervisor** — provider
   credentials retain the documented runtime-delivery model; the entire agent
