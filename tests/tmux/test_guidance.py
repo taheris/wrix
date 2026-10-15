@@ -34,7 +34,11 @@ class NativeGuidance(unittest.TestCase):
                     if predicate():
                         return
                     time.sleep(0.05)
-                self.fail("documented workflow did not become ready within five seconds")
+                self.fail(
+                    "documented workflow did not become ready within five seconds\n"
+                    + run('tmux -S "$socket" display-message -p -t "$pane" "command=#{pane_current_command} dead=#{pane_dead} exit=#{pane_dead_status}"')
+                    + run('tmux -S "$socket" capture-pane -p -t "$pane" -S -1000')
+                )
 
             created = run(blocks[0] + '\nprintf "TARGETS=%s %s %s\\n" "$workflow_dir" "$socket" "$pane"')
             directory, socket, pane = created.split("TARGETS=", 1)[1].strip().split()
@@ -55,10 +59,11 @@ class NativeGuidance(unittest.TestCase):
                 self.assertNotIn("literal Enter C-c", output.splitlines())
                 run(literal[2])
                 until(lambda: 'literal Enter C-c' in run('tmux -S "$socket" capture-pane -p -t "$pane"').splitlines())
-                run('tmux -S "$socket" send-keys -t "$pane" -l -- "sleep 100"; tmux -S "$socket" send-keys -t "$pane" Enter')
-                until(lambda: run('tmux -S "$socket" display-message -p -t "$pane" "#{pane_current_command}"').strip() == "sleep")
+                run(r'''tmux -S "$socket" send-keys -t "$pane" -l -- "python3 -c 'import time; print(\"interrupt-ready\", flush=True); time.sleep(100)'"; tmux -S "$socket" send-keys -t "$pane" Enter''')
+                until(lambda: "interrupt-ready" in run('tmux -S "$socket" capture-pane -p -t "$pane"').splitlines())
                 run(literal[3])
-                until(lambda: run('tmux -S "$socket" display-message -p -t "$pane" "#{pane_current_command}"').strip() == "bash")
+                run(r'''tmux -S "$socket" send-keys -t "$pane" -l -- 'printf "interrupt-status=%s\n" "$?"'; tmux -S "$socket" send-keys -t "$pane" Enter''')
+                until(lambda: "interrupt-status=130" in run('tmux -S "$socket" capture-pane -p -t "$pane"').splitlines())
                 run('tmux -S "$socket" new-session -d -s unrelated "sleep 100"')
                 run(blocks[5])
                 self.assertNotEqual(call('tmux -S "$socket" has-session -t "=debug"').returncode, 0)
