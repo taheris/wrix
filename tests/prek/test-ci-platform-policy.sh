@@ -7,20 +7,12 @@ TEST_TMP="$(mktemp -d -t wrix-test-ci-policy.XXXXXX)"
 FAKE_NIX_LOG="$TEST_TMP/fake-nix.log"
 trap 'rm -rf "$TEST_TMP"' EXIT
 
-skip() {
-  local reason="$1"
-
-  echo "SKIP: $reason" >&2
-  exit 77
-}
-
-command -v jq >/dev/null 2>&1 || skip "jq not on PATH"
-
 mkdir -p "$TEST_TMP/bin"
 cat >"$TEST_TMP/bin/nix" <<'SCRIPT'
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >"$WRIX_TEST_CI_FAKE_NIX_LOG"
+exit "${WRIX_TEST_CI_FAKE_NIX_STATUS:-0}"
 SCRIPT
 chmod +x "$TEST_TMP/bin/nix"
 cat >"$TEST_TMP/bin/uname" <<'SCRIPT'
@@ -30,35 +22,36 @@ printf '%s\n' "$WRIX_TEST_CI_FAKE_PLATFORM"
 SCRIPT
 chmod +x "$TEST_TMP/bin/uname"
 
-test_darwin_pre_push_skips_test_ci() {
-  local output="$TEST_TMP/darwin-pre-push.jsonl" status
-
-  if WRIX_PRE_PUSH=1 \
+test_darwin_pre_push_runs_test_ci() {
+  WRIX_PRE_PUSH=1 \
     WRIX_TEST_CI_FAKE_PLATFORM=Darwin \
     WRIX_TEST_CI_FAKE_NIX_LOG="$FAKE_NIX_LOG" \
     PATH="$TEST_TMP/bin:$PATH" \
     "$REPO_ROOT/bin/test-ci-verifiers" \
     test-image-tier-graph \
-    test-image-nix-config >"$output"; then
+    test-image-nix-config
+
+  if [[ "$(<"$FAKE_NIX_LOG")" != "run .#test-ci -- --json test-image-tier-graph test-image-nix-config" ]]; then
+    echo "FAIL: Darwin pre-push did not run every selected test-ci target" >&2
+    return 1
+  fi
+}
+
+test_ci_failure_reaches_pre_push() {
+  local status
+
+  if WRIX_PRE_PUSH=1 \
+    WRIX_TEST_CI_FAKE_PLATFORM=Darwin \
+    WRIX_TEST_CI_FAKE_NIX_STATUS=19 \
+    WRIX_TEST_CI_FAKE_NIX_LOG="$FAKE_NIX_LOG" \
+    PATH="$TEST_TMP/bin:$PATH" \
+    "$REPO_ROOT/bin/test-ci-verifiers" test-image-tier-graph; then
     status=0
   else
     status="$?"
   fi
-  if [[ "$status" -ne 77 ]]; then
-    echo "FAIL: Darwin policy skip exited $status; expected 77" >&2
-    return 1
-  fi
-
-  if [[ -e "$FAKE_NIX_LOG" ]]; then
-    echo "FAIL: Darwin pre-push invoked test-ci: $(<"$FAKE_NIX_LOG")" >&2
-    return 1
-  fi
-  if [[ "$(jq -s 'length' "$output")" -ne 2 ]]; then
-    echo "FAIL: Darwin pre-push did not emit one verdict per test-ci target" >&2
-    return 1
-  fi
-  if ! jq -e -s 'all(.[]; .pass == false and .skipped == true and (.evidence | contains("disabled by default for Darwin pre-push")))' "$output" >/dev/null; then
-    echo "FAIL: Darwin pre-push verdicts do not report the test-ci policy skip" >&2
+  if [[ "$status" -ne 19 ]]; then
+    echo "FAIL: Darwin pre-push suppressed test-ci failure $status; expected 19" >&2
     return 1
   fi
 }
@@ -110,7 +103,10 @@ test_darwin_pre_push_queries_inputs_without_execution_skip() {
 }
 
 failed=0
-if ! test_darwin_pre_push_skips_test_ci; then
+if ! test_darwin_pre_push_runs_test_ci; then
+  failed=$((failed + 1))
+fi
+if ! test_ci_failure_reaches_pre_push; then
   failed=$((failed + 1))
 fi
 if ! test_manual_darwin_keeps_test_ci; then

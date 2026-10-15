@@ -6,21 +6,8 @@ if [[ "$#" -eq 0 ]]; then
   exit 64
 fi
 
-# Discovery does not execute a test, so Darwin's execution-only policy cannot
-# turn a valid metadata response into a skip or suppress protocol errors.
 if [[ "$1" == "--print-inputs" ]]; then
   exec nix run .#test-ci -- "$@"
-fi
-
-platform="$(uname -s)"
-if [[ "$platform" == "Darwin" && "${WRIX_PRE_PUSH:-0}" == "1" ]]; then
-  for target in "$@"; do
-    jq -cn \
-      --arg target "$target" \
-      --arg evidence "policy skip: test-ci is disabled by default for Darwin pre-push" \
-      '{target:$target,pass:false,skipped:true,evidence:$evidence}'
-  done
-  exit 77
 fi
 
 exec nix run .#test-ci -- --json "$@"

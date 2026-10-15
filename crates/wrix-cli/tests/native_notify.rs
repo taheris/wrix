@@ -1,6 +1,6 @@
 use std::{
     fs,
-    path::Path,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
     time::Duration,
@@ -11,11 +11,20 @@ fn launch(root: &Path, name: &str) -> std::io::Result<std::process::Child> {
         .args(["notify", "run", "--", "sh", "-c", "printf '%s' \"${WRIX_FOCUS_TARGET:-}\" > \"$OUTPUT\"; while [ ! -f \"$RELEASE\" ]; do sleep 0.02; done; exit 23"])
         .env("XDG_RUNTIME_DIR", root)
         .env("XDG_DATA_HOME", root)
+        .env("HOME", root)
         .env("OUTPUT", root.join(name))
         .env("RELEASE", root.join(format!("{name}-release")))
         .env("WRIX_FOCUS_TARGET", "untrusted-inherited-target")
         .env_remove("TMUX").env_remove("TMUX_PANE")
         .stdin(Stdio::null()).spawn()
+}
+
+fn sessions(root: &Path) -> PathBuf {
+    if cfg!(target_os = "macos") {
+        root.join(".local/share/wrix/sessions")
+    } else {
+        root.join("wrix/sessions")
+    }
 }
 
 fn target(root: &Path, name: &str) -> std::io::Result<String> {
@@ -43,7 +52,7 @@ fn concurrent_launches_at_shared_origin_have_independent_lifetimes() {
     let one = target(root.path(), "first").unwrap();
     let two = target(root.path(), "second").unwrap();
     assert_ne!(one, two);
-    let sessions = root.path().join("wrix/sessions");
+    let sessions = sessions(root.path());
     for value in [&one, &two] {
         assert!(value.starts_with("native-"));
         let record: serde_json::Value =
@@ -78,6 +87,7 @@ fn registration_failure_still_runs_command_without_inherited_routing() {
         ])
         .env("XDG_RUNTIME_DIR", &blocked)
         .env("XDG_DATA_HOME", &blocked)
+        .env("HOME", &blocked)
         .env("WRIX_FOCUS_TARGET", "inherited")
         .output()
         .unwrap();
@@ -97,13 +107,9 @@ fn spawn_failure_releases_registration() {
         .args(["notify", "run", "--", "/nonexistent/wrix-test-command"])
         .env("XDG_RUNTIME_DIR", root.path())
         .env("XDG_DATA_HOME", root.path())
+        .env("HOME", root.path())
         .output()
         .unwrap();
     assert!(!output.status.success());
-    assert_eq!(
-        fs::read_dir(root.path().join("wrix/sessions"))
-            .unwrap()
-            .count(),
-        0
-    );
+    assert_eq!(fs::read_dir(sessions(root.path())).unwrap().count(), 0);
 }

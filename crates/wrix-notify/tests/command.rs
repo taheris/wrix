@@ -207,24 +207,26 @@ fn executable_help_and_status_codes() {
         Some(2)
     );
     let runtime = tempfile::tempdir().unwrap();
+    let sessions = command::session_directory(Platform::host(), |name| match name {
+        "HOME" | "XDG_RUNTIME_DIR" => Some(runtime.path().as_os_str().to_owned()),
+        _ => None,
+    })
+    .unwrap();
     let output = Command::new(bin)
         .args(["--is-focused", "missing"])
         .env("XDG_RUNTIME_DIR", runtime.path())
         .env("XDG_DATA_HOME", runtime.path())
+        .env("HOME", runtime.path())
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
-    assert!(
-        !runtime
-            .path()
-            .join("wrix/sessions/attention.sqlite")
-            .exists()
-    );
+    assert!(!sessions.join("attention.sqlite").exists());
     assert!(
         Command::new(bin)
             .args(["--enqueue", "missing"])
             .env("XDG_RUNTIME_DIR", runtime.path())
             .env("XDG_DATA_HOME", runtime.path())
+            .env("HOME", runtime.path())
             .output()
             .unwrap()
             .status

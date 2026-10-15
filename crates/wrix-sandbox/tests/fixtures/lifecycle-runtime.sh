@@ -15,7 +15,10 @@ case "${1:-} ${2:-}" in
     fi
     ;;
   'images --format' | 'ps -a') ;;
-  'image list' | 'list --all') printf '%s\n' '[]' ;;
+  'image list')
+    printf '[{"configuration":{"name":"localhost/wrix-test:latest"},"id":"%s"}]\n' "${WRIX_TEST_DIGEST:?}"
+    ;;
+  'list --all') printf '%s\n' '[]' ;;
   tag*) [[ "${2:-}" == "${WRIX_TEST_DIGEST:?}" ]] ;;
   'image tag') [[ "${3:-}" == "${WRIX_TEST_DIGEST:?}" ]] ;;
   'run --rm' | 'service start')

@@ -550,7 +550,8 @@ fn retired_sign_environment_does_not_change_bootstrap_signing() -> TestResult {
                 "bootstrap-test",
             ])
             .arg(helper)
-            .env("HOME", home)
+            .env("HOME", &home)
+            .env("XDG_CONFIG_HOME", home.join(".config"))
             .env("WRIX_SIGNING_KEY", &signing)
             .env_remove("WRIX_DEPLOY_KEY")
             .env("WRIX_GIT_SIGN", retired_sign)
@@ -1206,7 +1207,7 @@ impl GrantFixture {
                 "not private\n",
             )?;
         }
-        for name in ["podman", "container", "route"] {
+        for name in ["podman", "container", "route", "skopeo"] {
             let path = bin.join(name);
             fs::write(
                 &path,

@@ -131,7 +131,7 @@ configuration must not define a divergent set.
 `nix run .#test-ci -- --list`. They keep full image and workspace-build closures
 out of the generic `.#verify` registry. Wrix batches selected `test-ci:` targets
 through `bin/test-ci-verifiers`; during pre-push the runner executes them on
-Linux and reports the configured platform skip on Darwin.
+both Linux and Darwin.
 
 ### Pending modifier
 

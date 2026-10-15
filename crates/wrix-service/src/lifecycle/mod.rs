@@ -2013,6 +2013,8 @@ mod test {
         assert_eq!(plan.beads_sync_branch.as_str(), "team/beads");
         let remote = root
             .path()
+            .canonicalize()
+            .unwrap()
             .join(".git/beads-worktrees/team/beads/.beads/dolt-remote");
         std::fs::create_dir_all(&remote).unwrap();
         std::fs::write(config, "sync-branch: [").unwrap();

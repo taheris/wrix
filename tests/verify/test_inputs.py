@@ -21,7 +21,7 @@ class VerifierInputs(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="wrix-verifier-inputs-")
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.env = dict(os.environ, REPO_ROOT=str(self.root), LOOM_INSIDE="1",
                         GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
         for name in GIT_ENV:

@@ -37,7 +37,15 @@ fn real_bundle_builder_works_without_root_write_privileges() -> TestResult {
         .env("HOME", work.path())
         .env("PATH", "/path-not-set")
         .env("NIX_LOG_FD", "2");
-    drop_root_privileges(&mut command)?;
+    if running_as_root()? {
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::process::CommandExt;
+            command.uid(65534).gid(65534);
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("run this packaging regression as an unprivileged user".into());
+    }
     let result = run_command(&mut command)?;
     assert!(
         result.status.success(),
@@ -65,22 +73,10 @@ fn real_bundle_builder_works_without_root_write_privileges() -> TestResult {
     Ok(())
 }
 
-fn drop_root_privileges(command: &mut Command) -> TestResult {
+fn running_as_root() -> TestResult<bool> {
     let result = run_command(Command::new("id").arg("-u"))?;
     if !result.status.success() {
         return Err(format!("cannot determine test UID: {}", result.stderr).into());
     }
-    if result.stdout.trim() == "0" {
-        #[cfg(target_os = "linux")]
-        {
-            use std::os::unix::process::CommandExt;
-            command.uid(65534).gid(65534);
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            let _ = command;
-            return Err("run this packaging regression as an unprivileged user".into());
-        }
-    }
-    Ok(())
+    Ok(result.stdout.trim() == "0")
 }

@@ -151,7 +151,8 @@ fn request_headers_are_bounded_and_complete() -> TestResult {
         "GET /nix-cache-info HTTP/1.1\r\nX-Large: {}\r\n\r\n",
         "a".repeat(9000)
     );
-    assert!(request(endpoint, &oversized)?.starts_with("HTTP/1.1 431"));
+    let response = request(endpoint, &oversized)?;
+    assert!(response.starts_with("HTTP/1.1 431"), "{response:?}");
     assert!(request(endpoint, "GET /nix-cache-info HTTP/1.1\r\n")?.starts_with("HTTP/1.1 400"));
     Ok(())
 }

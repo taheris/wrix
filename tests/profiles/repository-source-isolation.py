@@ -50,7 +50,7 @@ def perturb(path):
 
 metadata = nix("flake", "metadata", "--json", "--no-write-lock-file", "git+file://" + str(root))
 with tempfile.TemporaryDirectory(prefix="wrix-source-isolation-") as temporary:
-    source = Path(temporary) / "source"
+    source = Path(temporary).resolve() / "source"
     shutil.copytree(metadata["path"], source, symlinks=True)
     original = derivations(source)
     perturb(source / "crates/wrix-cli/tests/arguments.rs")

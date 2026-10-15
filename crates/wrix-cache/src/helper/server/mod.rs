@@ -205,10 +205,9 @@ pub(super) fn parse_cache_target(target: &str) -> Option<&str> {
 }
 
 fn write_headers(output: &mut impl Write, status: &str, length: u64) -> io::Result<()> {
-    write!(
-        output,
-        "HTTP/1.1 {status}\r\nContent-Length: {length}\r\nConnection: close\r\n\r\n"
-    )
+    let headers =
+        format!("HTTP/1.1 {status}\r\nContent-Length: {length}\r\nConnection: close\r\n\r\n");
+    output.write_all(headers.as_bytes())
 }
 
 fn write_missing(output: &mut impl Write, method: Method) -> io::Result<()> {

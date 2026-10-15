@@ -80,7 +80,7 @@ impl Fixture {
         fs::create_dir(self.root.path().join("selected-workspace"))?;
         let bin = self.root.path().join("bin");
         fs::create_dir(&bin)?;
-        for name in ["podman", "container", "route"] {
+        for name in ["podman", "container", "route", "skopeo"] {
             let path = bin.join(name);
             fs::write(&path, include_str!("fixtures/launch-runtime.sh"))?;
             fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
@@ -299,6 +299,7 @@ fn run_launch_options_stop_before_agent_arguments() -> TestResult {
             } else {
                 fixture.workspace.clone()
             };
+            let workspace = workspace.canonicalize()?;
             if separator {
                 command.arg("--");
             }
@@ -316,9 +317,16 @@ fn run_launch_options_stop_before_agent_arguments() -> TestResult {
                 .position(|arg| arg == "localhost/wrix-test:latest")
                 .ok_or("runtime image argument missing")?;
             assert_eq!(&argv[image + 1..], agent_args);
-            assert!(argv[..image].windows(2).any(|pair| {
-                pair[0] == "-v" && pair[1] == format!("{}:/workspace", workspace.display())
-            }));
+            let mounts = argv[..image]
+                .windows(2)
+                .filter(|pair| pair[0] == "-v")
+                .map(|pair| &pair[1])
+                .collect::<Vec<_>>();
+            let source = mounts
+                .iter()
+                .find_map(|mount| mount.strip_suffix(":/workspace"))
+                .ok_or_else(|| format!("workspace mount missing: {mounts:?}"))?;
+            assert_eq!(PathBuf::from(source).canonicalize()?, workspace);
         }
     }
     for (positive, negative) in [
@@ -502,6 +510,17 @@ fn launch_runtime_fixture_conforms_to_inspection_capture_and_failure_contract() 
             let value: Value = serde_json::from_slice(&output.stdout)?;
             assert_eq!(value[0]["digest"], digest);
             assert_eq!(value[0]["id"], digest);
+            let listed = Command::new(&program)
+                .args(["image", "list", "--format", "json"])
+                .env("WRIX_TEST_DIGEST", &digest)
+                .output()?;
+            assert!(listed.status.success());
+            let value: Value = serde_json::from_slice(&listed.stdout)?;
+            assert_eq!(value[0]["id"], digest);
+            assert_eq!(
+                value[0]["configuration"]["name"],
+                "localhost/wrix-test:latest"
+            );
         }
         let args = [
             "run",
@@ -547,6 +566,10 @@ fn launch_runtime_fixture_conforms_to_inspection_capture_and_failure_contract() 
         .output()?;
     assert!(output.status.success());
     assert_eq!(String::from_utf8(output.stdout)?.trim(), "interface: en0");
+    let output = Command::new(fixture.root.path().join("bin/skopeo"))
+        .args(["inspect", "--raw", "docker-archive:/missing/image-source"])
+        .output()?;
+    assert_eq!(output.status.code(), Some(91));
     Ok(())
 }
 

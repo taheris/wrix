@@ -211,7 +211,7 @@ impl Fixture {
     fn launch_command(&self, mode: LaunchCommand, workspace: &Path) -> TestResult<Command> {
         let bin = self.root.path().join("bin");
         fs::create_dir_all(&bin)?;
-        for name in ["podman", "container", "route"] {
+        for name in ["podman", "container", "route", "skopeo"] {
             let path = bin.join(name);
             fs::write(&path, include_str!("fixtures/launch-runtime.sh"))?;
             set_mode(&path, 0o755)?;

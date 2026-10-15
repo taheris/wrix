@@ -191,11 +191,10 @@ use through `skip-if-missing` rather than a wrix-side hook-id skip list.
 
 ### CI result policy
 
-Darwin's pre-push cost-policy skip is not a missing sandbox capability and does
-not count as a verified pass or an authorized worker exemption. Direct CI
-invocations and the separate integration-branch host-test stage retain live
-execution; worker acceptance cannot supply host coverage or a push marker.
-[system](verify:prek.ci-platform-policy)
+Selected CI targets execute during pre-push on both Linux and Darwin. A failed
+check or an unverified skip does not count as a verified pass or an authorized
+worker exemption. Worker acceptance cannot supply host coverage or a push
+marker. [system](verify:prek.ci-platform-policy)
 
 ## Success Criteria
 
@@ -290,9 +289,9 @@ execution; worker acceptance cannot supply host coverage or a push marker.
   [check](verify:prek.ci-only-heavy-checks)
 - Full image realization criteria use `test-ci:<app>` targets instead of the
   generic `verify:` registry [check](verify:prek.ci-only-heavy-checks)
-- Pre-push runs `test-ci:` targets on Linux and reports an unverified policy
-  skip with exit 77 without realizing them on Darwin, while direct Darwin
-  invocation still runs them [system](verify:prek.ci-platform-policy)
+- Pre-push runs every selected `test-ci:` target on Linux and Darwin and
+  propagates failures, using the same runner as direct invocation
+  [system](verify:prek.ci-platform-policy)
 - Positional app names and unknown options to `test-ci` fail before any checks
   or runners execute; named app selection requires `--json`
   [system](verify:prek.ci-batching)
@@ -342,11 +341,9 @@ execution; worker acceptance cannot supply host coverage or a push marker.
 3. **Runtime dependency boundary** — `pre-push-checks` uses Bash and Git before
    handing control to Loom or the wrapped command; `skip-if-missing` uses Bash
    before handing control to the probed or wrapped command.
-4. **Platform-aware pre-push cost** — The pre-push chain is the interactive
-   critical path of `git push`. CI-only realization targets run during Linux
-   pre-push and report a policy skip during Darwin pre-push, where realizing
-   Linux image closures is disproportionately expensive. Direct CI-only
-   invocation still exercises them on Darwin.
+4. **Pre-push coverage** — The pre-push chain runs selected CI-only realization
+   targets on both Linux and Darwin. Remote Nix builders can realize Linux image
+   closures for Darwin callers without removing checks from the push gate.
 
 ## Out of Scope
 

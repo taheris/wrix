@@ -41,7 +41,7 @@ impl Fixture {
         for dir in [&workspace, &bin, &root.path().join("home")] {
             fs::create_dir_all(dir)?;
         }
-        for name in ["podman", "container", "route", "service"] {
+        for name in ["podman", "container", "route", "service", "skopeo"] {
             let path = bin.join(name);
             fs::write(&path, include_str!("../../fixtures/lifecycle-runtime.sh"))?;
             fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
@@ -261,6 +261,7 @@ pub struct Control(BufReader<TcpStream>);
 
 impl Control {
     fn new(stream: TcpStream) -> TestResult<Self> {
+        stream.set_nonblocking(false)?;
         stream.set_read_timeout(Some(PROCESS_TIMEOUT))?;
         stream.set_write_timeout(Some(PROCESS_TIMEOUT))?;
         Ok(Self(BufReader::new(stream)))
@@ -304,7 +305,7 @@ impl Process {
 
     fn cleanup(&mut self) -> io::Result<()> {
         let mut kill = Command::new("kill")
-            .args(["-KILL", &format!("-{}", self.child.id())])
+            .args(["-KILL", "--", &format!("-{}", self.child.id())])
             .spawn()?;
         let kill_status = wait_bounded(&mut kill);
         if kill_status.is_err() {
@@ -388,6 +389,17 @@ fn runtime_fixture_conforms_to_inspection_hold_release_and_status_contract() -> 
                 let value: serde_json::Value = serde_json::from_str(&stdout)?;
                 assert_eq!(value[0]["digest"], digest());
                 assert_eq!(value[0]["id"], digest());
+                let mut list = Command::new(&program);
+                fixture.configure(&mut list, exit_code)?;
+                assert!(
+                    Process::spawn(list.args(["image", "list", "--format", "json"]))?
+                        .finish()?
+                        .success()
+                );
+                let listed: serde_json::Value =
+                    serde_json::from_slice(&fs::read(fixture.root().join("stdout"))?)?;
+                assert_eq!(listed[0]["id"], digest());
+                assert_eq!(listed[0]["configuration"]["name"], IMAGE);
             }
             let mut command = Command::new(&program);
             fixture.configure(&mut command, exit_code)?;
@@ -427,6 +439,18 @@ fn runtime_fixture_conforms_to_inspection_hold_release_and_status_contract() -> 
     assert_eq!(
         fs::read_to_string(fixture.root.path().join("stdout"))?,
         "interface: en0\n"
+    );
+    let mut inspector = Command::new(fixture.root().join("bin/skopeo"));
+    fixture.configure(&mut inspector, 0)?;
+    assert_eq!(
+        Process::spawn(inspector.args([
+            "inspect",
+            "--raw",
+            "docker-archive:/missing/image-source"
+        ]))?
+        .finish()?
+        .code(),
+        Some(91)
     );
     Ok(())
 }
