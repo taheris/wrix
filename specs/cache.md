@@ -1283,17 +1283,17 @@ valid unchanged key through the Celler publication/signing path.
   [test?](../crates/wrix-cache/tests/celler_frontend.rs::read_routes_are_scoped_and_read_only)
 
 - Idle clients cannot block independent production cache requests.
-  [test?](../crates/wrix-cache/tests/celler_frontend.rs::idle_clients_do_not_block_other_requests)
+  [test?](../crates/wrix-cache/tests/celler_frontend.rs::celler_production_idle_clients_do_not_block_other_requests)
 
 - Disconnected/reset clients cannot terminate production read admission.
-  [test?](../crates/wrix-cache/tests/celler_frontend.rs::disconnected_clients_do_not_terminate_service)
+  [test?](../crates/wrix-cache/tests/celler_frontend.rs::celler_production_disconnected_clients_do_not_terminate_service)
 
 - Read admission enforces the 32-request limit and complete headers within 8
   KiB, 32 fields and five seconds.
   [test?](../crates/wrix-cache/tests/celler_frontend.rs::request_admission_and_headers_are_bounded)
 
 - Trickle-fed headers cannot extend the five-second request deadline.
-  [test?](../crates/wrix-cache/tests/celler_frontend.rs::partial_request_deadline_is_not_extended_by_trickling)
+  [test?](../crates/wrix-cache/tests/celler_frontend.rs::celler_production_partial_request_deadline_is_not_extended_by_trickling)
 
 - Production response writes obey 30-second inactivity and five-minute total
   deadlines.
