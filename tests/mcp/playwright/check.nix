@@ -145,7 +145,7 @@ let
     fi
     link_target=$(readlink "$configured")
     case "$link_target" in
-      ${linuxPkgs.playwright-driver.browsers}/chromium-*/chrome-linux/chrome | ${linuxPkgs.playwright-driver.browsers}/chromium-*/chrome-linux64/chrome) ;;
+      ${linuxPkgs.playwright-driver.browsers}/chromium-*/chrome-linux/chrome | ${linuxPkgs.playwright-driver.browsers}/chromium-*/chrome-linux64/chrome | ${linuxPkgs.playwright-driver.browsers}/chromium-*/chrome-linux-arm64/chrome) ;;
       *)
         printf 'Chromium helper link is outside playwright-driver.browsers: %s\n' "$link_target" >&2
         exit 1

@@ -296,6 +296,11 @@ on the Nix daemon inheriting direnv's cache variables. Policy or override
 changes require devshell re-entry to install a matching hook snapshot.
 [test](../crates/wrix-cache/tests/publisher.rs::daemon_publisher_uses_snapshot_without_ambient_config_or_repository_reads)
 
+The workspace state retains GC roots for the installed wrapper and its hook,
+publisher, and interpreter store outputs so garbage collection cannot remove the
+configured post-build hook while the workspace is active.
+[system](verify:services.host-nix-config)
+
 Automatic post-build publishing is scoped by `<state-root>/publish-roots.json`.
 The publisher acts only when `DRV_PATH` matches a configured publish-root
 derivation for this workspace; when it matches, the publisher copies that root's

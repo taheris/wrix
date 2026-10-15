@@ -221,11 +221,19 @@ case "$*" in
     src="${@: -1}"
     store_root="${WRIX_FAKE_NIX_STORE_ROOT:?}"
     out="$store_root/00000000000000000000000000000000-wrix-cache-hook-wrapper"
+    if [[ -d "$out" ]]; then
+      chmod -R u+w "$out"
+    fi
     rm -rf "$out"
     mkdir -p "$store_root"
     cp -R "$src" "$out"
     chmod -R a-w "$out"
     printf '%s\n' "$out"
+    ;;
+  --add-root*)
+    [[ "$#" == 5 && "$3" == --indirect && "$4" == --realise ]]
+    ln -sfn "$5" "$2"
+    printf '%s\n' "$2"
     ;;
   *)
     printf 'unsupported fake nix-store command: %s\n' "$*" >&2
@@ -301,6 +309,8 @@ with_fake_tools() {
   export WRIX_NIX_STORE="$bin_dir/nix-store"
   export WRIX_NIX_STORE_BIN="$bin_dir/nix-store"
   export WRIX_NIX_BIN="$bin_dir/nix"
+  export WRIX_CACHE_HOOK_BIN="$REPO_ROOT/target/debug/wrix-cache-hook"
+  export WRIX_CACHE_PUBLISH_BIN="$REPO_ROOT/target/debug/wrix-cache-publish"
   unset NIX_CONFIG WRIX_FAKE_NIX_IGNORE WRIX_SERVICE_IMAGE WRIX_SERVICE_IMAGE_SOURCE
 }
 
@@ -781,6 +791,8 @@ test_host_nix_configures_cache_and_hook() {
   hook_path="$(printf '%s\n' "$output" | awk -F ' = ' '/post-build-hook/{print $2}')"
   wrapper="$hook_path"
   [[ -x "$wrapper" ]] || { fail "stored hook wrapper is not executable: $wrapper"; return 1; }
+  [[ "$(readlink "$state_root/host-nix-roots/wrapper")" == "${wrapper%/bin/*}" ]] \
+    || { fail "stored hook wrapper has no GC root"; return 1; }
   endpoints="$(cat "$TEST_TMP/endpoints.json")"
   assert_contains "wrapper workspace hash" "$(cat "$wrapper")" "$(json_get "$TEST_TMP/endpoints.json" workspace_hash)" || return 1
   assert_contains "wrapper owner uid" "$(cat "$wrapper")" "--owner-uid \"$(id -u)\"" || return 1
@@ -792,6 +804,21 @@ test_host_nix_configures_cache_and_hook() {
   assert_contains "wrapper snapshot handoff" "$(cat "$wrapper")" '--config "${BASH_SOURCE[0]%/*}/../cache-config.json"' || return 1
   [[ "$(json_get "${wrapper%/*}/../cache-config.json" pending_retention_secs)" == "259200" ]] || { fail "stored snapshot lost repository retention policy"; return 1; }
   assert_contains "endpoint metadata" "$endpoints" "$cache_root" || return 1
+
+  (
+    cd "$workspace"
+    WRIX_SERVICE_BIN="$wrix_bin" \
+      WRIX_CACHE_HOOK_BIN=/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-fixture-hook/bin/wrix-cache-hook \
+      WRIX_CACHE_PUBLISH_BIN=/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-fixture-publisher/bin/wrix-cache-publish \
+      WRIX_BASH_BIN=/nix/store/cccccccccccccccccccccccccccccccc-fixture-bash/bin/bash \
+      bash "$REPO_ROOT/lib/services/host-nix-config.sh"
+  )
+  [[ "$(readlink "$state_root/host-nix-roots/hook")" == /nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-fixture-hook ]] \
+    || { fail "hook runtime has no GC root"; return 1; }
+  [[ "$(readlink "$state_root/host-nix-roots/publisher")" == /nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-fixture-publisher ]] \
+    || { fail "publisher runtime has no GC root"; return 1; }
+  [[ "$(readlink "$state_root/host-nix-roots/bash")" == /nix/store/cccccccccccccccccccccccccccccccc-fixture-bash ]] \
+    || { fail "hook interpreter has no GC root"; return 1; }
 }
 
 test_host_nix_config_fails_when_trusted_setting_ignored() {

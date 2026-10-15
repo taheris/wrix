@@ -141,6 +141,7 @@ let
         if [[ -d "$archive" && -f "$archive/members.json" ]]; then
             mkdir -p "$dest"
             cp -rs "$archive/." "$dest/"
+            ${pkgs.findutils}/bin/find "$dest" -type d -exec chmod u+w {} +
         else
             image_query prepare "$archive" "$dest"
         fi
