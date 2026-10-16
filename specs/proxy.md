@@ -1,7 +1,7 @@
 # Enforced Egress Proxy
 
-Authenticated HTTP/CONNECT admission for restricted sandbox networking, cohosted
-in the shared host-user service container.
+Authenticated HTTP/CONNECT admission for restricted sandbox networking, managed
+within the host-user service deployment.
 
 ## Problem Statement
 
@@ -14,11 +14,11 @@ TLS or claim to prevent exfiltration through approved services.
 
 Acceptance: [Proxy Acceptance](#proxy-acceptance).
 
-`services.md` owns the single host-user container, workspace tenancy, lifecycle
-and managed storage. The proxy is a component of that container, not a separate
-VM per launch or workspace. `sandbox.md` owns `open`/`limit` selection and the
-agent firewall; `profiles.md` owns allowlist membership; `security.md` owns the
-cross-cutting threat and credential model.
+`services.md` owns host-user deployment identity, workspace tenancy, managed
+storage and replaceable container generations. The proxy is shared
+infrastructure, not a separate VM per launch or workspace. `sandbox.md` owns
+`open`/`limit` selection and the agent firewall; `profiles.md` owns allowlist
+membership; `security.md` owns the cross-cutting threat and credential model.
 
 Trusted launchers register immutable effective policies through host management
 and issue scoped per-launch traffic credentials. One proxy serves multiple
@@ -38,6 +38,27 @@ Proxy isolation does not protect those cache keys from a sufficiently privileged
 compromise of the shared service. Shared compiler jobs are deliberately inside
 this service trust boundary, not independently isolated worker processes; proxy
 enforcement assumes that infrastructure remains trusted.
+
+## Proxy Engine
+
+Acceptance: [Proxy Acceptance](#proxy-acceptance) and
+[Grant Ownership Acceptance](#grant-ownership-acceptance).
+
+The Rust proxy embeds Rama as its HTTP forwarding and opaque CONNECT engine.
+Wrix owns launch authentication, immutable host/port policy, the shared
+protected address baseline and connection-owned grant lifecycle. Rama supplies
+protocol handling and transport primitives, not an independent source of policy
+or a second management interface. The general Rama CLI, demo routes and
+client-selected upstream proxy routing are not exposed.
+
+Both HTTP and CONNECT use Wrix-authorized destination selection and checked
+numeric-address dialing. Authentication and policy admission apply to every
+request, including requests that reuse a connection. Connection reuse cannot
+bypass admission, transfer a grant's authority to a peer or prevent independent
+revocation. Cancellation covers pending resolution/connection work, streaming
+HTTP request/response bodies and CONNECT relays, including work still active
+after response headers have been returned. Revocation racing with admission
+cannot establish new authorized traffic for the revoked grant.
 
 ## Destination Admission
 
@@ -74,20 +95,23 @@ Shared-IP virtual hosting and permitted-service exfiltration remain limitations.
 
 Acceptance: [Grant Ownership Acceptance](#grant-ownership-acceptance).
 
-Each launcher owns one authenticated host-only control connection for its
-launch. Registration binds the immutable policy and traffic credential to that
-connection; traffic requests use separate data connections. Neither the agent
-nor runtime subprocesses inherit the control connection or its management
-authority.
+Each launcher owns one authoritative authenticated host-only control connection
+for its launch. Registration binds the immutable policy and traffic credential
+to that live ownership; traffic requests use separate data connections. Neither
+the agent nor runtime subprocesses inherit the control connection or its
+management authority.
 
-When the proxy observes control disconnect, including orderly close, EOF or
-transport failure, it revokes that connection's grant, rejects new requests and
-closes associated HTTP streams and CONNECT tunnels. Other launch grants remain
-unaffected. Normal launcher completion closes its ownership connection; explicit
-workspace/host stop retains the scoped revocation contract in `services.md`.
-Proxy/service restart does not restore old grants, and reconnect does not revive
-a revoked credential: authorization requires fresh registration and a fresh
-traffic credential.
+When the proxy observes loss of the authoritative control connection, including
+orderly close, EOF or transport failure, it revokes that grant, rejects new
+requests and closes associated HTTP streams and CONNECT tunnels across every
+participating generation. Other launch grants remain unaffected. Normal launcher
+completion closes its ownership connection; explicit workspace/host stop retains
+the scoped revocation contract in `services.md`. Proxy/service restart does not
+restore old grants, and reconnect does not revive a revoked credential:
+authorization requires fresh registration and a fresh traffic credential. Only
+the authenticated transfer of still-live ownership in
+[Planned Gateway Handoff](#planned-gateway-handoff) preserves an active grant;
+it cannot restore a disconnected or revoked one.
 
 Ownership requires no periodic application heartbeat, lease renewal or PID
 polling. An idle or hung launcher with a live connection remains authorized.
@@ -99,6 +123,49 @@ assumption that every failure produces immediate notification.
 Grant revocation is network authorization, not agent supervision or execution
 completion. It neither proves the agent stopped nor fills in missing execution
 metadata; `security.md` remains authoritative for those evidence limits.
+
+## Planned Gateway Handoff
+
+Acceptance: [Planned Handoff Acceptance](#planned-handoff-acceptance) and
+[Grant Ownership Acceptance](#grant-ownership-acceptance).
+
+Existing sandboxes keep their Wrix proxy endpoint, traffic credential,
+environment and firewall exception during a planned generation update. Trusted
+routing sends new connections to Green and retains existing connections on Blue
+under [Generation Handoff](services.md#generation-handoff). DNS changes, agent
+cooperation or a sandbox restart are not the handoff mechanism; existing
+TCP/CONNECT connections are not migrated between servers.
+
+The waiting launcher and trusted control plane authenticate transfer of a
+still-active grant before Green-dependent admission. Preserve the exact
+immutable policy and data credential so existing tools need no credential
+rewrite. A traffic credential alone, a saved grant, an old generation or an
+agent cannot authorize transfer. Changed policy requires ordinary new admission;
+never union Blue/Green or peer permissions to make handoff succeed.
+
+There is one authoritative live owner throughout the transition. A candidate
+control channel is not an independent second owner. The ownership transition
+must distinguish a confirmed transfer from control loss: closing the former
+connection after confirmed transfer does not revoke the now-transferred grant,
+but losing authoritative ownership before confirmation revokes it and
+invalidates the candidate rather than resurrecting it. Losing the new owner
+after transfer cancels that launch's work in both generations, including old
+streams, pending connects and body/background work. Stale transfer messages
+cannot reverse revocation or overwrite current ownership.
+
+Green must be ready to enforce this ownership and the unchanged policy before
+routing relies on it. Failed preparation/transfer leaves no newly authorized
+access; report any partial effects honestly. Ordinary crash/restart/reconnect
+still requires fresh registration and a distinct credential, not restoration
+from generation metadata. This planned live transfer introduces no lease,
+periodic application heartbeat, detached agent supervisor or persistent grant
+recovery service.
+
+A launch can outlive Blue once ownership has transferred and its old data
+connections close. Normal updates do not break an open SSH/CONNECT session or
+force retirement on a timer; the last selected gateway remains selected even
+when stopped. Services owns retirement and native Podman/Apple routing proof,
+not a guarantee that every update of the stable routing layer is transparent.
 
 ## Launch Integration
 
@@ -122,11 +189,18 @@ preflight reports policy and preparation needs without issuing grants or
 starting the shared service; traffic credential values never appear in the
 report. Grant lifetime and failure behavior follow
 [Grant Ownership](#grant-ownership); execution completion remains independent.
+SQL maintenance admission belongs to
+[Dolt Backend Handoff](services.md#dolt-backend-handoff), not the egress-grant
+revocation mechanism.
 
 ## Success Criteria
 
 ### Proxy Acceptance
 
+- The packaged Rust proxy uses embedded Rama for HTTP forwarding and opaque
+  CONNECT under Wrix-owned authentication, destination policy and control-plane
+  wiring; no general Rama CLI, demo API or client-selected upstream routing
+  becomes a sandbox-facing interface. [system?](verify:proxy.rama-integration)
 - Wrix-owned network rules use structured `host`/`ports` objects; bare strings,
   unknown rule fields and missing, empty or invalid ports fail before service
   preparation or container startup.
@@ -169,17 +243,25 @@ report. Grant lifetime and failure behavior follow
 
 ### Grant Ownership Acceptance
 
-- Registration binds each immutable policy/credential to its launch control
-  connection; observed disconnect revokes only that connection's grant.
-  [test?](../crates/wrix-service/tests/proxy_grants.rs::control_disconnect_revokes_only_its_launch_grant)
-- Live control disconnect rejects new traffic and closes existing HTTP streams
-  and CONNECT tunnels, while independently owned grants remain usable.
+- Registration binds each immutable policy/credential to authoritative live
+  ownership; observed loss revokes that launch across generations without
+  affecting independently owned grants.
+  [test?](../crates/wrix-service/tests/proxy_handoff.rs::authoritative_disconnect_revokes_across_generations_not_peers)
+- Live control disconnect rejects new traffic, cancels pending resolution and
+  connection work, and closes HTTP upload/download streams and CONNECT tunnels,
+  including after response headers and during admission races; independently
+  owned grants remain usable.
   [system?](verify:proxy.connection-owned-revocation)
+- HTTP keep-alive and pooled connections cannot bypass per-request admission,
+  transfer authority between grants or couple their revocation; revoking one
+  active grant leaves the other's authorized traffic usable.
+  [system?](verify:proxy.grant-pooling-isolation)
 - Runtime/agent child processes do not inherit control descriptors or management
   authority; a surviving child cannot keep a killed launcher's grant alive.
   [test?](../crates/wrix-cli/tests/proxy_grants.rs::runtime_children_do_not_inherit_control_connection)
-- Reconnect and proxy/service restart cannot revive revoked credentials; fresh
-  registration uses a distinct traffic credential.
+- Ordinary reconnect and proxy/service restart cannot revive revoked
+  credentials; fresh registration uses a distinct traffic credential. Planned
+  transfer cannot revive already-lost ownership.
   [test?](../crates/wrix-service/tests/proxy_grants.rs::old_credentials_do_not_revive_after_reconnect_or_restart)
 - Idle connection ownership remains valid without periodic application renewal
   messages or a finite lease deadline.
@@ -187,6 +269,32 @@ report. Grant lifetime and failure behavior follow
 - Documentation discloses hung/half-open connection limits and does not equate
   grant revocation with agent termination or recorded execution completion.
   [judge?](../tests/judges/proxy-grant-ownership.md)
+
+### Planned Handoff Acceptance
+
+- Authenticated live handoff preserves the same worker endpoint, credential and
+  exact immutable policy without agent changes, management delivery or
+  permission union; traffic credentials alone cannot authorize a transfer.
+  [test?](../crates/wrix-service/tests/proxy_handoff.rs::live_handoff_preserves_policy_and_worker_configuration)
+- Ownership commits to one live authority; expected former-channel close after
+  confirmation is distinguished from loss before commit, which revokes the grant
+  and invalidates pending transfer rather than reviving it.
+  [test?](../crates/wrix-service/tests/proxy_handoff.rs::ownership_commit_distinguishes_transfer_from_disconnect)
+- Current-owner loss after handoff cancels old/new-generation work and rejects
+  stale transfer/admission messages while independently owned peers remain
+  usable.
+  [test?](../crates/wrix-service/tests/proxy_handoff.rs::transferred_owner_loss_cancels_all_generations_without_revival)
+- Failed preparation/transfer cannot route clients to an unready authority,
+  restore saved grants after restart or falsely report all-or-nothing rollback.
+  [test?](../crates/wrix-service/tests/proxy_handoff.rs::handoff_failures_preserve_fail_closed_ownership)
+- Live Podman tooling keeps a slow Blue transfer/CONNECT session while
+  subsequent connections from the same unchanged sandbox use Green; launcher
+  death then revokes both paths without affecting a peer launch.
+  [system?](verify:proxy.planned-handoff-podman)
+- Live Apple tooling satisfies the same unchanged-sandbox routing, concurrent
+  old/new stream ownership and peer-safe revocation through actual guest TCP
+  routes, not DNS-only switching or assumed cross-VM socket transport.
+  [system?](verify:proxy.planned-handoff-apple)
 
 ## Out of Scope
 
@@ -205,3 +313,7 @@ report. Grant lifetime and failure behavior follow
 - Provider credential brokering, host-side agent supervision, automatic
   execution recovery, or an authoritative background observer of agent
   completion.
+- Live TCP/SSH/CONNECT stream migration, forced stream closure during normal
+  update, or transparent upgrades of every stable forwarding/control component.
+  Planned handoff transfers only still-live authorization and future
+  connections.

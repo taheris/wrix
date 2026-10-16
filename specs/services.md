@@ -1,7 +1,8 @@
 # Host Services
 
-One service container per host user, hosting logically isolated workspace Dolt
-and project Nix caches, a shared compiler daemon and per-launch egress policies.
+One managed service deployment per host user, hosting logically isolated
+workspace Dolt and project Nix caches, a shared compiler daemon and per-launch
+egress policies, with replaceable container generations.
 
 ## Problem Statement
 
@@ -16,7 +17,7 @@ belong to `cache.md`; tool-cache modes and compiler selection belong to
 ## Architecture
 
 `cli.md` owns root command grammar and dispatch. This spec owns one shared
-service-container identity per host user and the operations behind
+service-deployment identity per host user and the operations behind
 `wrix service ...`; it is not a machine-wide multi-user service. Physical
 container ownership is independent of repository paths. Workspace namespaces
 remain keyed by canonical repository identity, with Loom bead/integration clones
@@ -26,16 +27,25 @@ cache trust remains private except for the common dependency view explicitly
 authorized by [Cache Visibility](cache.md#cache-visibility).
 
 Acceptance: [Host Service Acceptance](#host-service-acceptance) and
-[Compiler Service Acceptance](#compiler-service-acceptance).
+[Compiler Service Acceptance](#compiler-service-acceptance),
+[Generation Acceptance](#generation-acceptance) and
+[Backend Upgrade Acceptance](#backend-upgrade-acceptance).
 
-The service container owns four service families:
+Normally one selected generation serves the deployment. Explicit updates may run
+separate Blue/Green generation containers concurrently; workspace identity is
+not a container-generation identity. Roles can hand over independently while
+other work remains on the older generation. Each stateful backend still has only
+one active owner. Container separation does not introduce compiler-only
+isolation or a stronger tenant compromise guarantee.
+
+The deployment owns four service families:
 
 - **Dolt for beads** — the Dolt SQL server for the Beads-owned workspace
   database. `beads.md` owns issue tracking and database storage; this spec owns
-  only the shared container lifecycle and endpoint publication.
-- **Project Nix cache** — Celler runs inside this container, with scoped
-  read-only client views and host-authorized publishing. `cache.md` owns cache
-  contents, transport, signing, publication and retention; this spec owns
+  only deployment/generation lifecycle and endpoint publication.
+- **Project Nix cache** — Celler runs inside managed service containers, with
+  scoped read-only client views and host-authorized publishing. `cache.md` owns
+  cache contents, transport, signing, publication and retention; this spec owns
   placement, namespace isolation and endpoints.
 
 - **Egress proxy** — shared HTTP/CONNECT infrastructure with isolated per-launch
@@ -49,10 +59,12 @@ The service container owns four service families:
 
 Acceptance: [Compiler Service Acceptance](#compiler-service-acceptance).
 
-The actual shared sccache daemon is cohosted with Dolt, Celler and the proxy,
-with service-owned persistent compiler-cache data. It does not use personal-host
-sccache data, another HTTP cache backend, or an additional compiler
-container/VM.
+The actual shared sccache daemon runs with the other backend service families,
+with service-owned persistent compiler-cache data. Generation overlap does not
+introduce a second active compiler-cache owner or a compiler-only isolation
+container/VM. It does not use personal-host sccache data or another HTTP cache
+backend. Gateway/backend roles may temporarily span generations during the
+controlled handoffs below.
 [Profiles Shared Compiler](profiles.md#shared-rust-compiler-service) owns
 shared/private selection and the restricted-Rust admission rule. One native LRU
 cache defaults to `SCCACHE_CACHE_SIZE=50G` for the host-user daemon. Its
@@ -71,7 +83,7 @@ host-private issuer/publishing/management state. Selected compiler views do not
 authorize arbitrary host paths or personal-cache imports.
 
 Shared-compiler compatibility is part of required-interface admission, without
-allowing one workspace to replace a running shared container. Private/restricted
+allowing one workspace to replace serving generations. Private/restricted
 launches do not register compiler inputs or receive its execution endpoint.
 Read-only information/preflight does not start the daemon or allocate its data.
 Workspace retirement removes only its compiler access/work; it does not stop the
@@ -89,7 +101,8 @@ isolation or worker-equivalent per-job resource accounting is promised.
 
 ### State layout
 
-Acceptance: [Host Service Acceptance](#host-service-acceptance).
+Acceptance: [Host Service Acceptance](#host-service-acceptance) and
+[Generation Acceptance](#generation-acceptance).
 
 Host-private management, publishing and credential-issuer state is separate from
 service-visible workspace data and Celler's delegated cache-signing state.
@@ -101,9 +114,12 @@ Workspace-private state roots remain platform-native:
 | Darwin   | `$HOME/Library/Application Support/wrix/workspaces/<workspace-hash>/`     |
 
 `<state-root>/services.json` records namespace endpoint metadata, port leases
-and its metadata schema version. `cache.md` owns host-private namespace
-publication/pending/status state, public-key metadata and the separately managed
-Celler signing/archive data.
+and its metadata schema version. Host-managed deployment state also records
+selected generation/version, serving/draining roles and ownership transitions;
+it is not an agent-controlled selection or a durable store of live traffic
+grants. Stopping a generation retains its selection and version. `cache.md` owns
+host-private namespace publication/pending/status state, public-key metadata and
+the separately managed Celler signing/archive data.
 
 Service-visible workspace data roots are:
 
@@ -113,13 +129,20 @@ Service-visible workspace data roots are:
 | Darwin   | `$HOME/Library/Application Support/wrix/service-data/workspaces/<workspace-hash>/`     |
 
 `beads.md` owns the live database and canonical sync-worktree children beneath
-this root. The shared container mounts managed service data and Celler's
-persistent metadata/archive data plus admitted compiler input/output views, not
-arbitrary repository trees or the host home. Celler's managed mounts permit its
-own metadata/signing/archive writes. New workspaces register without replacing
-the container or changing its mount set. Tenant-facing APIs expose only
-authorized workspace data and endpoints; a shared parent mount is not permission
-for clients to traverse other tenants.
+this root. Dolt, Celler metadata/signing/archive state and shared compiler-cache
+data occupy separate managed persistent areas, independent of generation
+lifetimes. They are not one freely writable volume mounted into every color.
+Each backend has one active owner; preparing another generation does not open
+its databases or acquire concurrent cache ownership. Runtime volume attachment
+and native filesystem behavior must satisfy this on both backends, not assume
+Apple permits parallel attachment of a named volume.
+
+Service generations mount only admitted managed data and compiler input/output
+views, not arbitrary repository trees or the host home. Celler's managed mounts
+permit its own metadata/signing/archive writes. New workspaces register without
+replacing serving generations or changing their mount sets. Tenant-facing APIs
+expose only authorized workspace data and endpoints; a shared parent mount is
+not permission for clients to traverse other tenants.
 
 Celler receives cache-signing authority in this shared boundary under
 [Cache Authority](cache.md#cache-authority). Authoritative publish manifests,
@@ -137,7 +160,8 @@ non-authoritative and contain no management credentials.
 
 ### Lifecycle
 
-Acceptance: [Host Service Acceptance](#host-service-acceptance).
+Acceptance: [Host Service Acceptance](#host-service-acceptance) and
+[Generation Acceptance](#generation-acceptance).
 
 `mkDevShell` ensures the shared service and registers the selected namespace
 when its project cache is enabled or Beads is configured. Nix-cache opt-out does
@@ -145,23 +169,30 @@ not disable Beads, proxy or shared compiler use. Both sandbox launch modes
 ensure required namespace services; shared Rust also requires its compiler
 service even when the Nix cache/Beads are off. `limit` requires the shared
 proxy, with Rust using private tool caches rather than shared compiler
-delegation. Registration and shared-container creation are concurrency-safe and
-idempotent. A malformed registration cannot overwrite another workspace's state
-or policy.
+delegation. Registration, generation selection and creation are concurrency-safe
+and idempotent; concurrent ordinary starts do not create competing deployments.
+A malformed registration cannot overwrite another workspace's state or policy.
 
-Service lifetime is caller-independent: shell/editor exit does not kill the
-shared container. Ordinary `wrix service stop` retires only the selected
+Service lifetime is caller-independent: shell/editor exit does not kill serving
+or draining generations. Ordinary `wrix service stop` retires only the selected
 workspace's services and proxy grants, leaving other workspaces and shared
 common dependency view available. `wrix service stop --host` is the explicit
-host-user-wide shutdown and revokes all service availability and proxy grants.
-Bare `wrix service` reports the selected workspace; `wrix service --host`
-reports shared-container state without requiring a repository. Both information
-defaults are read-only even when infrastructure is absent/stopped: no namespace
-registration, managed-state creation, image installation, service startup/repair
-or grant issuance. Logs and endpoint queries remain workspace-scoped. Host
-operations select the current user's shared infrastructure, not another machine
-or elevated authority. The container remains available until explicit host
-shutdown; no idle timer is introduced.
+host-user-wide shutdown of all serving/draining generations and revokes all
+service availability and proxy grants. It preserves data and the selected
+generation/version; later startup resumes that selection rather than implicitly
+selecting a newer image. Resume also respects recorded backend role versions: a
+selected Green gateway does not authorize silently migrating a backend still
+assigned to Blue after a partial update. Bare `wrix service` reports the
+selected workspace; `wrix service --host` reports deployment/generation state
+without requiring a repository. Both information defaults are read-only even
+when infrastructure is absent/stopped: no namespace registration, managed-state
+creation, image installation, service startup/repair or grant issuance. Logs and
+endpoint queries remain workspace-scoped. Host operations select the current
+user's shared infrastructure, not another machine or elevated authority. No
+automatic idle timer is introduced. A stopped selected gateway remains selected
+and is restarted at that version when required; absence of traffic is not
+permission to retire the last selected generation. Stopping an in-use gateway is
+disruptive shutdown, not transparent resource saving.
 
 Cache-only registration remains suppressed for temporary scratch workspaces.
 Loom clones share their outer repository namespace without creating separate
@@ -172,7 +203,8 @@ egress.
 
 ### Compatibility and Replacement
 
-Acceptance: [Compatibility Acceptance](#compatibility-acceptance).
+Acceptance: [Compatibility Acceptance](#compatibility-acceptance) and
+[Generation Acceptance](#generation-acceptance).
 
 Ordinary workspace startup (`mkDevShell`, `run`, `spawn` and
 `wrix service start`) reuses a compatible running host service. Compatibility
@@ -182,17 +214,251 @@ features; unknown or unverifiable compatibility is not permission to replace it.
 An incompatible running service causes nonzero failure with explicit host-wide
 remediation. Startup does not remove/recreate it, install a replacement image,
 alter managed database/cache data, rewrite endpoints or revoke peer proxy
-grants. A workspace stop does not authorize host replacement. The explicit
-replacement flow is `wrix service stop --host`, then `wrix service start`; the
-shutdown is deliberately disruptive to all namespaces, but retains managed
-workspace data and valid Celler signing state plus host-private
-publishing/management authority. Old traffic grants do not survive replacement.
+grants. A workspace stop does not authorize host replacement. Explicit
+deployment shutdown remains `wrix service stop --host`, with ordinary
+`wrix service start` resuming the selected version. That shutdown is
+deliberately disruptive to all namespaces, but retains managed workspace data,
+valid Celler signing state and host-private publishing/management authority. Old
+traffic grants do not survive shutdown/restart. Changing the selected generation
+is a separate host-authorized activation under
+[Generation Handoff](#generation-handoff), not an implicit effect of stop/start.
+Separately authorized Dolt backend maintenance follows
+[Dolt Backend Handoff](#dolt-backend-handoff); it is not permission for ordinary
+startup to replace shared infrastructure.
 
 Creating a missing or fully stopped service is normal startup, not replacement
 of a running service. Read-only launch preflight reports a required incompatible
 service as a blocker without repair; a stopped service remains a preparation
 need. Compatibility is rechecked by actual startup, not authorized by a prior
 preview.
+
+### Generation Handoff
+
+Acceptance: [Generation Acceptance](#generation-acceptance).
+
+Blue and Green are separate managed container generations, not separate
+workspace tenants or concurrent writable copies of backend data. A replacement
+is prepared without touching the live databases or activating another compiler
+cache owner. Only explicit host-authorized `wrix service update` changes an
+existing selected generation under
+[CLI Service Update](cli.md#service-update-command). Its scope is this host
+user's deployment, not the current workspace, with no redundant `--host` flag;
+cache/proxy traffic credentials are not update authority. Its candidate comes
+from the explicit service-image binding supplied by the invoked host Wrix
+package through the existing image-source contract. The
+[host CLI/project-data workflow](cli.md#host-cli-and-project-configuration)
+keeps this package on PATH while projects supply launch configuration, not a
+second executable or service-image override. Home Manager, nix-darwin, user
+profiles and explicitly temporary Nix provision are installation choices, not
+different image-selection rules.
+
+The binding, not an executable/store-path hash, version string, current
+repository, launch configuration or previously selected image, identifies the
+candidate. Packages can share a Rust executable while supplying different
+service-image definitions; use actual managed image identity for compatible
+target reuse. Ambient/project image defaults and latest-release lookup cannot
+replace that binding. Resolve and validate it before live selection changes;
+missing input does not authorize guessing or repository discovery. Service
+operations do not require launcher-only `--profile-config`.
+
+The update plan always includes all four deployment roles: gateway, Dolt, Celler
+and shared sccache. Idle or stopped roles and roles unused by the current
+repository are not omitted, and there is no per-role update selector. Complete
+activation requires confirmed readiness at the target for all four roles, not
+just a new gateway or the presence of their binaries in an image. A failed or
+incomplete role remains required even when it currently has no traffic. Updating
+these service roles does not enable cache access, publication or shared tools
+for workspaces whose policies disable them, nor broaden their permissions.
+
+Update requires an existing deployment and fails before creation when none
+exists, directing the user to ordinary `wrix service start` from a repository.
+For an existing stopped deployment, explicit update starts and activates the
+candidate using the normal ownership, readiness and recovery requirements. It
+does not only record a staged version for later validation. Ordinary start
+continues to resume recorded gateway/backend versions without implicit update.
+
+Concurrent updates must not race selection or create competing backend owners.
+Repeating an already-applied compatible target does not churn the generation or
+revoke grants; already-pending drain/retirement can still progress. Ordinary
+launch/start and actual or cached direnv activation reuse or resume the
+selection, report incompatibility/update needs, and do not silently activate a
+candidate. Information and preflight remain read-only.
+
+Sandbox-facing endpoints remain stable across a planned handoff. For egress
+proxy traffic, trusted connection-aware routing sends newly established
+connections to the selected gateway while existing proxy connections retain
+their old paths. This is not a DNS change alone, a rewrite of agent
+environments, live TCP migration or a request that users reload/restart their
+sandboxes. Existing keep-alive connections still receive ordinary per-request
+admission. Internal forwarding reaches only fixed authorized service listeners,
+never arbitrary destinations or management APIs. The stable routing/control
+boundary is outside the replaceable gateway selection; its own replacement is
+not implicitly interruption-free.
+
+For proxy traffic, complete the authenticated active-grant handoff in
+[Proxy Planned Handoff](proxy.md#planned-gateway-handoff) before new routing
+requires Green to admit those launches. Preserve immutable policy, scoped
+credentials and a live launcher owner; unknown, revoked or failed transfers are
+not authorization. A failed preparation cannot silently reroute clients to an
+unready gateway. Report any partial ownership/routing effects truthfully rather
+than claiming an atomic whole-deployment rollback.
+
+An existing egress download or opaque CONNECT tunnel remains on Blue until its
+connection closes; a later proxy connection from that same sandbox uses Green.
+Transferring launch ownership means a long-lived sandbox alone does not pin
+Blue. Such long-lived or idle proxy connections can retain it indefinitely:
+normal update does not force-close them to meet a retirement deadline. The
+separate explicit host shutdown remains disruptive, not a hidden force-update
+mode.
+
+After successful selection, Blue becomes eligible for managed removal only when
+its protected egress connections and SQL sessions have finished, and its
+ownership/coordination obligations, backend roles and background/in-flight work
+have finished or been safely handed over. Idle Celler/sccache transports follow
+[backend work-drain rules](#cache-and-compiler-backend-handoff), not a
+requirement that every idle backend socket close naturally. Selected Green must
+already be ready for the roles it has taken over. Report selection, remaining
+old-generation work and retirement separately; successful routing activation
+does not mean old streams migrated or the old container vanished. Once all four
+deployment role transitions are ready, activation may succeed while protected
+proxy connections still drain; that is not a failed required transition or a
+wait for whole sandbox lifetimes. Failed/incomplete required role transitions
+remain nonzero with known partial state under
+[CLI Update Results](cli.md#service-update-command). Retirement removes obsolete
+runtime containers, not persistent service data or cached images outside
+explicit image GC. Never retire the last selected gateway merely because it is
+idle or stopped. If it is stopped without replacement, resume that recorded
+generation/version, not an arbitrary latest image. If that version cannot be
+restored safely, fail actionably rather than silently selecting a different one.
+
+Once those removal conditions hold, retire the obsolete generation
+**automatically**, even after the successful update command has returned. The
+managed service/runtime lifecycle must retain cleanup ownership beyond that
+client process; another update, GC, start or other Wrix invocation is not
+required. This is generation cleanup, not agent execution reconciliation, and
+must not give workers or cohosted compiler code host runtime-control authority.
+Uncertain eligibility cannot authorize removal. Failed removal remains recorded
+as incomplete/failed retirement rather than falsely reported as completed or
+worked around by closing protected connections or interrupting unfinished work;
+readiness of the selected replacement does not waive any drain or ownership
+guard. Automatic retirement adds no forced deadline for protected connections
+that remain live.
+
+Stable routing and data handoff must be demonstrated with actual Podman and
+Apple paths, including their TCP/Unix, authentication, mount and shutdown
+behavior. A narrow stable forwarder or proven native runtime steering may meet
+the contract; neither DNS changes nor an untested volume/network assumption is
+sufficient. No broader host mounts, worker runtime-control socket or full worker
+runtime migration is authorized to make this work.
+
+### Cache and Compiler Backend Handoff
+
+Acceptance: [Backend Upgrade Acceptance](#backend-upgrade-acceptance).
+
+Backend version changes are separately coordinated single-owner maintenance, not
+a side effect of switching proxy routes. Dolt follows
+[Dolt Backend Handoff](#dolt-backend-handoff). Celler and sccache use the same
+prepare, close-new-admission, drain, clean-release, new-owner-readiness pattern.
+Use finite busy-drain budgets; failure to establish quiescence aborts that
+backend transition before update-driven stop/data changes and restores its old
+admission. These are not the GC acquisition budget or a force-kill deadline.
+
+Celler drains admitted HTTP transfers and whole multi-request publication
+workflows, and completes or safely quiesces background maintenance and metadata
+writes before release. An active publication remains admitted work between HTTP
+requests; a quiet socket or empty request count is not proof of completion.
+Transfer the existing metadata, signing state, archives and effective policy to
+one new owner, without simultaneous native database opens, key rotation or
+view/retention reset. Authenticate readiness through actual scoped HTTP access,
+not just an open port. Incomplete multi-request publication remains failed or
+pending under cache caller rules; do not report an upload complete or silently
+replay an entire publication because one request finished.
+
+Sccache drains native compiler jobs, originating output delivery and pending
+cache writes before stopping its old owner. Preserve the one native 50G cache
+budget and correct source/toolchain/cwd/output mappings; never start a second
+server on the same local cache, kill a job to satisfy an update, or replay a
+compile across generations. Validate new-owner native protocol/toolchain
+readiness before admitting new work. Existing compatible cache entries remain
+reusable; this does not make evictable cache artifacts a permanent archive.
+
+For Celler and sccache the drain unit is admitted backend work, not every
+transport connection. Once native completion/quiescence is proven and admission
+coordination prevents new work racing that decision, clean shutdown may close
+truly idle backend transports; clients may need to reconnect to the same stable
+endpoint. No age-based idle guess, socket count or uncertain native state is
+proof that publication, compiler output or metadata/cache writes have finished.
+Uncertainty or busy timeout aborts before stopping the old backend rather than
+killing admitted work. This permission does not apply to protected egress
+HTTP/CONNECT connections or whole Dolt sessions, including idle SQL sessions.
+
+New backend operations may be briefly unavailable during the ownership gap;
+there is no universal zero-downtime or transparent retry guarantee. A blocked
+backend can retain an old-generation role even after proxy routing changes.
+Report completed, draining, aborted and failed transitions distinctly, return
+nonzero for failed required transitions, and do not tear down their old
+container to force completion. After ownership release or migration, unsafe
+old-binary rollback is forbidden; preserve recovery state and report unready
+roles rather than inventing success. Planned role stops are not unexpected
+process deaths and do not stop unrelated roles or revoke proxy grants.
+
+### Dolt Backend Handoff
+
+Acceptance: [Dolt Handoff Acceptance](#dolt-handoff-acceptance).
+
+A controlled Dolt version handoff is host-authorized maintenance, distinct from
+whole-container shutdown. Ordinary startup, information, preflight and GC do not
+initiate it or bypass its exclusive maintenance ownership. Preparing the
+candidate image/configuration does not open the live database, run migrations or
+claim production readiness. Persistent database data is independent of the
+selected version; handoff retains one authoritative copy and one live owner
+rather than using simultaneous read-only/read-write servers or mount-role flips.
+
+Before stopping the current backend, close new SQL admission for every namespace
+it serves, across all live gateway generations and TCP/Unix or maintenance entry
+points. Close admission atomically with admitted-connection accounting so an
+in-flight connection cannot race an observed drained state. New client
+connections fail promptly without reaching the backend; they are not queued and
+no SQL is buffered or replayed. Native SQL clients receive a connection failure,
+not an HTTP response masquerading as a MySQL error.
+
+Existing sessions remain attached to the old backend and may finish normally.
+Drain waits for whole sessions, including idle or transaction-owning sessions,
+not merely the absence of executing statements. Backend-side completion must be
+established as well as gateway-side closure; an inaccessible backend or a
+vanished downstream socket is not proof of quiescence. Native inspection must
+cover all relevant sessions, excluding only identified maintenance-observer
+connections, and maintenance work cannot bypass the closed admission boundary.
+
+Drain uses a finite budget. If quiescence cannot be established within that
+budget, abort the update before stopping the old backend or changing its
+version/configuration/database format, reopen its SQL admissions and report
+nonzero. Do not force-close existing sessions, steal locks or use runtime
+forced-kill escalation to make the update succeed.
+
+Only after quiescence may the old backend shut down cleanly. Verify completion
+and storage-ownership release before a new version opens the same persistent
+data. Establish a consistent recovery checkpoint before a potentially
+incompatible migration. The new owner must pass authenticated readiness for the
+affected namespaces before client admission reopens. A socket accepting TCP is
+not sufficient readiness. Preserve database/history contents and existing
+workspace authorization; the handoff does not reinitialize databases or rotate
+credentials merely to obtain readiness.
+
+Failures after shutdown or migration are not a successful pre-stop abort. Keep
+admission closed when ownership, data compatibility or readiness is unknown,
+report the reached phase and required recovery, and never start an old binary
+against migrated data without established compatibility or a valid recovery
+procedure. A disconnected write can have an uncertain outcome; do not silently
+retry SQL or claim transaction migration.
+
+Intentional Dolt maintenance does not stop workers, revoke launcher-owned proxy
+grants or interrupt unrelated proxy/cache/compiler work. It is an expected
+component lifecycle transition, not an unexpected-exit trigger for the entire
+service. Unexpected failures outside the authorized transition retain normal
+supervision. This SQL policy does not promise interruption-free replacement of
+the whole deployment or transparent blue-green migration of stateful backend
+connections.
 
 ### Service image source
 
@@ -209,14 +475,16 @@ belong to [CLI Image Commands](cli.md#image-commands).
 
 ### Service operations
 
-Acceptance: [Host Service Acceptance](#host-service-acceptance).
+Acceptance: [Host Service Acceptance](#host-service-acceptance) and
+[Generation Acceptance](#generation-acceptance).
 
 `cli.md` owns public command placement, root help behavior and the packaged
 binary surface. This spec owns workspace information/start/stop/GC, explicit
-host information/stop/GC, logs/endpoints, bare Dolt information and Dolt
-endpoint/readiness operations (`socket`, `port`, `host`, `wait`,
-`sandbox-endpoint`). [CLI Dolt Information](cli.md#dolt-information) owns the
-information default replacing status and the print-only attach helper.
+host information/stop/GC and intrinsically host-user-wide update,
+logs/endpoints, bare Dolt information and Dolt endpoint/readiness operations
+(`socket`, `port`, `host`, `wait`, `sandbox-endpoint`).
+[CLI Dolt Information](cli.md#dolt-information) owns the information default
+replacing status and the print-only attach helper.
 [CLI Service Scope](cli.md#service-scope) owns information defaults and the
 `--host` selector for dual-scope operations, including data GC. The duplicated
 host namespace and retired status/cleanup spellings are not aliases. Ordinary
@@ -232,7 +500,7 @@ Information is passive; setters preserve cache-owned persistence/activation and
 authority boundaries. [CLI Retention Commands](cli.md#cache-retention-commands)
 owns grammar.
 
-Service implementation is Rust-first: `wrix-service` owns shared-container
+Service implementation is Rust-first: `wrix-service` owns deployment/generation
 lifecycle, workspace registration, endpoint metadata, port leasing and
 Dolt/proxy/cache hosting integration. Cache library/helpers and their immutable
 Nix entry points belong to `cache.md`.
@@ -439,10 +707,13 @@ matching range, persists the chosen port, and reuses it while available. Startup
 fails if required host ports cannot be bound to loopback only.
 
 Unexpected exit of an active proxy, Dolt, Celler or shared sccache daemon fails
-the shared container rather than hiding an unavailable component. Intentional
-namespace retirement is not a failure. This fail-fast physical boundary can
-affect other workspaces; logical tenancy is not independent container-level
-fault isolation.
+its affected generation container rather than hiding an unavailable component.
+Intentional namespace retirement, completed generation retirement and authorized
+backend/ownership handoff are not unexpected exits. Failure must be reported and
+dependent access must fail closed; it is not permission to resurrect revoked
+grants or bypass failed readiness. Components still sharing that container can
+affect other workspaces; generation separation is not a promise of independent
+tenant or component compromise/fault isolation.
 
 ## Success Criteria
 
@@ -454,8 +725,8 @@ fault isolation.
   [test?](../crates/wrix-service/tests/compiler_service.rs::shared_compiler_capacity_is_service_owned_and_defaults_to_fifty_g)
 
 - Service planning/image integration hosts one actual sccache daemon alongside
-  the other service families, without an extra compiler container/VM or HTTP
-  blob-cache backend.
+  the other service families, without an extra compiler-only isolation
+  container/VM or HTTP blob-cache backend.
   [test?](../crates/wrix-service/tests/compiler_service.rs::shared_compiler_is_one_managed_cohosted_daemon)
 - Compiler registration/request plans keep originating checkout, selected guest
   toolchain and writable outputs distinct, including concurrent clones of one
@@ -491,14 +762,14 @@ fault isolation.
   carry a nonzero port rather than optional or sentinel port state
   [test](../crates/wrix-service/src/lifecycle/mod.rs::endpoint_payloads_serialize_without_missing_or_zero_tcp_ports)
 
-- Concurrent starts across workspaces create at most one host-user service
-  container and independently register each requested namespace
-  [test?](../crates/wrix-cli/tests/host_service.rs::concurrent_workspaces_share_one_host_service)
+- Concurrent ordinary starts across workspaces select one host-user deployment
+  without competing generation activation and independently register namespaces.
+  [test?](../crates/wrix-service/tests/generation_handoff.rs::concurrent_starts_preserve_one_deployment_selection)
 
-- `wrix service dolt sandbox-endpoint` returns the running Apple service VM's
-  non-loopback TCP host and internal SQL port, or fails if no guest-visible
-  address exists; host publication remains loopback-only
-  [test](../crates/wrix-cli/tests/service_lifecycle.rs::apple_sandbox_endpoint_uses_service_vm_instead_of_host_loopback)
+- Apple sandbox Dolt endpoint publication is guest-reachable and stable across
+  authorized routing changes, fails if no safe reachable route exists, and keeps
+  physical-host publication loopback-only.
+  [test?](../crates/wrix-service/tests/generation_handoff.rs::apple_endpoint_is_stable_guest_reachable_and_host_loopback_only)
 
 - Workspace identity produces stable namespaces, port leases, workspace
   control/data roots and locks without a container identity per checkout
@@ -556,18 +827,19 @@ fault isolation.
   intentional-stop-aware supervision
   [test?](../crates/wrix-cli/tests/host_service.rs::shared_components_have_intentional_stop_aware_supervision)
 
-- Unexpected active-component exit fails the shared container; intentional
-  retirement of one namespace does not terminate other namespaces
-  [test?](../crates/wrix-service/tests/host_service.rs::unexpected_component_exit_fails_shared_service)
+- Unexpected component exit fails its affected container and dependent access
+  closed; intentional retirement/authorized handoff does not terminate unrelated
+  service work or revive grants across generations.
+  [test?](../crates/wrix-service/tests/generation_handoff.rs::supervision_distinguishes_planned_transitions_from_container_failure)
 
 - Cache HTTP and fallback Dolt TCP host ports use their deterministic workspace
   ranges; busy-port fallback is persisted/reused while available, and inability
   to bind loopback-only causes startup failure.
   [test?](../crates/wrix-service/tests/host_service.rs::workspace_port_leases_are_scoped_persisted_and_loopback_only)
 
-- Two independent workspaces share one host-user container without replacing it
-  when a new workspace registers; their workspace control roots/endpoints remain
-  distinct.
+- Two independent workspaces share one host-user deployment without replacing
+  its serving generations when a new workspace registers; their workspace
+  control roots/endpoints remain distinct.
   [test?](../crates/wrix-cli/tests/host_service.rs::new_workspace_registers_without_container_replacement)
 - Linux and Darwin managed Dolt/Celler data is narrowly mounted, including
   delegated cache-signing state, while host publishing/issuer/control roots,
@@ -707,16 +979,184 @@ fault isolation.
   workspace does not authorize replacement of an incompatible running service.
   [test?](../crates/wrix-cli/tests/host_service.rs::workspace_stop_is_not_host_replacement_authorization)
 
+### Dolt Handoff Acceptance
+
+- Candidate preparation leaves live databases unopened and unmigrated, without
+  claiming production readiness; normal startup, information, preflight and GC
+  cannot authorize a version handoff or override its maintenance ownership.
+  [test?](../crates/wrix-service/tests/dolt_handoff.rs::preparation_and_ordinary_operations_do_not_mutate_live_databases)
+- New SQL admission closes across every affected namespace, live gateway
+  generation and transport/maintenance route, with in-flight connections
+  included atomically in drain accounting.
+  [test?](../crates/wrix-service/tests/dolt_handoff.rs::sql_admission_gate_covers_all_routes_and_connection_races)
+- New connections fail promptly without backend dispatch, queued SQL, replay or
+  HTTP error responses on native SQL transports.
+  [test?](../crates/wrix-service/tests/dolt_handoff.rs::draining_rejects_new_connections_without_dispatch_or_queueing)
+- Existing sessions remain usable until they close; idle or transaction-owning
+  sessions prevent drain completion rather than being treated as safe to kill.
+  [test?](../crates/wrix-service/tests/dolt_handoff.rs::drain_preserves_existing_sessions_and_waits_for_idle_connections)
+- Quiescence requires backend completion and full relevant-session visibility;
+  client disconnection, failed inspection or an unrelated observer connection
+  cannot falsely prove an empty backend.
+  [test?](../crates/wrix-service/tests/dolt_handoff.rs::quiescence_requires_backend_evidence_not_client_socket_counts)
+- Drain timeout aborts before old-backend shutdown or update-driven data
+  changes, reopens its admissions and reports failure without force-closing
+  sessions or stealing locks.
+  [test?](../crates/wrix-service/tests/dolt_handoff.rs::drain_timeout_aborts_update_and_resumes_old_admission)
+- The new version opens persistent data only after confirmed clean shutdown and
+  release by the old owner, never through concurrent read-only/read-write opens
+  or lock/mount-role bypass.
+  [test?](../crates/wrix-service/tests/dolt_handoff.rs::backend_ownership_transfers_only_after_confirmed_release)
+- Potentially incompatible migrations require a consistent recovery checkpoint;
+  failed post-stop/migration steps keep admission closed and cannot trigger an
+  unverified old-binary rollback.
+  [test?](../crates/wrix-service/tests/dolt_handoff.rs::migration_and_startup_failures_preserve_safe_recovery_boundaries)
+- Successful admission reopening requires authenticated readiness in affected
+  namespaces, preserving data and authorization rather than merely accepting
+  TCP, recreating databases or replacing credentials.
+  [test?](../crates/wrix-service/tests/dolt_handoff.rs::reopening_requires_authenticated_namespace_readiness)
+- Failure reporting distinguishes an aborted drain from a stopped/migrated
+  backend needing recovery, without SQL replay or claims that uncertain writes
+  have been transparently migrated.
+  [test?](../crates/wrix-service/tests/dolt_handoff.rs::handoff_failures_report_phase_without_replaying_sql)
+- Real Podman gateway/Dolt handoff preserves completed Beads writes and history,
+  drains active sessions, rejects new admissions and leaves worker proxy grants,
+  cache access and compilation unaffected; busy-session timeout preserves the
+  old backend and a successful retry reopens only after native readiness.
+  [system?](test-ci:test-services-dolt-handoff-podman)
+- Real Apple gateway/Dolt handoff satisfies the same data, drain, timeout and
+  peer-availability contract using its actual TCP and persistent-storage path,
+  without assuming simultaneous named-volume attachment or cross-VM Unix
+  sockets. [system?](test-ci:test-services-dolt-handoff-apple)
+
+### Generation Acceptance
+
+- Explicit update requires host management authority over this deployment;
+  workspace input, cache/proxy traffic credentials and ordinary startup cannot
+  authorize generation activation.
+  [test?](../crates/wrix-service/tests/generation_handoff.rs::explicit_update_requires_host_management_authority)
+- Managed update resolves its candidate from the invoked host package's explicit
+  binding, not project launch data, cwd, executable/store-path hashes, version
+  strings, recorded selection or ambient image defaults; equivalent bindings
+  reuse the same compatible target despite different package paths.
+  [test?](../crates/wrix-service/tests/generation_handoff.rs::update_target_uses_explicit_package_image_binding)
+- Actual Nix-packaged host Wrix supplies its service-image binding independently
+  of both projects' generated launch configurations and installation directory;
+  production update argv does not adopt either project's image overrides or
+  require launcher-only profile configuration.
+  [system?](verify:services.managed-update-binding)
+- An absent deployment is rejected before candidate creation, namespace
+  provisioning or selected-state changes, with ordinary-start guidance.
+  [test?](../crates/wrix-service/tests/generation_handoff.rs::update_rejects_absent_deployment_without_creation)
+- An existing stopped deployment can be explicitly started/activated at the
+  candidate version only through update, with readiness/failure reported rather
+  than a successful staged-but-unvalidated selection.
+  [test?](../crates/wrix-service/tests/generation_handoff.rs::explicit_update_starts_existing_stopped_deployment)
+- The update plan requires gateway, Dolt, Celler and shared sccache readiness at
+  the target, including idle/stopped roles and roles unused by the current
+  repository; no role is skipped or made optional because it lacks traffic, and
+  the update does not enable disabled workspace cache/tool features or broaden
+  their permissions.
+  [test?](../crates/wrix-service/tests/generation_handoff.rs::update_plan_requires_all_four_roles_without_enabling_workspace_features)
+- Concurrent and repeated updates preserve one selection and one owner per
+  backend; an already-applied compatible target does not churn generations or
+  revoke grants while pending safe retirement can progress.
+  [test?](../crates/wrix-service/tests/generation_handoff.rs::concurrent_and_repeated_updates_preserve_selection_and_owners)
+- Selection and backend role versions survive stop and ordinary startup resumes
+  them; idle/stopped state does not retire the last gateway, select a new image
+  or silently migrate a still-Blue backend after partial update. Ordinary/direnv
+  activation cannot perform an implicit upgrade.
+  [test?](../crates/wrix-service/tests/generation_handoff.rs::selection_survives_stop_without_implicit_upgrade)
+- Stable sandbox proxy endpoints select Green for new egress connections while
+  retaining old proxy connections on Blue, without agent environment,
+  firewall-rule, credential, restart or DNS-cache intervention and without
+  broadening internal routes.
+  [test?](../crates/wrix-service/tests/generation_handoff.rs::stable_routing_switches_new_connections_without_rewriting_workers)
+- Live ownership handoff is required before Green-dependent proxy routing;
+  candidate/transfer failure cannot grant unknown access or falsely claim
+  readiness or whole-update rollback.
+  [test?](../crates/wrix-service/tests/generation_handoff.rs::routing_activation_requires_ready_authorized_ownership)
+- An old generation remains while protected egress connections or SQL sessions,
+  coordination, backend roles or in-flight work remain; transferred launches
+  alone do not pin it. Retirement cannot force-close protected connections or
+  kill backend work; proven-idle Celler/sccache transports use backend
+  work-drain rules.
+  [test?](../crates/wrix-service/tests/generation_handoff.rs::retirement_tracks_generation_work_not_whole_launch_lifetime)
+- A formerly serving obsolete generation is removed only with a ready selected
+  replacement, preserving persistent backend data/images and reporting
+  activation separately from still-draining work and eventual retirement.
+  [test?](../crates/wrix-service/tests/generation_handoff.rs::retirement_preserves_data_and_reports_draining_separately)
+- Safe retirement continues after the update client exits: once remaining work
+  and ownership obligations finish, the obsolete generation is removed without
+  another Wrix invocation, GC or whole-worker shutdown.
+  [test?](../crates/wrix-service/tests/generation_handoff.rs::retirement_continues_after_update_client_exit_without_followup_command)
+- Uncertain eligibility prevents removal; cleanup failure preserves the safety
+  guards and reports actual incomplete/failed retirement, not completed cleanup
+  or a reason to force-close old work.
+  [test?](../crates/wrix-service/tests/generation_handoff.rs::retirement_failure_preserves_guards_and_reports_incomplete_cleanup)
+- Dolt, Celler and compiler data remain independently owned persistent areas,
+  not concurrently opened writable state in both colors or an assumed
+  parallel-attach Apple named volume.
+  [test?](../crates/wrix-service/tests/generation_handoff.rs::generation_storage_preserves_per_backend_single_ownership)
+- Real Podman generations switch new sandbox proxy connections transparently,
+  preserve an established slow transfer/CONNECT connection on Blue, revoke
+  transferred ownership across colors and, after the update CLI has exited,
+  automatically remove Blue when its remaining work drains, without another Wrix
+  invocation. [system?](test-ci:test-services-generation-handoff-podman)
+- Real Apple generations satisfy the same transparent routing, revocation,
+  automatic post-CLI drain/removal and persistent-state contract through actual
+  guest TCP and supported mount behavior, without assuming cross-VM Unix sockets
+  or requiring another Wrix invocation.
+  [system?](test-ci:test-services-generation-handoff-apple)
+
+### Backend Upgrade Acceptance
+
+- Celler handoff drains admitted transfers/publication and background metadata
+  work, rejects new work during the gap, then cleanly releases one owner and
+  authenticates the replacement without key/view/retention reset.
+  [test?](../crates/wrix-service/tests/backend_handoff.rs::celler_handoff_drains_native_work_and_preserves_authority)
+- Sccache handoff waits for native jobs, originating outputs and cache writes,
+  transfers its same 50G single-server cache and checks native readiness without
+  replay, peer-output collision or job killing.
+  [test?](../crates/wrix-service/tests/backend_handoff.rs::compiler_handoff_preserves_jobs_outputs_and_single_cache_ownership)
+- Proven Celler workflow/transfer/background-write completion permits clean
+  shutdown to close idle HTTP transports; an admitted publication between
+  requests or unfinished metadata work is not idle or safe to interrupt.
+  [test?](../crates/wrix-service/tests/backend_handoff.rs::celler_idle_transport_shutdown_preserves_publication_workflows)
+- Proven compiler job, output-delivery and cache-write completion permits clean
+  shutdown to close idle compiler transports without waiting for whole worker
+  lifetimes; pending output or writes cannot be discarded as idle.
+  [test?](../crates/wrix-service/tests/backend_handoff.rs::compiler_idle_connections_do_not_pin_work_drained_handoff)
+- Busy timeout or uncertain native completion aborts the affected backend before
+  update-driven stop/data changes and reopens old admission, without killing
+  work or closing protected connections; socket-idle guesses are insufficient,
+  and GC budgets do not silently set upgrade drain budgets.
+  [test?](../crates/wrix-service/tests/backend_handoff.rs::busy_timeout_preserves_old_backend_without_forced_drain)
+- Post-release/migration failures retain recovery state and unready admission;
+  reports distinguish completed/draining/failed roles and nonzero incomplete
+  required work without unsafe downgrade or forced old-container removal.
+  [test?](../crates/wrix-service/tests/backend_handoff.rs::partial_updates_report_role_state_without_unsafe_rollback)
+- Real native Celler and compiler upgrades preserve admitted transfers, signed
+  scoped reads, jobs/output delivery and compatible cache reuse while a
+  long-lived worker continues using stable endpoints. Proven-idle Celler and
+  compiler transports can close only after work drains, and native clients
+  reconnect at those endpoints; busy/uncertain and startup failures exercise the
+  production recovery/reporting path without killing active work.
+  [system?](test-ci:test-services-backend-handoff)
+
 ## Requirements
 
 Acceptance: [Host Service Acceptance](#host-service-acceptance),
 [GC Scope Acceptance](#gc-scope-acceptance),
-[Compiler Service Acceptance](#compiler-service-acceptance) and
-[Compatibility Acceptance](#compatibility-acceptance).
+[Compiler Service Acceptance](#compiler-service-acceptance),
+[Compatibility Acceptance](#compatibility-acceptance) and
+[Dolt Handoff Acceptance](#dolt-handoff-acceptance),
+[Generation Acceptance](#generation-acceptance) and
+[Backend Upgrade Acceptance](#backend-upgrade-acceptance).
 
 ### Functional
 
-1. **Host and workspace identity** — one container belongs to the host user;
+1. **Host and workspace identity** — one deployment belongs to the host user;
    namespaces follow [Architecture](#architecture) without data/access/port/lock
    collisions.
 2. **Service operations** — lifecycle and Dolt operations follow
@@ -727,9 +1167,10 @@ Acceptance: [Host Service Acceptance](#host-service-acceptance),
 3. **Lifecycle management** — shared creation, namespace registration, read-only
    information and scoped stop follow [Lifecycle](#lifecycle), independently of
    caller lifetime.
-4. **Compatibility and replacement** — reuse, failure and explicit host
-   replacement follow
-   [Compatibility and Replacement](#compatibility-and-replacement).
+4. **Compatibility and replacement** — reuse/failure follow
+   [Compatibility and Replacement](#compatibility-and-replacement); explicit
+   generation activation/routing/retirement follow
+   [Generation Handoff](#generation-handoff).
 5. **Service image source** — creation uses the shared installer described in
    [Service Image Source](#service-image-source), not a service-specific path.
 6. **Endpoint publication** — selected-workspace SQL and cache access follow
@@ -737,6 +1178,12 @@ Acceptance: [Host Service Acceptance](#host-service-acceptance),
 7. **Shared compiler** — admitted job context, the single native cache budget,
    lifecycle and trust boundary follow
    [Shared Compiler Service](#shared-compiler-service).
+8. **Dolt version handoff** — SQL admission, connection draining, single-owner
+   data transfer and truthful recovery follow
+   [Dolt Backend Handoff](#dolt-backend-handoff).
+9. **Cache/compiler upgrade** — native work draining, single-owner transfer and
+   partial outcomes follow
+   [Cache and Compiler Backend Handoff](#cache-and-compiler-backend-handoff).
 
 ### Non-Functional
 
@@ -775,7 +1222,12 @@ Acceptance: [Host Service Acceptance](#host-service-acceptance),
   daemon. Moving only Dolt does not eliminate the proxy's service container and
   would add a separate privileged setup and lifecycle.
 - Automatic replacement/upgrade of a running host service from an ordinary
-  workspace startup; explicit host shutdown is required first.
+  workspace startup or direnv reload. Generation selection changes only through
+  explicit host-authorized activation; ordinary restart resumes the selection.
+- Transparent SQL transaction/session migration, SQL replay, queued SQL
+  admission during Dolt handoff, live read-only/read-write data-role flipping,
+  or closing protected egress/SQL connections or killing admitted backend work
+  to guarantee an upgrade completes.
 - Automatic idle shutdown, background execution reconciliation or recovery of
   agent work; host-wide shutdown is explicit.
 - Cache contents, transport/signing/publication/retention and cache exclusions

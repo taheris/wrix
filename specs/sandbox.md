@@ -22,37 +22,37 @@ returns a sandbox attrset:
   (`profiles.md`)
 - An OCI **image source** built from the profile and the selected agent runtime
   (`image-builder.md`)
-- A profile-agnostic **launcher** binary (`wrix`; root command grammar owned by
-  `cli.md`)
+- The independently provided, profile-agnostic host **launcher** (`wrix`;
+  installation and root command grammar owned by `cli.md`)
 
 ### Sandbox Outputs
 
-`mkSandbox` returns `{ package, image, launcher, profile, devShell }`:
+Acceptance: [Success Criteria](#success-criteria) and
+[Runtime and Configuration Acceptance](#runtime-and-configuration-acceptance).
 
-- `package` — a configured sandbox package. `bin/wrix` is the explicit
-  configured CLI, and the package `meta.mainProgram` is `wrix-run`, which
-  defaults `nix run .#sandbox-*` to `wrix run`. The wrapper is bound to its
-  built `(profile × agent)` image variant; agent selection and image defaults
-  come from the JSON, not mutable shell logic. One-shot users invoke `package`
-  directly.
-- `image` — the per-profile OCI image-source derivation/attrset. It carries the
-  source path plus metadata (`ref`, `source_kind`, `digest`, and
-  `profileConfig`) so orchestrators can feed it through the platform install
-  path without re-deriving tags or source-kind rules (see _Image install path_
-  below).
-- `launcher` — the raw Rust `wrix` derivation. Orchestrators (e.g. loom) pass
-  `--profile-config <store-path>` and, for `spawn`, a per-launch `SpawnConfig`
-  JSON.
-- `profile` — the resolved profile attrset after merging consumer `packages`,
-  `mounts`, `env`, and MCP server packages.
-- `devShell` — a helper function for host devshells backed by this sandbox
-  object, so `wrix run` inside the shell and `nix run .#sandbox-*` use the same
-  configured package.
+`mkSandbox` returns `{ image, profile, devShell }`, not a configured CLI:
+
+- `image` — the per-profile OCI image-source derivation/attrset, carrying
+  `source`, `ref`, `source_kind`, `digest` and the generated immutable
+  `profileConfig`. These paired data feed the shared platform installer and
+  explicit host `--profile-config` without re-deriving tags or source kinds.
+- `profile` — the resolved profile after consumer package, mount, environment
+  and MCP composition.
+- `devShell` — the bound host-shell constructor. It automatically supplies this
+  sandbox's configuration to the host CLI under
+  [Project Launch Handoff](profiles.md#project-launch-handoff).
+
+The host CLI is independently provided under
+[Host CLI and Project Configuration](cli.md#host-cli-and-project-configuration).
+There are no `package`/`launcher` attributes, configured `wrix`/ `wrix-run`
+executables or runnable `sandbox-*` compatibility targets. Programmatic
+consumers use `image.profileConfig` or the data-only
+[Profile Manifest](profiles.md#profile-image-manifest) with host `wrix`.
 
 ### Platform Dispatch
 
 `lib/sandbox/default.nix` selects the platform image source, entrypoint, and
-configured wrapper metadata, then rejects unsupported systems at evaluation. The
+generated launch metadata, then rejects unsupported systems at evaluation. The
 profile-agnostic Rust `wrix` launcher performs host runtime dispatch at
 execution time: Linux constructs the Podman invocation, and Darwin constructs
 the Apple `container` invocation.
@@ -287,10 +287,10 @@ orthogonally with the profile, so variants are `(profile × agent)`.
 
 Selection is by build target, not by caller env. `WRIX_AGENT` is the internal
 wire the entrypoint reads, but callers do not select it by exporting env vars. A
-human selects an agent by choosing the `mkSandbox { agent = …; }` build / its
-`sandbox-<profile>[-<agent>]` target; that choice is encoded in the immutable
-`ProfileConfig` JSON. Orchestrators driving the raw `launcher` pass a matching
-per-call `ProfileConfig`.
+human selects an agent in `mkSandbox { agent = …; }`; the paired image and
+immutable `ProfileConfig` encode that choice. Orchestrators use the host CLI
+with the matching explicit per-call configuration, not a project-selected raw
+launcher executable.
 
 #### Entrypoint Agent Guards
 
@@ -299,8 +299,8 @@ entrypoint dispatches on `WRIX_AGENT` and, before exec, first rejects a mismatch
 between the ProfileConfig-selected agent and the image-declared agent with a
 clear ProfileConfig/image-variant error, then verifies the named binary is
 present (`command -v`). A request for an agent absent from the image — e.g.
-`WRIX_AGENT=pi` against a claude image on the raw-launcher path — fails loudly
-with a clear error instead of a bare `command not found`.
+`WRIX_AGENT=pi` against a claude image through explicit profile configuration —
+fails loudly with a clear error instead of a bare `command not found`.
 
 #### Per-Agent Configuration
 
@@ -389,7 +389,8 @@ mkSandbox {
 }
 ```
 
-Returns `{ package, image, launcher, profile, devShell }`.
+Returns `{ image, profile, devShell }`; generated launch configuration is
+available as `image.profileConfig`.
 
 ## Launcher Runtime Contract
 
@@ -397,9 +398,10 @@ Returns `{ package, image, launcher, profile, devShell }`.
 including help and root dispatch. This section owns the runtime contract behind
 those subcommands. The Rust `wrix` launcher binary is profile-agnostic. Nix
 supplies build-time defaults through an immutable `ProfileConfig` JSON file,
-passed by `--profile-config <path>` or a wrapper-set equivalent. Both launcher
-subcommands share container construction (mounts, env passthrough, runtime
-selection, deploy key, workspace service startup, network firewall
+selected under [Project Configuration Handoff](#project-configuration-handoff)
+by explicit `--profile-config <path>` or the generated devshell default. Both
+launcher subcommands share container construction (mounts, env passthrough,
+runtime selection, deploy key, workspace service startup, network firewall
 configuration); they differ only in stdio and per-launch configuration source.
 
 Git grants are resolved independently for `deploy` and `sign`: explicit launch
@@ -419,10 +421,10 @@ After the workspace, one optional leading `--` is consumed and all remaining
 arguments are passed unchanged to the agent, even if they match Wrix option
 names. With no workspace argument, `--` is required to pass agent arguments.
 
-For a configured launcher, `wrix run --git-sign /repo -- --help` grants signing
-and passes `--help` to the agent in `/repo`. `wrix run --no-git-sign -- --help`
-uses CWD and disables signing. `AGENT_ARGS` are the selected agent's argv, not a
-Wrix-interpreted shell command.
+With selected launch configuration, `wrix run --git-sign /repo -- --help` grants
+signing and passes `--help` to the agent in `/repo`.
+`wrix run --no-git-sign -- --help` uses CWD and disables signing. `AGENT_ARGS`
+are the selected agent's argv, not a Wrix-interpreted shell command.
 
 `wrix spawn` uses optional `SpawnConfig.git.deploy` and `SpawnConfig.git.sign`
 booleans; omitted fields inherit independently. Invalid policy or override types
@@ -438,10 +440,10 @@ owns their launch-time injection for both modes, including the cache-enabled Nix
 client context. `proxy.md` owns launch traffic grants. Both subcommands use the
 same container construction path.
 
-| Subcommand                                           | Stdio                         | Configuration source                                 | Use case                                            |
-| ---------------------------------------------------- | ----------------------------- | ---------------------------------------------------- | --------------------------------------------------- |
-| `wrix run [LAUNCH_OPTIONS] [DIR] [--] [AGENT_ARGS…]` | TTY (`-it`)                   | `ProfileConfig` JSON + host env + CLI args           | Interactive sessions, `nix run .#sandbox-<profile>` |
-| `wrix spawn --spawn-config <file> [--stdio]`         | Non-TTY; stdin with `--stdio` | `ProfileConfig` JSON + per-launch `SpawnConfig` JSON | Programmatic dispatch (loom; future orchestrators)  |
+| Subcommand                                           | Stdio                         | Configuration source                                 | Use case                                           |
+| ---------------------------------------------------- | ----------------------------- | ---------------------------------------------------- | -------------------------------------------------- |
+| `wrix run [LAUNCH_OPTIONS] [DIR] [--] [AGENT_ARGS…]` | TTY (`-it`)                   | `ProfileConfig` JSON + host env + CLI args           | Interactive sessions through the host CLI          |
+| `wrix spawn --spawn-config <file> [--stdio]`         | Non-TTY; stdin with `--stdio` | `ProfileConfig` JSON + per-launch `SpawnConfig` JSON | Programmatic dispatch (loom; future orchestrators) |
 
 `wrix spawn` stays in the foreground until the container command finishes and
 returns its observed exit status. It does not allocate a TTY. `--stdio` enables
@@ -583,6 +585,34 @@ allowlist, agent args, Git grants, tool-cache sharing, mounts, image ref/source
 for orchestrators), but it may not change the selected agent independently of
 the image/profile config. `wrix run` errors when no valid `ProfileConfig` is
 supplied; there is no implicit default image baked in.
+
+### Project Configuration Handoff
+
+Acceptance:
+[Project Configuration Acceptance](#project-configuration-acceptance).
+
+The host CLI consumes immutable data generated by `mkSandbox`, without a project
+binary. [CLI Configuration Selection](cli.md#host-cli-and-project-configuration)
+supplies the selected explicit or generated-default file; the automatic default
+is delivered by [Project Launch Handoff](profiles.md#project-launch-handoff).
+Explicit input does not require a devshell. Missing or invalid selected data
+fails actionably, without a built-in image, repository search/evaluation or
+alternate executable fallback.
+
+The same resolver and strict schema-1 parser serve inspection and actual launch.
+Malformed data or unsupported declared compatibility fails before service
+startup, staging or runtime dispatch. The Nix constructor preserves its
+image/configuration pairing. Independent host/project pins are validated, not
+assumed compatible or silently redirected to another CLI. This admission is not
+proof of all image contents or future runtime behavior; actual launch retains
+current-state and image-entrypoint guards. The project pointer supplies launch
+data only, not host service-image, management or installation authority.
+
+Per-project configured launchers, `mkSandbox.package`, `mkSandbox.launcher`,
+runnable sandbox targets and manifest-provided executables have no compatibility
+path. Pure image/configuration outputs, explicit `--profile-config` and
+per-launch `SpawnConfig` remain supported. CLI-level selection/help is owned by
+[Host Configuration](cli.md#host-cli-and-project-configuration).
 
 ### Launch Tool Cache Selection
 
@@ -797,8 +827,9 @@ rootfs symlink. [check](nix build
 - `mkSandbox` accepts the documented parameter set (`profile`, `cpus`,
   `memoryMb`, `deployKey`, `packages`, `mounts`, `env`, `runtimeSecrets`, `mcp`,
   `mcpRuntime`, `agent`, `agentPkg`, `agentSettings`) and returns
-  `{ package, image, launcher, profile, devShell }`
-  [check](verify:sandbox.mksandbox-api)
+  `{ image, profile, devShell }` with generated configuration in
+  `image.profileConfig` and no configured executable outputs.
+  [check?](verify:sandbox.data-only-constructor)
 - Platform dispatch picks the Linux implementation on Linux hosts and the macOS
   implementation on Darwin hosts [check](verify:sandbox.platform-dispatch)
 - Evaluating `mkSandbox` on an unsupported system throws at evaluation time
@@ -904,11 +935,10 @@ rootfs symlink. [check](nix build
 - `wrix run` errors at startup with a clear message when no valid Nix-generated
   `ProfileConfig` JSON is supplied
   [test](../crates/wrix-sandbox/tests/command.rs::run_requires_valid_profile_config)
-- `mkSandbox`'s `package` wrapper keeps `bin/wrix` explicit, exposes `wrix-run`
-  as `meta.mainProgram` for `nix run`, and passes an immutable Nix-store
-  `ProfileConfig` JSON path to the profile-agnostic launcher for both `run` and
-  `spawn`, with image defaults supplied by `ProfileConfig` rather than mutable
-  `WRIX_DEFAULT_IMAGE_*` env vars [check](test-ci:test-profile-config-wrapper)
+- Actual host run/spawn use the generated image/configuration pair via the
+  automatic devshell handoff or explicit `--profile-config`, without mutable
+  legacy image defaults, a configured executable or runnable sandbox adapter.
+  [system?](test-ci:test-profile-config-global-cli)
 - `ProfileConfig.image` includes `ref`, `source`, explicit `source_kind`, and
   `digest`; the launcher/runtime installer rejects configs where `source_kind`
   is missing or incompatible with the selected platform install path
@@ -1124,6 +1154,19 @@ rootfs symlink. [check](nix build
   archive and relies on the digest-presence check while per-blob install remains
   out of scope [system](verify:sandbox.darwin-image-load)
 
+### Project Configuration Acceptance
+
+- Run/spawn inspection and actual dispatch resolve the same explicit versus
+  generated-default configuration, with no repository search/evaluation or
+  implicit image when neither is supplied.
+  [test?](../crates/wrix-cli/tests/host_configuration.rs::inspection_and_launch_share_project_configuration_resolution)
+- Invalid or unsupported declared configuration fails before preparation rather
+  than falling back to another executable, image or schema reader.
+  [test?](../crates/wrix-cli/tests/host_configuration.rs::unsupported_project_configuration_fails_before_preparation)
+- Real constructor-generated configuration reaches the provided host CLI with
+  its paired image/agent metadata, without configured launcher outputs.
+  [system?](test-ci:test-profile-config-global-cli)
+
 ### Tool Cache Launch Acceptance
 
 - Spawn parsing preserves omitted tool-cache sharing as inheritance, explicit
@@ -1265,9 +1308,9 @@ rootfs symlink. [check](nix build
 ### Functional
 
 1. **mkSandbox API** — accepts the parameters above; returns
-   `{ package, image, launcher, profile, devShell }`. Profile schema lives in
-   `profiles.md`; image build in `image-builder.md`; MCP server contracts in
-   `playwright-mcp.md`; native terminal debugging in `tmux.md`.
+   `{ image, profile, devShell }` with `image.profileConfig`. Profile schema
+   lives in `profiles.md`; image build in `image-builder.md`; MCP server
+   contracts in `playwright-mcp.md`; native terminal debugging in `tmux.md`.
 2. **Platform dispatch** — Linux selects the Podman launcher; macOS selects the
    Apple `container` CLI launcher; unsupported systems throw.
 3. **Workspace mount** — the selected workspace bind-mounts at `/workspace`;
@@ -1301,7 +1344,7 @@ rootfs symlink. [check](nix build
    `ProfileConfig` JSON plus CLI/host-env runtime inputs; `wrix spawn` reads the
    same `ProfileConfig` plus per-launch `SpawnConfig` JSON. Both share container
    construction, including workspace service startup and endpoint injection when
-   services are enabled. Wrapper config-generation rules are owned by
+   services are enabled. Data-generation and host-handoff rules are owned by
    _Architecture > Sandbox Outputs_; workspace service contracts are owned by
    `services.md`, and project-cache transport/trust and
    [client freshness](cache.md#client-publication-freshness) by `cache.md`.
@@ -1360,6 +1403,10 @@ rootfs symlink. [check](nix build
    destination admission and its TLS limitations belong to `proxy.md`.
 
 ## Out of Scope
+
+- Configured per-project Wrix executables, `wrix-run`/runnable sandbox adapters,
+  retired `package`/`launcher` attributes, or executable fields in profile
+  manifests; project consumers provide image/configuration data to host Wrix.
 
 - Performance SLAs or fixed per-VM memory-overhead guarantees; runtime costs
   require measurement and are not promised by this contract

@@ -12,11 +12,11 @@ extend either without rebuilding the bundle by hand or mixing platform packages.
 ## Architecture
 
 A profile is a Nix attrset consumed by two peers. `mkSandbox` uses the image
-package and environment surfaces to produce an image and launcher; `mkDevShell`
-uses the host surfaces to produce a native shell. The Rust profile also carries
-a host toolchain derivation and package builder. On Linux, the host and image
-toolchains are one derivation. On Darwin, they use the same channel and
-components but different platform store paths.
+package and environment surfaces to produce image/configuration data;
+`mkDevShell` uses the host surfaces to produce a native shell. The Rust profile
+also carries a host toolchain derivation and package builder. On Linux, the host
+and image toolchains are one derivation. On Darwin, they use the same channel
+and components but different platform store paths.
 
 Built-in profiles are constants under `profiles.<name>`. `deriveProfile` extends
 any profile. `rustProfile { toolchain; sha256; ... }` constructs a
@@ -400,8 +400,10 @@ in {
 
 ### mkDevShell
 
-`sandbox.devShell { ... }` binds a concrete sandbox's profile and configured
-launcher. `wrix.mkDevShell` is the profile-only form:
+`sandbox.devShell { ... }` is the recommended project entry point: it binds the
+concrete sandbox's host profile and generated launch data to the host CLI under
+[Project Launch Handoff](#project-launch-handoff). `wrix.mkDevShell` retains the
+profile-only form, which does not invent a sandbox image/configuration:
 
 ```nix
 wrix.mkDevShell {
@@ -417,15 +419,17 @@ wrix.mkDevShell {
 Exactly one of `profile` or `sandbox` is accepted. A bound `sandbox.devShell`
 does not accept either override. Composition order is:
 
-| Field       | Rule                                                             |
-| ----------- | ---------------------------------------------------------------- |
-| `packages`  | `profile.hostPackages ++ packages`                               |
-| `env`       | `profile.hostEnv // env`                                         |
-| `shellHook` | internal lifecycle, then `profile.shellHook`, then consumer hook |
+| Field       | Rule                                                                            |
+| ----------- | ------------------------------------------------------------------------------- |
+| `packages`  | `profile.hostPackages ++ packages`                                              |
+| `env`       | `profile.hostEnv // env` for ordinary keys; generated handoff keys are reserved |
+| `shellHook` | internal lifecycle, then `profile.shellHook`, then consumer hook                |
 
-The lifecycle runs workspace services, project-cache integration, and hook-path
-selection before the profile and consumer hooks. The cache policy belongs to
-`cache.md`. Cache-enabled activation, including `direnv reload`, runs
+Before Wrix-managed activation effects, the lifecycle admits the provided host
+CLI under [Project Launch Handoff](#project-launch-handoff). It then runs
+workspace services, project-cache integration, and hook-path selection before
+the profile and consumer hooks. The cache policy belongs to `cache.md`.
+Cache-enabled activation, including `direnv reload`, runs
 [Host Pull Credential Refresh](cache.md#host-pull-credential-refresh): refresh
 the host-private seven-day token even when the Nix environment is
 unchanged/cached, not by exporting a secret or starting a background renewer.
@@ -437,8 +441,9 @@ activation. Cache opt-out suppresses this publication; no eager project warm is
 introduced.
 
 Acceptance: [Success Criteria](#success-criteria),
-[Host Cache Credential Acceptance](#host-cache-credential-acceptance) and
-[Host Cache Publication Acceptance](#host-cache-publication-acceptance).
+[Host Cache Credential Acceptance](#host-cache-credential-acceptance),
+[Host Cache Publication Acceptance](#host-cache-publication-acceptance) and
+[Project Handoff Acceptance](#project-handoff-acceptance).
 
 #### Prek hook management
 
@@ -452,48 +457,86 @@ different path is overwritten with a one-line notice. Opting out leaves existing
 state unchanged. `pre-commit.md` owns runtime resolution, compatibility, and
 shared-worktree behavior.
 
+## Project Launch Handoff
+
+Acceptance: [Project Handoff Acceptance](#project-handoff-acceptance).
+
+A consumer constructs one sandbox and uses `sandbox.devShell { }`; the
+constructor automatically supplies that sandbox's generated immutable
+`image.profileConfig` through a constructor-owned environment pointer. It keeps
+profile, selected agent and image metadata together without consumer path/env
+copying or independent pairing. Conflicting attempts to replace this generated
+wiring through constructor environment overrides are evaluation errors. Explicit
+per-invocation configuration remains available through the CLI, not a second
+constructor-owned executable.
+
+Neither devshell form adds a project Wrix CLI/`wrix-run` to host PATH, exports
+project service-image overrides, or selects a project executable as a fallback.
+Host CLI provision and explicit configuration selection follow
+[Host CLI and Project Configuration](cli.md#host-cli-and-project-configuration).
+Profile-only shells retain host tooling/lifecycle but do not supply an implicit
+sandbox definition.
+
+Actual activation, including first and cached/unchanged direnv activation,
+requires a compatible host `wrix` on PATH before Wrix service, credential,
+publication or hook-setup effects. Missing or unsupported host/config
+combinations fail actionably; they do not provision a CLI, use another project
+binary, fetch latest, or silently disable enabled integration. Nix realization
+surrounding shell entry is distinct from these activation effects. Independent
+host/project pins are not assumed compatible, and merely installing a newer host
+package does not authorize a service update.
+
+Recovery guidance offers Home Manager, nix-darwin, explicit
+`nix profile add 'github:taheris/wrix#wrix'`, and explicit temporary provision
+of the host package through Nix; no particular profile path is mandatory. These
+are user actions, not automatic profile mutation. Launch parser/image guards
+belong to [Sandbox Handoff](sandbox.md#project-configuration-handoff).
+
 ## Profile-Image Manifest
 
 `wrix.lib.${system}.mkProfileImages` accepts profile names mapped to the
-`.image` values returned by `mkSandbox`. It produces JSON keyed first by profile
-name and then by the image's selected agent. Each agent entry contains
-`{ ref, source, source_kind, launcher, profile_config }`; `launcher` is the raw,
-profile-agnostic `${sandbox.launcher}/bin/wrix` executable, not the configured
-sandbox wrapper. Image metadata is copied opaquely from the selected image;
-missing `profileConfig` is rejected at evaluation. The launcher, source, and
-profile-config paths retain Nix store context. `image-builder.md` owns and
-verifies source kind and composition; `sandbox.md` owns agent selection.
-[check](verify:profiles.manifest-launcher)
+`.image` values returned by `mkSandbox`. It produces data-only JSON keyed first
+by profile name and then by the image's selected agent. Each agent entry
+contains `{ ref, source, source_kind, profile_config }`, with no executable
+`launcher` field. Source and profile-config references retain Nix store context.
+Image metadata is copied from the selected image; missing `profileConfig` is
+rejected at evaluation.
 
-Bundled `packages.profile-images` covers the Pi images used by the repository
-runtime. External flakes call `mkProfileImages` for custom profiles or explicit
-consumer direct runners; no redundant `profile-images-pi` manifest is exposed.
+Orchestrators invoke the provided host `wrix` with the selected
+`--profile-config` and, for spawn, their per-launch `SpawnConfig`; they do not
+receive or select another Rust CLI through this manifest. `image-builder.md`
+owns source kind/composition and `sandbox.md` owns agent selection. Acceptance:
+[Manifest and Output Acceptance](#manifest-and-output-acceptance).
+
+Bundled `packages.profile-images` covers the built-in Pi images. External flakes
+use the same data-only helper for custom profiles and explicit consumer direct
+runners; there is no redundant `profile-images-pi` manifest.
 
 ## Flake Outputs
 
-For each built-in `base`, `rust`, and `python` profile, the flake exposes:
+Acceptance: [Manifest and Output Acceptance](#manifest-and-output-acceptance).
 
-| Family                                     | Contract                                                    |
-| ------------------------------------------ | ----------------------------------------------------------- |
-| `packages.image-<profile>[-<agent>]`       | Selected OCI image source; the unsuffixed image is Pi       |
-| `packages.sandbox-<profile>[-<agent>]`     | Runnable configured launcher; the unsuffixed launcher is Pi |
-| `packages.sandbox-<profile>[-<agent>]-mcp` | Same agent/profile with runtime MCP selection               |
-| `packages.profile-images`                  | Pi profile manifest                                         |
+The flake exposes the host `packages.wrix` and selects that host CLI as
+`packages.default`. For built-in `base`, `rust` and `python` profiles,
+`packages.image-<profile>[-<agent>]` exposes the selected OCI image source; the
+unsuffixed image selects Pi, and explicit suffixes are `-claude` and `-pi`.
+`packages.profile-images` supplies the Pi data manifest.
 
-Agent suffixes are `-claude` and `-pi`; the unsuffixed family selects the
-default Pi variant. `packages.default` is the Rust Pi sandbox and runs through
-`wrix-run`. Built-in outputs do not manufacture a direct runner; consumers
-construct direct outputs with their own package under `sandbox.md`'s contract.
-MCP selection is orthogonal to profiles; there are no per-server profile
-variants.
+Runnable `packages.sandbox-*`, configured default/debug launcher packages, and
+per-project `wrix`/`wrix-run` exports are absent, not forwarding or
+compatibility aliases. Consumers use `sandbox.devShell { }` plus host
+`wrix run`, or data outputs plus explicit host `spawn`. Direct consumers supply
+their own agent package under `sandbox.md`; no placeholder direct runner is
+manufactured. MCP selection remains orthogonal and is configured through
+`mkSandbox`, not retained runnable MCP launcher variants.
 
 ## Repository Loom Tooling
 
-The repository devshell supplies the native Loom CLI, while its packaged
-sandbox/image variants supply the Linux CLI from the same source revision. This
-applies across profiles, agent runtimes, and MCP variants, including the default
-and debug sandboxes. Reusable profile-library constructors remain
-orchestrator-neutral.
+The repository devshell supplies the native Loom CLI, while its packaged images
+supply the Linux CLI from the same source revision. This applies across profile,
+agent and MCP image variants; it does not add another Wrix executable to the
+host devshell or preserve runnable default/debug sandbox packages. Reusable
+profile-library constructors remain orchestrator-neutral.
 
 Loom tracks `main` through a source-only input pinned by `flake.lock`. Building
 the CLI uses the repository's existing package-builder inputs without evaluating
@@ -649,22 +692,21 @@ without introducing a reciprocal flake dependency.
   (regression guard against reintroducing
   `fenix.packages.${system}.rust-analyzer`, which drags a nightly
   cargo/rustc/rust-std closure) [check](verify:profiles.rust-no-nightly-closure)
-- `mkProfileImages { rust = …; }` produces a JSON file whose entry for `rust` is
-  keyed by the image's selected agent and whose selected-agent entry has `ref`,
-  `source`, `source_kind`, `launcher`, and `profile_config` fields. Image
-  metadata is copied opaquely from the corresponding
-  `(wrix.mkSandbox { profile = wrix.profiles.rust; agent = …; }).image`; its
-  values and meanings are owned and verified by `image-builder.md`
-  [check](test-ci:test-profile-images-manifest-shape)
-- Each built-in profile's unsuffixed image/sandbox outputs select Pi, explicit
-  Claude/Pi variants resolve to their selected image sources, and
-  `packages.default` selects Rust Pi with `meta.mainProgram = "wrix-run"`; no
-  built-in output supplies a placeholder direct runner
-  [check](verify:profiles.pi-default-outputs)
-- `packages.profile-images` contains the built-in Pi entries with their matching
-  launcher/profile config, with no redundant `profile-images-pi` output; custom
-  direct manifests retain the generic `mkProfileImages` contract
-  [check](verify:profiles.pi-default-manifest)
+- `mkProfileImages { rust = …; }` produces the selected-agent data shape with
+  `ref`, `source`, `source_kind` and `profile_config`, no launcher executable,
+  and Nix-context-preserving image/configuration references; missing
+  configuration is an evaluation error.
+  [check?](verify:profiles.data-only-manifest)
+- Built-in image outputs select Pi by default and explicit Claude/Pi variants
+  resolve to their selected sources, without a placeholder direct runner.
+  [check?](verify:profiles.image-only-output-contract)
+- The only Wrix CLI/default package is the host package; runnable sandbox/MCP
+  variants, configured default/debug launchers and project `wrix-run` exports
+  are absent, not aliases or host-CLI forwarding adapters.
+  [check?](verify:profiles.host-cli-package-outputs)
+- The bundled Pi manifest and custom direct manifests use the data-only contract
+  with no per-entry executable or redundant Pi manifest.
+  [check?](verify:profiles.pi-data-manifest)
 - `profiles.rust.buildPackage` is exposed and returns an attrset with `bin`,
   `clippy`, `nextest`, and `cargoArtifacts` fields
   [check](verify:profiles.rust-build-package-exposed)
@@ -696,6 +738,38 @@ without introducing a reciprocal flake dependency.
 - Platform container entrypoints contain no rustup bootstrap logic; the Rust
   toolchain is image-built
   [check](verify:profiles.sandbox-entrypoints-no-rustup)
+
+### Project Handoff Acceptance
+
+- The bound constructor automatically supplies its own generated launch
+  configuration without a project CLI on host PATH or project service-image
+  override; profile-only construction does not invent a sandbox definition.
+  [check?](verify:devshell.host-cli-data-handoff)
+- Constructor environment overrides cannot replace its generated launch wiring
+  with independently paired configuration/image data.
+  [check?](verify:devshell.generated-handoff-reserved)
+- First and actual cached/unchanged activation use the provided host CLI and
+  selected project's generated configuration without a profile-specific
+  executable or manual configuration wiring.
+  [system?](test-ci:test-devshell-host-cli-handoff)
+- Missing/incompatible host CLI or unsupported project launch data blocks
+  activation before Wrix service, credential, publication or hook-setup effects;
+  no automatic install, second-binary fallback or silent integration opt-out.
+  [system?](test-ci:test-devshell-host-cli-handoff)
+- Explicitly providing the host package via a temporary Nix environment works
+  without a persistent profile installation or fixed installation directory.
+  [system?](test-ci:test-devshell-host-cli-handoff)
+- Consumer setup guidance explains automatic constructor wiring and actionable
+  Home Manager, nix-darwin, `nix profile add` and temporary-package recovery,
+  without claiming independent pins are always compatible.
+  [judge?](../tests/judges/global-wrix-consumer-api.md)
+
+### Manifest and Output Acceptance
+
+- The same host CLI accepts actual Nix-generated configurations from two
+  projects via their data manifests and explicit `--profile-config`, without a
+  manifest-provided launcher or legacy runnable target.
+  [system?](test-ci:test-profile-config-global-cli)
 
 ### Tool Cache Isolation Acceptance
 
@@ -841,8 +915,10 @@ without introducing a reciprocal flake dependency.
 9. **Devshell Construction** — `sandbox.devShell { ... }` is the preferred host
    devshell entry point when a concrete sandbox exists, and top-level
    `mkDevShell { profile; ... }` remains available for profile-only shells; both
-   consume `profile.hostPackages` for the host PATH and consumers do not splice
-   `profile.shellHook` directly
+   consume `profile.hostPackages` without supplying another Wrix CLI. Bound
+   construction automatically delivers project configuration under
+   [Project Launch Handoff](#project-launch-handoff); consumers do not splice
+   `profile.shellHook` or manually wire configuration paths
 10. **Prek Hook Management** — `mkDevShell` configures `core.hooksPath` from the
     hook derivation selected by `prekHooks` when `.pre-commit-config.yaml` is
     present, with `prekHooks = false` as the opt-out. The bundle's contents and
@@ -852,9 +928,17 @@ without introducing a reciprocal flake dependency.
 
 1. **Curated Toolkit** — Base profile is a ready-to-work agent toolkit, not a
    minimal OS layer.
-2. **Reproducible** — Same profile produces same environment via Nix
+2. **Reproducible** — Same profile produces the same tool/image configuration
+   via Nix; compatibility with an independently managed host CLI is checked, not
+   inferred from matching executable names.
 
 ## Out of Scope
+
+- Per-project Wrix executables, configured launcher derivations/runnable sandbox
+  aliases, and manifest-selected Rust binaries; image/configuration data is the
+  project interface.
+- Automatic installation/update of the host CLI or silent fallback when host
+  setup is missing or incompatible.
 
 - Language-specific project scaffolding
 - IDE configuration beyond Claude Code

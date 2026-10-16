@@ -32,16 +32,66 @@ behavior is owned by the sibling spec named in the table.
 | `wrix beads`, `wrix beads push`               | `beads.md`    | Beads workspace information and explicit session-close synchronization |
 | `wrix init ...`                               | this spec     | Repository-local Git, signing, hook, and verification bootstrap        |
 
-Global `--profile-config <file>` remains the launcher configuration input for
-`run` and `spawn`; it is not a general project config file. The implementation
-may use any argument-parsing library or a hand-written parser as long as the
-public behavior below holds.
+Global `--profile-config <file>` remains the explicit launcher configuration
+input for `run` and `spawn`, overriding the generated project default under
+[Host CLI and Project Configuration](#host-cli-and-project-configuration).
+Neither source is a general project or service-administration configuration. The
+implementation may use any argument-parsing library or a hand-written parser as
+long as the public behavior below holds.
 
 Root help lists every public command group and points detailed behavior to each
 command's help. Unknown commands exit non-zero, name the unknown token, and
 print enough usage text for the operator to choose a valid command. Historical
 standalone entry points such as `wrix-svc`, `beads-dolt`, `beads-push`, and
 `<repo>-beads` are not public compatibility surfaces.
+
+### Host CLI and Project Configuration
+
+Acceptance: [Host Configuration Acceptance](#host-configuration-acceptance).
+
+Host consumers provide one Nix-managed `wrix` on PATH, normally through Home
+Manager, nix-darwin or an explicit user-profile installation:
+
+```sh
+nix profile add 'github:taheris/wrix#wrix'
+```
+
+Explicit temporary provision of the host package through Nix is also supported;
+no particular profile directory or installation-path heuristic is required.
+Installing/updating that package does not activate a service update. The invoked
+host package supplies the service-image binding owned by
+[Generation Handoff](services.md#generation-handoff).
+
+Projects supply launch data, not another Wrix executable. The recommended
+`sandbox.devShell { }` constructor automatically delivers its generated,
+immutable launch configuration through a constructor-owned environment pointer
+under [Project Launch Handoff](profiles.md#project-launch-handoff). Consumers do
+not manually pair image metadata, export configuration paths or add a configured
+launcher to PATH. Project configuration cannot select the host service-image
+binding.
+
+For example, entering the Wrix and Loom checkouts keeps the same host
+`which wrix` result while selecting each project's launch configuration.
+`wrix run` uses the selected project image; explicit `wrix service update` uses
+the host package's service image for the shared deployment used by both
+repositories. Entering a directory or reloading direnv never activates that
+update.
+
+Run/spawn use explicit `--profile-config` before the generated project default.
+Missing/invalid launch data fails actionably; there is no implicit
+profile/image, repository search/evaluation, second binary or latest-version
+fallback. Other command groups ignore the project launch pointer; explicitly
+passing launcher-only `--profile-config` to them remains an argument error.
+Parsing/compatibility and actual-launch checks belong to
+[Project Configuration Handoff](sandbox.md#project-configuration-handoff).
+Devshell admission and installation guidance belong to
+[Project Launch Handoff](profiles.md#project-launch-handoff), including Home
+Manager, nix-darwin, `nix profile add` and temporary provision.
+
+Per-project configured `wrix`/`wrix-run` executables and runnable `sandbox-*`
+flake targets are not compatibility APIs. Their retirement does not remove
+image/configuration outputs, programmatic `spawn`, or explicit invocation of the
+host Wrix package through Nix.
 
 ### CLI Command Shape
 
@@ -75,7 +125,8 @@ requested action.
 
 ### Service Scope
 
-Acceptance: [Service Scope Acceptance](#service-scope-acceptance).
+Acceptance: [Service Scope Acceptance](#service-scope-acceptance) and
+[Service Update Acceptance](#service-update-acceptance).
 
 Dual-scope operations select the canonical workspace by default. `--host`
 selects this host user's shared infrastructure, not a duplicated command branch.
@@ -84,6 +135,7 @@ selects this host user's shared infrastructure, not a duplicated command branch.
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
 | `wrix service`                               | Read-only information about the selected workspace and its services.                                   |
 | `wrix service --host`                        | Read-only shared-infrastructure information; no repository required.                                   |
+| `wrix service update`                        | Explicit host-user-wide generation/backend update; no repository or `--host` required.                 |
 | `wrix service start`                         | Ensure compatible shared infrastructure and start/register the selected workspace's required services. |
 | `wrix service stop`                          | Retire only the selected workspace's services and proxy grants.                                        |
 | `wrix service stop --host`                   | Shut down shared infrastructure for all this user's workspaces; no repository required.                |
@@ -101,9 +153,9 @@ affects all service availability and proxy grants but preserves data.
 Within `service`, `--host` is admitted for information, stop, data GC and
 [Cache Retention Commands](#cache-retention-commands), where both scopes exist.
 It does not add host start/logs/endpoints, Dolt or other cache workflows.
-Intrinsically shared image inventory, `gc image` and `gc all` keep their scope
-without the flag. Unsupported scope combinations fail before dispatch, not
-silent flag ignoring.
+Intrinsically shared `update`, image inventory, `gc image` and `gc all` keep
+their scope without the flag. Unsupported scope combinations fail before
+dispatch, not silent flag ignoring.
 
 [Service GC Scope](services.md#garbage-collection-scope) owns maintenance: bare
 GC is workspace Dolt-only, without Celler dispatch/availability checks,
@@ -155,8 +207,62 @@ Help and results identify selected workspace versus shared host-user scope,
 especially for destructive actions. Lifecycle/replacement belongs to
 [Services Lifecycle](services.md#lifecycle) and
 [Compatibility and Replacement](services.md#compatibility-and-replacement).
-Explicit replacement is `wrix service stop --host`, then `wrix service start`;
-workspace startup never implicitly authorizes disruption.
+`wrix service stop --host` shuts down all serving/draining generations;
+`wrix service start` resumes the selected generation/version, not an implicit
+upgrade. Planned selection/routing/retirement follows
+[Generation Handoff](services.md#generation-handoff); ordinary workspace or
+direnv startup never implicitly authorizes activation or disruption.
+
+### Service Update Command
+
+Acceptance: [Service Update Acceptance](#service-update-acceptance).
+
+```text
+wrix service update
+```
+
+This explicit action selects this host user's whole managed service deployment,
+independently of the current repository. It has no workspace variant or
+redundant `--host` flag. Scope does not grant management authority: ordinary
+cache/proxy traffic credentials cannot authorize an update.
+
+The command delegates candidate preparation, explicit activation, native backend
+handoff and safe generation retirement to
+[Generation Handoff](services.md#generation-handoff), including its required
+four-role plan regardless of current repository, idle traffic or stopped roles;
+there is no per-role selector. It applies the invoked host package's bound
+service image through the existing image-source contract, not the project's
+launch configuration, an unpinned latest-release lookup, an arbitrary positional
+image argument or an update of the host CLI itself. Missing/invalid managed
+input fails before live selection changes. Unsupported options, children and
+extra arguments fail before image preparation, grant transfer or service
+mutation; no force, GC-wait, workspace or host-scope alias is implied.
+
+Update requires an existing managed deployment. If absent, fail before creation
+and direct the user to `wrix service start` from a repository. For an existing
+stopped deployment, this explicit action starts and activates the candidate; it
+does not merely stage an unvalidated stopped selection. Ordinary `start` still
+resumes the recorded selection rather than upgrading it.
+
+Help and results identify host-user-wide scope, selected generation/version,
+backend transition outcomes and any still-draining Blue work. Successful
+activation with all four deployment roles ready may return while Blue retains
+old connections; that expected draining is not failure and does not wait for
+entire sandbox lifetimes. Report retirement separately rather than claiming Blue
+was removed or streams migrated. Explain that safe obsolete-generation cleanup
+continues automatically after this command exits; another Wrix invocation or GC
+is not needed once drain/ownership conditions hold. Failed/incomplete required
+role transitions return nonzero and describe known partial effects without
+global rollback, closing protected egress/SQL connections or killing backend
+work. Explain the
+[backend-specific drain units](services.md#cache-and-compiler-backend-handoff):
+clean shutdown may close proven-idle Celler/sccache transports after admitted
+work completes, so their native clients may need to reconnect at unchanged
+endpoints. This is not permission to interrupt active work or idle SQL sessions.
+
+Ordinary start and actual/cached direnv activation reuse/resume the selected
+version and can report update needs; they do not invoke this action or activate
+Green implicitly. Bare service information remains passive.
 
 ### Image Commands
 
@@ -657,6 +763,22 @@ authorization. Verification diagnoses stale/missing helpers and hooks with
 - Unknown root commands exit nonzero, name the token and print root usage.
   [test](../crates/wrix-cli/tests/cli_surface.rs::unknown_root_command_reports_usage)
 
+### Host Configuration Acceptance
+
+- Production run/spawn select explicit `--profile-config` before the generated
+  project default, without requiring a configured wrapper executable.
+  [test?](../crates/wrix-cli/tests/host_configuration.rs::explicit_profile_config_overrides_project_default)
+- Missing or invalid launch configuration fails before preparation without
+  repository discovery, an implicit profile/image or another CLI fallback.
+  [test?](../crates/wrix-cli/tests/host_configuration.rs::missing_or_invalid_launch_configuration_has_no_fallback)
+- Non-launch commands ignore the project launch pointer, while explicit
+  launcher-only flags remain invalid on those commands.
+  [test?](../crates/wrix-cli/tests/host_configuration.rs::project_launch_defaults_do_not_configure_service_or_helper_commands)
+- Host setup/help distinguishes global CLI ownership from project launch data,
+  explains the supported installation/recovery choices and does not advertise
+  retired configured-launcher or sandbox runnable APIs.
+  [test?](../crates/wrix-cli/tests/host_configuration.rs::help_explains_host_cli_project_data_and_explicit_installation)
+
 ### CLI Shape Acceptance
 
 - Production bare `service cache` dispatches passive selected-workspace
@@ -883,6 +1005,11 @@ authorization. Verification diagnoses stale/missing helpers and hooks with
   adding host workflows or silently changing resource scope.
   [test?](../crates/wrix-cli/tests/host_service.rs::host_scope_flag_rejects_unsupported_combinations_before_dispatch)
 
+- Service help/results distinguish deployment selection, stopped-generation
+  resume, new-generation activation and old-generation draining/retirement;
+  stop/start and direnv reload are not implicit upgrades.
+  [test?](../crates/wrix-cli/tests/host_service.rs::help_distinguishes_resume_activation_and_generation_retirement)
+
 - GC dispatch distinguishes workspace Dolt-only, host Dolt-plus-Celler, host
   data-plus-images and image-only maintenance; shared forms work outside
   repositories and no scope falls back to the print-only Dolt helper.
@@ -917,6 +1044,44 @@ authorization. Verification diagnoses stale/missing helpers and hooks with
   protected collections can succeed, without a failure being hidden by another
   collector's success.
   [test?](../crates/wrix-cli/tests/host_service.rs::gc_exit_status_reflects_failed_or_incomplete_work)
+
+### Service Update Acceptance
+
+- Actual `service update` argv dispatches host-user-wide managed update without
+  a repository, current-workspace restriction or extra management authority.
+  [test?](../crates/wrix-cli/tests/host_service.rs::service_update_dispatches_host_deployment_without_repository)
+- Redundant `--host`, unsupported flags/children, positional images and surplus
+  arguments fail before candidate preparation, ownership transfer or mutation;
+  unresolved managed image input cannot change live selection.
+  [test?](../crates/wrix-cli/tests/host_service.rs::service_update_argument_and_input_errors_precede_side_effects)
+- Help identifies the invoked host package as the update-image source, not the
+  repository's launch defaults, host-CLI/self update, arbitrary latest lookup or
+  implicit activation through start/direnv; it describes the four required
+  deployment roles, normal draining and automatic retirement after the command
+  exits, without requiring another Wrix invocation or GC. It distinguishes
+  protected egress/whole-SQL-session drain from Celler/sccache work drain and
+  possible idle-transport closure/reconnection.
+  [test?](../crates/wrix-cli/tests/host_service.rs::service_update_help_explains_scope_activation_and_draining)
+- Actual update dispatch includes all four deployment roles even when idle,
+  stopped or unused by the current repository; gateway-only or partial backend
+  readiness cannot produce a successful complete update.
+  [test?](../crates/wrix-cli/tests/host_service.rs::service_update_requires_complete_plan_even_for_idle_roles)
+- Confirmed activation with all four deployment roles ready succeeds while old
+  connections drain, reports selected versus draining/retired generations and
+  explains automatic cleanup continuing after the command exits without
+  requiring another Wrix invocation or GC; it neither waits for complete sandbox
+  lifetimes nor closes protected egress/SQL connections or kills backend work.
+  [test?](../crates/wrix-cli/tests/host_service.rs::service_update_reports_successful_activation_with_blue_still_draining)
+- An absent deployment makes actual `service update` argv fail before creation
+  with guidance to run ordinary `service start` from a repository.
+  [test?](../crates/wrix-cli/tests/host_service.rs::service_update_requires_existing_deployment)
+- Explicit update of an existing stopped deployment starts/activates the
+  candidate and reports readiness or failure rather than only staged state.
+  [test?](../crates/wrix-cli/tests/host_service.rs::service_update_activates_existing_stopped_deployment)
+- Failed/incomplete required role transitions return nonzero and report actual
+  completed/draining/failed phases without false rollback, completed retirement
+  or forced old-container removal.
+  [test?](../crates/wrix-cli/tests/host_service.rs::service_update_reports_partial_failure_without_global_rollback)
 
 ### Image Command Acceptance
 
@@ -1020,6 +1185,11 @@ authorization. Verification diagnoses stale/missing helpers and hooks with
     workspace-default private scope or explicit host common scope under
     [Cache Retention Commands](#cache-retention-commands); behavior belongs to
     `cache.md`.
+13. **Explicit service updates** —
+    [Service Update Command](#service-update-command) owns the
+    repository-independent `wrix service update` surface; service
+    generation/backend behavior belongs to `services.md`, not automatic start or
+    direnv activation.
 
 ### Non-Functional
 
@@ -1039,6 +1209,12 @@ authorization. Verification diagnoses stale/missing helpers and hooks with
    public contracts hold.
 
 ## Out of Scope
+
+- Per-project Wrix executables, `wrix-run` compatibility commands or runnable
+  `sandbox-*` flake aliases; project consumers use generated launch data and the
+  host CLI.
+- Automatic profile installation, implicit latest-package fetching or silently
+  disabling Wrix integration when the required host CLI is unavailable.
 
 - Creating Git repositories with `git init`; Wrix initialization configures an
   existing Git worktree rather than creating its Git metadata.
