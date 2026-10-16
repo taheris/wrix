@@ -28,8 +28,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 
-# Pinned sha256 for tests/fixtures/rust-toolchain.toml (Rust 1.99.0).
-TOOLCHAIN_FIXTURE_SHA="sha256-zm3dyIY2T414ZRR3EhLOvptzG6gta4WZUcawzMUWtqI="
+# Pinned sha256 for tests/fixtures/rust-toolchain.toml (Rust 1.99.1).
+TOOLCHAIN_FIXTURE_SHA="sha256-+xUr6Al1wZSqX8aEsq7DpuFOK4Ve/i+qTl+K5uWQ9GM="
 
 require_tools() {
   local tool

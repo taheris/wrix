@@ -1,3 +1,2 @@
-# Rust 1.99.0; reuse the default profile's stable component derivations.
 [toolchain]
-channel = "stable-2026-10-01"
+channel = "1.99.1"

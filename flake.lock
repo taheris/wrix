@@ -25,10 +25,10 @@
         "rust-analyzer-src": "rust-analyzer-src"
       },
       "locked": {
-        "lastModified": 1791899674,
-        "narHash": "sha256-oNKkrIt4ZDapeLTGaeU1URTmk7x90mcH+8vrDwUq5Pg=",
+        "lastModified": 1792148656,
+        "narHash": "sha256-bZlZdPkXbPdTz9gUJRyDanGuvXpxvE7hhJC+M1nOEn0=",
         "ref": "main",
-        "rev": "04b421dace0f5bf18d3ca363e95e59395d4cc680",
+        "rev": "cd2704cee3dc20ceb397562930e310af5f86aede",
         "shallow": true,
         "type": "git",
         "url": "https://github.com/nix-community/fenix.git"
@@ -65,10 +65,10 @@
     "loom-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1792009059,
-        "narHash": "sha256-mnWkAxxC/aQDTFjJayU45B2lW2dHqAchRoBmGE1IaMg=",
+        "lastModified": 1792156359,
+        "narHash": "sha256-EXf1HG/iK2q3ZYmBkMBfcERkO151sfSqcudA/QcCids=",
         "ref": "main",
-        "rev": "ddd53f04fdce3c978ff5c5b93b6d9cfdd78dae5d",
+        "rev": "e353e043c427d07dd5ed9de1f330bd53109b82d3",
         "shallow": true,
         "type": "git",
         "url": "https://github.com/taheris/loom.git"
@@ -82,10 +82,10 @@
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1791487292,
-        "narHash": "sha256-tqM7xDEsaeK1p6VvRygeZ9LkQRpUUkbRT02BHv6hnTM=",
+        "lastModified": 1792116957,
+        "narHash": "sha256-EjZqHKObBfIOeHZnMRVV87HB3pPq/WBkmRJWyFxmZu8=",
         "ref": "nixpkgs-unstable",
-        "rev": "8edc0c72e3a38faf5434e40d1f19431125fe4b30",
+        "rev": "f20cd90e28fe0403873f473b29e42662cd86e8c4",
         "shallow": true,
         "type": "git",
         "url": "https://github.com/NixOS/nixpkgs.git"
@@ -110,11 +110,11 @@
     "rust-analyzer-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1791835614,
-        "narHash": "sha256-CMXY9x3W43sVW8G7IhXAi3vNqkbWwbsxtKldef8Jar0=",
+        "lastModified": 1792086358,
+        "narHash": "sha256-OAXtlM95Nr/RKpqOgq4rhkxtQKt8yxgqbVRxZ2o/UHE=",
         "owner": "rust-lang",
         "repo": "rust-analyzer",
-        "rev": "dd5ed69d4b5b26fe7f91013b1d02608cd37ae199",
+        "rev": "71fbb7faf489656947a03566b32556d93c312c36",
         "type": "github"
       },
       "original": {
