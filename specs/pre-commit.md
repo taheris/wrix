@@ -87,7 +87,7 @@ Reloading the updated Wrix devshell repairs the current binding even when
 and stale hook path when hook policy is enabled; `--no-hooks` remains a passive
 opt-out. Worker entrypoints bind their image-native runner before installing
 hooks. Existing worker images need rebuilding after a Wrix pin update.
-[test?](../crates/wrix-cli/tests/prek_runtime.rs::repo_init_repairs_stale_runner_and_hook_path)
+[test](../crates/wrix-cli/tests/prek_runtime.rs::repo_init_repairs_stale_runner_and_hook_path)
 
 Repair each independent clone in its own directory: re-enter its updated Wrix
 devshell, or run the updated Nix-packaged `wrix init repo` with the existing
