@@ -844,7 +844,7 @@ without introducing a reciprocal flake dependency.
 - Run/spawn reject restricted Rust with resolved shared mode before preparation,
   preserve normal precedence without silent coercion, and accept effective
   private selection without disabling Nix/Celler.
-  [test?](../crates/wrix-cli/tests/tool_cache_controls.rs::restricted_rust_requires_effective_private_tool_caches)
+  [test](../crates/wrix-cli/tests/tool_cache_controls.rs::restricted_rust_requires_effective_private_tool_caches)
 - Live Podman workers use the actual shared daemon for cache misses/hits and
   output delivery; concurrent distinct checkouts/toolchains do not mix results,
   private mode stays local, and ordinary compiler errors do not terminate

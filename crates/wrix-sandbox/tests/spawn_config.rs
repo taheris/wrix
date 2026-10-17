@@ -11,6 +11,78 @@ use wrix_sandbox::command::Command;
 use common::{ChildSpec, ProfileFixture, TestResult};
 
 #[test]
+fn tool_cache_sharing_parses_owned_optional_boolean() -> TestResult {
+    let fixture = SpawnFixture::new("spawn-tool-cache")?;
+    for (choice, expected) in [
+        (None, None),
+        (Some(json!({})), None),
+        (Some(json!({"shared": false})), Some(false)),
+        (Some(json!({"shared": true})), Some(true)),
+    ] {
+        let mut value =
+            json!({"workspace": path_text(&fixture.workspace), "env": [], "agent_args": []});
+        if let Some(choice) = choice {
+            value["tool_caches"] = choice;
+        }
+        let config = fixture.write("choice", &value)?;
+        let run = fixture.run("choice", &config)?;
+        assert!(run.success, "{}", run.stderr);
+        assert!(run.stdout.contains(if expected == Some(false) {
+            "TOOL_CACHE_MODE=private"
+        } else {
+            "TOOL_CACHE_MODE=shared"
+        }));
+        match expected {
+            Some(shared) => assert!(
+                run.stdout
+                    .contains(&format!("TOOL_CACHE_SHARED_OVERRIDE={shared}"))
+            ),
+            None => assert!(!run.stdout.contains("TOOL_CACHE_SHARED_OVERRIDE=")),
+        }
+    }
+    for choice in [
+        json!(null),
+        json!(false),
+        json!([]),
+        json!([false]),
+        json!("private"),
+        json!({"shared": null}),
+        json!({"shared": "false"}),
+        json!({"shared": 0}),
+        json!({"shared": []}),
+        json!({"shared": {}}),
+        json!({"paths": []}),
+        json!({"shared": true, "extra": false}),
+    ] {
+        let config = fixture.write(
+            "invalid",
+            &json!({
+                "workspace": path_text(&fixture.workspace), "env": [], "agent_args": [],
+                "tool_caches": choice
+            }),
+        )?;
+        let run = fixture.run("invalid", &config)?;
+        assert!(!run.success, "accepted {choice}");
+        assert!(
+            run.stderr.contains("invalid SpawnConfig schema"),
+            "{}",
+            run.stderr
+        );
+        assert_eq!(run.stdout, "");
+    }
+    let config = fixture.root.path().join("duplicate.json");
+    fs::write(
+        &config,
+        format!(
+            r#"{{"workspace":{},"env":[],"agent_args":[],"tool_caches":{{"shared":true,"shared":false}}}}"#,
+            serde_json::to_string(&path_text(&fixture.workspace))?
+        ),
+    )?;
+    assert!(!fixture.run("duplicate", &config)?.success);
+    Ok(())
+}
+
+#[test]
 fn documented_spawn_config_fields_render_into_launch_plan() -> TestResult {
     let fixture = SpawnFixture::new("spawn-documented")?;
     let mount_host = fixture.root.path().join("documented-mount");

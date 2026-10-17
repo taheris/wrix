@@ -279,6 +279,7 @@ mod test {
             agent_args: Vec::new(),
             git_deploy: None,
             git_sign: None,
+            tool_caches: wrix_core::tool_cache::Preference::default(),
         });
         let barrier = Barrier::new(2);
         let create = || {

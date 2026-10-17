@@ -5,3 +5,4 @@ pub mod duration;
 pub mod git;
 pub mod path;
 pub mod repository_policy;
+pub mod tool_cache;

@@ -43,8 +43,8 @@ impl Command {
     }
 }
 
-pub const RUN_HELP: &str = "Run an interactive sandbox.\n\nUsage: wrix [--profile-config <file>] run [LAUNCH_OPTIONS] [DIR] [--] [AGENT_ARGS ...]\n\nDIR defaults to CWD; without DIR, use -- before agent arguments.\nLauncher options stop at DIR or --; after DIR, one optional -- is consumed.\nRemaining arguments are passed unchanged to the agent, including --help.\nOmitted Git options inherit repository policy, defaulting independently to false.\n\nOptions:\n  --profile-config <file>  Override generated project launch data with <file>.\n  --git-deploy             Grant the deploy key for this launch; conflicts with --no-git-deploy.\n  --no-git-deploy          Deny the deploy key for this launch; conflicts with --git-deploy.\n  --git-sign               Grant the signing key for this launch; conflicts with --no-git-sign.\n  --no-git-sign            Deny the signing key for this launch; conflicts with --git-sign.\n  -h, --help               Print launcher help before DIR or --.\n";
-pub const SPAWN_HELP: &str = "Spawn a programmatic sandbox.\n\nUsage: wrix [--profile-config <file>] spawn --spawn-config <file> [--stdio]\n\nOptions:\n  --profile-config <file>  Override generated project launch data with <file>.\n  --spawn-config <file>    Read per-launch settings from <file> (required).\n  --stdio                  Enable the selected agent's JSONL protocol on standard I/O (default: off).\n  -h, --help               Print help.\n";
+pub const RUN_HELP: &str = "Run an interactive sandbox.\n\nUsage: wrix [--profile-config <file>] run [LAUNCH_OPTIONS] [DIR] [--] [AGENT_ARGS ...]\n\nDIR defaults to CWD; without DIR, use -- before agent arguments.\nLauncher options stop at DIR or --; after DIR, one optional -- is consumed.\nRemaining arguments are passed unchanged to the agent, including --help.\nOmitted Git options inherit repository policy, defaulting independently to false.\nTool caches: explicit launch choice > repository tool_caches.shared > shared default.\nPrivate mode does not disable caching or separate Nix/Celler policy.\nRestricted Rust requires private mode; use --no-cache with WRIX_NETWORK=limit.\n\nOptions:\n  --profile-config <file>  Override generated project launch data with <file>.\n  --cache                  Reuse shared worker tool caches for this launch.\n  --no-cache               Use fresh private writable local tool caches for this launch.\n  --git-deploy             Grant the deploy key for this launch; conflicts with --no-git-deploy.\n  --no-git-deploy          Deny the deploy key for this launch; conflicts with --git-deploy.\n  --git-sign               Grant the signing key for this launch; conflicts with --no-git-sign.\n  --no-git-sign            Deny the signing key for this launch; conflicts with --git-sign.\n  -h, --help               Print launcher help before DIR or --.\n";
+pub const SPAWN_HELP: &str = "Spawn a programmatic sandbox.\n\nSpawnConfig.tool_caches.shared is an optional boolean: false uses fresh private writable local tool caches; true reuses shared worker tool caches.\nPrecedence: explicit launch choice > repository tool_caches.shared > shared default.\nOmission inherits; this does not disable caching or separate Nix/Celler policy.\nRestricted Rust requires private mode with WRIX_NETWORK=limit.\n\nUsage: wrix [--profile-config <file>] spawn --spawn-config <file> [--stdio]\n\nOptions:\n  --profile-config <file>  Override generated project launch data with <file>.\n  --spawn-config <file>    Read per-launch settings from <file> (required).\n  --stdio                  Enable the selected agent's JSONL protocol on standard I/O (default: off).\n  -h, --help               Print help.\n";
 
 pub fn write_run_help(stdout: &mut impl Write) -> io::Result<()> {
     stdout.write_all(RUN_HELP.as_bytes())?;
@@ -127,6 +127,7 @@ fn parse_run(args: &[String]) -> Result<Option<Run>, CliError> {
     let mut workspace = None;
     let mut git_deploy = None;
     let mut git_sign = None;
+    let mut shared = None;
     let mut index = 0;
     while let Some(arg) = args.get(index) {
         match arg.as_str() {
@@ -136,6 +137,13 @@ fn parse_run(args: &[String]) -> Result<Option<Run>, CliError> {
                     return Err(CliError::ConflictingDeployFlags);
                 }
                 git_deploy = Some(enabled);
+            }
+            "--cache" | "--no-cache" => {
+                let enabled = arg == "--cache";
+                if shared.is_some_and(|value| value != enabled) {
+                    return Err(CliError::ConflictingCacheFlags);
+                }
+                shared = Some(enabled);
             }
             "--git-sign" | "--no-git-sign" => {
                 let enabled = arg == "--git-sign";
@@ -170,6 +178,7 @@ fn parse_run(args: &[String]) -> Result<Option<Run>, CliError> {
         agent_args: args[index..].to_vec(),
         git_deploy,
         git_sign,
+        tool_caches: wrix_core::tool_cache::Preference { shared },
     }))
 }
 
@@ -215,6 +224,8 @@ enum CliError {
     ConflictingDeployFlags,
     /// --git-sign cannot be combined with --no-git-sign
     ConflictingSignFlags,
+    /// --cache cannot be combined with --no-cache
+    ConflictingCacheFlags,
     /// unknown wrix run flag: {flag}; use -- before agent arguments when DIR is omitted
     UnknownRunFlag { flag: String },
     /// --spawn-config requires <file>

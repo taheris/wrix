@@ -9,6 +9,49 @@ use wrix_core::{
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
 #[test]
+fn tool_cache_sharing_policy_is_optional_typed_and_strict() {
+    use wrix_core::tool_cache::{Mode, Preference};
+
+    for (content, expected) in [
+        ("", None),
+        ("[tool_caches]", None),
+        ("tool_caches.shared = false", Some(false)),
+        ("tool_caches = { shared = true }", Some(true)),
+    ] {
+        for cache in ["", "\n[cache]\nenable = false"] {
+            let policy = repository_policy::parse(&format!("{content}{cache}")).unwrap();
+            assert_eq!(policy.tool_caches.shared, expected);
+            for explicit in [None, Some(false), Some(true)] {
+                assert_eq!(
+                    Mode::resolve(Preference { shared: explicit }, policy.tool_caches),
+                    if explicit.or(expected).unwrap_or(true) {
+                        Mode::Shared
+                    } else {
+                        Mode::Private
+                    }
+                );
+            }
+        }
+    }
+    for content in [
+        "tool_caches = false",
+        "tool_caches = []",
+        "[[tool_caches]]\nshared = true",
+        "tool_caches.shared = 'false'",
+        "tool_caches.shared = 1",
+        "tool_caches.shared = []",
+        "tool_caches.shared = {}",
+        "tool_caches.paths = []",
+        "tool_caches.shared = true\ntool_caches.shared = false",
+    ] {
+        assert!(
+            repository_policy::parse(content).is_err(),
+            "accepted {content}"
+        );
+    }
+}
+
+#[test]
 fn omitted_policy_fields_remain_absent_and_grants_default_false() {
     for content in ["", "# no overrides\n", "[cache]\n", "[git]\n", "[init]\n"] {
         let policy = repository_policy::parse(content).unwrap();
@@ -65,6 +108,7 @@ fn supported_key_remote_and_init_overrides_are_typed() {
             online_verify: Some(true),
         },
         cache: repository_policy::cache::Policy::default(),
+        tool_caches: wrix_core::tool_cache::Preference::default(),
     };
     for content in [
         "[git]\ndeploy_key = 'repo.example-key_1'\ndeploy = true\nsign = false\nremote = 'upstream'\n[init]\nprek_hooks = false\nonline_verify = true\n",

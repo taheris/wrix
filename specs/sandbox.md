@@ -1174,10 +1174,10 @@ rootfs symlink. [check](nix build
 - Spawn parsing preserves omitted tool-cache sharing as inheritance, explicit
   false as private and true as shared, with strict owned object/boolean
   validation before preparation.
-  [test?](../crates/wrix-sandbox/tests/spawn_config.rs::tool_cache_sharing_parses_owned_optional_boolean)
+  [test](../crates/wrix-sandbox/tests/spawn_config.rs::tool_cache_sharing_parses_owned_optional_boolean)
 - Run cache flags obey launcher prefix/conflict rules without interpreting
   forwarded agent arguments or accepting long-name launcher aliases.
-  [test?](../crates/wrix-cli/tests/tool_cache_controls.rs::run_cache_flags_follow_prefix_and_conflict_rules)
+  [test](../crates/wrix-cli/tests/tool_cache_controls.rs::run_cache_flags_follow_prefix_and_conflict_rules)
 - Both dry-run renderings report the shared resolver's effective tool-cache mode
   for run/spawn without creating, reading prewarms into or populating cache
   data.
@@ -1186,7 +1186,7 @@ rootfs symlink. [check](nix build
 - Restricted Rust with resolved shared mode fails before preparation in
   run/spawn; effective private mode remains valid with Nix/Celler enabled, and
   no shared compiler endpoint is granted.
-  [test?](../crates/wrix-cli/tests/tool_cache_controls.rs::restricted_rust_requires_effective_private_tool_caches)
+  [test](../crates/wrix-cli/tests/tool_cache_controls.rs::restricted_rust_requires_effective_private_tool_caches)
 - Both preflight renderings retain the resolvable plan and explain the
   restricted Rust/private-cache conflict as a nonzero blocker without starting
   services, staging credentials or allocating compiler/cache views.

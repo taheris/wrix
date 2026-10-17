@@ -802,23 +802,23 @@ authorization. Verification diagnoses stale/missing helpers and hooks with
 - Run/spawn help describes short run flags and the optional owned spawn boolean,
   distinguishes shared/private tool caches from Nix/Celler policy, and documents
   explicit launch > repository > shared-default precedence.
-  [test?](../crates/wrix-cli/tests/tool_cache_controls.rs::help_distinguishes_tool_sharing_from_nix_cache)
+  [test](../crates/wrix-cli/tests/tool_cache_controls.rs::help_distinguishes_tool_sharing_from_nix_cache)
 - Repository `tool_caches.shared` accepts typed optional booleans, preserves
   omission/false, rejects unknown keys/malformed values and remains independent
   of Nix-cache policy.
-  [test?](../crates/wrix-core/tests/repository_policy.rs::tool_cache_sharing_policy_is_optional_typed_and_strict)
+  [test](../crates/wrix-core/tests/repository_policy.rs::tool_cache_sharing_policy_is_optional_typed_and_strict)
 - Run short flags dispatch sharing choices under prefix/conflict rules, while
   long proposed aliases are not accepted as launcher options; agent passthrough
   after the normal boundary remains unchanged.
-  [test?](../crates/wrix-cli/tests/tool_cache_controls.rs::run_cache_flags_follow_prefix_and_conflict_rules)
+  [test](../crates/wrix-cli/tests/tool_cache_controls.rs::run_cache_flags_follow_prefix_and_conflict_rules)
 - One-off choices override repository preferences in either direction without
   creating or rewriting policy or persisting the override.
-  [test?](../crates/wrix-cli/tests/tool_cache_controls.rs::one_off_cache_choices_do_not_persist_policy)
+  [test](../crates/wrix-cli/tests/tool_cache_controls.rs::one_off_cache_choices_do_not_persist_policy)
 
 - Run/spawn reject shared restricted Rust before preparation and explain the
   private-cache remedy; explicit, inherited and programmatic private choices
   remain valid without disabling Nix/Celler or changing repository policy.
-  [test?](../crates/wrix-cli/tests/tool_cache_controls.rs::restricted_rust_requires_effective_private_tool_caches)
+  [test](../crates/wrix-cli/tests/tool_cache_controls.rs::restricted_rust_requires_effective_private_tool_caches)
 
 ### Init Acceptance
 

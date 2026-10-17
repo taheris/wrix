@@ -1,6 +1,7 @@
 mod execution_metadata;
 mod linux_terminal;
 mod pi_auth;
+mod tool_cache;
 
 use pi_auth::Storage as PiAuth;
 
@@ -50,6 +51,7 @@ pub struct Run {
     pub agent_args: Vec<String>,
     pub git_deploy: Option<bool>,
     pub git_sign: Option<bool>,
+    pub tool_caches: wrix_core::tool_cache::Preference,
 }
 
 pub struct Spawn {
@@ -66,6 +68,8 @@ pub struct Spawn {
 pub enum LaunchError {
     /// WRIX_NETWORK must be 'open' or 'limit' (got: {value})
     InvalidNetworkMode { value: String },
+    /// restricted Rust requires fresh private local tool caches; use run --no-cache, repository tool_caches.shared = false, or SpawnConfig.tool_caches.shared = false (Nix/Celler policy is unchanged)
+    RestrictedRustSharedCaches,
     /// project cache sandbox host must be a numeric IPv4 address: {host}
     InvalidCacheHost { host: String },
     /// project cache public key not found: {path}
@@ -205,8 +209,21 @@ pub fn execute(
 ) -> Result<ExitCode, LaunchError> {
     let network_mode = NetworkMode::from_env(request.profile_config.network.default_mode)?;
     let dry_run = env_flag("WRIX_DRY_RUN");
-    let credential_sources = CredentialSources::resolve(request)?;
-    let plan = Plan::new(request, network_mode, credential_sources)?;
+    let workspace = match &request.kind {
+        Kind::Run(run) => run.workspace.as_path(),
+        Kind::Spawn(spawn) => Path::new(&spawn.config.workspace),
+    };
+    let repository_root = Workspace::from_path(workspace)?.repository_root();
+    let policy = repository_root
+        .as_deref()
+        .map(repository_policy::read)
+        .transpose()
+        .map_err(|source| LaunchError::RepositoryPolicy { source })?
+        .unwrap_or_default();
+    let tool_cache_mode = tool_cache::resolve(request, &policy, network_mode)?;
+    let credential_sources =
+        CredentialSources::resolve(request, repository_root.as_deref(), &policy)?;
+    let plan = Plan::new(request, network_mode, credential_sources, tool_cache_mode)?;
     if dry_run {
         let services = if env_flag("WRIX_DRY_RUN_SERVICES") {
             ServicesState::load(request)?
@@ -254,6 +271,7 @@ struct Plan<'a> {
     credential_sources: Option<CredentialSources>,
     host_podman_socket: Option<HostPodmanSocket>,
     network_mode: NetworkMode,
+    tool_cache_mode: wrix_core::tool_cache::Mode,
     git_identity: GitIdentity,
     focus_target: Option<FocusTarget>,
     host_tmux_target: Option<FocusTarget>,
@@ -824,6 +842,7 @@ impl<'a> Plan<'a> {
         request: &'a Request,
         network_mode: NetworkMode,
         credential_sources: Option<CredentialSources>,
+        tool_cache_mode: wrix_core::tool_cache::Mode,
     ) -> Result<Self, LaunchError> {
         let profile = &request.profile_config;
         let source = match &request.kind {
@@ -921,6 +940,7 @@ impl<'a> Plan<'a> {
             credential_sources,
             host_podman_socket,
             network_mode,
+            tool_cache_mode,
             git_identity: GitIdentity::load(),
             focus_target,
             host_tmux_target,
@@ -955,6 +975,14 @@ impl<'a> Plan<'a> {
                 self.request.profile_config.profile.name
             )?;
             writeln!(stdout, "WORKSPACE={}", self.workspace.display())?;
+            writeln!(stdout, "TOOL_CACHE_MODE={}", self.tool_cache_mode.as_str())?;
+            let tool_cache_override = match &self.request.kind {
+                Kind::Run(run) => run.tool_caches.shared,
+                Kind::Spawn(spawn) => spawn.config.tool_caches.shared,
+            };
+            if let Some(shared) = tool_cache_override {
+                writeln!(stdout, "TOOL_CACHE_SHARED_OVERRIDE={shared}")?;
+            }
             let overrides = match &self.request.kind {
                 Kind::Run(run) => GitGrants {
                     deploy: run.git_deploy,
@@ -1961,7 +1989,11 @@ struct CredentialSources {
 }
 
 impl CredentialSources {
-    fn resolve(request: &Request) -> Result<Option<Self>, LaunchError> {
+    fn resolve(
+        request: &Request,
+        repository_root: Option<&Path>,
+        policy: &repository_policy::Policy,
+    ) -> Result<Option<Self>, LaunchError> {
         let (workspace, overrides) = match &request.kind {
             Kind::Run(run) => (
                 run.workspace.as_path(),
@@ -1972,20 +2004,13 @@ impl CredentialSources {
             ),
             Kind::Spawn(spawn) => (Path::new(&spawn.config.workspace), spawn.config.git),
         };
-        let repository_root = Workspace::from_path(workspace)?.repository_root();
-        let policy = repository_root
-            .as_deref()
-            .map(repository_policy::read)
-            .transpose()
-            .map_err(|source| LaunchError::RepositoryPolicy { source })?
-            .unwrap_or_default();
         let deploy = overrides.deploy.or(policy.git.deploy).unwrap_or(false);
         let sign = overrides.sign.or(policy.git.sign).unwrap_or(false);
         if !deploy && !sign {
             return Ok(None);
         }
         let name = deploy_key_name(
-            repository_root.as_deref().unwrap_or(workspace),
+            repository_root.unwrap_or(workspace),
             policy
                 .git
                 .deploy_key

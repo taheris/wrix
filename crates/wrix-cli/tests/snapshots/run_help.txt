@@ -6,9 +6,14 @@ DIR defaults to CWD; without DIR, use -- before agent arguments.
 Launcher options stop at DIR or --; after DIR, one optional -- is consumed.
 Remaining arguments are passed unchanged to the agent, including --help.
 Omitted Git options inherit repository policy, defaulting independently to false.
+Tool caches: explicit launch choice > repository tool_caches.shared > shared default.
+Private mode does not disable caching or separate Nix/Celler policy.
+Restricted Rust requires private mode; use --no-cache with WRIX_NETWORK=limit.
 
 Options:
   --profile-config <file>  Override generated project launch data with <file>.
+  --cache                  Reuse shared worker tool caches for this launch.
+  --no-cache               Use fresh private writable local tool caches for this launch.
   --git-deploy             Grant the deploy key for this launch; conflicts with --no-git-deploy.
   --no-git-deploy          Deny the deploy key for this launch; conflicts with --git-deploy.
   --git-sign               Grant the signing key for this launch; conflicts with --no-git-sign.

@@ -19,6 +19,7 @@ pub struct Policy {
     pub git: Git,
     pub init: Init,
     pub cache: cache::Policy,
+    pub tool_caches: crate::tool_cache::Preference,
 }
 
 /// Key identity and independent credential grants; identity alone grants nothing.
@@ -105,6 +106,7 @@ pub fn parse(content: &str) -> Result<Policy, ParseError> {
             online_verify: raw.init.online_verify,
         },
         cache: raw.cache,
+        tool_caches: raw.tool_caches,
     })
 }
 
@@ -127,6 +129,8 @@ struct RawFile {
     init: RawInit,
     #[serde(default, deserialize_with = "deserialize_table")]
     cache: cache::Policy,
+    #[serde(default, deserialize_with = "deserialize_table")]
+    tool_caches: crate::tool_cache::Preference,
 }
 
 #[derive(Default, Deserialize)]

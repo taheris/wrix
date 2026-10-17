@@ -113,6 +113,8 @@ fn public_flags_have_descriptions() -> TestResult {
             vec!["run", "--help"],
             vec![
                 "--profile-config <file>",
+                "--cache",
+                "--no-cache",
                 "--git-deploy",
                 "--no-git-deploy",
                 "--git-sign",

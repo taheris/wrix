@@ -265,6 +265,7 @@ pub struct SpawnConfig {
     pub env: Vec<(EnvName, String)>,
     pub agent_args: Vec<String>,
     pub git: GitGrants,
+    pub tool_caches: wrix_core::tool_cache::Preference,
     pub mounts: Vec<SpawnMount>,
 }
 
@@ -325,6 +326,8 @@ struct RawSpawnConfig {
     agent_args: Vec<String>,
     #[serde(default, deserialize_with = "deserialize_git_grants")]
     git: GitGrants,
+    #[serde(default)]
+    tool_caches: wrix_core::tool_cache::Preference,
     #[serde(default)]
     mounts: Vec<SpawnMount>,
     #[serde(flatten)]
@@ -450,13 +453,17 @@ pub fn load_spawn_config(path: &Path, platform: Platform) -> Result<SpawnConfig,
         });
     }
     let content = fs::read_to_string(path)?;
-    let value = serde_json::from_str::<Value>(&content).map_err(|source| {
-        ConfigError::InvalidSpawnConfigJson {
-            path: path.display().to_string(),
-            source,
+    let raw = serde_json::from_str::<RawSpawnConfig>(&content).map_err(|source| {
+        if source.is_data() {
+            ConfigError::InvalidSpawnConfigSchema
+        } else {
+            ConfigError::InvalidSpawnConfigJson {
+                path: path.display().to_string(),
+                source,
+            }
         }
     })?;
-    parse_spawn_value(value, platform)
+    parse_spawn(raw, platform)
 }
 
 #[cfg(test)]
@@ -575,9 +582,14 @@ impl RawProfileConfig {
     }
 }
 
+#[cfg(test)]
 fn parse_spawn_value(value: Value, platform: Platform) -> Result<SpawnConfig, ConfigError> {
     let spawn = serde_json::from_value::<RawSpawnConfig>(value)
         .map_err(|_source| ConfigError::InvalidSpawnConfigSchema)?;
+    parse_spawn(spawn, platform)
+}
+
+fn parse_spawn(spawn: RawSpawnConfig, platform: Platform) -> Result<SpawnConfig, ConfigError> {
     if let Some(field) = first_present_field(
         &spawn.extensions,
         &[
@@ -645,6 +657,7 @@ fn parse_spawn_value(value: Value, platform: Platform) -> Result<SpawnConfig, Co
         env: spawn.env,
         agent_args: spawn.agent_args,
         git: spawn.git,
+        tool_caches: spawn.tool_caches,
         mounts: spawn.mounts,
     })
 }
