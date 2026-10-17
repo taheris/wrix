@@ -954,7 +954,8 @@ fn defaults_and_overrides_do_not_create_policy() -> TestResult {
     const CHILD: &str = "WRIX_TEST_INIT_POLICY_CHILD";
     if std::env::var_os(CHILD).is_some() {
         let root = std::env::current_dir()?;
-        let profile = root.parent().unwrap().join("profile.json");
+        let directory = tempfile::tempdir()?;
+        let profile = directory.path().join("profile.json");
         fs::write(&profile, r#"{"security":{"deploy_key":"profile-key"}}"#)?;
         let derived = format!("{}-test-host", root.file_name().unwrap().to_str().unwrap());
         run_git(
@@ -1185,6 +1186,9 @@ fn repo_signing_is_opt_in_and_verified() -> TestResult {
         "true"
     );
     assert_eq!(tree(&fixture.repo.path().join(".git/objects"))?, objects);
+    let log = fixture.log("keygen.log")?;
+    assert_contains("disposable signature", &log, "-Y\nsign\n");
+    assert_contains("signature verification", &log, "-Y\nverify\n");
     let grants = wrix_core::repository_policy::read(fixture.repo.path())?.git;
     assert!(!grants.deploy_enabled());
     assert!(!grants.sign_enabled());
