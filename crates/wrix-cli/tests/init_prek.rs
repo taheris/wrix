@@ -35,7 +35,7 @@ fn prek_hooks() -> TestResult {
 
     let mut command = init_command(repo.path(), &home, &deploy_key, &hooks)?;
     command
-        .arg("init")
+        .args(["init", "repo"])
         .args(["--offline", "--no-sign", "--key", "prek-key"]);
     let result = run_command(&mut command)?;
     assert_success_with_clean_stderr(&result);
@@ -46,7 +46,7 @@ fn prek_hooks() -> TestResult {
 
     let mut command = init_command(&integration, &home, &deploy_key, &hooks)?;
     command
-        .arg("init")
+        .args(["init", "repo"])
         .args(["--offline", "--no-sign", "--key", "prek-key"]);
     let result = run_command(&mut command)?;
     assert_success_with_clean_stderr(&result);
@@ -62,9 +62,13 @@ fn prek_hooks() -> TestResult {
     let flag_repo = setup_committed_repo("prek-disabled-flag", true)?;
     run_git(flag_repo.path(), &["config", "core.hooksPath", sentinel])?;
     let mut command = init_command(flag_repo.path(), &home, &deploy_key, &hooks)?;
-    command
-        .arg("init")
-        .args(["--offline", "--no-sign", "--no-hooks", "--key", "prek-key"]);
+    command.args(["init", "repo"]).args([
+        "--offline",
+        "--no-sign",
+        "--no-hooks",
+        "--key",
+        "prek-key",
+    ]);
     let result = run_command(&mut command)?;
     assert_success_with_clean_stderr(&result);
     assert_contains("flag disabled output", &result.stdout, "prek_hooks: false");
@@ -78,7 +82,7 @@ fn prek_hooks() -> TestResult {
     )?;
     let mut command = init_command(config_repo.path(), &home, &deploy_key, &hooks)?;
     command
-        .arg("init")
+        .args(["init", "repo"])
         .args(["--offline", "--no-sign", "--key", "prek-key"]);
     let result = run_command(&mut command)?;
     assert_success_with_clean_stderr(&result);

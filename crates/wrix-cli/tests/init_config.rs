@@ -45,7 +45,7 @@ fn defaults_and_overrides() -> TestResult {
         &hooks,
         &[fake_git.as_path()],
     )?;
-    command.arg("init");
+    command.args(["init", "repo"]);
     let result = run_command(&mut command)?;
     assert_success_with_clean_stderr(&result);
     assert_policy_line(
@@ -99,7 +99,7 @@ init = { prek_hooks = false, online_verify = false }
 ",
     )?;
     let mut command = init_command(repo.path(), &home, &deploy_key, &signing_key, &hooks, &[])?;
-    command.arg("init");
+    command.args(["init", "repo"]);
     let result = run_command(&mut command)?;
     assert_success_with_clean_stderr(&result);
     assert_policy_line("wrix.toml", &result.stdout, "deploy_key", "toml-key");
@@ -121,7 +121,7 @@ online_verify = true
 "#,
     )?;
     let mut command = init_command(repo.path(), &home, &deploy_key, &signing_key, &hooks, &[])?;
-    command.arg("init").args([
+    command.args(["init", "repo"]).args([
         "--key",
         "flag-key",
         "--remote",
@@ -129,7 +129,6 @@ online_verify = true
         "--offline",
         "--no-sign",
         "--no-hooks",
-        "--force",
     ]);
     let result = run_command(&mut command)?;
     assert_success_with_clean_stderr(&result);
@@ -138,7 +137,7 @@ online_verify = true
     assert_policy_line("flag overrides", &result.stdout, "remote", "origin");
     assert_policy_line("flag overrides", &result.stdout, "prek_hooks", "false");
     assert_policy_line("flag overrides", &result.stdout, "online_verify", "false");
-    assert_policy_line("flag overrides", &result.stdout, "force", "true");
+    assert_policy_line("flag overrides", &result.stdout, "force", "false");
 
     Ok(())
 }
@@ -175,7 +174,7 @@ fn git_grants_are_independent_and_default_false() -> TestResult {
         );
         let mut command = wrix_command_with_path(repo.path(), &[])?;
         command
-            .args(["init", "--offline", "--no-hooks"])
+            .args(["init", "repo", "--offline", "--no-hooks"])
             .env("HOME", &home)
             .env("HOSTNAME", "devhost")
             .env("WRIX_DEPLOY_KEY", &deploy_key)
@@ -239,6 +238,7 @@ fn invalid_and_retired_git_grants_are_rejected() -> TestResult {
         command
             .args([
                 "init",
+                "repo",
                 "--deploy",
                 "--sign",
                 "--key",

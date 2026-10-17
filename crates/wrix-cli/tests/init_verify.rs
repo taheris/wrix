@@ -30,6 +30,7 @@ fn outer_init_verifies_its_own_repository_with_independent_integration_clone() -
     let integration_config = fs::read(&integration_config_path)?;
     let home = fixture.home("online-helper");
     let deploy_key = write_deploy_key(&home, 0o600)?;
+    fixture.prepare(repo.path(), &home, &deploy_key)?;
     fixture.set_mode("success")?;
 
     assert_ne!(common_git_dir(repo.path())?, common_git_dir(&integration)?);
@@ -75,6 +76,7 @@ fn init_inside_integration_clone_verifies_that_repository() -> TestResult {
     let outer_config = fs::read(&outer_config_path)?;
     let home = fixture.home("integration-helper");
     let deploy_key = write_deploy_key(&home, 0o600)?;
+    fixture.prepare(&integration, &home, &deploy_key)?;
     fixture.set_mode("success")?;
 
     let result = fixture.run_init(
@@ -145,6 +147,7 @@ fn offline_flag_skips_network_verification() -> TestResult {
     let repo = setup_committed_repo("offline-flag", false)?;
     let home = fixture.home("offline-flag");
     let deploy_key = write_deploy_key(&home, 0o600)?;
+    fixture.prepare(repo.path(), &home, &deploy_key)?;
     fixture.set_mode("fail-if-online")?;
 
     let result = fixture.run_init(
@@ -166,6 +169,7 @@ fn offline_config_skips_network_verification() -> TestResult {
     let repo = setup_committed_repo("offline-config", false)?;
     let home = fixture.home("offline-config");
     let deploy_key = write_deploy_key(&home, 0o600)?;
+    fixture.prepare(repo.path(), &home, &deploy_key)?;
     fs::write(
         repo.path().join("wrix.toml"),
         "[init]\nonline_verify = false\n",
@@ -194,7 +198,9 @@ fn offline_verification_rejects_insecure_key_permissions() -> TestResult {
     let fixture = VerifyFixture::new()?;
     let repo = setup_committed_repo("offline-local-check", false)?;
     let home = fixture.home("offline-local-check");
-    let deploy_key = write_deploy_key(&home, 0o644)?;
+    let deploy_key = write_deploy_key(&home, 0o600)?;
+    fixture.prepare(repo.path(), &home, &deploy_key)?;
+    set_mode(&deploy_key, 0o644)?;
     fixture.set_mode("fail-if-online")?;
 
     let result = fixture.run_init(
@@ -222,6 +228,7 @@ fn online_failures_distinguish_host_key_from_authorization() -> TestResult {
     let host_key_repo = setup_committed_repo("host-key-failure", false)?;
     let host_key_home = fixture.home("host-key-failure");
     let host_key = write_deploy_key(&host_key_home, 0o600)?;
+    fixture.prepare(host_key_repo.path(), &host_key_home, &host_key)?;
     fixture.set_mode("host-key")?;
     let result = fixture.run_init(
         host_key_repo.path(),
@@ -244,6 +251,7 @@ fn online_failures_distinguish_host_key_from_authorization() -> TestResult {
     let auth_repo = setup_committed_repo("auth-failure", false)?;
     let auth_home = fixture.home("auth-failure");
     let auth_key = write_deploy_key(&auth_home, 0o600)?;
+    fixture.prepare(auth_repo.path(), &auth_home, &auth_key)?;
     fixture.set_mode("auth")?;
     let result = fixture.run_init(
         auth_repo.path(),
@@ -271,6 +279,7 @@ fn worktree_transport_override_fails_verification() -> TestResult {
     let repo = setup_committed_repo("worktree-transport-override", false)?;
     let home = fixture.home("worktree-transport-override");
     let deploy_key = write_deploy_key(&home, 0o600)?;
+    fixture.prepare(repo.path(), &home, &deploy_key)?;
     run_git(
         repo.path(),
         &["config", "extensions.worktreeConfig", "true"],
@@ -360,6 +369,25 @@ impl VerifyFixture {
     fn assert_no_online_capture(&self) {
         assert_absent(&self.git_capture_dir.join("cwd"));
         assert_absent(&self.ssh_capture_dir.join("cwd"));
+    }
+
+    fn prepare(&self, repo: &Path, home: &Path, deploy_key: &Path) -> TestResult {
+        let mut command = wrix_command_with_path(repo, &[&self.tracing_git, &self.fake_ssh])?;
+        let result = run_command(
+            command
+                .args([
+                    "init",
+                    "repo",
+                    "--offline",
+                    "--no-sign",
+                    "--key",
+                    "verify-key",
+                ])
+                .env("HOME", home)
+                .env("WRIX_DEPLOY_KEY", deploy_key),
+        )?;
+        assert_success_with_clean_stderr(&result);
+        Ok(())
     }
 
     fn run_init(

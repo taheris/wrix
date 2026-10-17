@@ -37,7 +37,7 @@ fn outer_init_leaves_independent_loom_integration_clone_unchanged() -> TestResul
 
     let mut command = wrix_command(repo.path())?;
     command
-        .arg("init")
+        .args(["init", "repo"])
         .args(["--offline", "--sign", "--key", "common-key"])
         .env("HOME", &home);
     let result = run_command(&mut command)?;
@@ -122,7 +122,7 @@ fn strict_context_aware_ssh_helper() -> TestResult {
 
     let mut command = wrix_command(repo.path())?;
     command
-        .arg("init")
+        .args(["init", "repo"])
         .args(["--offline", "--no-sign", "--key", "strict-key"])
         .env("HOME", &home)
         .env("WRIX_DEPLOY_KEY", &env_key);

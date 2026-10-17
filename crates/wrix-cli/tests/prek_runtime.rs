@@ -150,7 +150,14 @@ impl Fixture {
         write_empty_key(&key)?;
         run_command(
             wrix_command(self.repo.path())?
-                .args(["init", "--offline", "--no-sign", "--key", "test-key"])
+                .args([
+                    "init",
+                    "repo",
+                    "--offline",
+                    "--no-sign",
+                    "--key",
+                    "test-key",
+                ])
                 .env("HOME", self.work.path())
                 .env("WRIX_DEPLOY_KEY", key)
                 .env("WRIX_PREK_HOOKS", &self.runtime.hooks)
@@ -254,7 +261,14 @@ fn packaged_launcher_initializes_binding_without_runner_on_path() -> TestResult 
     let result = run_command(
         fixture
             .command(&packaged, fixture.repo.path(), "host")
-            .args(["init", "--offline", "--no-sign", "--key", "test-key"])
+            .args([
+                "init",
+                "repo",
+                "--offline",
+                "--no-sign",
+                "--key",
+                "test-key",
+            ])
             .env("WRIX_DEPLOY_KEY", key)
             .env_remove("WRIX_PREK_HOOKS"),
     )?;

@@ -412,7 +412,7 @@ fn deploy_offline_flag_fails_before_key_or_api_mutation() -> TestResult {
     assert_contains(
         "offline flag",
         &result.stderr,
-        "--deploy cannot be used with --offline",
+        "provisioning cannot be used with --offline",
     );
     assert_absent(&home.join(".ssh/deploy_keys/offline-key"));
     fixture.assert_gh_log_empty("offline flag")?;
@@ -440,7 +440,7 @@ fn deploy_offline_config_fails_before_key_or_api_mutation() -> TestResult {
     assert_contains(
         "offline config",
         &result.stderr,
-        "--deploy requires online verification",
+        "provisioning requires online verification",
     );
     assert_absent(&home.join(".ssh/deploy_keys/offline-key"));
     fixture.assert_gh_log_empty("offline config")?;
@@ -486,7 +486,7 @@ impl DeployFixture {
 
     fn run_init(&self, repo: &Path, home: &Path, args: &[&str]) -> TestResult<RunResult> {
         let mut command = self.init_command(repo, home)?;
-        command.arg("init").args(args);
+        command.args(["init", "repo"]).args(args);
         run_command(&mut command)
     }
 

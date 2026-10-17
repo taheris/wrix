@@ -23,7 +23,7 @@ fn signing_is_opt_in() -> TestResult {
 
     let mut command = wrix_command(repo.path())?;
     command
-        .arg("init")
+        .args(["init", "repo"])
         .args(["--offline", "--key", "signing-key"])
         .env("HOME", &home)
         .env(
@@ -65,7 +65,7 @@ fn signing_is_opt_in() -> TestResult {
         }
         let mut command = wrix_command(repo.path())?;
         command
-            .arg("init")
+            .args(["init", "repo"])
             .args(["--offline", "--key", "signing-key"])
             .env("HOME", &home);
         if !use_policy {
@@ -96,7 +96,7 @@ fn signing_key_env_must_point_to_file() -> TestResult {
     let before = fs::read(repo.path().join(".git/config"))?;
     let mut command = wrix_command(repo.path())?;
     command
-        .arg("init")
+        .args(["init", "repo"])
         .args(["--offline", "--sign", "--key", "missing-key"])
         .env("HOME", &home)
         .env("WRIX_SIGNING_KEY", fixture.path().join("absent-key"));
@@ -125,7 +125,7 @@ fn fallback_signing_key_is_required() -> TestResult {
     let before = fs::read(repo.path().join(".git/config"))?;
     let mut command = wrix_command(repo.path())?;
     command
-        .arg("init")
+        .args(["init", "repo"])
         .args(["--offline", "--sign", "--key", "missing-key"])
         .env("HOME", &home);
 
@@ -152,7 +152,7 @@ fn no_sign_flag_disables_signing() -> TestResult {
     write_ed25519_key(&home.join(".ssh/deploy_keys/no-sign-key"))?;
     let mut command = wrix_command(repo.path())?;
     command
-        .arg("init")
+        .args(["init", "repo"])
         .args(["--offline", "--key", "no-sign-key", "--no-sign"])
         .env("HOME", &home);
 
@@ -178,7 +178,7 @@ fn signing_config_opt_out_disables_signing() -> TestResult {
     fs::write(repo.path().join("wrix.toml"), "[git]\nsign = false\n")?;
     let mut command = wrix_command(repo.path())?;
     command
-        .arg("init")
+        .args(["init", "repo"])
         .args(["--offline", "--key", "config-key"])
         .env("HOME", &home);
 
@@ -209,7 +209,7 @@ fn sign_flags_override_repository_policy() -> TestResult {
         fs::write(repo.path().join("wrix.toml"), &policy)?;
         let mut command = wrix_command(repo.path())?;
         command
-            .arg("init")
+            .args(["init", "repo"])
             .args(["--offline", "--key", "signing-key", flag])
             .env("HOME", &home);
         if policy_sign {

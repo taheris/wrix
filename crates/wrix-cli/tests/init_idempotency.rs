@@ -131,7 +131,7 @@ fn run_init(
     args: &[&str],
 ) -> TestResult<common::RunResult> {
     let mut command = init_command(repo, home, fake_git, fake_gh, hooks)?;
-    command.arg("init").args(args);
+    command.args(["init", "repo"]).args(args);
     run_command(&mut command)
 }
 

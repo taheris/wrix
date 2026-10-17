@@ -186,7 +186,7 @@ test_session_local_signing() {
       git -C "$workspace" init -q
       git -C "$workspace" remote add origin git@github.com:example/grants.git
       (cd "$workspace" && HOME="$HOME_DIR" WRIX_DEPLOY_KEY="$DEPLOY_KEY" WRIX_SIGNING_KEY="$SIGNING_KEY" \
-        PATH="$LAUNCHER/bin:$PATH" "$LAUNCHER/bin/wrix" init --offline --sign --key grant-key) \
+        PATH="$LAUNCHER/bin:$PATH" "$LAUNCHER/bin/wrix" init repo --offline --sign --key grant-key) \
         >"$TEST_TMP/init.out" 2>&1
       git -C "$workspace" config commit.gpgsign "$host_sign"
       cp "$workspace/.git/config" "$workspace/common.before"

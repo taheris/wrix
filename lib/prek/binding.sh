@@ -2,7 +2,7 @@
 set -euo pipefail
 
 wrix_prek_fail() {
-  printf 'wrix: %s; reload the Wrix devshell or run the Nix-packaged wrix init in this repository to repair hooks\n' "$*" >&2
+  printf 'wrix: %s; reload the Wrix devshell or run the Nix-packaged wrix init repo in this repository to repair hooks\n' "$*" >&2
   exit 1
 }
 
