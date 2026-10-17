@@ -150,13 +150,13 @@ fn public_flags_have_descriptions() -> TestResult {
             "init",
             vec!["init", "--offline", "--help"],
             vec![
-                "--deploy",
                 "--key <name>",
                 "--remote <name>",
-                "--offline",
                 "--sign",
                 "--no-sign",
+                "--offline",
                 "--no-hooks",
+                "--deploy",
                 "--force",
                 "-h, --help",
             ],
@@ -227,7 +227,7 @@ fn conflicting_sign_flags_are_non_mutating() -> TestResult {
         let mut command = Command::new(env!("CARGO_BIN_EXE_wrix"));
         command
             .current_dir(repo.path())
-            .args(["init", "--deploy"])
+            .args(["init", "deploy"])
             .args(flags)
             .env("HOME", home.path())
             .env("PATH", "");
@@ -256,13 +256,13 @@ fn deploy_offline_flags_are_non_mutating() -> TestResult {
     let repo = setup_repo("cli-deploy-offline-flags")?;
     let before = git_config(repo.path())?;
 
-    let result = run_wrix_in(repo.path(), &["init", "--deploy", "--offline"])?;
+    let result = run_wrix_in(repo.path(), &["init", "repo", "--deploy", "--offline"])?;
 
     assert_failure_with_clean_stdout(&result);
     assert_contains(
         "deploy offline",
         &result.stderr,
-        "--deploy cannot be used with --offline",
+        "deploy provisioning cannot be used with --offline",
     );
     assert_contains("deploy offline", &result.stderr, "Usage: wrix init");
     assert_eq!(before, git_config(repo.path())?);
@@ -276,13 +276,13 @@ fn deploy_under_offline_policy_is_non_mutating() -> TestResult {
     fs::write(repo.path().join("wrix.toml"), policy)?;
     let before = git_config(repo.path())?;
 
-    let result = run_wrix_in(repo.path(), &["init", "--deploy"])?;
+    let result = run_wrix_in(repo.path(), &["init", "repo", "--deploy"])?;
 
     assert_failure_with_clean_stdout(&result);
     assert_contains(
         "deploy offline policy",
         &result.stderr,
-        "--deploy requires online verification",
+        "deploy provisioning requires online verification",
     );
     assert_contains("deploy offline policy", &result.stderr, "Usage: wrix init");
     assert_eq!(before, git_config(repo.path())?);
