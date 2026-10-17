@@ -31,6 +31,9 @@ class BrowserGateScope(unittest.TestCase):
                         GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1", TMPDIR=str(runtime))
         for key in subprocess.check_output(["git", "rev-parse", "--local-env-vars"], text=True).splitlines():
             self.env.pop(key, None)
+        for key in tuple(self.env):
+            if key.startswith("PLAYWRIGHT_") or key == "WRIX_MCP_MANIFEST":
+                self.env.pop(key)
         self.sentinel = "browser-runtime-" + uuid.uuid4().hex
         nixpkgs = subprocess.check_output(["nix", "eval", "--raw", "--impure", "--expr",
             '(builtins.getFlake "path:' + SOURCE_STORE + '").inputs.nixpkgs.outPath'], text=True)
@@ -278,7 +281,7 @@ exec bin/test-ci-verifiers "$@"
                         case.assertEqual(record["outcome"], "fail", record)
                 case.assertFalse((case.root / ".loom/marker.json").exists())
             finally:
-                case.doCleanups()
+                self.assertTrue(case.doCleanups(), "Scoped fixture cleanup failed")
 
         with ThreadPoolExecutor(max_workers=3) as pool:
             futures = [(lane, path, pool.submit(check_subject, lane, path))
