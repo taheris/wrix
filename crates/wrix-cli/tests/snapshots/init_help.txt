@@ -1,14 +1,27 @@
-Initialize repository Git policy.
+Verify repository Git policy.
 
 Usage: wrix init [options]
+       wrix init deploy [options]
+       wrix init repo [--deploy] [options]
+
+Workflows:
+  init             Verify existing setup without applying or repairing it.
+  init deploy      Provision/reuse GitHub keys and registrations only.
+  init repo        Apply repository setup using existing keys, then verify.
+  init repo --deploy
+                   Provision keys before applying and verifying repository setup.
 
 Options:
-  --deploy         Provision GitHub deploy keys (and signing keys when enabled), not sandbox grants; requires online verification.
-  --key <name>     Use <name> for deploy and signing keys (default: policy or <repo>-<host>).
-  --remote <name>  Use <name> for GitHub detection and verification (default: policy or origin).
-  --offline        Skip network and API checks; cannot be combined with --deploy.
-  --sign           Enable SSH commit signing (default: policy or disabled); conflicts with --no-sign.
-  --no-sign        Disable SSH commit signing for this invocation; conflicts with --sign.
-  --no-hooks       Skip prek hook setup (default: enabled when prek config exists).
-  --force          Replace conflicting key material and registrations when supported.
-  -h, --help       Print help.
+  --key <name>     Select key identity (default: repository, profile or <repo>-<host>).
+  --remote <name>  Select the GitHub remote (default: policy or origin).
+  --sign           Select enabled signing (default: policy or disabled); conflicts with --no-sign.
+  --no-sign        Select disabled signing for this invocation; conflicts with --sign.
+  --offline        Omit network/API checks, retaining local checks; invalid for provisioning.
+  --no-hooks       Skip hook checks/setup on init or init repo without changing existing hooks.
+  --deploy         Provision keys first on init repo only; requires online operation.
+  --force          Replace conflicting keys/registrations on provisioning workflows only.
+  -h, --help       Print help without mutation.
+
+Provisioning requires online operation and manages separate signing keys only when signing is enabled.
+It does not grant sandbox credentials or apply repository helpers/hooks on init deploy.
+Repo application never provisions missing keys without --deploy and succeeds only after verification.

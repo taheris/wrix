@@ -53,7 +53,7 @@ pub fn run(
     }
 
     match build_plan(profile_config_path, args).and_then(|plan| {
-        plan.apply()?;
+        plan.execute()?;
         Ok(plan)
     }) {
         Ok(plan) => {
@@ -68,7 +68,7 @@ pub fn run(
     }
 }
 
-pub const HELP: &str = "Initialize repository Git policy.\n\nUsage: wrix init [options]\n\nOptions:\n  --deploy         Provision GitHub deploy keys (and signing keys when enabled), not sandbox grants; requires online verification.\n  --key <name>     Use <name> for deploy and signing keys (default: policy or <repo>-<host>).\n  --remote <name>  Use <name> for GitHub detection and verification (default: policy or origin).\n  --offline        Skip network and API checks; cannot be combined with --deploy.\n  --sign           Enable SSH commit signing (default: policy or disabled); conflicts with --no-sign.\n  --no-sign        Disable SSH commit signing for this invocation; conflicts with --sign.\n  --no-hooks       Skip prek hook setup (default: enabled when prek config exists).\n  --force          Replace conflicting key material and registrations when supported.\n  -h, --help       Print help.\n";
+pub const HELP: &str = "Verify repository Git policy.\n\nUsage: wrix init [options]\n       wrix init deploy [options]\n       wrix init repo [--deploy] [options]\n\nWorkflows:\n  init             Verify existing setup without applying or repairing it.\n  init deploy      Provision/reuse GitHub keys and registrations only.\n  init repo        Apply repository setup using existing keys, then verify.\n  init repo --deploy\n                   Provision keys before applying and verifying repository setup.\n\nOptions:\n  --key <name>     Select key identity (default: repository, profile or <repo>-<host>).\n  --remote <name>  Select the GitHub remote (default: policy or origin).\n  --sign           Select enabled signing (default: policy or disabled); conflicts with --no-sign.\n  --no-sign        Select disabled signing for this invocation; conflicts with --sign.\n  --offline        Omit network/API checks, retaining local checks; invalid for provisioning.\n  --no-hooks       Skip hook checks/setup on init or init repo without changing existing hooks.\n  --deploy         Provision keys first on init repo only; requires online operation.\n  --force          Replace conflicting keys/registrations on provisioning workflows only.\n  -h, --help       Print help without mutation.\n\nProvisioning requires online operation and manages separate signing keys only when signing is enabled.\nIt does not grant sandbox credentials or apply repository helpers/hooks on init deploy.\nRepo application never provisions missing keys without --deploy and succeeds only after verification.\n";
 
 pub fn write_help(stdout: &mut impl Write) -> io::Result<()> {
     stdout.write_all(HELP.as_bytes())
@@ -199,15 +199,18 @@ impl fmt::Display for KeyKind {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-enum DeployPolicy {
+enum Workflow {
     #[default]
-    Skip,
-    Provision,
+    Verify,
+    Deploy,
+    Repo {
+        provision: bool,
+    },
 }
 
-impl DeployPolicy {
-    const fn enabled(self) -> bool {
-        matches!(self, Self::Provision)
+impl Workflow {
+    const fn provisions(self) -> bool {
+        matches!(self, Self::Deploy | Self::Repo { provision: true })
     }
 }
 
@@ -274,7 +277,7 @@ impl ForcePolicy {
 
 #[derive(Default)]
 struct Flags {
-    deploy: DeployPolicy,
+    workflow: Workflow,
     key_name: Option<KeyName>,
     remote: Option<RemoteName>,
     signing: Option<SigningPolicy>,
@@ -308,7 +311,7 @@ struct Plan {
     github_repo: Option<GithubRepo>,
     hooks: HookPolicy,
     verification: VerificationPolicy,
-    deploy: DeployPolicy,
+    workflow: Workflow,
     force: ForcePolicy,
 }
 
@@ -375,11 +378,21 @@ enum RemoteKeyPlan {
 }
 
 impl Plan {
-    fn apply(&self) -> Result<(), Error> {
-        if self.deploy == DeployPolicy::Provision {
+    fn execute(&self) -> Result<(), Error> {
+        if self.workflow.provisions() {
             self.provision_deploy()?;
         }
+        match self.workflow {
+            Workflow::Deploy => Ok(()),
+            Workflow::Verify => self.verify(),
+            Workflow::Repo { .. } => {
+                self.apply()?;
+                self.verify()
+            }
+        }
+    }
 
+    fn apply(&self) -> Result<(), Error> {
         let signing_key = self.resolve_signing_key()?;
         let common_dir = git_common_dir(&self.root)?;
         let state_dir = common_dir.join("wrix");
@@ -393,13 +406,20 @@ impl Plan {
             0o700,
         )?;
         write_common_git_config(&common_dir, "core.sshCommand", TRANSPORT_TRAMPOLINE)?;
-        let signing_identity = configure_signing(
+        configure_signing(
             &self.root,
             &common_dir,
             &self.key_name,
             signing_key.as_deref(),
         )?;
-        configure_prek_hooks(&self.root, &common_dir, self.hooks)?;
+        configure_prek_hooks(&self.root, &common_dir, self.hooks)
+    }
+
+    fn verify(&self) -> Result<(), Error> {
+        let common_dir = git_common_dir(&self.root)?;
+        let state_dir = common_dir.join("wrix");
+        let helper_path = state_dir.join("git-ssh");
+        let known_hosts_path = state_dir.join("github_known_hosts");
         verify_transport_helper(
             &self.root,
             &common_dir,
@@ -407,8 +427,17 @@ impl Plan {
             &known_hosts_path,
             &self.key_name,
         )?;
-        if let Some(identity) = signing_identity {
-            verify_signing_commit(&self.root, &identity)?;
+        if self.signing == SigningPolicy::Enabled {
+            if let Some(key) = self.resolve_signing_key()? {
+                require_private_key_mode(KeyKind::Signing, &key)?;
+            }
+            verify_signing_config(&self.root, &common_dir, &self.key_name)?;
+            verify_signing_commit(&self.root, &signing_identity(&self.root)?)?;
+        } else {
+            require_runtime_git_config(&self.root, "commit.gpgsign", "false")?;
+        }
+        if self.hooks == HookPolicy::Enabled {
+            verify_prek_hooks(&common_dir, &resolve_prek_hooks_path()?)?;
         }
         if self.verification == VerificationPolicy::Online {
             verify_online(&self.root, &self.remote, self.github_repo()?)?;
@@ -478,14 +507,14 @@ impl Plan {
         writeln!(stdout, "remote: {}", self.remote)?;
         writeln!(stdout, "prek_hooks: {}", self.hooks.as_bool())?;
         writeln!(stdout, "online_verify: {}", self.verification.as_bool())?;
-        writeln!(stdout, "deploy: {}", self.deploy.enabled())?;
+        writeln!(stdout, "deploy: {}", self.workflow.provisions())?;
         writeln!(stdout, "force: {}", self.force.enabled())
     }
 }
 
 fn build_plan(profile_config_path: Option<&Path>, args: &[String]) -> Result<Plan, Error> {
     let flags = parse_flags(args)?;
-    if flags.deploy.enabled() && flags.verification == Some(VerificationPolicy::Offline) {
+    if flags.workflow.provisions() && flags.verification == Some(VerificationPolicy::Offline) {
         return Err(Error::DeployOfflineFlag);
     }
 
@@ -521,11 +550,11 @@ fn build_plan(profile_config_path: Option<&Path>, args: &[String]) -> Result<Pla
         })
         .unwrap_or(VerificationPolicy::Online);
 
-    if flags.deploy.enabled() && verification == VerificationPolicy::Offline {
+    if flags.workflow.provisions() && verification == VerificationPolicy::Offline {
         return Err(Error::DeployOfflinePolicy);
     }
     let remote_url = remote_url(&root, &remote)?;
-    let github_repo = if flags.deploy.enabled() || verification == VerificationPolicy::Online {
+    let github_repo = if flags.workflow.provisions() || verification == VerificationPolicy::Online {
         Some(
             parse_github_remote(&remote_url).map_err(|source| Error::UnsupportedGithubRemote {
                 remote: remote.clone(),
@@ -537,8 +566,10 @@ fn build_plan(profile_config_path: Option<&Path>, args: &[String]) -> Result<Pla
         None
     };
     let signing_key = if signing == SigningPolicy::Enabled {
-        require_signing_program()?;
-        if flags.deploy.enabled() {
+        if flags.workflow != Workflow::Deploy {
+            require_signing_program()?;
+        }
+        if flags.workflow.provisions() {
             None
         } else {
             Some(crate::sign::resolve_key_for_key_name(
@@ -558,25 +589,35 @@ fn build_plan(profile_config_path: Option<&Path>, args: &[String]) -> Result<Pla
         github_repo,
         hooks,
         verification,
-        deploy: flags.deploy,
+        workflow: flags.workflow,
         force: flags.force,
     })
 }
 
 fn parse_flags(args: &[String]) -> Result<Flags, Error> {
-    let mut flags = Flags::default();
-    let mut index = 0;
+    let (workflow, mut index) = match args.first().map(String::as_str) {
+        Some("deploy") => (Workflow::Deploy, 1),
+        Some("repo") => (Workflow::Repo { provision: false }, 1),
+        _ => (Workflow::Verify, 0),
+    };
+    let mut flags = Flags {
+        workflow,
+        ..Flags::default()
+    };
     while index < args.len() {
         match args[index].as_str() {
-            "--deploy" => {
-                flags.deploy = DeployPolicy::Provision;
+            "--deploy" if matches!(flags.workflow, Workflow::Repo { .. }) => {
+                flags.workflow = Workflow::Repo { provision: true };
                 index += 1;
             }
             "--key" => {
-                let value = args.get(index + 1).ok_or(Error::MissingFlagValue {
-                    flag: "--key",
-                    value_name: "<name>",
-                })?;
+                let value = args
+                    .get(index + 1)
+                    .filter(|value| !value.starts_with('-'))
+                    .ok_or(Error::MissingFlagValue {
+                        flag: "--key",
+                        value_name: "<name>",
+                    })?;
                 flags.key_name = Some(parse_key_name(value, "--key")?);
                 index += 2;
             }
@@ -586,10 +627,13 @@ fn parse_flags(args: &[String]) -> Result<Flags, Error> {
                 index += 1;
             }
             "--remote" => {
-                let value = args.get(index + 1).ok_or(Error::MissingFlagValue {
-                    flag: "--remote",
-                    value_name: "<name>",
-                })?;
+                let value = args
+                    .get(index + 1)
+                    .filter(|value| !value.starts_with('-'))
+                    .ok_or(Error::MissingFlagValue {
+                        flag: "--remote",
+                        value_name: "<name>",
+                    })?;
                 flags.remote = Some(parse_remote_name(value, "--remote")?);
                 index += 2;
             }
@@ -620,7 +664,7 @@ fn parse_flags(args: &[String]) -> Result<Flags, Error> {
             }
             "--" => {
                 if index + 1 == args.len() {
-                    return Ok(flags);
+                    break;
                 }
                 return Err(Error::UnexpectedArgument {
                     value: args[index + 1].clone(),
@@ -632,6 +676,12 @@ fn parse_flags(args: &[String]) -> Result<Flags, Error> {
                 });
             }
         }
+    }
+    if flags.force.enabled() && !flags.workflow.provisions() {
+        return Err(Error::ForceWithoutProvisioning);
+    }
+    if flags.workflow == Workflow::Deploy && flags.hooks.is_some() {
+        return Err(Error::DeployHooks);
     }
     Ok(flags)
 }
@@ -2162,9 +2212,13 @@ enum Error {
     },
     /// --sign cannot be combined with --no-sign
     ConflictingSignFlags,
-    /// --deploy cannot be used with --offline because deploy provisioning requires online verification
+    /// --force requires init deploy or init repo --deploy
+    ForceWithoutProvisioning,
+    /// --no-hooks is only supported on init verification or init repo
+    DeployHooks,
+    /// deploy provisioning cannot be used with --offline because it requires online verification
     DeployOfflineFlag,
-    /// --deploy requires online verification; remove --deploy or set init.online_verify = true
+    /// deploy provisioning requires online verification; set init.online_verify = true
     DeployOfflinePolicy,
     /// cannot resolve current directory: {0}
     CurrentDir(#[source] io::Error),
@@ -2346,14 +2400,14 @@ enum Error {
 #[cfg(test)]
 mod test {
     use super::{
-        DeployPolicy, ForcePolicy, HookPolicy, KeyName, OnlineFailure, RemoteKeyId, RemoteName,
-        SigningPolicy, VerificationPolicy, classify_online_failure, parse_flags,
-        parse_github_remote,
+        ForcePolicy, HookPolicy, KeyName, OnlineFailure, RemoteKeyId, RemoteName, SigningPolicy,
+        VerificationPolicy, Workflow, classify_online_failure, parse_flags, parse_github_remote,
     };
 
     #[test]
     fn flags_parse_documented_init_options() {
         let args = vec![
+            String::from("repo"),
             String::from("--deploy"),
             String::from("--key"),
             String::from("repo-key"),
@@ -2364,7 +2418,7 @@ mod test {
             String::from("--force"),
         ];
         let flags = parse_flags(&args).unwrap();
-        assert_eq!(flags.deploy, DeployPolicy::Provision);
+        assert_eq!(flags.workflow, Workflow::Repo { provision: true });
         assert_eq!(flags.key_name, Some(KeyName::parse("repo-key").unwrap()));
         assert_eq!(flags.remote, Some(RemoteName::parse("upstream").unwrap()));
         assert_eq!(flags.verification, Some(VerificationPolicy::Offline));

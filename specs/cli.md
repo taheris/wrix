@@ -824,14 +824,14 @@ authorization. Verification diagnoses stale/missing helpers and hooks with
 
 - Help for every init workflow describes its effects, flag placement and
   verification/provisioning boundaries without mutating managed state.
-  [test?](../crates/wrix-cli/tests/init_workflows.rs::workflow_help_is_complete_and_non_mutating)
+  [test](../crates/wrix-cli/tests/init_workflows.rs::workflow_help_is_complete_and_non_mutating)
 - Unsupported init subcommands, retired flat flags, misplaced flags, surplus
   arguments, missing values and conflicting modes fail with usage before writes
   or remote mutation.
-  [test?](../crates/wrix-cli/tests/init_workflows.rs::argument_errors_precede_local_and_remote_mutation)
+  [test](../crates/wrix-cli/tests/init_workflows.rs::argument_errors_precede_local_and_remote_mutation)
 - Every init workflow requires an existing Git worktree and resolvable selected
   remote; no failure creates Git metadata or a GitHub repository.
-  [test?](../crates/wrix-cli/tests/init_workflows.rs::workflows_require_existing_repository_and_remote)
+  [test](../crates/wrix-cli/tests/init_workflows.rs::workflows_require_existing_repository_and_remote)
 - Bare init verifies correctly configured setup without persistent managed
   changes, including Git objects, keys, helpers, hooks, runner/SSH files, policy
   and service state, on both success and failure.
@@ -841,22 +841,22 @@ authorization. Verification diagnoses stale/missing helpers and hooks with
   [test?](../crates/wrix-cli/tests/init_workflows.rs::verification_reports_drift_without_repair)
 - Standalone init deploy provisions/checks keys and registrations without
   applying repository configuration or requiring installed helpers/hooks.
-  [test?](../crates/wrix-cli/tests/init_workflows.rs::standalone_deploy_only_provisions_keys)
+  [test](../crates/wrix-cli/tests/init_workflows.rs::standalone_deploy_only_provisions_keys)
 - Init repo applies requested Git/signing/hooks setup and verifies it, but never
   provisions missing keys without the explicit deploy modifier.
   [test?](../crates/wrix-cli/tests/init_workflows.rs::repo_applies_and_verifies_without_implicit_provisioning)
 - Init repo --deploy uses standalone provisioning semantics before application;
   provisioning failure prevents application, and later verification failure
   cannot produce success.
-  [test?](../crates/wrix-cli/tests/init_workflows.rs::composed_repo_orders_provision_apply_and_verify)
+  [test](../crates/wrix-cli/tests/init_workflows.rs::composed_repo_orders_provision_apply_and_verify)
 - Init flag placement follows the workflow table, including force only during
   provisioning and passive no-hooks behavior only on verification/repo setup.
-  [test?](../crates/wrix-cli/tests/init_workflows.rs::workflow_flag_applicability_is_enforced)
+  [test](../crates/wrix-cli/tests/init_workflows.rs::workflow_flag_applicability_is_enforced)
 - Explicit offline mode rejects both provisioning forms before key, API, config
   or policy mutation.
-  [test?](../crates/wrix-cli/tests/init_workflows.rs::offline_provisioning_is_rejected_before_mutation)
+  [test](../crates/wrix-cli/tests/init_workflows.rs::offline_provisioning_is_rejected_before_mutation)
 - Offline repository policy rejects both provisioning forms before mutation.
-  [test?](../crates/wrix-cli/tests/init_workflows.rs::offline_policy_rejects_provisioning_before_mutation)
+  [test](../crates/wrix-cli/tests/init_workflows.rs::offline_policy_rejects_provisioning_before_mutation)
 - Valid workflows need no wrix.toml and do not create one to record defaults;
   key selection uses flag > repository > supplied ProfileConfig > derived
   default, and remote/hooks/online policy uses flag > repository > defaults.
@@ -866,7 +866,7 @@ authorization. Verification diagnoses stale/missing helpers and hooks with
   [test](../crates/wrix-core/tests/repository_policy.rs::supported_key_remote_and_init_overrides_are_typed)
 - Prefixed/mixed policy and wrong-typed ProfileConfig security/key identity fail
   before any workflow mutation.
-  [test?](../crates/wrix-cli/tests/init_workflows.rs::invalid_policy_and_profile_identity_precede_mutation)
+  [test](../crates/wrix-cli/tests/init_workflows.rs::invalid_policy_and_profile_identity_precede_mutation)
 - Repo initialization applies context-stable transport/signing only to the
   invoked repository, leaving an independent nested integration clone unchanged.
   [test?](../crates/wrix-cli/tests/init_workflows.rs::outer_repo_setup_does_not_mutate_integration_clone)
@@ -897,10 +897,10 @@ authorization. Verification diagnoses stale/missing helpers and hooks with
 - Both provisioning entrypoints create separate passphraseless ed25519 deploy
   and signing keys with secure permissions when signing is enabled, registering
   repo write access and the operator's signing key respectively.
-  [test?](../crates/wrix-cli/tests/init_workflows.rs::both_provisioning_forms_pair_requested_signing_keys)
+  [test](../crates/wrix-cli/tests/init_workflows.rs::both_provisioning_forms_pair_requested_signing_keys)
 - Signing-disabled provisioning creates only the deploy key and neither writes
   nor implicitly enables sandbox grants; a grant alone never provisions keys.
-  [test?](../crates/wrix-cli/tests/init_workflows.rs::provisioning_does_not_infer_or_write_grants)
+  [test](../crates/wrix-cli/tests/init_workflows.rs::provisioning_does_not_infer_or_write_grants)
 - Matching local/remote deploy keys are reused without remote mutation.
   [test](../crates/wrix-cli/tests/init_deploy.rs::matching_deploy_keys_are_reused)
 - Matching historical signing registrations remain reusable without rotation.
@@ -910,7 +910,7 @@ authorization. Verification diagnoses stale/missing helpers and hooks with
 - Remote registration conflicts fail unless force permits replacement.
   [test](../crates/wrix-cli/tests/init_deploy.rs::remote_key_conflict_requires_force)
 - Provisioning rejects non-GitHub remotes before key or API mutation.
-  [test?](../crates/wrix-cli/tests/init_workflows.rs::unsupported_provisioning_remote_precedes_mutation)
+  [test](../crates/wrix-cli/tests/init_workflows.rs::unsupported_provisioning_remote_precedes_mutation)
 - Online verification exercises real Git and the existing strict helper from the
   invoked repository against the selected GitHub SSH URL, including HTTPS
   origins and an independent nested integration clone.
@@ -929,7 +929,7 @@ authorization. Verification diagnoses stale/missing helpers and hooks with
   [test?](../crates/wrix-cli/tests/init_workflows.rs::offline_verification_rejects_insecure_permissions)
 - Repeated standalone provisioning preserves matching keys/registrations and
   leaves repository setup untouched.
-  [test?](../crates/wrix-cli/tests/init_workflows.rs::standalone_provisioning_is_idempotent)
+  [test](../crates/wrix-cli/tests/init_workflows.rs::standalone_provisioning_is_idempotent)
 - Repeated composed repo initialization avoids key, config, hook, helper,
   Git-object and file-metadata churn or remote mutation.
   [test?](../crates/wrix-cli/tests/init_workflows.rs::composed_repo_initialization_is_idempotent)
