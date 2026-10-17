@@ -2,7 +2,7 @@
 
 pkgs.runCommand "wrix-prek-hooks"
   {
-    outputHash = "sha256-NGZ6hFvtkMXD93fWE1NYPzAFnRChzFIt5ZJ3qvo8m8w=";
+    outputHash = "sha256-WkgVCHKmroJq8GvaLVQ5uWlTzNyMaoTgATKybO6oRXg=";
     outputHashAlgo = "sha256";
     outputHashMode = "recursive";
   }
