@@ -15,6 +15,11 @@ use std::{
 use config::{Platform, load_profile_config, load_spawn_config};
 use launch::{Kind, Request, Run, Spawn};
 
+/// Constructor-owned immutable project launch data; explicit CLI input wins.
+pub const PROJECT_PROFILE_CONFIG: &str = "WRIX_PROJECT_PROFILE_CONFIG";
+
+pub const HOST_SETUP: &str = "Provide one host wrix on PATH using Home Manager, nix-darwin, nix profile add 'github:taheris/wrix#wrix', or a temporary environment: nix shell 'github:taheris/wrix#wrix'. No fixed installation directory is required. Projects supply launch data, not another executable. Enter sandbox.devShell for its generated immutable project configuration, or pass --profile-config <file> explicitly. Explicit input overrides the project default for run/spawn only. For incompatible data, update the host package or regenerate supported project data; Wrix does not install or select another CLI automatically.";
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Command {
     Run,
@@ -38,15 +43,17 @@ impl Command {
     }
 }
 
-pub const RUN_HELP: &str = "Run an interactive sandbox.\n\nUsage: wrix [--profile-config <file>] run [LAUNCH_OPTIONS] [DIR] [--] [AGENT_ARGS ...]\n\nDIR defaults to CWD; without DIR, use -- before agent arguments.\nLauncher options stop at DIR or --; after DIR, one optional -- is consumed.\nRemaining arguments are passed unchanged to the agent, including --help.\nOmitted Git options inherit repository policy, defaulting independently to false.\n\nOptions:\n  --profile-config <file>  Read launcher defaults from <file> before run (required).\n  --git-deploy             Grant the deploy key for this launch; conflicts with --no-git-deploy.\n  --no-git-deploy          Deny the deploy key for this launch; conflicts with --git-deploy.\n  --git-sign               Grant the signing key for this launch; conflicts with --no-git-sign.\n  --no-git-sign            Deny the signing key for this launch; conflicts with --git-sign.\n  -h, --help               Print launcher help before DIR or --.\n";
-pub const SPAWN_HELP: &str = "Spawn a programmatic sandbox.\n\nUsage: wrix [--profile-config <file>] spawn --spawn-config <file> [--stdio]\n\nOptions:\n  --profile-config <file>  Read launcher defaults from <file> (required).\n  --spawn-config <file>    Read per-launch settings from <file> (required).\n  --stdio                  Enable the selected agent's JSONL protocol on standard I/O (default: off).\n  -h, --help               Print help.\n";
+pub const RUN_HELP: &str = "Run an interactive sandbox.\n\nUsage: wrix [--profile-config <file>] run [LAUNCH_OPTIONS] [DIR] [--] [AGENT_ARGS ...]\n\nDIR defaults to CWD; without DIR, use -- before agent arguments.\nLauncher options stop at DIR or --; after DIR, one optional -- is consumed.\nRemaining arguments are passed unchanged to the agent, including --help.\nOmitted Git options inherit repository policy, defaulting independently to false.\n\nOptions:\n  --profile-config <file>  Override generated project launch data with <file>.\n  --git-deploy             Grant the deploy key for this launch; conflicts with --no-git-deploy.\n  --no-git-deploy          Deny the deploy key for this launch; conflicts with --git-deploy.\n  --git-sign               Grant the signing key for this launch; conflicts with --no-git-sign.\n  --no-git-sign            Deny the signing key for this launch; conflicts with --git-sign.\n  -h, --help               Print launcher help before DIR or --.\n";
+pub const SPAWN_HELP: &str = "Spawn a programmatic sandbox.\n\nUsage: wrix [--profile-config <file>] spawn --spawn-config <file> [--stdio]\n\nOptions:\n  --profile-config <file>  Override generated project launch data with <file>.\n  --spawn-config <file>    Read per-launch settings from <file> (required).\n  --stdio                  Enable the selected agent's JSONL protocol on standard I/O (default: off).\n  -h, --help               Print help.\n";
 
 pub fn write_run_help(stdout: &mut impl Write) -> io::Result<()> {
-    stdout.write_all(RUN_HELP.as_bytes())
+    stdout.write_all(RUN_HELP.as_bytes())?;
+    writeln!(stdout, "\n{HOST_SETUP}")
 }
 
 pub fn write_spawn_help(stdout: &mut impl Write) -> io::Result<()> {
-    stdout.write_all(SPAWN_HELP.as_bytes())
+    stdout.write_all(SPAWN_HELP.as_bytes())?;
+    writeln!(stdout, "\n{HOST_SETUP}")
 }
 
 pub fn run(
@@ -70,6 +77,12 @@ pub fn run(
         },
         Err(error) => {
             writeln!(stderr, "wrix {}: {error}", command.as_str())?;
+            if matches!(
+                error,
+                CliError::MissingProfileConfig | CliError::Config { .. }
+            ) {
+                writeln!(stderr, "{HOST_SETUP}")?;
+            }
             Ok(ExitCode::FAILURE)
         }
     }
@@ -94,7 +107,9 @@ fn build_request(
         }
         Command::Spawn => Parsed::Spawn,
     };
-    let profile_config_path = profile_config_path.ok_or(CliError::MissingProfileConfig)?;
+    let profile_config_path = profile_config_path
+        .or_else(|| std::env::var_os(PROJECT_PROFILE_CONFIG).map(PathBuf::from))
+        .ok_or(CliError::MissingProfileConfig)?;
     let profile_config = load_profile_config(&profile_config_path, Platform::CURRENT)?;
     let kind = match parsed {
         Parsed::Run(run) => Kind::Run(run),
@@ -194,7 +209,7 @@ fn parse_spawn(args: &[String]) -> Result<Spawn, CliError> {
 
 #[derive(Debug, displaydoc::Display, thiserror::Error)]
 enum CliError {
-    /// wrix requires --profile-config <Nix store ProfileConfig JSON>
+    /// wrix requires --profile-config <Nix store ProfileConfig JSON> or generated project launch data from sandbox.devShell
     MissingProfileConfig,
     /// --git-deploy cannot be combined with --no-git-deploy
     ConflictingDeployFlags,

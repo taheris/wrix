@@ -380,7 +380,7 @@ fn assert_described_options(label: &str, help: &str, expected: &[&str]) {
         "{label}: help has no Options section: {help:?}",
     );
     let options_start = options_start.map_or(help.len(), |index| index + OPTIONS_HEADING.len());
-    let options = &help[options_start..];
+    let options = help[options_start..].split("\n\n").next().unwrap_or("");
     let mut actual = Vec::new();
     for line in options.lines().filter(|line| !line.trim().is_empty()) {
         let option = line.trim();

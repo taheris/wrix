@@ -8,9 +8,11 @@ Remaining arguments are passed unchanged to the agent, including --help.
 Omitted Git options inherit repository policy, defaulting independently to false.
 
 Options:
-  --profile-config <file>  Read launcher defaults from <file> before run (required).
+  --profile-config <file>  Override generated project launch data with <file>.
   --git-deploy             Grant the deploy key for this launch; conflicts with --no-git-deploy.
   --no-git-deploy          Deny the deploy key for this launch; conflicts with --git-deploy.
   --git-sign               Grant the signing key for this launch; conflicts with --no-git-sign.
   --no-git-sign            Deny the signing key for this launch; conflicts with --git-sign.
   -h, --help               Print launcher help before DIR or --.
+
+Provide one host wrix on PATH using Home Manager, nix-darwin, nix profile add 'github:taheris/wrix#wrix', or a temporary environment: nix shell 'github:taheris/wrix#wrix'. No fixed installation directory is required. Projects supply launch data, not another executable. Enter sandbox.devShell for its generated immutable project configuration, or pass --profile-config <file> explicitly. Explicit input overrides the project default for run/spawn only. For incompatible data, update the host package or regenerate supported project data; Wrix does not install or select another CLI automatically.

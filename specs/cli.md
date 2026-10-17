@@ -767,17 +767,17 @@ authorization. Verification diagnoses stale/missing helpers and hooks with
 
 - Production run/spawn select explicit `--profile-config` before the generated
   project default, without requiring a configured wrapper executable.
-  [test?](../crates/wrix-cli/tests/host_configuration.rs::explicit_profile_config_overrides_project_default)
+  [test](../crates/wrix-cli/tests/host_configuration.rs::explicit_profile_config_overrides_project_default)
 - Missing or invalid launch configuration fails before preparation without
   repository discovery, an implicit profile/image or another CLI fallback.
-  [test?](../crates/wrix-cli/tests/host_configuration.rs::missing_or_invalid_launch_configuration_has_no_fallback)
+  [test](../crates/wrix-cli/tests/host_configuration.rs::missing_or_invalid_launch_configuration_has_no_fallback)
 - Non-launch commands ignore the project launch pointer, while explicit
   launcher-only flags remain invalid on those commands.
-  [test?](../crates/wrix-cli/tests/host_configuration.rs::project_launch_defaults_do_not_configure_service_or_helper_commands)
+  [test](../crates/wrix-cli/tests/host_configuration.rs::project_launch_defaults_do_not_configure_service_or_helper_commands)
 - Host setup/help distinguishes global CLI ownership from project launch data,
   explains the supported installation/recovery choices and does not advertise
   retired configured-launcher or sandbox runnable APIs.
-  [test?](../crates/wrix-cli/tests/host_configuration.rs::help_explains_host_cli_project_data_and_explicit_installation)
+  [test](../crates/wrix-cli/tests/host_configuration.rs::help_explains_host_cli_project_data_and_explicit_installation)
 
 ### CLI Shape Acceptance
 

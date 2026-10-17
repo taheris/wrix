@@ -84,6 +84,14 @@ fn parse_root(args: &[String]) -> Result<RootInvocation, clap::Error> {
         Some(("help", matches)) => Some(Invocation::Help(passthrough_values(matches))),
         Some(_) | None => None,
     };
+    if profile_config.is_some()
+        && !matches!(invocation, Some(Invocation::Run(_) | Invocation::Spawn(_)))
+    {
+        return Err(root_command().error(
+            ErrorKind::ArgumentConflict,
+            "--profile-config is only valid for run and spawn",
+        ));
+    }
     Ok(RootInvocation {
         profile_config,
         invocation,
@@ -305,6 +313,7 @@ pub fn write_help(stdout: &mut impl Write) -> io::Result<()> {
 fn root_command() -> ClapCommand {
     ClapCommand::new("wrix")
         .about("Manage Wrix sandboxes, services, and repository setup.")
+        .after_help(wrix_sandbox::command::HOST_SETUP)
         .override_usage("wrix <command>")
         .disable_help_flag(true)
         .disable_help_subcommand(true)
@@ -315,12 +324,12 @@ fn root_command() -> ClapCommand {
                 .long(PROFILE_CONFIG)
                 .value_name("file")
                 .num_args(1)
-                .help("Read launcher defaults for run, spawn, and init from <file>."),
+                .help("Override generated project launch data for run and spawn."),
         )
         .subcommand(
             ClapCommand::new("run")
                 .about("Run an interactive sandbox.")
-                .override_help(wrix_sandbox::command::RUN_HELP)
+                .override_help(format!("{}\n{}\n", wrix_sandbox::command::RUN_HELP, wrix_sandbox::command::HOST_SETUP))
                 .disable_help_flag(true)
                 .disable_help_subcommand(true),
         )
@@ -349,7 +358,7 @@ fn root_command() -> ClapCommand {
             "help",
             "Print command help.",
             "Print command help.\n\nUsage: wrix help [command]\n\nOptions:\n  -h, --help  Print help.\n",
-        ))
+        ).arg(help_arg()))
 }
 
 fn passthrough_command(name: &'static str, about: &'static str, help: &'static str) -> ClapCommand {
@@ -357,7 +366,7 @@ fn passthrough_command(name: &'static str, about: &'static str, help: &'static s
         .about(about)
         .override_help(help)
         .disable_help_flag(true)
-        .arg(help_arg())
+        .disable_help_subcommand(true)
         .arg(
             Arg::new(PASSTHROUGH_ARGS)
                 .num_args(0..)

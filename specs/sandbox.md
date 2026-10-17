@@ -1161,10 +1161,10 @@ rootfs symlink. [check](nix build
 - Run/spawn inspection and actual dispatch resolve the same explicit versus
   generated-default configuration, with no repository search/evaluation or
   implicit image when neither is supplied.
-  [test?](../crates/wrix-cli/tests/host_configuration.rs::inspection_and_launch_share_project_configuration_resolution)
+  [test](../crates/wrix-cli/tests/host_configuration.rs::inspection_and_launch_share_project_configuration_resolution)
 - Invalid or unsupported declared configuration fails before preparation rather
   than falling back to another executable, image or schema reader.
-  [test?](../crates/wrix-cli/tests/host_configuration.rs::unsupported_project_configuration_fails_before_preparation)
+  [test](../crates/wrix-cli/tests/host_configuration.rs::unsupported_project_configuration_fails_before_preparation)
 - Real constructor-generated configuration reaches the provided host CLI with
   its paired image/agent metadata, without configured launcher outputs.
   [system?](test-ci:test-profile-config-global-cli)
