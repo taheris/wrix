@@ -258,6 +258,46 @@ The runtime acceptance — a fresh container letting the runtime user run
 `nix develop` / `nix build` and mutate baked store paths — is owned by
 `sandbox.md`.
 
+## Image Construction Policy
+
+`mkSandbox` accepts one typed, versioned `imagePolicy` attribute set. The
+default is `{ kind = "default"; version = 1; }`; omitting it or selecting it
+explicitly produces the same image and profile configuration. Unknown kinds,
+unsupported versions, non-integer versions, unknown fields and incomplete policy
+values are rejected during constructor evaluation. Capability discovery is
+data-only: `wrixLib.capabilities.imagePolicies.<kind>` lists supported integer
+versions. There is no separate native sandbox constructor. [check](nix build
+.#checks.x86_64-linux.image-policy-api)
+
+`{ kind = "private-native-nix"; version = 1; }` constructs a private single-user
+Nix image for the existing `wrix` identity (UID/GID 1000). This policy does not
+select a runtime UID, share a host store, start a daemon, or repair an existing
+image/store. Consumers launch it as UID/GID 1000. The policy is applied only to
+the fresh staged image customization tree under dockerTools' fakeroot. It
+preserves existing store paths, database/WAL bytes, roots and logs rather than
+replacing or reinitializing them. It leaves `/homeless-shelter` unoccupied.
+[check](nix build .#checks.x86_64-linux.image-policy-state-preservation)
+
+The three ancestors `/nix`, `/nix/var`, and `/nix/var/nix` are root-owned
+`0755`. The store, secure `builds` directory and `wrix` per-user profile/root
+directories are UID/GID-1000-owned `0755`; database and temporary-root
+directories are UID/GID-1000-owned `0700`. A pre-created UID/GID-1000-owned
+`0600` `gc.lock` allows non-root Nix writers without making its parent writable.
+Auto GC roots retain sticky `1777`, and build logs remain writable by the
+private owner. The existing single-user `build-users-group`, signed-input policy
+and absence of a daemon/socket/remote-store override are retained. The policy
+marker and label participate in both archive and nix-descriptor
+source/config-digest identities, and thus the generated profile-config identity.
+Unselected images retain their existing behavior; lower image tiers do not
+change. [check](nix build .#checks.x86_64-linux.image-policy-artifacts)
+
+A fresh factory-produced Rust/Pi image is exercised as UID 1000 through Loom's
+native preflight and an actual Pi RPC `get_state` response, followed by Nix
+evaluation, additive build, import, signed substitution/develop and Rust
+build/Clippy/Nextest operations. Initial valid paths remain registered. A
+capability skip or build timeout is not runtime acceptance.
+[system](test-ci:test-loom-native-readiness)
+
 ## Hook Installation
 
 Every profile image carries the prek surfaces defined by `pre-commit.md` § Hook

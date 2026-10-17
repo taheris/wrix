@@ -72,7 +72,12 @@ in
   inherit (devshell) mkDevShell;
   inherit (prek) prekHooks prePushChecks skipIfMissing;
   inherit (profile) deriveProfile rustProfile;
-  inherit (sandbox) profiles mkSandbox mkProfileImages;
+  inherit (sandbox)
+    capabilities
+    profiles
+    mkSandbox
+    mkProfileImages
+    ;
   inherit beads serviceImage;
 
   rustPackage = rustCli;

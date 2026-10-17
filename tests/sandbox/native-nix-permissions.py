@@ -1,41 +1,74 @@
-"""Check emitted Loom image metadata, not just the profile manifest."""
+"""Verify effective native-image metadata from real OCI or archive artifacts."""
 
+import argparse
+import io
 import json
 import pathlib
-import sys
 import tarfile
 
-layout = pathlib.Path(sys.argv[1])
+parser = argparse.ArgumentParser()
+parser.add_argument("image", type=pathlib.Path)
+parser.add_argument("--archive", action="store_true")
+parser.add_argument("--legacy", action="store_true")
+args = parser.parse_args()
 
+if args.archive:
+    with tarfile.open(args.image) as archive:
+        manifest = json.load(archive.extractfile("manifest.json"))[0]
+        config = json.load(archive.extractfile(manifest["Config"]))
+        layer = archive.extractfile(manifest["Layers"][-1]).read()
+else:
+    def blob(digest):
+        algorithm, value = digest.split(":")
+        return args.image / "blobs" / algorithm / value
 
-def blob(digest):
-    algorithm, value = digest.split(":")
-    return layout / "blobs" / algorithm / value
+    index = json.loads((args.image / "index.json").read_text())
+    manifest = json.loads(blob(index["manifests"][0]["digest"]).read_text())
+    config = json.loads(blob(manifest["config"]["digest"]).read_text())
+    layer = blob(manifest["layers"][-1]["digest"]).read_bytes()
 
-
-index = json.loads((layout / "index.json").read_text())
-manifest = json.loads(blob(index["manifests"][0]["digest"]).read_text())
 expected = {
-    "nix": 0o755,
-    "nix/var": 0o755,
-    "nix/var/nix": 0o755,
-    "nix/store": 0o777,
-    "nix/var/nix/db": 0o777,
-    "nix/var/nix/profiles": 0o755,
-    "nix/var/nix/profiles/per-user": 0o755,
-    "nix/var/nix/gcroots": 0o755,
-    "nix/var/nix/gcroots/per-user": 0o755,
-    "nix/var/nix/gcroots/auto": 0o1777,
-    "nix/var/log/nix/drvs": 0o777,
+    "nix": (0, 0, 0o755),
+    "nix/var": (0, 0, 0o755),
+    "nix/var/nix": (0, 0, 0o755),
+    "nix/store": (1000, 1000, 0o755),
+    "nix/var/nix/db": (1000, 1000, 0o700),
+    "nix/var/nix/temproots": (1000, 1000, 0o700),
+    "nix/var/nix/builds": (1000, 1000, 0o755),
+    "nix/var/nix/gc.lock": (1000, 1000, 0o600),
+    "nix/var/nix/profiles": (0, 0, 0o755),
+    "nix/var/nix/profiles/per-user": (0, 0, 0o755),
+    "nix/var/nix/profiles/per-user/wrix": (1000, 1000, 0o755),
+    "nix/var/nix/gcroots": (0, 0, 0o755),
+    "nix/var/nix/gcroots/per-user": (0, 0, 0o755),
+    "nix/var/nix/gcroots/per-user/wrix": (1000, 1000, 0o755),
+    "nix/var/nix/gcroots/auto": (0, 0, 0o1777),
+    "nix/var/log/nix/drvs": (1000, 1000, 0o777),
 }
-observed = {}
-for layer in manifest["layers"]:
-    with tarfile.open(blob(layer["digest"])) as archive:
-        for entry in archive:
-            name = entry.name.removeprefix("./").strip("/")
-            if name in expected:
-                observed[name] = (entry.uid, entry.gid, entry.mode)
+if args.legacy:
+    for name in ("nix/var/nix/builds", "nix/var/nix/gc.lock",
+                 "nix/var/nix/profiles/per-user/wrix", "nix/var/nix/gcroots/per-user/wrix"):
+        del expected[name]
+    for name in ("nix/store", "nix/var/nix", "nix/var/nix/db",
+                 "nix/var/nix/temproots", "nix/var/log/nix/drvs"):
+        expected[name] = (0, 0, 0o777)
 
-for name, mode in expected.items():
-    assert observed.get(name) == (0, 0, mode), (name, observed.get(name), oct(mode))
-print("native Nix ancestors and writable state permissions: PASS")
+with tarfile.open(fileobj=io.BytesIO(layer)) as archive:
+    entries = {entry.name.removeprefix("./").strip("/"): entry for entry in archive}
+    for name, metadata in expected.items():
+        entry = entries[name]
+        assert (entry.uid, entry.gid, entry.mode) == metadata, (name, entry, metadata)
+        assert entry.isfile() if name.endswith("gc.lock") else entry.isdir(), name
+    assert "homeless-shelter" not in entries
+    assert "nix/var/nix/daemon-socket/socket" not in entries
+    assert "nix/var/nix/db/db.sqlite" in entries
+    assert "nix/var/nix/db/reserved" not in entries
+    assert "NIX_REMOTE" not in dict(item.split("=", 1) for item in config["config"]["Env"])
+    if not args.legacy:
+        marker = entries["etc/wrix/image-policy.json"]
+        assert marker.isfile() or marker.issym()
+        assert config["config"]["Labels"]["wrix.image.policy"] == "private-native-nix-v1"
+    else:
+        assert "etc/wrix/image-policy.json" not in entries
+        assert "wrix.image.policy" not in config["config"]["Labels"]
+print("emitted image ownership, modes, policy and retained Nix state: PASS")

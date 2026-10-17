@@ -1,5 +1,10 @@
 # Loom native Rust readiness investigation
 
+Historical investigation at `ab9baa7a`. The follow-up
+[private native Nix policy](private-native-nix.md) addresses these gaps and
+records fresh UID-1000 runtime evidence; the blocked outcome below describes the
+earlier ancestor-only experiment, not the new construction policy.
+
 ## Outcome: blocked on native executor provisioning
 
 Fresh Rust/Pi artifacts from Wrix `ab9baa7a` reproduce the reported exit 78.

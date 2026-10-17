@@ -36,6 +36,10 @@
   # Use buildLayeredImage (tar in store) instead of streamLayeredImage (script).
   # Required on Darwin where the stream script's Linux Python shebang won't execute.
   asTarball ? false,
+  imagePolicy ? {
+    kind = "default";
+    version = 1;
+  },
 }:
 
 let
@@ -46,6 +50,9 @@ let
     optional
     optionalString
     ;
+  policy = (import ./image-policy.nix { inherit (pkgs) lib; }).resolve imagePolicy;
+  privateNix = policy.kind == "private-native-nix";
+  policyMetadata = pkgs.writeTextDir "etc/wrix/image-policy.json" (toJSON policy);
   sshConfig = import ../util/ssh.nix;
   knownHosts = import ./known-hosts.nix { inherit pkgs; };
 
@@ -213,7 +220,8 @@ let
     pkgs.dockerTools.caCertificates
     profileEnv
   ]
-  ++ optional (networkBootstrapSh != null) networkTools;
+  ++ optional (networkBootstrapSh != null) networkTools
+  ++ optional privateNix policyMetadata;
 
   # The image's MATERIALIZED on-disk store, registered in the baked Nix DB so the
   # registered-valid set equals the on-disk /nix/store in BOTH directions — no
@@ -296,6 +304,9 @@ let
     "wrix.image.kind" = "profile";
     "wrix.profile.name" = profile.name;
     "wrix.agent.kind" = agent;
+  }
+  // pkgs.lib.optionalAttrs privateNix {
+    "wrix.image.policy" = "${policy.kind}-v${toString policy.version}";
   };
 
   rawImage = buildImage {
@@ -396,6 +407,10 @@ let
       # the customisation layer on any input change, and Nix recreates it
       # lazily on first in-container read-write store open.
       rm -f nix/var/nix/db/reserved
+    '';
+
+    fakeRootCommands = optionalString privateNix ''
+      ${imageBuilderPkgs.bash}/bin/bash ${./initialize-private-nix.sh} .
     '';
 
     config = {
@@ -509,6 +524,7 @@ rawImage
   # exclusive) can inspect the agent-only tier (specs/image-builder.md
   # § Provenance-Tiered Layering).
   inherit stableProfileImage agentImage ociLayout;
+  imagePolicy = policy;
   # Expose generated agent configuration so verifiers inspect the image input JSON.
   inherit
     claudeConfigJson

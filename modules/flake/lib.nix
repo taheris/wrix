@@ -24,6 +24,7 @@
 
       legacyPackages.lib = {
         inherit (wrix)
+          capabilities
           deriveProfile
           mkDevShell
           mkProfileImages

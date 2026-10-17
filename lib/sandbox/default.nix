@@ -42,6 +42,7 @@ let
     launcher = serviceCli;
   };
   imageTagLib = import ../util/image-tag.nix { };
+  imagePolicyLib = import ./image-policy.nix { inherit (pkgs) lib; };
 
   # podman accepts `localhost/<name>:<tag>` refs; Apple's `container` CLI
   # uses bare `<name>:<tag>`. Match the convention each launcher expects.
@@ -282,6 +283,10 @@ let
       agent,
       agentPkg,
       asTarball ? false,
+      imagePolicy ? {
+        kind = "default";
+        version = 1;
+      },
     }:
     import ./image.nix {
       pkgs = linuxPkgs;
@@ -299,6 +304,7 @@ let
         agent
         agentPkg
         asTarball
+        imagePolicy
         ;
     };
 
@@ -366,8 +372,13 @@ let
       agent ? "pi",
       agentPkg ? null,
       agentSettings ? { },
+      imagePolicy ? {
+        kind = "default";
+        version = 1;
+      },
     }:
     let
+      resolvedImagePolicy = imagePolicyLib.resolve imagePolicy;
       effectiveMcp = if mcpRuntime then mapAttrs (_: _: { }) mcpRegistry else mcp;
       mcpConfig = buildMcpConfig effectiveMcp;
       mcpServerConfigs = mcpConfig.mcpServers;
@@ -460,6 +471,7 @@ let
         claudeSettings = finalClaudeSettings;
         piSettings = finalPiSettings;
         agentPkg = finalAgentPkg;
+        imagePolicy = resolvedImagePolicy;
         inherit
           agent
           mcpRuntime
@@ -575,11 +587,13 @@ let
           '';
 
     in
-    seq finalAgentPkg {
-      inherit package launcher profileConfig;
-      image = imageWithConfig;
-      profile = finalProfile;
-    };
+    seq resolvedImagePolicy (
+      seq finalAgentPkg {
+        inherit package launcher profileConfig;
+        image = imageWithConfig;
+        profile = finalProfile;
+      }
+    );
 
 in
 {
@@ -594,4 +608,5 @@ in
     validateRuntimeSecrets
     ;
   inherit (manifest) mkProfileImages;
+  inherit (imagePolicyLib) capabilities;
 }

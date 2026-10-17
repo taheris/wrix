@@ -130,7 +130,20 @@
           profile-images = loomLib.mkProfileManifest {
             inherit pkgs;
             imagePkgs = linuxPkgs;
-            wrixLib = wrix;
+            # The pinned factory predates image policies; select the policy at its constructor boundary.
+            wrixLib = wrix // {
+              mkSandbox =
+                args:
+                wrix.mkSandbox (
+                  args
+                  // pkgs.lib.optionalAttrs (args.profile.name == "rust") {
+                    imagePolicy = {
+                      kind = "private-native-nix";
+                      version = 1;
+                    };
+                  }
+                );
+            };
             loomBin = linuxLoomCli;
             runtimes.pi = { };
           };

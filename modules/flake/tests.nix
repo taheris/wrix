@@ -15,7 +15,13 @@
     }:
     let
       loomTests = import ../../tests/loom.nix {
-        inherit pkgs loomCli linuxLoomCli;
+        inherit
+          pkgs
+          linuxPkgs
+          wrix
+          loomCli
+          linuxLoomCli
+          ;
         inherit (config) packages;
         devShell = config.devShells.default;
         lock = builtins.fromJSON (builtins.readFile ../../flake.lock);

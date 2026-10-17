@@ -1,5 +1,7 @@
 {
   pkgs,
+  linuxPkgs,
+  wrix,
   loomCli,
   linuxLoomCli,
   packages,
@@ -30,6 +32,24 @@ let
       ];
     assert all (profile: attrNames profile == [ "pi" ]) (builtins.attrValues profileManifest.manifest);
     assert nativeEntry.native_preflight == "rust";
+    assert
+      nativeSandbox.image.imagePolicy == {
+        kind = "private-native-nix";
+        version = 1;
+      };
+    assert all
+      (
+        name:
+        profileManifest.sandboxes.${name}.pi.image.source.drvPath == (wrix.mkSandbox {
+          profile = wrix.profiles.${name};
+          agent = "pi";
+          packages = [ linuxLoomCli ];
+        }).image.source.drvPath
+      )
+      [
+        "base"
+        "python"
+      ];
     assert nativeEntry.runtime == "pi";
     assert nativeEntry.source == toString nativeSandbox.image.source;
     assert nativeEntry.profile_config == toString nativeSandbox.profileConfig;
@@ -90,6 +110,26 @@ let
       )
     );
 
+  nativeReadiness = pkgs.writeShellApplication {
+    name = "test-loom-native-readiness";
+    runtimeInputs = [
+      pkgs.podman
+      pkgs.coreutils
+    ];
+    text = ''
+      image=$(podman pull --quiet --signature-policy ${pkgs.writeText "local-image-policy.json" ''
+        {"default":[{"type":"insecureAcceptAnything"}]}
+      ''} oci:${nativeSandbox.image.ociLayout}:latest)
+      expected=$(cat ${nativeSandbox.image.digest})
+      actual=$(podman image inspect --format '{{.Id}}' "$image")
+      [[ "''${actual#sha256:}" == "''${expected#sha256:}" ]]
+      podman run --rm --network=pasta --user=1000:1000 --workdir=/tmp \
+        --mount type=bind,source=${pkgs.path},destination=/fixture/nixpkgs,ro \
+        --mount type=bind,source=${./sandbox/native-nix-operations.sh},destination=/fixture/probe.sh,ro \
+        --entrypoint /bin/bash "$expected" /fixture/probe.sh /fixture/nixpkgs
+    '';
+  };
+
   ciApp = name: check: {
     inherit name;
     executable = name;
@@ -105,9 +145,24 @@ in
     loom-package-wiring = wiring;
     loom-devshell = devshellCli;
     loom-native-profiles = nativeProfiles;
+  }
+  // import ./sandbox/image-policy.nix {
+    inherit
+      pkgs
+      linuxPkgs
+      wrix
+      nativeSandbox
+      ;
   };
   ciApps = [
     (ciApp "test-loom-devshell" devshellCli)
     (ciApp "test-loom-agent-images" agentImages)
+    {
+      name = "test-loom-native-readiness";
+      executable = "test-loom-native-readiness";
+      package = nativeReadiness;
+      platforms = (import ./lib/verifier.nix).linux;
+      capabilities = [ "container-runtime" ];
+    }
   ];
 }
