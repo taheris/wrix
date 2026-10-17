@@ -42,8 +42,8 @@ repos:
         name: loom gate verify
         entry: >-
           bin/pre-push-checks --hook-id loom-gate-verify
-          --hook-entry 'skip-if-missing loom -- env WRIX_PRE_PUSH=1 loom gate verify --diff @{upstream}..HEAD' --
-          skip-if-missing loom -- env WRIX_PRE_PUSH=1 loom gate verify --diff @{upstream}..HEAD
+          --hook-entry 'skip-if-missing loom -- env WRIX_PRE_PUSH=1 RUSTC_WRAPPER= CARGO_BUILD_RUSTC_WRAPPER= loom gate verify --diff @{upstream}..HEAD' --
+          skip-if-missing loom -- env WRIX_PRE_PUSH=1 RUSTC_WRAPPER= CARGO_BUILD_RUSTC_WRAPPER= loom gate verify --diff @{upstream}..HEAD
         language: system
         pass_filenames: false
         always_run: true

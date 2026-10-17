@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-root=$(realpath "${1:?image root is required}")
-if [[ "$root" == / || "$root" == /nix || "$root" == /nix/var || "$root" == /nix/var/nix \
+if ! root=$(realpath -- "${1:?image root is required}" 2>/dev/null) \
+  || [[ "$root" == / || "$root" == /nix || "$root" == /nix/var || "$root" == /nix/var/nix \
   || "$root" == /nix/store || "$root" == /nix/store/* \
   || ! -f "$root/etc/wrix/private-nix-version" || -L "$root/etc/wrix/private-nix-version" ]] \
   || [[ "$(<"$root/etc/wrix/private-nix-version")" != 1 ]]; then

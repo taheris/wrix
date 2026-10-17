@@ -77,9 +77,12 @@ class PrivateNixInitialization(unittest.TestCase):
 
     def test_rejects_unmarked_tree_without_changing_it(self):
         with tempfile.TemporaryDirectory() as temporary:
-            result = subprocess.run(["bash", str(INITIALIZER), temporary], capture_output=True)
-            self.assertNotEqual(result.returncode, 0)
-            self.assertEqual(list(pathlib.Path(temporary).iterdir()), [])
+            for root in (temporary, str(pathlib.Path(temporary) / "missing" / "stage")):
+                with self.subTest(root=root):
+                    result = subprocess.run(["bash", str(INITIALIZER), root], capture_output=True)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(b"requires a staged image root", result.stderr)
+                    self.assertEqual(list(pathlib.Path(temporary).iterdir()), [])
 
 
 if __name__ == "__main__":
