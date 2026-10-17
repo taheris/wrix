@@ -10,7 +10,7 @@ let
     builtins.appendContext path { "${path}".path = true; };
 in
 {
-  "cli.package-surface" = ''
+  "cli.package-surface".script = ''
     local package
     local forbidden
     local repo_beads_bin
@@ -29,7 +29,7 @@ in
     fi
   '';
 
-  "cli.shared-verifier-app" = ''
+  "cli.shared-verifier-app".script = ''
     local list_output
     local batch_output
     local verdict_count
@@ -55,7 +55,19 @@ in
     python3 "$root/tests/verify/test_inputs.py" "$SELF" "$test_ci" "$loom/bin/loom" "$root" ${escapeShellArg nixpkgsSource} ${escapeShellArg system}
   '';
 
-  "cli.verify-runner-batching" = ''
+  "cli.browser-gate-scope" = {
+    inherit (import ../lib/browser-resources.nix { }) inputs;
+    platforms = (import ../lib/verifier.nix).linux;
+    script = ''
+      local root loom
+      export PATH="${pkgs.procps}/bin:$PATH"
+      root="$(repo_root)"
+      loom="$(build_flake_package loom)"
+      python3 "$root/tests/verify/browser-gate-scope.py" "$root" "$loom/bin/loom" ${escapeShellArg system}
+    '';
+  };
+
+  "cli.verify-runner-batching".script = ''
     local root
     local list_output
     root="$(repo_root)"

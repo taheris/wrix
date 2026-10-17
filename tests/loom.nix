@@ -12,6 +12,7 @@
 let
   inherit (builtins) all attrNames elem;
   inherit (pkgs.lib) concatMapStrings hasPrefix optionalString;
+  resources = import ./lib/browser-resources.nix { };
   sourceNode = lock.nodes.${lock.nodes.root.inputs.loom-src};
   sandboxNames = builtins.filter (hasPrefix "sandbox") (attrNames packages) ++ [
     "default"
@@ -133,6 +134,7 @@ let
 
   ciApp = name: check: {
     inherit name;
+    inherit (resources) inputs;
     executable = name;
     package = pkgs.writeShellScriptBin name ''
       set -euo pipefail
@@ -160,6 +162,7 @@ in
     (ciApp "test-loom-agent-images" agentImages)
     {
       name = "test-loom-native-readiness";
+      inherit (resources) inputs;
       executable = "test-loom-native-readiness";
       package = nativeReadiness;
       platforms = (import ./lib/verifier.nix).linux;

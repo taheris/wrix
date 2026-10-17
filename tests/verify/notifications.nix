@@ -61,11 +61,11 @@ let
   '';
 in
 {
-  "notifications.claude-stop-hook-config" = nixEval "notifications.claude-stop-hook-config";
+  "notifications.claude-stop-hook-config".script = nixEval "notifications.claude-stop-hook-config";
 
-  "notifications.focus-target-envelope" = notifyTest "test_focus_target_envelope";
+  "notifications.focus-target-envelope".script = notifyTest "test_focus_target_envelope";
 
-  "notifications.attention-navigation" = ''
+  "notifications.attention-navigation".script = ''
     export PATH="${notifyPath}:$PATH"
     nix build --no-link --no-warn-dirty "$(repo_root)#legacyPackages.${system}.ciChecks.wrix-rust-nextest"
     python3 "$(repo_root)/tests/standalone/test_attention.py"
@@ -77,30 +77,31 @@ in
     python3 "$(repo_root)/tests/standalone/test_attention.py" AttentionTests.test_native_launch_host_delivery_and_navigation
   '';
 
-  "notifications.focus-target-registration" = ''
+  "notifications.focus-target-registration".script = ''
     export PATH="${notifyPath}:$PATH"
     run_repo_script_with_wrix "tests/standalone/notify-test.sh" "test_focus_target_registration"
     run_repo_script "tests/standalone/notify-test.sh" "test_tmux_target_focus"
   '';
 
-  "notifications.pi-settled" = ''
+  "notifications.pi-settled".script = ''
     ${piTestEnv}
     run_repo_script "tests/standalone/notify-test.sh" "test_pi_settled"
   '';
 
-  "notifications.pi-focus-routing" = ''
+  "notifications.pi-focus-routing".script = ''
     ${piTestEnv}
     run_repo_script_with_wrix "tests/standalone/notify-test.sh" "test_pi_focus_routing"
   '';
 
-  "notifications.pi-notify-failure" = ''
+  "notifications.pi-notify-failure".script = ''
     ${piTestEnv}
     run_repo_script "tests/standalone/notify-test.sh" "test_pi_notify_failure"
   '';
 
-  "notifications.client-non-blocking" = notifyTest "test_client_non_blocking";
+  "notifications.client-non-blocking".script = notifyTest "test_client_non_blocking";
 
-  "notifications.client-tcp-endpoint-override" = notifyTest "test_client_tcp_endpoint_override";
+  "notifications.client-tcp-endpoint-override".script =
+    notifyTest "test_client_tcp_endpoint_override";
 
   "notifications.container-transport-darwin" = darwinLive (
     notifyTest "test_container_transport_darwin"
@@ -110,9 +111,9 @@ in
 
   "notifications.daemon-dispatch-latency" = live (notifyTest "test_daemon_dispatch_latency");
 
-  "notifications.focus-override" = notifyTest "test_focus_override";
+  "notifications.focus-override".script = notifyTest "test_focus_override";
 
-  "notifications.macos-tcp-bind-address" = nixEval "notifications.macos-tcp-bind-address";
+  "notifications.macos-tcp-bind-address".script = nixEval "notifications.macos-tcp-bind-address";
 
-  "notifications.verbose-logging" = notifyTest "test_verbose_logging";
+  "notifications.verbose-logging".script = notifyTest "test_verbose_logging";
 }

@@ -54,6 +54,7 @@
         });
       legacyPackages.ciChecks = test.ciChecks;
       legacyPackages.ciApps = test.ciAppDerivations;
+      legacyPackages.verifyScripts = test.verify.scripts;
       legacyPackages.systemTests = test.systemTests;
       legacyPackages.testApps = test.testAppDerivations;
       legacyPackages.testFixtures.execution = test.executionSandbox;

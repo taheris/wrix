@@ -13,6 +13,7 @@
           src = inputs.loom-src;
         }).bin.overrideAttrs
           (old: {
+            patches = (old.patches or [ ]) ++ [ ../../patches/loom-system-input-batching.patch ];
             postInstall = (old.postInstall or "") + ''
               find "$out/bin" -type f ! -name loom ! -name loom-walk -delete
             '';

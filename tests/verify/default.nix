@@ -3,6 +3,7 @@
   system,
   linuxPkgs,
   focusBinary,
+  src ? ../..,
 }:
 
 let
@@ -50,9 +51,7 @@ let
     (import ./services.nix { inherit pkgs system; })
     (import ./tmux.nix { inherit pkgs system; })
   ];
-  registry = mapAttrs (_: entry: if builtins.isString entry then { script = entry; } else entry) (
-    builtins.foldl' (acc: next: acc // next) { } domainRegistries
-  );
+  registry = builtins.foldl' (acc: next: acc // next) { } domainRegistries;
   requirements = pkgs.writeText "verify-requirements.json" (
     toJSON (
       mapAttrs (_: entry: {
@@ -77,7 +76,9 @@ let
   caseArms = concatStringsSep "\n" (
     map (target: ''
       ${escapeShellArg target})
-        ${registry.${target}.script}
+        local script
+        script="$(nix build --no-link --print-out-paths --no-warn-dirty ${escapeShellArg "${src}#legacyPackages.${system}.verifyScripts.\"${target}\""})" || return 1
+        source "$script"
         ;;
     '') targetNames
   );
@@ -297,5 +298,6 @@ in
     program = "${verify}/bin/verify";
   };
   package = verify;
+  scripts = mapAttrs (name: entry: pkgs.writeText "verify-${name}.sh" entry.script) registry;
   targets = map (target: "verify:${target}") targetNames;
 }

@@ -3,9 +3,13 @@
 let
   inherit (pkgs.lib) escapeShellArg;
 
-  repoScript = path: function: ''
-    run_repo_script ${escapeShellArg path} ${escapeShellArg function}
-  '';
+  resources = import ../lib/browser-resources.nix { };
+  repoScript = path: function: {
+    inherit (resources) inputs;
+    script = ''
+      run_repo_script ${escapeShellArg path} ${escapeShellArg function}
+    '';
+  };
 
   descriptions = import ./profiles-eval.nix {
     root = ../..;
@@ -43,11 +47,14 @@ let
     '
   '';
 
-  flakeCheck = name: ''
-    local root
-    root="$(repo_root)"
-    nix build --no-link --no-warn-dirty "$root#checks.${system}.${name}"
-  '';
+  flakeCheck = name: {
+    inherit (resources) inputs;
+    script = ''
+      local root
+      root="$(repo_root)"
+      nix build --no-link --no-warn-dirty "$root#checks.${system}.${name}"
+    '';
+  };
 
   buildPackage = function: repoScript "tests/profiles/build-package.sh" function;
   corePackages = function: repoScript "tests/profiles/core-packages.sh" function;
@@ -91,7 +98,7 @@ in
   "profiles.nested-derive" = profileComposition "test_nested_derive_profile";
   "profiles.no-dev-toolchain-lib" = nixEval "profiles.no-dev-toolchain-lib";
   "profiles.no-rust-with-toolchain" = nixEval "profiles.no-rust-with-toolchain";
-  "profiles.repository-integration-source-isolation" = ''
+  "profiles.repository-integration-source-isolation".script = ''
     local root
     root="$(repo_root)"
     python3 "$root/tests/profiles/repository-source-isolation.py" "$root"
@@ -107,7 +114,7 @@ in
     buildPackage "test_workspace_edit_reuses_dep_cache";
   "profiles.rust-build-package-workspace-edit-skips-cargo-artifacts" =
     buildPackage "test_workspace_edit_skips_cargo_artifacts";
-  "profiles.rust-compile-run" = rustCompileRun;
+  "profiles.rust-compile-run".script = rustCompileRun;
   "profiles.rust-extension-args" = rustProfileCtor "test_extension_args";
   "profiles.rust-no-nightly-closure" =
     repoScript "tests/profiles/no-nightly-closure.sh" "test_no_nightly_closure";

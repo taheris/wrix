@@ -34,6 +34,7 @@ skip_capabilities = ["container-runtime", "kvm", "user-network-namespace", "virt
 [runner.system.verify]
 match = '^verify:(.+)$'
 command = "nix run .#verify -- {targets}"
+inputs = "nix run .#verify -- {print_inputs} {targets}"
 target = "{capture_1}"
 join = " "
 parse = "json-lines"
@@ -44,6 +45,7 @@ skip_capabilities = ["container-runtime", "kvm", "user-network-namespace"]
 [runner.system.test-ci]
 match = '^test-ci:(.+)$'
 command = "bin/test-ci-verifiers {targets}"
+inputs = "bin/test-ci-verifiers {print_inputs} {targets}"
 target = "{capture_1}"
 join = " "
 parse = "json-lines"

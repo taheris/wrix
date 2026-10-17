@@ -204,7 +204,7 @@ def main():
                     match=r"^test-ci:(.+)$", command="bin/test-ci-verifiers {targets}",
                     skip_capabilities=EXPECTED["skip_capabilities"] + ["virtiofsd-capabilities"],
                 )
-            expected["inputs"] = INPUTS[name] if tier == "check" else None
+            expected["inputs"] = INPUTS[name]
             entry = runner_entry(runner, tier, name)
             errors = runner_errors(entry, expected)
             require(not errors, f"[runner.{tier}.{name}] {'; '.join(errors)}")

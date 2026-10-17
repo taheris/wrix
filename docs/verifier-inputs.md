@@ -2,27 +2,53 @@
 
 ## Definition-derived scope
 
-`tests/lib/inputs.nix` binds resource operands to their input projections. The
-three source-only checks in `tests/verify/profiles-eval.nix` read the same
-resource objects they describe. The three builder CI definitions bind the
-library and fixture directory operands used by their imports and scripts. Their
-directory scopes include newly added resources. All six declarations also
-conservatively include repository Nix definitions, `flake.lock`, `loom.toml`,
-and the shared dispatch/protocol scripts.
+`tests/lib/inputs.nix` binds resource operands to their input projections.
+Source-only checks in `tests/verify/profiles-eval.nix` read the same resource
+objects they describe. Builder CI definitions bind library and fixture directory
+operands to their imports and scripts. Browser/MCP definitions use
+`tests/lib/browser-resources.nix` for their library, fixture and owning-contract
+resources, including transitive Rust, image and packaging dependencies. Image,
+profile and Loom-package constructors also project these resources, covering
+indirect MCP image references without a browser-target-name filter. Directory
+scopes include newly added resources. These projections deliberately include
+repository Nix definitions, `flake.lock`, `loom.toml` and shared
+dispatch/protocol scripts; browser coverage is conservative across all specs,
+tests and library resources, not optimized to exclude unrelated changes within
+those directories.
 
 The existing target registries generate `--print-inputs` batch maps; there is no
 separate target/dependency registry. Opaque definitions are omitted, not encoded
-as empty known declarations. Description construction does not force opaque
-predicates/packages or builder image/tool evaluation. The Nix-native
-`verifier-inputs` check exercises these boundaries, malformed declarations, and
-the connection between resource operands, reads, and projections.
+as empty known declarations. Verifier definitions separate script thunks from
+metadata. The discovery app contains no target scripts or runtime references;
+admitted execution realizes only the selected script through
+`legacyPackages.<system>.verifyScripts`. Description construction does not force
+opaque predicates/packages or browser, builder and image/tool evaluation. The
+Nix-native `verifier-inputs` check exercises these boundaries, malformed
+declarations, and the connection between resource operands, reads, and
+projections.
 
-Only batched check runners opt in. System runners retain unknown-input
-always-run behavior: the consumed Loom release still queries distinct system
-scenarios separately. No persistent discovery cache, tier change, timeout,
-marker exception, or skip-policy change is introduced.
+Both check and system runners opt into batched input queries. The consumed Loom
+package applies `patches/loom-system-input-batching.patch` to extend its
+existing query-cache priming to system groups, without changing per-annotation
+system execution. Tier identities remain separate. Unknown declarations remain
+always-run; malformed declarations and failed discovery block execution. No
+persistent discovery cache, tier change, marker exception or skip-policy change
+is introduced.
 
-## Controlled worker comparison
+`verify:cli.browser-gate-scope` exercises the real consumed Loom planner and
+production Wrix runners in disposable Git repositories. It checks changed
+fixture/contract/lock/image/dispatch subjects in both lanes, opaque selection,
+query batching, explicit/full execution and failed discovery. Unique failing
+external browser/MCP package derivations provide cold realization evidence from
+native Nix build logs, rather than successful fake gate output or warm-cache
+absence. Inventory, descriptions and unrelated overview documentation leave
+those boundary derivations unrealized. This is a system-boundary scoping test,
+not evidence of successful live browser execution.
+
+## Historical check-only worker comparison
+
+The measurements below cover the earlier six known declarations and check-only
+opt-in. They are not measurements of the current browser/system integration.
 
 Base: published `a43ff7d08b40c38bfaeaae73d1b577e3899e18de`, consuming official
 Loom `7d4fcbd`. The comparison uses seven annotated targets, the real Wrix
@@ -71,6 +97,7 @@ older runtime.
 
 ```bash
 nix build .#checks.x86_64-linux.verifier-inputs
+nix run .#verify -- cli.browser-gate-scope
 nix run .#verify -- cli.shared-verifier-app prek.ci-platform-policy prek.ci-batching
 nix run .#verify -- --print-inputs devshell.no-prek-install notifications.focus-target-envelope
 nix run .#test-ci -- --print-inputs test-linux-builder-sshd-hardening test-security-execution-metadata-lifecycle
@@ -82,10 +109,10 @@ lookup/normalization, description-only execution, fresh discovery in separate
 invocations, and system sharing with one receipt per criterion. Existing result,
 sandbox capability, CI batching, and push-marker conformance remain in place.
 
-Session evidence is retained under `.loom/scratch/wx-3175t/`: `measure.py`,
-`logs/measurements.json`, untraced logs, separate request traces, and complete
-per-target receipts. The discarded package-introspection prototype is retained
-separately; its measurements are not mixed into the table above.
+The original session used scratch measurement logs and per-target receipts.
+Scratch is ephemeral, so those paths are not durable evidence or reproduction
+inputs. The table above records that historical experiment, not a current
+verification result. Run the verifier commands for current evidence.
 
 An existing upstream defect, `wx-1x5ns`, drops runner-owned logical targets on
 explicit `--files` scopes despite discovery. These regressions exercise the

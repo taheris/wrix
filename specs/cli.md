@@ -949,27 +949,27 @@ authorization. Verification diagnoses stale/missing helpers and hooks with
 - Browser-dependent `verify:` and `test-ci:` definitions expose checked inputs
   derived from their actual resources, including owning contracts and transitive
   dependencies, rather than fabricated empty declarations or target-name
-  filters. [system?](verify:cli.browser-gate-scope)
+  filters. [system](verify:cli.browser-gate-scope)
 - Production diff-scoped verification of unrelated overview documentation
   selects no browser-dependent target in either requested check or system lanes.
-  [system?](verify:cli.browser-gate-scope)
+  [system](verify:cli.browser-gate-scope)
 - Playwright/MCP source, fixture and owning-contract changes retain their
   applicable browser-dependent targets through the production scoped gate.
-  [system?](verify:cli.browser-gate-scope)
+  [system](verify:cli.browser-gate-scope)
 - Lockfile, shared-image and shared-dispatch changes retain every applicable
   dependent browser target rather than gaining an unrelated-change shortcut.
-  [system?](verify:cli.browser-gate-scope)
+  [system](verify:cli.browser-gate-scope)
 - Inventory, description and scope discovery do not execute target predicates or
   realize browser/image/test-runtime closures, even for opaque or unselected
   definitions; unrelated documentation gate execution adds no such realization.
-  [system?](verify:cli.browser-gate-scope)
+  [system](verify:cli.browser-gate-scope)
 - Opaque inputs remain unknown and conservatively selected within requested
   stages/tiers; malformed declarations and discovery failures remain errors.
-  [system?](verify:cli.browser-gate-scope)
+  [system](verify:cli.browser-gate-scope)
 - Explicit target invocation and unscoped verification preserve applicable
   browser coverage and existing stage/tier/platform/capability semantics;
   exclusions neither count as passes nor broaden marker authority.
-  [system?](verify:cli.browser-gate-scope)
+  [system](verify:cli.browser-gate-scope)
 
 ### Host Build Dispatch Acceptance
 

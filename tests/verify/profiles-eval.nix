@@ -102,63 +102,72 @@ let
     && !(hasAttr "sandbox" args)
     && !(hasAttr "shellHook" args);
 
-  checks = mapAttrs (_: opaque) (import ./agent-defaults.nix { inherit flake system; }) // {
-    "devshell.flake-module-does-not-own-hooks-path" = sourceCheck [ flakeDevshellSource ] (
-      sources:
-      ensure (lacks "core.hooksPath" (builtins.head sources)) "modules/flake/devshell.nix sets core.hooksPath"
-    );
-
-    "devshell.sandbox-boundary" = opaque (
-      ensure repositoryDevshellUsesSandbox "repository devshell bypasses the bound sandbox.devShell surface"
-    );
-
-    "devshell.no-prek-install" = sourceCheck [ devshellSource ] (
-      sources:
-      let
-        source = builtins.head sources;
-      in
-      ensure (lacks "prek install" source) "mkDevShell invokes prek install"
-      && ensure (lacks ".git/hooks" source) "mkDevShell mutates .git/hooks"
-    );
-
-    "profiles.beads-metrics-disabled" = opaque (
-      ensure (all
-        (
-          profile:
-          let
-            sandbox = wlib.mkSandbox { inherit profile; };
-          in
-          profile.env.BD_DISABLE_METRICS == "1"
-          && profile.hostEnv.BD_DISABLE_METRICS == "1"
-          && (wlib.mkDevShell { inherit profile; }).BD_DISABLE_METRICS == "1"
-          && sandbox.profile.env.BD_DISABLE_METRICS == "1"
-          && (sandbox.devShell { }).BD_DISABLE_METRICS == "1"
-        )
-        [
-          wlib.profiles.base
-          wlib.profiles.rust
-          wlib.profiles.python
-        ]
-      ) "profiles, sandboxes, and devshells must disable Beads metrics"
-    );
-
-    "profiles.no-dev-toolchain-lib" = opaque (
-      ensure (!(hasAttr "devToolchain" wlib)) "wrix.devToolchain is still exposed"
-    );
-
-    "profiles.no-rust-with-toolchain" = opaque (
-      ensure (
-        !(hasAttr "withToolchain" wlib.profiles.rust)
-      ) "profiles.rust.withToolchain is still exposed"
-    );
-
-    "profiles.sandbox-entrypoints-no-rustup" = sourceCheck entrypointSources (
-      sources:
-      ensure (all (
-        source: lacksLower "rustup" source
-      ) sources) "sandbox entrypoints contain rustup bootstrap logic"
-    );
+  resources = import ../lib/browser-resources.nix { inherit root; };
+  resourceCheck = passed: {
+    inherit passed;
+    inherit (resources) inputs;
   };
+  checks =
+    mapAttrs (_: resourceCheck) (
+      import (resources.fixtures.path + "/verify/agent-defaults.nix") { inherit flake system; }
+    )
+    // {
+      "devshell.flake-module-does-not-own-hooks-path" = sourceCheck [ flakeDevshellSource ] (
+        sources:
+        ensure (lacks "core.hooksPath" (builtins.head sources)) "modules/flake/devshell.nix sets core.hooksPath"
+      );
+
+      "devshell.sandbox-boundary" = opaque (
+        ensure repositoryDevshellUsesSandbox "repository devshell bypasses the bound sandbox.devShell surface"
+      );
+
+      "devshell.no-prek-install" = sourceCheck [ devshellSource ] (
+        sources:
+        let
+          source = builtins.head sources;
+        in
+        ensure (lacks "prek install" source) "mkDevShell invokes prek install"
+        && ensure (lacks ".git/hooks" source) "mkDevShell mutates .git/hooks"
+      );
+
+      "profiles.beads-metrics-disabled" = opaque (
+        ensure (all
+          (
+            profile:
+            let
+              sandbox = wlib.mkSandbox { inherit profile; };
+            in
+            profile.env.BD_DISABLE_METRICS == "1"
+            && profile.hostEnv.BD_DISABLE_METRICS == "1"
+            && (wlib.mkDevShell { inherit profile; }).BD_DISABLE_METRICS == "1"
+            && sandbox.profile.env.BD_DISABLE_METRICS == "1"
+            && (sandbox.devShell { }).BD_DISABLE_METRICS == "1"
+          )
+          [
+            wlib.profiles.base
+            wlib.profiles.rust
+            wlib.profiles.python
+          ]
+        ) "profiles, sandboxes, and devshells must disable Beads metrics"
+      );
+
+      "profiles.no-dev-toolchain-lib" = opaque (
+        ensure (!(hasAttr "devToolchain" wlib)) "wrix.devToolchain is still exposed"
+      );
+
+      "profiles.no-rust-with-toolchain" = opaque (
+        ensure (
+          !(hasAttr "withToolchain" wlib.profiles.rust)
+        ) "profiles.rust.withToolchain is still exposed"
+      );
+
+      "profiles.sandbox-entrypoints-no-rustup" = sourceCheck entrypointSources (
+        sources:
+        ensure (all (
+          source: lacksLower "rustup" source
+        ) sources) "sandbox entrypoints contain rustup bootstrap logic"
+      );
+    };
 in
 if describe then
   mapAttrs (_: check: check.inputs) checks

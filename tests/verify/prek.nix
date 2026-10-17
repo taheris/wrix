@@ -12,49 +12,54 @@ let
   '';
 in
 {
-  "prek.bundle-contents" = ''
+  "prek.bundle-contents".script = ''
     ${repoScript "tests/profiles/prek-hooks-bundle.sh" "test_bundle_contents"}
     ${repoScript "tests/profiles/prek-hooks-bundle.sh" "test_bundle_path_is_context_stable"}
   '';
-  "prek.shims-use-hook-impl" = ''
+  "prek.shims-use-hook-impl".script = ''
     ${repoScript "tests/profiles/prek-hooks-bundle.sh" "test_shims_use_hook_impl"}
     ${repoScript "tests/profiles/prek-hooks-bundle.sh" "test_prek_capture_fixture_conforms_to_packaged_runtime"}
   '';
-  "prek.shims-no-flock" = ''
+  "prek.shims-no-flock".script = ''
     ${repoScript "tests/profiles/prek-hooks-bundle.sh" "test_shims_no_flock"}
     ${repoScript "tests/profiles/prek-hooks-bundle.sh" "test_shims_resolve_packaged_prek_at_runtime"}
   '';
-  "prek.pre-push-stamp" =
+  "prek.pre-push-stamp".script =
     repoScript "tests/profiles/prek-hooks-bundle.sh" "test_pre_push_exact_transaction_stamp_written_and_consumed";
-  "prek.pre-push-stamp-transaction-scope" =
+  "prek.pre-push-stamp-transaction-scope".script =
     repoScript "tests/profiles/prek-hooks-bundle.sh" "test_pre_push_stamp_rejects_different_transaction";
-  "prek.pre-push-stale-stamp" =
+  "prek.pre-push-stale-stamp".script =
     repoScript "tests/profiles/prek-hooks-bundle.sh" "test_pre_push_stale_stamp_removed_on_failure";
-  "prek.pre-push-stamp-cannot-revive" =
+  "prek.pre-push-stamp-cannot-revive".script =
     repoScript "tests/profiles/prek-hooks-bundle.sh" "test_pre_push_stamp_cannot_revive_after_return_to_sha";
-  "prek.no-verify-bypasses-hooks" =
+  "prek.no-verify-bypasses-hooks".script =
     repoScript "tests/profiles/prek-hooks-bundle.sh" "test_no_verify_bypasses_pre_commit_and_pre_push";
-  "prek.wrappers-on-devshell-path" =
+  "prek.wrappers-on-devshell-path".script =
     repoScript "tests/profiles/mkdevshell-prek.sh" "test_wrappers_exposed_and_on_devshell_path";
-  "prek.config-stage-set" = repoScript "tests/prek/wrix-hook-stages.sh" "test_wrix_config_stage_set";
-  "prek.formatter-cache-independent" = ''
+  "prek.config-stage-set".script =
+    repoScript "tests/prek/wrix-hook-stages.sh" "test_wrix_config_stage_set";
+  "prek.formatter-cache-independent".script = ''
     local root formatter
     root="$(repo_root)"
     formatter="$(build_flake_package formatter.${system})"
     python3 "$root/tests/prek/treefmt-cache.py" "$root" "$formatter/bin/treefmt"
   '';
-  "prek.pre-push-checks-marker-valid" = wholeRepoScript "tests/prek/pre-push-checks-marker-valid.sh";
-  "prek.pre-push-checks-marker-stale" = wholeRepoScript "tests/prek/pre-push-checks-marker-stale.sh";
-  "prek.pre-push-checks-no-marker" = wholeRepoScript "tests/prek/pre-push-checks-no-marker.sh";
-  "prek.pre-push-checks-no-metadata" = wholeRepoScript "tests/prek/pre-push-checks-no-metadata.sh";
-  "prek.pre-push-checks-no-loom" = wholeRepoScript "tests/prek/pre-push-checks-no-loom.sh";
-  "prek.skip-if-missing-present" = wholeRepoScript "tests/prek/skip-if-missing-present.sh";
-  "prek.skip-if-missing-absent" = wholeRepoScript "tests/prek/skip-if-missing-absent.sh";
-  "prek.wrapper-runtime-dependencies" = wholeRepoScript "tests/prek/wrapper-runtime-dependencies.sh";
-  "prek.config-wrapper-contract" = wholeRepoScript "tests/prek/wrix-pre-push-config.sh";
-  "prek.ci-only-heavy-checks" = wholeRepoScript "tests/prek/ci-only-heavy-checks.sh";
-  "prek.ci-platform-policy" = wholeRepoScript "tests/prek/test-ci-platform-policy.sh";
-  "prek.ci-batching" = ''
+  "prek.pre-push-checks-marker-valid".script =
+    wholeRepoScript "tests/prek/pre-push-checks-marker-valid.sh";
+  "prek.pre-push-checks-marker-stale".script =
+    wholeRepoScript "tests/prek/pre-push-checks-marker-stale.sh";
+  "prek.pre-push-checks-no-marker".script = wholeRepoScript "tests/prek/pre-push-checks-no-marker.sh";
+  "prek.pre-push-checks-no-metadata".script =
+    wholeRepoScript "tests/prek/pre-push-checks-no-metadata.sh";
+  "prek.pre-push-checks-no-loom".script = wholeRepoScript "tests/prek/pre-push-checks-no-loom.sh";
+  "prek.skip-if-missing-present".script = wholeRepoScript "tests/prek/skip-if-missing-present.sh";
+  "prek.skip-if-missing-absent".script = wholeRepoScript "tests/prek/skip-if-missing-absent.sh";
+  "prek.wrapper-runtime-dependencies".script =
+    wholeRepoScript "tests/prek/wrapper-runtime-dependencies.sh";
+  "prek.config-wrapper-contract".script = wholeRepoScript "tests/prek/wrix-pre-push-config.sh";
+  "prek.ci-only-heavy-checks".script = wholeRepoScript "tests/prek/ci-only-heavy-checks.sh";
+  "prek.ci-platform-policy".script = wholeRepoScript "tests/prek/test-ci-platform-policy.sh";
+  "prek.ci-batching".script = ''
     local root test_ci_runner loom
     root="$(repo_root)"
     loom="$(build_flake_package loom)"

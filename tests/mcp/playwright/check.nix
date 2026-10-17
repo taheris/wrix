@@ -10,12 +10,17 @@
 
 let
   inherit (pkgs.lib) escapeShellArg;
+  resources = import ../../lib/browser-resources.nix { };
+  defined = package: {
+    inherit package;
+    inherit (resources) inputs;
+  };
 
-  registry = import ../../../lib/mcp {
+  registry = import (resources.library.path + "/mcp") {
     pkgs = linuxPkgs;
   };
   server = registry.playwright;
-  sandboxLib = import ../../../lib/sandbox {
+  sandboxLib = import (resources.library.path + "/sandbox") {
     inherit
       pkgs
       system
@@ -238,12 +243,10 @@ let
     );
 in
 {
-  inherit
-    chromiumImageCheck
-    executablePathCheck
-    mandatoryFlagsCheck
-    registryTripleCheck
-    sandbox
-    userOptionsCheck
-    ;
+  inherit sandbox;
+  chromiumImageCheck = defined chromiumImageCheck;
+  executablePathCheck = defined executablePathCheck;
+  mandatoryFlagsCheck = defined mandatoryFlagsCheck;
+  registryTripleCheck = defined registryTripleCheck;
+  userOptionsCheck = defined userOptionsCheck;
 }

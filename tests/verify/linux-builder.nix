@@ -10,7 +10,7 @@ let
   '';
 in
 {
-  "linux-builder.integration" = ''
+  "linux-builder.integration".script = ''
     local platform
     local version
     local major
@@ -33,8 +33,10 @@ in
     return 77
   '';
 
-  "linux-builder.key-material-generation" = builderScript "test_generates_per_user_ed25519_material";
+  "linux-builder.key-material-generation".script =
+    builderScript "test_generates_per_user_ed25519_material";
 
-  "linux-builder.key-material-idempotent" = builderScript "test_preserves_existing_private_keys";
+  "linux-builder.key-material-idempotent".script =
+    builderScript "test_preserves_existing_private_keys";
 
 }

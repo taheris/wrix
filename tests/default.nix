@@ -167,7 +167,12 @@ let
   };
 
   verify = import ./verify {
-    inherit pkgs system linuxPkgs;
+    inherit
+      pkgs
+      system
+      linuxPkgs
+      src
+      ;
     focusBinary = wrix.rustPackage.focusNotification;
   };
 
@@ -302,6 +307,12 @@ let
   };
   mkDefinedCiApp =
     { package, inputs }: executable: (mkCiApp package executable) // { inherit inputs; };
+  mkImageCiApp =
+    package: executable:
+    mkDefinedCiApp {
+      inherit package;
+      inherit (sandboxImageChecks) inputs;
+    } executable;
   mkLiveCiApp =
     package: executable:
     (mkCiApp package executable)
@@ -370,45 +381,45 @@ let
     );
 
   ciApps = loomTests.ciApps ++ [
-    (mkCiApp piMcpTests.imageWiring "test-pi-mcp-image-wiring")
+    (mkDefinedCiApp piMcpTests.imageWiring "test-pi-mcp-image-wiring")
     (mkTmuxCiApp "workflow")
     (mkTmuxCiApp "exited-process")
     (mkTmuxCiApp "targeted-cleanup")
     (mkTmuxCiApp "container-cleanup")
-    (mkCiApp sandboxImageChecks.imageInstallRealSkopeoTest "test-image-install-real-skopeo")
-    (mkCiApp sandboxImageChecks.imageInstallDigestSkipTest "test-image-install-digest-skip")
-    (mkCiApp sandboxImageChecks.digestMatchesStoredIdTest "test-image-digest-matches-stored-id")
-    (mkCiApp sandboxImageChecks.linuxImageArchivelessSourceTest "test-linux-image-archiveless-source")
-    (mkCiApp sandboxImageChecks.imageDigestNoTarTest "test-image-digest-no-tar")
-    (mkCiApp sandboxImageChecks.imageTierGraphTest "test-image-tier-graph")
-    (mkCiApp sandboxImageChecks.imageNixConfigTest "test-image-nix-config")
-    (mkCiApp sandboxImageChecks.imageCaCertificatesTest "test-image-ca-certificates")
-    (mkCiApp sandboxImageChecks.imageEntrypointCommandTest "test-image-entrypoint-command")
-    (mkCiApp sandboxImageChecks.imageAgentMarkerTest "test-image-agent-marker")
-    (mkCiApp sandboxImageChecks.profilePackagesBundledTest "test-profile-packages-bundled")
-    (mkCiApp sandboxImageChecks.imageTierMembershipTest "test-image-tier-membership")
-    (mkCiApp sandboxImageChecks.wrixImagesSourceKindTest "test-wrix-images-source-kind")
-    (mkCiApp sandboxImageChecks.wrixImageLabelsTest "test-wrix-image-labels")
-    (mkCiApp sandboxImageChecks.agentDeclaredDirectRunnerTest "test-agent-declared-direct-runner")
-    (mkCiApp sandboxImageChecks.agentConsumerRuntimeClosuresTest "test-agent-consumer-runtime-closures")
-    (mkCiApp sandboxImageChecks.agentClaudeRuntimeTest "test-agent-claude-runtime")
-    (mkCiApp sandboxImageChecks.claudeRuntimeNoopTest "test-claude-runtime-noop")
-    (mkCiApp sandboxImageChecks.prekHooksClosureTest "test-prek-hooks-closure")
-    (mkCiApp sandboxImageChecks.baseImageUniversalTest "test-base-image-universal")
-    (mkCiApp sandboxImageChecks.entrypointResolverBaseTest "test-entrypoint-resolver-base")
-    (mkCiApp sandboxImageChecks.baseImageHashStableTest "test-base-image-hash-stable")
-    (mkCiApp sandboxImageChecks.stableProfileHashStableTest "test-stable-profile-hash-stable")
-    (mkCiApp sandboxImageChecks.stableProfileMembershipTest "test-stable-profile-membership")
-    (mkCiApp sandboxImageChecks.pinnedToolchainStableTest "test-pinned-toolchain-stable-tier")
-    (mkCiApp sandboxImageChecks.downstreamChangeLeafOnlyTest "test-downstream-change-leaf-only")
-    (mkCiApp sandboxImageChecks.archivelessGeneratedChangeTest "test-archiveless-generated-change")
-    (mkCiApp sandboxImageChecks.agentTierIsolatedTest "test-agent-tier-isolated")
-    (mkCiApp sandboxImageChecks.agentExclusiveTest "test-agent-exclusive")
-    (mkCiApp sandboxImageChecks.agentPkgThreadedTest "test-agent-pkg-threaded")
-    (mkCiApp sandboxImageChecks.iterationCostBoundedTest "test-iteration-cost-bounded")
-    (mkCiApp sandboxImageChecks.customisationLayerBoundedTest "test-customisation-layer-bounded")
-    (mkCiApp sandboxImageChecks.imageNixDbConsistentTest "test-image-nix-db-consistent")
-    (mkCiApp sandboxImageChecks.imageNixDbNoDanglingTest "test-image-nix-db-no-dangling")
+    (mkImageCiApp sandboxImageChecks.imageInstallRealSkopeoTest "test-image-install-real-skopeo")
+    (mkImageCiApp sandboxImageChecks.imageInstallDigestSkipTest "test-image-install-digest-skip")
+    (mkImageCiApp sandboxImageChecks.digestMatchesStoredIdTest "test-image-digest-matches-stored-id")
+    (mkImageCiApp sandboxImageChecks.linuxImageArchivelessSourceTest "test-linux-image-archiveless-source")
+    (mkImageCiApp sandboxImageChecks.imageDigestNoTarTest "test-image-digest-no-tar")
+    (mkImageCiApp sandboxImageChecks.imageTierGraphTest "test-image-tier-graph")
+    (mkImageCiApp sandboxImageChecks.imageNixConfigTest "test-image-nix-config")
+    (mkImageCiApp sandboxImageChecks.imageCaCertificatesTest "test-image-ca-certificates")
+    (mkImageCiApp sandboxImageChecks.imageEntrypointCommandTest "test-image-entrypoint-command")
+    (mkImageCiApp sandboxImageChecks.imageAgentMarkerTest "test-image-agent-marker")
+    (mkImageCiApp sandboxImageChecks.profilePackagesBundledTest "test-profile-packages-bundled")
+    (mkImageCiApp sandboxImageChecks.imageTierMembershipTest "test-image-tier-membership")
+    (mkImageCiApp sandboxImageChecks.wrixImagesSourceKindTest "test-wrix-images-source-kind")
+    (mkImageCiApp sandboxImageChecks.wrixImageLabelsTest "test-wrix-image-labels")
+    (mkImageCiApp sandboxImageChecks.agentDeclaredDirectRunnerTest "test-agent-declared-direct-runner")
+    (mkImageCiApp sandboxImageChecks.agentConsumerRuntimeClosuresTest "test-agent-consumer-runtime-closures")
+    (mkImageCiApp sandboxImageChecks.agentClaudeRuntimeTest "test-agent-claude-runtime")
+    (mkImageCiApp sandboxImageChecks.claudeRuntimeNoopTest "test-claude-runtime-noop")
+    (mkImageCiApp sandboxImageChecks.prekHooksClosureTest "test-prek-hooks-closure")
+    (mkImageCiApp sandboxImageChecks.baseImageUniversalTest "test-base-image-universal")
+    (mkImageCiApp sandboxImageChecks.entrypointResolverBaseTest "test-entrypoint-resolver-base")
+    (mkImageCiApp sandboxImageChecks.baseImageHashStableTest "test-base-image-hash-stable")
+    (mkImageCiApp sandboxImageChecks.stableProfileHashStableTest "test-stable-profile-hash-stable")
+    (mkImageCiApp sandboxImageChecks.stableProfileMembershipTest "test-stable-profile-membership")
+    (mkImageCiApp sandboxImageChecks.pinnedToolchainStableTest "test-pinned-toolchain-stable-tier")
+    (mkImageCiApp sandboxImageChecks.downstreamChangeLeafOnlyTest "test-downstream-change-leaf-only")
+    (mkImageCiApp sandboxImageChecks.archivelessGeneratedChangeTest "test-archiveless-generated-change")
+    (mkImageCiApp sandboxImageChecks.agentTierIsolatedTest "test-agent-tier-isolated")
+    (mkImageCiApp sandboxImageChecks.agentExclusiveTest "test-agent-exclusive")
+    (mkImageCiApp sandboxImageChecks.agentPkgThreadedTest "test-agent-pkg-threaded")
+    (mkImageCiApp sandboxImageChecks.iterationCostBoundedTest "test-iteration-cost-bounded")
+    (mkImageCiApp sandboxImageChecks.customisationLayerBoundedTest "test-customisation-layer-bounded")
+    (mkImageCiApp sandboxImageChecks.imageNixDbConsistentTest "test-image-nix-db-consistent")
+    (mkImageCiApp sandboxImageChecks.imageNixDbNoDanglingTest "test-image-nix-db-no-dangling")
     (mkDefinedCiApp linuxBuilderChecks.sshdHardeningTest "test-linux-builder-sshd-hardening")
     (mkDefinedCiApp linuxBuilderChecks.imageSourceKindTest "test-linux-builder-image-source-kind")
     (mkDefinedCiApp linuxBuilderChecks.sourceKindLoadTransportTest "test-linux-builder-source-kind-load-transport")
@@ -420,10 +431,10 @@ let
     (mkCiApp testContainerPrePush "test-container-pre-push")
     (mkCiApp testWrixCliInProfile "test-wrix-cli-in-profile")
     (mkCiApp testSandboxAgentSettings "test-sandbox-agent-settings")
-    (mkCiApp testPlaywrightChromiumClosure "test-playwright-chromium-closure")
-    (mkCiApp testPlaywrightChromiumExecutablePath "test-playwright-chromium-executable-path")
-    (mkCiApp testPlaywrightMandatoryFlags "test-playwright-mandatory-flags")
-    (mkCiApp testPlaywrightUserOptionsConfig "test-playwright-user-options-config")
+    (mkDefinedCiApp testPlaywrightChromiumClosure "test-playwright-chromium-closure")
+    (mkDefinedCiApp testPlaywrightChromiumExecutablePath "test-playwright-chromium-executable-path")
+    (mkDefinedCiApp testPlaywrightMandatoryFlags "test-playwright-mandatory-flags")
+    (mkDefinedCiApp testPlaywrightUserOptionsConfig "test-playwright-user-options-config")
     (mkCiApp testBeadsLiveSystem "test-beads-live-system")
     (mkServiceCiApp testServicesDevshellStartIndependent "test-services-devshell-start-independent")
     (mkServiceCiApp testServicesLimitModeCacheEndpoint "test-services-limit-mode-cache-endpoint")
@@ -452,7 +463,7 @@ let
     }) ciApps
   );
   testAppDerivations = ciAppDerivations // {
-    playwright-mcp-registry = playwrightMcpTests.registryTripleCheck;
+    playwright-mcp-registry = playwrightMcpTests.registryTripleCheck.package;
     playwright-mcp-sandbox = playwrightMcpTests.sandbox.package;
     test-notify = testNotify;
   };

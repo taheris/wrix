@@ -22,6 +22,7 @@ let
   sandboxScriptAllWithWrix = script: ''
     run_repo_script_with_wrix ${escapeShellArg "tests/sandbox/${script}.sh"}
   '';
+  browser = import ../lib/browser-resources.nix { };
   containerStarts = sandboxScript "container-starts";
   entrypoint = sandboxScript "entrypoint-contract";
   network = sandboxScript "network-baseline";
@@ -29,15 +30,15 @@ let
 
 in
 {
-  "sandbox.agent-binary-guard" = ''
+  "sandbox.agent-binary-guard".script = ''
     nix build --no-link ".#checks.${system}.entrypoint-declared-runner"
   '';
 
-  "sandbox.agent-config-homes" = entrypoint "test_agent_config_homes_both_entrypoints";
+  "sandbox.agent-config-homes".script = entrypoint "test_agent_config_homes_both_entrypoints";
 
   "sandbox.agent-lacks-net-admin" = live (network "test_agent_lacks_net_admin");
 
-  "sandbox.custom-mounts-env" = sandboxScriptAllWithWrix "custom-mounts-env";
+  "sandbox.custom-mounts-env".script = sandboxScriptAllWithWrix "custom-mounts-env";
 
   "sandbox.darwin-container-starts" = darwinLive (containerStarts "test_darwin_container_starts");
 
@@ -45,16 +46,18 @@ in
 
   "sandbox.darwin-network-bootstrap" = darwinLive (sandboxScriptAll "darwin-network-bootstrap");
 
-  "sandbox.entrypoint-declared-runner" = ''
+  "sandbox.entrypoint-declared-runner".script = ''
     nix build --no-link ".#checks.${system}.entrypoint-declared-runner"
   '';
 
-  "sandbox.entrypoint-requires-bootstrap" = entrypoint "test_entrypoints_require_network_bootstrap";
+  "sandbox.entrypoint-requires-bootstrap".script =
+    entrypoint "test_entrypoints_require_network_bootstrap";
 
-  "sandbox.entrypoint-deploy-key-public" =
+  "sandbox.entrypoint-deploy-key-public".script =
     entrypoint "test_deploy_key_public_derivation_both_entrypoints";
 
-  "sandbox.entrypoint-workspace-bin-prepend" = entrypoint "test_workspace_bin_path_prepend_both";
+  "sandbox.entrypoint-workspace-bin-prepend".script =
+    entrypoint "test_workspace_bin_path_prepend_both";
 
   "sandbox.filesystem-isolation" = live (sandboxScriptAll "filesystem-isolation");
 
@@ -86,29 +89,36 @@ in
     ${sandboxScriptAll "network-bootstrap"}
   '';
 
-  "sandbox.mksandbox-api" = sandboxScriptAll "mksandbox-api";
+  "sandbox.mksandbox-api".inputs = browser.inputs;
+  "sandbox.mksandbox-api".script = sandboxScriptAll "mksandbox-api";
 
-  "sandbox.mcp-manifest-handoff" = ''
+  "sandbox.mcp-manifest-handoff".inputs = browser.inputs;
+  "sandbox.mcp-manifest-handoff".script = ''
     nix build --no-link ".#checks.${system}.mcp-manifest-handoff"
   '';
 
-  "sandbox.pi-mcp-selection" = ''
+  "sandbox.pi-mcp-selection".inputs = browser.inputs;
+  "sandbox.pi-mcp-selection".script = ''
     nix build --no-link ".#checks.${system}.pi-mcp-native"
   '';
 
-  "sandbox.pi-mcp-structured-results" = ''
+  "sandbox.pi-mcp-structured-results".inputs = browser.inputs;
+  "sandbox.pi-mcp-structured-results".script = ''
     nix build --no-link ".#checks.${system}.pi-mcp-native"
   '';
 
-  "sandbox.pi-mcp-images" = ''
+  "sandbox.pi-mcp-images".inputs = browser.inputs;
+  "sandbox.pi-mcp-images".script = ''
     nix build --no-link ".#checks.${system}.pi-mcp-native"
   '';
 
-  "sandbox.pi-mcp-errors-cancellation" = ''
+  "sandbox.pi-mcp-errors-cancellation".inputs = browser.inputs;
+  "sandbox.pi-mcp-errors-cancellation".script = ''
     nix build --no-link ".#checks.${system}.pi-mcp-native"
   '';
 
-  "sandbox.pi-mcp-lifecycle" = ''
+  "sandbox.pi-mcp-lifecycle".inputs = browser.inputs;
+  "sandbox.pi-mcp-lifecycle".script = ''
     nix build --no-link ".#checks.${system}.pi-mcp-native"
   '';
 
@@ -124,19 +134,19 @@ in
 
   "sandbox.nix-store-verify-clean" = linuxLive (sandboxScriptAll "nix-store-verify-clean");
 
-  "sandbox.pi-settings-precedence" = ''
+  "sandbox.pi-settings-precedence".script = ''
     nix build --no-link ".#checks.${system}.pi-settings-precedence"
   '';
 
-  "sandbox.pi-codemode-tools" = ''
+  "sandbox.pi-codemode-tools".script = ''
     nix build --no-link ".#checks.${system}.pi-codemode-tools"
   '';
 
-  "sandbox.platform-dispatch" = platform "test_platform_dispatch_current_system";
+  "sandbox.platform-dispatch".script = platform "test_platform_dispatch_current_system";
 
   "sandbox.uid-mapping" = linuxLive (sandboxScriptAll "uid-mapping");
 
-  "sandbox.unsupported-system-error" = platform "test_unsupported_system_error";
+  "sandbox.unsupported-system-error".script = platform "test_unsupported_system_error";
 
   "sandbox.unsafe-podman-socket" = requiring linux [ ] (
     sandboxScriptAllWithWrix "unsafe-podman-socket"

@@ -29,7 +29,8 @@ let
     "aarch64-linux"
   ];
 
-  sandboxLib = import ../../lib/sandbox {
+  resources = import ../lib/browser-resources.nix { };
+  sandboxLib = import (resources.library.path + "/sandbox") {
     inherit
       pkgs
       system
@@ -2956,6 +2957,7 @@ let
 
 in
 {
+  inherit (resources) inputs;
   inherit
     imageInstallRealSkopeoTest
     imageInstallDigestSkipTest

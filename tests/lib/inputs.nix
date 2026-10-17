@@ -52,6 +52,7 @@ in
   };
   directory = path: {
     inherit path;
+    relative = relative path;
     inputs = [ "/${relative path}/" ];
   };
   # Nix evaluation/packaging can depend on any repository Nix definition.
@@ -63,6 +64,7 @@ in
       "/**/*.nix"
       "/flake.lock"
       "/loom.toml"
+      "/patches/"
       "/${relative ./verifier.sh}"
       "/${relative ./print-inputs.sh}"
     ]
