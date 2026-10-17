@@ -62,6 +62,10 @@ pub fn run(
         }
         Err(error) => {
             writeln!(stderr, "wrix init: {error}")?;
+            writeln!(
+                stderr,
+                "For missing or drifted repository setup, run wrix init repo."
+            )?;
             write_help(stderr)?;
             Ok(ExitCode::FAILURE)
         }
@@ -437,7 +441,10 @@ impl Plan {
             require_runtime_git_config(&self.root, "commit.gpgsign", "false")?;
         }
         if self.hooks == HookPolicy::Enabled {
-            verify_prek_hooks(&common_dir, &resolve_prek_hooks_path()?)?;
+            let hooks_path = resolve_prek_hooks_path()?;
+            verify_prek_hooks(&common_dir, &hooks_path)?;
+            require_runtime_git_config(&self.root, "core.hooksPath", &path_string(&hooks_path))?;
+            verify_prek_runner(&self.root)?;
         }
         if self.verification == VerificationPolicy::Online {
             verify_online(&self.root, &self.remote, self.github_repo()?)?;
@@ -1408,6 +1415,8 @@ fn write_allowed_signers(
 
 fn verify_signing_config(root: &Path, common_dir: &Path, key_name: &KeyName) -> Result<(), Error> {
     require_common_config_value(common_dir, "gpg.format", "ssh")?;
+    require_runtime_git_config(root, "gpg.format", "ssh")?;
+    require_runtime_git_config(root, "commit.gpgsign", "true")?;
     require_stable_common_config_value(
         root,
         common_dir,
@@ -1449,6 +1458,7 @@ fn require_stable_common_config_value(
     expected: &str,
 ) -> Result<(), Error> {
     require_common_config_value(common_dir, key, expected)?;
+    require_runtime_git_config(root, key, expected)?;
     let value = read_common_git_config(common_dir, key)?;
     ensure_context_stable_signing_config(root, key, &value)
 }
@@ -1758,6 +1768,67 @@ fn read_common_git_config(common_dir: &Path, key: &str) -> Result<String, Error>
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
+fn require_file_content(path: &Path, expected: &str) -> Result<(), Error> {
+    let content = fs::read(path).map_err(|source| Error::StateIo {
+        path: path_string(path),
+        source,
+    })?;
+    if content == expected.as_bytes() {
+        return Ok(());
+    }
+    Err(Error::HelperVerify {
+        detail: format!(
+            "{} differs from the installed Wrix definition",
+            path.display()
+        ),
+    })
+}
+
+fn verify_prek_runner(root: &Path) -> Result<(), Error> {
+    let context = env::var_os("WRIX_PREK_CONTEXT");
+    let context = match context.as_deref().and_then(|value| value.to_str()) {
+        Some("host") => "host",
+        Some("container") => "container",
+        None | Some("") if context.as_ref().is_none_or(|value| value.is_empty()) => {
+            if Path::new("/etc/wrix/image-agent").is_file() {
+                "container"
+            } else {
+                "host"
+            }
+        }
+        _ => {
+            return Err(Error::HelperVerify {
+                detail: String::from("invalid WRIX_PREK_CONTEXT; expected host or container"),
+            });
+        }
+    };
+    let os = if cfg!(target_os = "macos") {
+        "darwin"
+    } else {
+        env::consts::OS
+    };
+    let key = format!("wrix.prek-{context}-{}-{os}.runner", env::consts::ARCH);
+    let runner = read_common_git_config(&git_common_dir(root)?, &key)?;
+    if !Path::new(&runner).is_absolute() {
+        return Err(Error::HelperVerify {
+            detail: format!("hook runner for {key} must be an absolute executable path"),
+        });
+    }
+    require_executable_hook(Path::new(&runner))?;
+    let output = ProcessCommand::new(&runner)
+        .arg("--print-bin-dir")
+        .current_dir(root)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|source| Error::PrekRunnerIo { source })?;
+    if output.status.success() && !output.stdout.is_empty() {
+        return Ok(());
+    }
+    Err(Error::HelperVerify {
+        detail: format!("hook runner runtime unavailable for {key}"),
+    })
+}
+
 fn verify_transport_helper(
     root: &Path,
     common_dir: &Path,
@@ -1773,6 +1844,8 @@ fn verify_transport_helper(
     require_mode(common_dir.join("wrix"), 0o700)?;
     require_mode(helper_path, 0o700)?;
     require_mode(known_hosts_path, 0o600)?;
+    require_file_content(helper_path, &transport_helper_script(key_name))?;
+    require_file_content(known_hosts_path, GITHUB_KNOWN_HOSTS)?;
     let expected_key = resolved_deploy_key(key_name)?;
     require_private_key_mode(KeyKind::Deploy, &expected_key)?;
     let effective_config = probe_helper_config(root, helper_path)?;

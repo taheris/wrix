@@ -835,10 +835,10 @@ authorization. Verification diagnoses stale/missing helpers and hooks with
 - Bare init verifies correctly configured setup without persistent managed
   changes, including Git objects, keys, helpers, hooks, runner/SSH files, policy
   and service state, on both success and failure.
-  [test?](../crates/wrix-cli/tests/init_workflows.rs::bare_verification_never_applies_or_repairs_state)
+  [test](../crates/wrix-cli/tests/init_workflows.rs::bare_verification_never_applies_or_repairs_state)
 - Bare init reports missing/drifted setup with repo-repair guidance instead of
   creating keys or repairing helpers, hooks or bindings.
-  [test?](../crates/wrix-cli/tests/init_workflows.rs::verification_reports_drift_without_repair)
+  [test](../crates/wrix-cli/tests/init_workflows.rs::verification_reports_drift_without_repair)
 - Standalone init deploy provisions/checks keys and registrations without
   applying repository configuration or requiring installed helpers/hooks.
   [test](../crates/wrix-cli/tests/init_workflows.rs::standalone_deploy_only_provisions_keys)
@@ -879,7 +879,7 @@ authorization. Verification diagnoses stale/missing helpers and hooks with
   [test](../crates/wrix-cli/tests/init_git_bootstrap.rs::strict_context_aware_ssh_helper)
 - A weakening worktree-local transport override makes bare verification fail
   without repairing the override or weakening common policy.
-  [test?](../crates/wrix-cli/tests/init_workflows.rs::verification_rejects_worktree_transport_override)
+  [test](../crates/wrix-cli/tests/init_workflows.rs::verification_rejects_worktree_transport_override)
 - Repository Git grants default to false, remain independent, and key identity
   alone does not grant credentials.
   [test](../crates/wrix-cli/tests/init_config.rs::git_grants_are_independent_and_default_false)
@@ -914,19 +914,19 @@ authorization. Verification diagnoses stale/missing helpers and hooks with
 - Online verification exercises real Git and the existing strict helper from the
   invoked repository against the selected GitHub SSH URL, including HTTPS
   origins and an independent nested integration clone.
-  [test?](../crates/wrix-cli/tests/init_workflows.rs::online_verification_uses_invoked_repository_and_strict_helper)
+  [test](../crates/wrix-cli/tests/init_workflows.rs::online_verification_uses_invoked_repository_and_strict_helper)
 - Non-GitHub online verification fails before network verification or mutation.
-  [test?](../crates/wrix-cli/tests/init_workflows.rs::unsupported_verification_remote_precedes_network)
+  [test](../crates/wrix-cli/tests/init_workflows.rs::unsupported_verification_remote_precedes_network)
 - Online verification distinguishes host-key failures from authentication or
   repository authorization failures.
-  [test?](../crates/wrix-cli/tests/init_workflows.rs::verification_distinguishes_host_keys_and_authorization)
+  [test](../crates/wrix-cli/tests/init_workflows.rs::verification_distinguishes_host_keys_and_authorization)
 - Explicit offline verification retains local helper/key/signing/hook checks
   without network calls or repair.
-  [test?](../crates/wrix-cli/tests/init_workflows.rs::offline_verification_retains_local_checks)
+  [test](../crates/wrix-cli/tests/init_workflows.rs::offline_verification_retains_local_checks)
 - Offline policy retains the same local checks without network calls or repair.
-  [test?](../crates/wrix-cli/tests/init_workflows.rs::offline_policy_retains_local_checks)
+  [test](../crates/wrix-cli/tests/init_workflows.rs::offline_policy_retains_local_checks)
 - Offline verification rejects insecure deploy-key permissions.
-  [test?](../crates/wrix-cli/tests/init_workflows.rs::offline_verification_rejects_insecure_permissions)
+  [test](../crates/wrix-cli/tests/init_workflows.rs::offline_verification_rejects_insecure_permissions)
 - Repeated standalone provisioning preserves matching keys/registrations and
   leaves repository setup untouched.
   [test](../crates/wrix-cli/tests/init_workflows.rs::standalone_provisioning_is_idempotent)
