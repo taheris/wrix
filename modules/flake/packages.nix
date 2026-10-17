@@ -1,4 +1,4 @@
-_:
+{ inputs, ... }:
 
 {
   perSystem =
@@ -14,6 +14,7 @@ _:
     let
       inherit (builtins) concatMap elem listToAttrs;
       inherit (wrix) profiles;
+      loomLib = import "${inputs.loom-src}/nix/lib.nix";
 
       agents = [
         "claude"
@@ -126,7 +127,13 @@ _:
 
           default = sandboxOverlays.sandbox-rust-pi;
           nodejs = linuxPkgs.nodejs_22;
-          profile-images = wrix.mkProfileImages profileImages;
+          profile-images = loomLib.mkProfileManifest {
+            inherit pkgs;
+            imagePkgs = linuxPkgs;
+            wrixLib = wrix;
+            loomBin = linuxLoomCli;
+            runtimes.pi = { };
+          };
         }
         // (
           # Test sandbox image (claude/beads stubbed out with `hello`);

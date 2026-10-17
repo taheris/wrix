@@ -17,6 +17,32 @@ let
   ];
   environmentFor = name: packages.${name}.image.profileEnv;
   hostTools = devShell.nativeBuildInputs ++ devShell.buildInputs;
+  profileManifest = packages.profile-images;
+  nativeEntry = profileManifest.manifest.rust.pi;
+  nativeSandbox = profileManifest.sandboxes.rust.pi;
+
+  nativeProfiles =
+    assert
+      attrNames profileManifest.manifest == [
+        "base"
+        "python"
+        "rust"
+      ];
+    assert all (profile: attrNames profile == [ "pi" ]) (builtins.attrValues profileManifest.manifest);
+    assert nativeEntry.native_preflight == "rust";
+    assert nativeEntry.runtime == "pi";
+    assert nativeEntry.source == toString nativeSandbox.image.source;
+    assert nativeEntry.profile_config == toString nativeSandbox.profileConfig;
+    assert nativeEntry.launcher == "${nativeSandbox.launcher}/bin/wrix";
+    assert all builtins.hasContext [
+      nativeEntry.source
+      nativeEntry.profile_config
+      nativeEntry.launcher
+    ];
+    pkgs.runCommand "test-loom-native-profiles" { } ''
+      set -euo pipefail
+      touch "$out"
+    '';
 
   sourceOnly =
     assert sourceNode.flake == false;
@@ -78,6 +104,7 @@ in
     loom-source-only = sourceOnly;
     loom-package-wiring = wiring;
     loom-devshell = devshellCli;
+    loom-native-profiles = nativeProfiles;
   };
   ciApps = [
     (ciApp "test-loom-devshell" devshellCli)
