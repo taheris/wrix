@@ -9,7 +9,9 @@ case "${1:-} ${2:-}" in
     ;;
   'image inspect')
     if [[ "$runtime" == container ]]; then
-      printf '[{"id":"%s","digest":"%s"}]\n' "${WRIX_TEST_DIGEST:?}" "$WRIX_TEST_DIGEST"
+      printf '[{"id":"%s","digest":"%s","labels":{"wrix.nix.private":"%s"}}]\n' "${WRIX_TEST_DIGEST:?}" "$WRIX_TEST_DIGEST" "${WRIX_TEST_PRIVATE_NIX_VERSION:-1}"
+    elif [[ "${4:-}" == '{{ index .Config.Labels "wrix.nix.private" }}' ]]; then
+      printf '%s\n' "${WRIX_TEST_PRIVATE_NIX_VERSION:-1}"
     else
       printf '%s\n' "${WRIX_TEST_DIGEST:?}"
     fi

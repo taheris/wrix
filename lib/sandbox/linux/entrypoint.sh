@@ -13,7 +13,6 @@ if [[ "${WRIX_KRUN_INIT:-}" == "1" ]]; then
   fi
   set -- "${ARGS[@]}"
   unset ARGS WRIX_KRUN_CMD WRIX_KRUN_INIT
-  export LD_PRELOAD=/lib/libfakeuid.so
 fi
 
 # shellcheck source=/dev/null
@@ -38,8 +37,8 @@ cd /workspace
 # (default boundary) or host-user->root (krun). Either way paths under
 # /workspace and nix's libgit2 caches ($XDG_CACHE_HOME) can present an owner
 # git/libgit2 reject as "dubious ownership" / "not owned by current user"
-# (especially on krun, where libfakeuid makes tools see uid 1000). Trust all
-# paths: single identity, effectively root, ephemeral container. Covers git ops
+# across workspace and cache mounts. Trust all paths: single identity,
+# rootless container or ephemeral VM. Covers git ops
 # and nix's git fetcher alike.
 git config --global --replace-all safe.directory '*'
 

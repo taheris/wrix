@@ -953,7 +953,7 @@ fn non_pi_launch_does_not_prepare_or_mount_pi_credentials() -> TestResult {
 }
 
 #[test]
-fn linux_default_boundary_sets_is_sandbox_without_fakeuid() -> TestResult {
+fn linux_default_boundary_preserves_real_identity() -> TestResult {
     if !cfg!(target_os = "linux") {
         return Ok(());
     }
@@ -974,7 +974,7 @@ fn linux_default_boundary_sets_is_sandbox_without_fakeuid() -> TestResult {
         Vec::new(),
     )?;
     assert!(run.success, "{}", run.stderr);
-    assert!(run.stdout.contains("ENV=IS_SANDBOX=1"));
+    assert!(!run.stdout.contains("LD_PRELOAD="));
     assert!(!run.stdout.contains("LD_PRELOAD"));
     assert!(!run.stdout.contains("libfakeuid"));
 

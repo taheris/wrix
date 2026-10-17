@@ -9,7 +9,6 @@ import tarfile
 parser = argparse.ArgumentParser()
 parser.add_argument("image", type=pathlib.Path)
 parser.add_argument("--archive", action="store_true")
-parser.add_argument("--legacy", action="store_true")
 args = parser.parse_args()
 
 if args.archive:
@@ -43,16 +42,8 @@ expected = {
     "nix/var/nix/gcroots/per-user": (0, 0, 0o755),
     "nix/var/nix/gcroots/per-user/wrix": (1000, 1000, 0o755),
     "nix/var/nix/gcroots/auto": (0, 0, 0o1777),
-    "nix/var/log/nix/drvs": (1000, 1000, 0o777),
+    "nix/var/log/nix/drvs": (1000, 1000, 0o755),
 }
-if args.legacy:
-    for name in ("nix/var/nix/builds", "nix/var/nix/gc.lock",
-                 "nix/var/nix/profiles/per-user/wrix", "nix/var/nix/gcroots/per-user/wrix"):
-        del expected[name]
-    for name in ("nix/store", "nix/var/nix", "nix/var/nix/db",
-                 "nix/var/nix/temproots", "nix/var/log/nix/drvs"):
-        expected[name] = (0, 0, 0o777)
-
 with tarfile.open(fileobj=io.BytesIO(layer)) as archive:
     entries = {entry.name.removeprefix("./").strip("/"): entry for entry in archive}
     for name, metadata in expected.items():
@@ -64,11 +55,12 @@ with tarfile.open(fileobj=io.BytesIO(layer)) as archive:
     assert "nix/var/nix/db/db.sqlite" in entries
     assert "nix/var/nix/db/reserved" not in entries
     assert "NIX_REMOTE" not in dict(item.split("=", 1) for item in config["config"]["Env"])
-    if not args.legacy:
-        marker = entries["etc/wrix/image-policy.json"]
-        assert marker.isfile() or marker.issym()
-        assert config["config"]["Labels"]["wrix.image.policy"] == "private-native-nix-v1"
-    else:
-        assert "etc/wrix/image-policy.json" not in entries
-        assert "wrix.image.policy" not in config["config"]["Labels"]
-print("emitted image ownership, modes, policy and retained Nix state: PASS")
+    marker = entries["etc/wrix/private-nix-version"]
+    assert marker.isfile()
+    assert archive.extractfile(marker).read() == b"1\n"
+    assert config["config"]["Labels"]["wrix.nix.private"] == "1"
+    assert "IS_SANDBOX=1" in config["config"]["Env"]
+    assert "wrix.image.policy" not in config["config"]["Labels"]
+    assert "etc/wrix/image-policy.json" not in entries
+    assert "lib/libfakeuid.so" not in entries
+print("emitted image ownership, modes and retained private Nix state: PASS")

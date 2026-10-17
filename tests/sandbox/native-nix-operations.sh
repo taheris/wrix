@@ -11,7 +11,7 @@ printf '#[test]\nfn native_test() { assert_eq!(2 + 2, 4); }\n' > src/lib.rs
 [[ "$(id -u)" == 1000 ]]
 printf 'runtime uid=%s\n' "$(id -u)"
 [[ ! -e /homeless-shelter ]]
-jq -e '.kind == "private-native-nix" and .version == 1' /etc/wrix/image-policy.json
+[[ "$(< /etc/wrix/private-nix-version)" == 1 ]]
 nix path-info --all | sort > initial-paths
 export LOOM_NATIVE_PREFLIGHT=rust
 python3 <<'PY'

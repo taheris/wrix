@@ -72,8 +72,8 @@ import ../../lib/sandbox/image.nix {
   agentPkg = selectedAgentPkg;
   entrypointSh = ../../lib/sandbox/linux/entrypoint.sh;
   # Mirror production (lib/sandbox/default.nix sets krunSupport = isLinux): bakes
-  # /lib/libfakeuid.so + krun-relay for the krun microVM boundary. The default
-  # container boundary runs as rootless container-root with IS_SANDBOX=1.
+  # the PTY relay for the krun microVM boundary. Every image supplies
+  # IS_SANDBOX=1 and preserves real numeric ownership for private Nix.
   krunSupport = testPkgs.stdenv.hostPlatform.isLinux;
   inherit claudeConfig;
   claudeSettings = { };

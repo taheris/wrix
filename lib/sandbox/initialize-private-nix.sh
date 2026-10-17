@@ -2,15 +2,33 @@
 set -euo pipefail
 
 root=$(realpath "${1:?image root is required}")
-if [[ "$root" == / || ! -f "$root/etc/wrix/image-policy.json" ]]; then
+if [[ "$root" == / || "$root" == /nix || "$root" == /nix/var || "$root" == /nix/var/nix \
+  || "$root" == /nix/store || "$root" == /nix/store/* \
+  || ! -f "$root/etc/wrix/private-nix-version" || -L "$root/etc/wrix/private-nix-version" ]] \
+  || [[ "$(<"$root/etc/wrix/private-nix-version")" != 1 ]]; then
   printf 'private Nix initialization requires a staged image root\n' >&2
   exit 1
 fi
 cd "$root"
 
+# Do not let a staged path redirect initialization into another tree.
+for path in nix nix/store nix/var nix/var/nix nix/var/nix/db \
+  nix/var/nix/temproots nix/var/nix/builds nix/var/nix/gc.lock \
+  nix/var/nix/profiles nix/var/nix/profiles/per-user nix/var/nix/profiles/per-user/wrix \
+  nix/var/nix/gcroots nix/var/nix/gcroots/per-user nix/var/nix/gcroots/per-user/wrix \
+  nix/var/nix/gcroots/auto nix/var/log nix/var/log/nix nix/var/log/nix/drvs; do
+  if [[ -L "$path" ]]; then
+    printf 'private Nix initialization rejects staged symlinks: %s\n' "$path" >&2
+    exit 1
+  fi
+done
+
 mkdir -p nix/store nix/var/nix/db nix/var/nix/temproots nix/var/nix/builds \
   nix/var/nix/profiles/per-user/wrix nix/var/nix/gcroots/per-user/wrix \
   nix/var/nix/gcroots/auto nix/var/log/nix/drvs
+chown 0:0 nix nix/var nix/var/nix \
+  nix/var/nix/profiles nix/var/nix/profiles/per-user \
+  nix/var/nix/gcroots nix/var/nix/gcroots/per-user nix/var/nix/gcroots/auto
 chmod 0755 nix nix/var nix/var/nix \
   nix/var/nix/profiles nix/var/nix/profiles/per-user \
   nix/var/nix/gcroots nix/var/nix/gcroots/per-user

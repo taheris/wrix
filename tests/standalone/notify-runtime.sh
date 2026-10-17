@@ -14,7 +14,9 @@ wait_for_release() {
 case "${1:-} ${2:-}" in
   'image inspect')
     if [[ "$(basename "$0")" == "container" ]]; then
-      jq -cn --arg digest "${WRIX_TEST_DIGEST:?}" '[{id: $digest, digest: $digest}]'
+      jq -cn --arg digest "${WRIX_TEST_DIGEST:?}" '[{id: $digest, digest: $digest, labels: {"wrix.nix.private":"1"}}]'
+    elif [[ "${4:-}" == '{{ index .Config.Labels "wrix.nix.private" }}' ]]; then
+      printf '1\n'
     else
       printf '%s\n' "${WRIX_TEST_DIGEST:?}"
     fi

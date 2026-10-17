@@ -129,18 +129,6 @@ exit 64
 EOF
   chmod +x "$bin_dir/bd"
 
-  write_bash_fixture "$bin_dir/unshare" <<'EOF'
-set -euo pipefail
-while [[ "$#" -gt 0 && "$1" != "--" ]]; do
-  shift
-done
-if [[ "${1:-}" == "--" ]]; then
-  shift
-fi
-exec "$@"
-EOF
-  chmod +x "$bin_dir/unshare"
-
   write_bash_fixture "$bin_dir/fixture-agent" <<'EOF'
 set -euo pipefail
 case "${WRIX_AGENT:-direct}" in
@@ -170,7 +158,6 @@ test_runtime_fixtures_do_not_need_env_or_path() {
   PATH="" WRIX_FAKE_BD_LOG="$log" WRIX_FAKE_BD_STATE="$state" \
     BEADS_DOLT_AUTO_START=0 BD_IMPORT_AUTO=false \
     "$tools/bd" --readonly sql 'SELECT 1' || return "$?"
-  PATH="" "$tools/unshare" -- "$BASH" -c 'printf "PASS: hermetic runtime fixtures\\n"' || return "$?"
   local agent output status
   local -a flags
   for agent in direct pi claude; do
@@ -224,7 +211,6 @@ rewrite_entrypoint() {
     -e "s|/workspace|$workspace|g" \
     -e "s|/home/wrix|$home_dir|g" \
     -e "s|/etc/|$(dirname "$etc_wrix")/|g" \
-    -e "s| -w /etc | -w $(dirname "$etc_wrix") |g" \
     -e "s|\. /git-ssh-setup\.sh|. $setup_path|g" \
     -e "s|\. /mcp-manifest\.sh|. $mcp_helper|g" \
     -e "s|\. /beads-sandbox\.sh|. $REPO_ROOT/lib/beads/sandbox.sh|g" \
@@ -284,7 +270,6 @@ run_entrypoint() {
 
   env \
     HOME="$home_dir" \
-    HOST_UID="$(id -u)" \
     PATH="$tool_dir:${WRIX_TEST_RUNTIME_PATH-$PATH}" \
     WRIX_AGENT="${WRIX_TEST_SELECTED_AGENT-$agent}" \
     WRIX_FIREWALL_BACKEND=iptables \

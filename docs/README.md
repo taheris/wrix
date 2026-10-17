@@ -20,8 +20,8 @@ host `spawn`; configured sandbox runners are not compatibility entry points.
 - [`docs/style-rules.md`](style-rules.md) — code-style and test-quality rules
   organized by rule family (SH-, NX-, DOC-, GIT-, TST-, RS-, COM-, CLI-).
 
-[Private native Nix image policy](private-native-nix.md) documents the versioned
-construction API, Loom migration and fresh-image verification evidence.
+[Private Nix](private-nix.md) documents the intrinsic sandbox contract,
+capability discovery, Loom integration and fresh-image verification boundaries.
 
 [Verifier input discovery and measurements](verifier-inputs.md) describes
 checked resource projections, conservative scope, and measured worker costs.

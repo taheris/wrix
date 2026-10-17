@@ -32,11 +32,7 @@ let
       ];
     assert all (profile: attrNames profile == [ "pi" ]) (builtins.attrValues profileManifest.manifest);
     assert nativeEntry.native_preflight == "rust";
-    assert
-      nativeSandbox.image.imagePolicy == {
-        kind = "private-native-nix";
-        version = 1;
-      };
+    assert nativeSandbox.image.labels."wrix.nix.private" == "1";
     assert all
       (
         name:
@@ -50,6 +46,11 @@ let
         "base"
         "python"
       ];
+    assert all (name: profileManifest.sandboxes.${name}.pi.image.labels."wrix.nix.private" == "1") [
+      "base"
+      "python"
+      "rust"
+    ];
     assert nativeEntry.runtime == "pi";
     assert nativeEntry.source == toString nativeSandbox.image.source;
     assert nativeEntry.profile_config == toString nativeSandbox.profileConfig;
@@ -146,13 +147,13 @@ in
     loom-devshell = devshellCli;
     loom-native-profiles = nativeProfiles;
   }
-  // import ./sandbox/image-policy.nix {
+  // import ./sandbox/private-nix.nix {
     inherit
       pkgs
       linuxPkgs
       wrix
-      nativeSandbox
       ;
+    profileSandboxes = profileManifest.sandboxes;
   };
   ciApps = [
     (ciApp "test-loom-devshell" devshellCli)

@@ -9,6 +9,7 @@ case "${1:-}" in
     case "$format" in
       '{{.Id}}') printf 'sha256:%064d\n' 0 ;;
       '{{.Digest}}') printf 'sha256:%064d\n' 0 ;;
+      '{{ index .Config.Labels "wrix.nix.private" }}') printf '1\n' ;;
       *) printf 'true\n' ;;
     esac
     ;;

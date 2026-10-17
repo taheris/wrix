@@ -1,6 +1,5 @@
 # Darwin VM UID mapping integration test
-# Verifies that unshare-based user namespace provides correct UID mapping
-# for VirtioFS mounts (fixes git dubious ownership errors)
+# Verifies real guest-root ownership for VirtioFS and private Nix together.
 #
 # This test will:
 # - Run during `nix flake check` if container CLI is available
@@ -37,9 +36,14 @@ let
   };
   profileImage = import ../../lib/sandbox/image.nix {
     pkgs = linuxPkgs;
+    hostPkgs = pkgs;
+    asTarball = true;
     profile = profiles.base;
-    agent = "claude";
-    agentPkg = linuxPkgs.claude-code;
+    agent = "direct";
+    agentPkg = linuxPkgs.writeShellApplication {
+      name = "wrix-uid-probe";
+      text = "exec /workspace/uid-test.sh";
+    };
     entrypointSh = ../../lib/sandbox/darwin/entrypoint.sh;
     claudeConfig = { };
     claudeSettings = { };
@@ -151,33 +155,24 @@ in
           cp ${containerTestScript} "$WORKSPACE/uid-test.sh"
           chmod +x "$WORKSPACE/uid-test.sh"
 
-          REAL_UID=$(id -u "$REAL_USER")
-
-          echo "Running container with UID mapping test..."
-          echo "HOST_UID=$REAL_UID"
-          echo ""
-
-          # Run the container with our test script
-          # Simulate entrypoint passwd setup (test bypasses entrypoint with --entrypoint)
+          WORKSPACE_UID=$(/usr/bin/stat -f %u "$WORKSPACE")
+          echo "Running real image entrypoint with ownership and Nix checks..."
           set +e
           container run --rm \
+            --cap-add CAP_NET_ADMIN \
             -w / \
             -v "$WORKSPACE:/workspace" \
             -e BD_NO_DB=1 \
-            -e HOST_UID="$REAL_UID" \
+            -e WRIX_AGENT=direct \
+            -e WRIX_NETWORK=open \
             --network default \
-            --entrypoint /bin/bash \
-            "$TEST_IMAGE" -c "
-              sed -i \"s/^wrix:x:1000:1000:/wrix:x:$REAL_UID:$REAL_UID:/\" /etc/passwd
-              sed -i \"s/^wrix:x:1000:/wrix:x:$REAL_UID:/\" /etc/group
-              export HOME=/home/wrix
-              exec /workspace/uid-test.sh
-            "
+            "$TEST_IMAGE"
           EXIT_CODE=$?
           set -e
 
           echo ""
           if [ "$EXIT_CODE" -eq 0 ]; then
+            [[ "$(/usr/bin/stat -f %u "$WORKSPACE/.uid-mapping-test")" == "$WORKSPACE_UID" ]]
             echo "=== UID MAPPING INTEGRATION TEST PASSED ==="
             mkdir -p $out
           else

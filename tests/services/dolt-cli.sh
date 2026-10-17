@@ -244,7 +244,7 @@ run_entrypoint_command() {
     XDG_CONFIG_HOME="$xdg_config_home" \
     XDG_CACHE_HOME="$xdg_cache_home" \
     XDG_STATE_HOME="$xdg_state_home" \
-    HOST_UID="$(id -u)" \
+
     WRIX_AGENT=direct \
     WRIX_FIREWALL_BACKEND=iptables \
     WRIX_NETWORK=open \

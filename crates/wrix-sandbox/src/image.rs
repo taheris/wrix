@@ -418,6 +418,8 @@ pub enum Error {
     Digest { source: DigestParseError },
     /// {source}
     ImageId { source: ImageIdParseError },
+    /// image does not implement private Nix v1: {image_ref}; rebuild the sandbox and use its matching ProfileConfig
+    PrivateNixUnavailable { image_ref: String },
     /// image ID is unavailable for store target: {target}
     MissingImageId { target: String },
     /// {source}
@@ -1032,6 +1034,21 @@ impl Store for CommandStore {
     }
 }
 
+/// Reject incompatible cached or overridden images before starting a sandbox.
+pub fn require_private_nix(runtime: Runtime, image_ref: &ImageRef) -> Result<(), Error> {
+    let version = inspect_value(
+        runtime,
+        &Target::Reference(image_ref.clone()),
+        InspectField::PrivateNix,
+    )?;
+    if version.as_deref() != Some("1") {
+        return Err(Error::PrivateNixUnavailable {
+            image_ref: image_ref.as_str().to_owned(),
+        });
+    }
+    Ok(())
+}
+
 fn linux_store_ref(image_ref: &ImageRef) -> String {
     // Store discovery is optional: containers-storage resolves its configured default
     // when Podman cannot supply explicit graph/run roots.
@@ -1059,6 +1076,7 @@ enum InspectField {
     Id,
     Digest,
     Managed,
+    PrivateNix,
 }
 
 fn inspect_value(
@@ -1073,6 +1091,7 @@ fn inspect_value(
                 InspectField::Id => "{{.Id}}",
                 InspectField::Digest => "{{.Digest}}",
                 InspectField::Managed => "{{ index .Config.Labels \"wrix.managed\" }}",
+                InspectField::PrivateNix => "{{ index .Config.Labels \"wrix.nix.private\" }}",
             };
             run_output("podman", &["image", "inspect", "--format", format, target])?
         }
@@ -1094,11 +1113,15 @@ fn inspect_container_value(stdout: &[u8], field: InspectField) -> Result<Option<
         InspectField::Id => "/0/id",
         InspectField::Digest => "/0/digest",
         InspectField::Managed => "/0/labels/wrix.managed",
+        InspectField::PrivateNix => "/0/labels/wrix.nix.private",
     };
     let value = value.pointer(pointer).or_else(|| match field {
         InspectField::Managed => value
             .pointer("/0/Labels/wrix.managed")
             .or_else(|| container_variant_label(&value, "wrix.managed")),
+        InspectField::PrivateNix => value
+            .pointer("/0/Labels/wrix.nix.private")
+            .or_else(|| container_variant_label(&value, "wrix.nix.private")),
         _ => None,
     });
     Ok(value.and_then(Value::as_str).and_then(normalized_value))
@@ -1528,6 +1551,28 @@ mod test {
         assert_eq!(
             inspect_container_value(&output, InspectField::Managed).expect("parse image inspect"),
             Some(String::from("true"))
+        );
+    }
+
+    #[test]
+    fn apple_image_inspect_finds_private_nix_version_in_all_supported_shapes() {
+        for image in [
+            json!([{"labels": {"wrix.nix.private": "1"}}]),
+            json!([{"Labels": {"wrix.nix.private": "1"}}]),
+            json!([{"variants": [{"config": {"config": {"Labels": {"wrix.nix.private": "1"}}}}]}]),
+        ] {
+            assert_eq!(
+                inspect_container_value(
+                    &serde_json::to_vec(&image).expect("serialize image"),
+                    InspectField::PrivateNix
+                )
+                .expect("parse image"),
+                Some(String::from("1"))
+            );
+        }
+        assert_eq!(
+            inspect_container_value(b"[{}]", InspectField::PrivateNix).expect("parse image"),
+            None
         );
     }
 

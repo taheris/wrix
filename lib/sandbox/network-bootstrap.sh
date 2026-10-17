@@ -13,6 +13,10 @@ wrix_die() {
   exit 1
 }
 
+[[ -f /etc/wrix/private-nix-version && "$(< /etc/wrix/private-nix-version)" == 1 ]] \
+  || wrix_die "image does not implement private Nix v1; rebuild the sandbox"
+[[ "$EUID" == 0 ]] || wrix_die "sandbox startup requires its managed root identity"
+
 [[ -x "$WRIX_AGENT_ENTRYPOINT" ]] || wrix_die "agent entrypoint is unavailable"
 [[ -d "$WRIX_NETWORK_READY_DIR" && ! -L "$WRIX_NETWORK_READY_DIR" ]] \
   || wrix_die "trusted runtime directory is unavailable: $WRIX_NETWORK_READY_DIR"
@@ -30,6 +34,7 @@ WRIX_SORT_BIN="$WRIX_NETWORK_TOOL_DIR/sort"
 WRIX_GREP_BIN="$WRIX_NETWORK_TOOL_DIR/grep"
 WRIX_NC_BIN="$WRIX_NETWORK_TOOL_DIR/nc"
 WRIX_SLEEP_BIN="$WRIX_NETWORK_TOOL_DIR/sleep"
+WRIX_STAT_BIN="$WRIX_NETWORK_TOOL_DIR/stat"
 
 for tool in \
   "$WRIX_CAPSH_BIN" \
@@ -37,9 +42,20 @@ for tool in \
   "$WRIX_GETENT_BIN" \
   "$WRIX_AWK_BIN" \
   "$WRIX_SORT_BIN" \
-  "$WRIX_GREP_BIN"; do
+  "$WRIX_GREP_BIN" \
+  "$WRIX_STAT_BIN"; do
   [[ -x "$tool" ]] || wrix_die "trusted network tool is unavailable: $tool"
 done
+
+# Validate, never repair, the fresh image's protected Nix ancestors.
+for path in /nix /nix/var /nix/var/nix; do
+  [[ ! -L "$path" && "$("$WRIX_STAT_BIN" -c '%u:%g:%a' "$path")" == 0:0:755 ]] \
+    || wrix_die "private Nix requires root-owned 0755 ancestors: $path"
+done
+[[ ! -e /homeless-shelter && ! -L /homeless-shelter ]] \
+  || wrix_die "private Nix requires the /homeless-shelter purity guard"
+[[ ! -e /nix/var/nix/daemon-socket/socket && ! -L /nix/var/nix/daemon-socket/socket ]] \
+  || wrix_die "private Nix cannot use a daemon socket"
 
 WRIX_FIREWALL_BACKEND="${WRIX_FIREWALL_BACKEND:-}"
 case "$WRIX_FIREWALL_BACKEND" in

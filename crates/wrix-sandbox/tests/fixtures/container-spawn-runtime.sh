@@ -8,7 +8,7 @@ case "${1:-} ${2:-}" in
     printf '%s\n' '[{"configuration":{"name":"localhost/wrix-test:latest"},"id":"sha256:image-id"}]'
     ;;
   'image inspect')
-    printf '%s\n' '[{"id":"sha256:image-id","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","labels":{"wrix.managed":"true"}}]'
+    printf '%s\n' '[{"id":"sha256:image-id","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","labels":{"wrix.managed":"true","wrix.nix.private":"1"}}]'
     ;;
   run*)
     shift

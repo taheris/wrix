@@ -173,6 +173,16 @@ test_static_environment_rejects_credentials() {
   assert_json "$result" '.accepted == false' "a static environment surface accepted credential material"
 }
 
+test_image_policy_is_not_a_constructor_argument() {
+  require_commands
+  local output
+  if output=$(nix_eval_json '(lib.mkSandbox { imagePolicy = {}; }).profile.name' 2>&1); then
+    fail "mkSandbox accepted a removed imagePolicy argument"
+    return 1
+  fi
+  [[ "$output" == *"unexpected argument 'imagePolicy'"* ]] || fail "$output"
+}
+
 test_environment_schema_rejects_invalid_names_and_policies() {
   local result
   require_commands
@@ -248,6 +258,7 @@ ALL_TESTS=(
   test_mksandbox_accepts_documented_parameters
   test_sandbox_devshell_rejects_binding_overrides
   test_static_environment_rejects_credentials
+  test_image_policy_is_not_a_constructor_argument
   test_environment_schema_rejects_invalid_names_and_policies
   test_bootstrap_sensitive_environment_is_rejected
 )

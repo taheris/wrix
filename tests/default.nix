@@ -198,7 +198,7 @@ let
 
   ciChecks =
     rustChecks
-    // builtins.intersectAttrs { image-policy-artifacts = null; } loomTests.checks
+    // builtins.intersectAttrs { private-nix-artifacts = null; } loomTests.checks
     // {
       inherit (smokeTests)
         builder-keys-structure
@@ -279,7 +279,7 @@ let
       profile-images-launcher = import ./profiles/manifest.nix { inherit pkgs wrix; };
       verifier-inputs = import ./lib/inputs-test.nix { inherit pkgs; };
     }
-    // removeAttrs loomTests.checks [ "image-policy-artifacts" ]
+    // removeAttrs loomTests.checks [ "private-nix-artifacts" ]
     // optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
       system-test-prerequisites = import ./services/vm-prerequisites.nix { inherit pkgs system; };
       crun-ring-buffer-constrained = import ./sandbox/crun-ring-buffer.nix { inherit linuxPkgs; };
@@ -468,7 +468,7 @@ let
           wrix-rust-clippy
           wrix-rust-nextest
           image-builds
-          ${if ciChecks ? image-policy-artifacts then "image-policy-artifacts" else ""}
+          ${if ciChecks ? private-nix-artifacts then "private-nix-artifacts" else ""}
           linux-pasta-port-forwarding-disabled
           network-mode-configuration
           package-runtime-path

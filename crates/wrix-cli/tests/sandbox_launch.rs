@@ -132,6 +132,25 @@ impl Fixture {
 }
 
 #[test]
+fn incompatible_image_is_rejected_before_container_start() -> TestResult {
+    for version in ["0", "2", "unknown"] {
+        let fixture = Fixture::new(None)?;
+        let output = fixture
+            .capture_runtime()?
+            .arg(&fixture.workspace)
+            .arg("true")
+            .env("WRIX_TEST_PRIVATE_NIX_VERSION", version)
+            .output()?;
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8(output.stderr)?.contains("image does not implement private Nix v1")
+        );
+        assert!(!fixture.root.path().join("argv").exists());
+    }
+    Ok(())
+}
+
+#[test]
 fn spawn_waits_for_container_completion() -> TestResult {
     for stdio in [false, true] {
         for exit_code in [0, 37] {
@@ -592,7 +611,13 @@ fn launcher_stages_only_beads_config_and_metadata() -> TestResult {
         r#"#!/usr/bin/env bash
 set -euo pipefail
 case "$1 $2" in
-  'image inspect') printf '%s\n' "$WRIX_TEST_DIGEST" ;;
+  'image inspect')
+    if [[ "$4" == '{{ index .Config.Labels "wrix.nix.private" }}' ]]; then
+      printf '1\n'
+    else
+      printf '%s\n' "$WRIX_TEST_DIGEST"
+    fi
+    ;;
   run*)
     for arg in "$@"; do
       case "$arg" in

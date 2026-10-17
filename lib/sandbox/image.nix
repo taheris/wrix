@@ -36,10 +36,6 @@
   # Use buildLayeredImage (tar in store) instead of streamLayeredImage (script).
   # Required on Darwin where the stream script's Linux Python shebang won't execute.
   asTarball ? false,
-  imagePolicy ? {
-    kind = "default";
-    version = 1;
-  },
 }:
 
 let
@@ -50,9 +46,7 @@ let
     optional
     optionalString
     ;
-  policy = (import ./image-policy.nix { inherit (pkgs) lib; }).resolve imagePolicy;
-  privateNix = policy.kind == "private-native-nix";
-  policyMetadata = pkgs.writeTextDir "etc/wrix/image-policy.json" (toJSON policy);
+  privateNix = import ./private-nix.nix { inherit (pkgs) lib; };
   sshConfig = import ../util/ssh.nix;
   knownHosts = import ./known-hosts.nix { inherit pkgs; };
 
@@ -84,15 +78,7 @@ let
   prekRunner = import ../prek/runner.nix { inherit pkgs; };
   prekWrappers = import ../prek/wrappers.nix { inherit pkgs; };
 
-  # UID spoofing and the PTY relay are used only inside the krun microVM.
-  libfakeuid = pkgs.stdenv.mkDerivation {
-    name = "libfakeuid";
-    src = ./linux/fakeuid.c;
-    dontUnpack = true;
-    buildPhase = "$CC -shared -fPIC -D_GNU_SOURCE -o libfakeuid.so $src -ldl";
-    installPhase = "mkdir -p $out/lib && cp libfakeuid.so $out/lib/";
-  };
-
+  # The PTY relay is used only inside the krun microVM.
   krunRelay = pkgs.stdenv.mkDerivation {
     name = "krun-relay";
     src = ./linux/krun-relay.c;
@@ -211,6 +197,7 @@ let
         grep = "${pkgs.gnugrep}/bin/grep";
         nc = "${pkgs.netcat}/bin/nc";
         sleep = "${pkgs.coreutils}/bin/sleep";
+        stat = "${pkgs.coreutils}/bin/stat";
       }
   );
 
@@ -220,8 +207,7 @@ let
     pkgs.dockerTools.caCertificates
     profileEnv
   ]
-  ++ optional (networkBootstrapSh != null) networkTools
-  ++ optional privateNix policyMetadata;
+  ++ optional (networkBootstrapSh != null) networkTools;
 
   # The image's MATERIALIZED on-disk store, registered in the baked Nix DB so the
   # registered-valid set equals the on-disk /nix/store in BOTH directions — no
@@ -290,6 +276,7 @@ let
   imageConfigEnv = [
     # GIT_AUTHOR_*/GIT_COMMITTER_* set at runtime by launcher (from host git config)
     "LANG=C.UTF-8"
+    "IS_SANDBOX=1"
     "PATH=${profileEnv}/bin:/bin:/usr/bin"
     "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
     "WRIX_PREK_HOOKS=${prekHooksBundle}"
@@ -304,9 +291,7 @@ let
     "wrix.image.kind" = "profile";
     "wrix.profile.name" = profile.name;
     "wrix.agent.kind" = agent;
-  }
-  // pkgs.lib.optionalAttrs privateNix {
-    "wrix.image.policy" = "${policy.kind}-v${toString policy.version}";
+    "wrix.nix.private" = toString privateNix.version;
   };
 
   rawImage = buildImage {
@@ -327,6 +312,7 @@ let
 
       mkdir -p etc/wrix
       printf '%s\n' '${agent}' > etc/wrix/image-agent
+      printf '%s\n' '${toString privateNix.version}' > etc/wrix/private-nix-version
       ${optionalString (agent == "direct") ''
         cp ${directExecutableFile} etc/wrix/direct-executable
       ''}
@@ -354,8 +340,6 @@ let
       ${optionalString krunSupport ''
         cp ${./linux/krun-init.sh} krun-init.sh
         chmod +x krun-init.sh
-        mkdir -p lib
-        cp ${libfakeuid}/lib/libfakeuid.so lib/libfakeuid.so
         cp ${krunRelay}/bin/krun-relay krun-relay
         chmod +x krun-relay
       ''}
@@ -386,22 +370,6 @@ let
         ${imageBuilderPkgs.buildPackages.nix}/bin/nix-store --load-db \
         < ${imageNixDb}/registration
 
-      # Fix Nix permissions for non-root users
-      # (includeNixDB creates files owned by root)
-      # Store must be writable to add new paths and create lock files
-      chmod -R a+rwX nix/store nix/var/nix
-
-      # Pre-create directory structure Nix expects with correct permissions
-      # This prevents Nix from trying to chmod directories it doesn't own
-      mkdir -p nix/var/nix/profiles/per-user
-      mkdir -p nix/var/nix/gcroots/per-user
-      mkdir -p nix/var/nix/gcroots/auto
-      mkdir -p nix/var/log/nix/drvs
-      chmod 755 nix/var/nix/profiles nix/var/nix/profiles/per-user
-      chmod 755 nix/var/nix/gcroots nix/var/nix/gcroots/per-user
-      chmod 1777 nix/var/nix/gcroots/auto
-      chmod -R a+rwX nix/var/log
-
       # Drop Nix's 8 MiB all-zero gc-reserved-space file: opening the store
       # read-write (includeNixDB + the load-db above) creates it, it re-hashes
       # the customisation layer on any input change, and Nix recreates it
@@ -409,7 +377,7 @@ let
       rm -f nix/var/nix/db/reserved
     '';
 
-    fakeRootCommands = optionalString privateNix ''
+    fakeRootCommands = ''
       ${imageBuilderPkgs.bash}/bin/bash ${./initialize-private-nix.sh} .
     '';
 
@@ -434,6 +402,7 @@ let
         cp ${imageStoreRoots} etc/wrix/store-roots
       '';
       includeNixDB = false;
+      fakeRootCommands = "";
     };
   };
 
@@ -524,7 +493,6 @@ rawImage
   # exclusive) can inspect the agent-only tier (specs/image-builder.md
   # § Provenance-Tiered Layering).
   inherit stableProfileImage agentImage ociLayout;
-  imagePolicy = policy;
   # Expose generated agent configuration so verifiers inspect the image input JSON.
   inherit
     claudeConfigJson

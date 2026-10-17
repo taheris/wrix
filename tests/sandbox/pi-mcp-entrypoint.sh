@@ -22,6 +22,5 @@ if [[ "$agent" == pi ]]; then
   cp "${PI_TEST_MODELS:?}" "$etc_wrix/pi-agent/models.json"
 fi
 rewrite_entrypoint "$platform" "$workspace" "$etc_wrix" "$entrypoint" "$home_dir"
-HOST_UID="$(id -u)"
-export HOME="$home_dir" HOST_UID PATH="$tool_dir:$PATH" WRIX_AGENT="$agent" WRIX_STDIO=1
+export HOME="$home_dir" PATH="$tool_dir:$PATH" WRIX_AGENT="$agent" WRIX_STDIO=1
 bash "$entrypoint" "$@"

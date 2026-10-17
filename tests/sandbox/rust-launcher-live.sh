@@ -102,6 +102,7 @@ case "${1:-}" in
           '{{.Id}}') image_id "$target" ;;
           '{{.Digest}}') image_digest "$target" ;;
           '{{ index .Config.Labels "wrix.managed" }}') managed_label "$target" ;;
+          '{{ index .Config.Labels "wrix.nix.private" }}') printf '1\n' ;;
           *) printf 'sha256:fake\n' ;;
         esac
         ;;
@@ -239,7 +240,7 @@ test_linux_custom_mounts_env_reach_live_launcher() {
   printf 'PASS: custom mounts/env reached the live Rust launcher container argv\n'
 }
 
-test_linux_sets_is_sandbox_without_fakeuid() {
+test_linux_checks_private_nix_without_uid_spoofing() {
   require_linux
   local tmp wrix workspace descriptor layout profile_config digest
   tmp=$(mktemp -d -t wrix-live.XXXXXX)
@@ -256,11 +257,11 @@ test_linux_sets_is_sandbox_without_fakeuid() {
 
   run_live_run "$tmp" "$profile_config" "$workspace" "$digest" "$wrix"
 
-  grep -q -- '-e IS_SANDBOX=1' "$tmp/state/podman.log" || fail "IS_SANDBOX=1 was not passed on the default Linux boundary"
+  grep -q -- 'image inspect --format {{ index .Config.Labels "wrix.nix.private" }}' "$tmp/state/podman.log" || fail "private Nix image capability was not checked"
   if grep -q -- 'LD_PRELOAD=/lib/libfakeuid.so' "$tmp/state/podman.log"; then
     fail "default Linux boundary passed libfakeuid LD_PRELOAD"
   fi
-  printf 'PASS: live Rust Linux launcher sets IS_SANDBOX without libfakeuid\n'
+  printf 'PASS: live Rust Linux launcher checks private Nix without UID spoofing\n'
 }
 
 test_linux_microvm_missing_kvm_fails_before_podman() {
@@ -422,7 +423,7 @@ IMAGES
 
 if [[ $# -eq 0 ]]; then
   test_linux_custom_mounts_env_reach_live_launcher
-  test_linux_sets_is_sandbox_without_fakeuid
+  test_linux_checks_private_nix_without_uid_spoofing
   test_linux_archiveless_install_uses_oci_layout
   test_linux_second_spawn_skips_loaded_image
   test_linux_delta_bounded_uses_descriptor_transport

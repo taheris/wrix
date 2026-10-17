@@ -7,44 +7,8 @@ set -euo pipefail
 # shellcheck source=/dev/null
 . /beads-sandbox.sh
 
-# UID mapping strategy for Darwin VirtioFS:
-#
-# VirtioFS maps all files to UID 0 inside the container. To get correct UID
-# matching, we use unshare(1) to create a user namespace at exec time that
-# maps inner HOST_UID to outer UID 0. This means:
-#   - Setup runs as root (can modify /etc/passwd, create files, set permissions)
-#   - All root-owned files automatically appear as HOST_UID inside the namespace
-#   - VirtioFS mounts (/workspace) appear as HOST_UID — no ownership mismatch
-#   - No chown to HOST_UID needed (counterproductive: outer HOST_UID maps to nobody)
-#
-# Compare Linux entrypoint which uses Podman's --userns=keep-id for the same effect.
-
-rewrite_wrix_identity() {
-  local uid="${HOST_UID:?}"
-  local passwd_path="/etc/passwd"
-  local group_path="/etc/group"
-  local passwd_tmp=""
-  local group_tmp=""
-
-  if [[ "$uid" == "0" ]]; then
-    return 0
-  fi
-  if [[ ! -w /etc ]]; then
-    echo "Warning: /etc is not writable; skipping wrix UID rewrite" >&2
-    return 0
-  fi
-
-  passwd_tmp="$(mktemp /etc/passwd.XXXXXX)"
-  group_tmp="$(mktemp /etc/group.XXXXXX)"
-  sed "s/^wrix:x:[0-9][0-9]*:[0-9][0-9]*:/wrix:x:$uid:$uid:/" "$passwd_path" >"$passwd_tmp"
-  sed "s/^wrix:x:[0-9][0-9]*:/wrix:x:$uid:/" "$group_path" >"$group_tmp"
-  chmod 0644 "$passwd_tmp" "$group_tmp"
-  mv "$passwd_tmp" "$passwd_path"
-  mv "$group_tmp" "$group_path"
-}
-
-rewrite_wrix_identity
-
+# VirtioFS presents workspace files as guest root. Keep that real identity:
+# remapping it would also remap Nix's protected root-owned ancestors.
 export USER="wrix"
 export HOME="/home/wrix"
 
@@ -64,7 +28,7 @@ validate_mount_mapping() {
 }
 
 # Copy directories from staging to destination
-# VirtioFS maps files as root; unshare namespace remaps root to HOST_UID
+# VirtioFS maps files as guest root, matching the agent's execution identity.
 # This must run BEFORE SSH setup so deploy keys are in place
 if [[ -n "${WRIX_DIR_MOUNTS:-}" ]]; then
     IFS=',' read -ra DIR_MOUNTS <<< "$WRIX_DIR_MOUNTS"
@@ -415,22 +379,18 @@ run_without_net_admin() {
   "$@"
 }
 
-# Drop to HOST_UID via user namespace (maps inner HOST_UID to outer root,
-# so VirtioFS root-owned files appear as HOST_UID — proper UID mapping)
-# Keep the wrapper alive for writable file-mount synchronization.
+# Preserve numeric ownership for Nix and VirtioFS alike. Keep the wrapper
+# alive for writable file-mount synchronization.
 MAIN_EXIT=0
 if [[ "$WRIX_AGENT" = "pi" ]] && [[ "${WRIX_STDIO:-}" = "1" ]]; then
-  run_without_net_admin unshare --user --map-user="$HOST_UID" --map-group="$HOST_UID" -- \
-    "$WRIX_AGENT_BIN" --mode rpc "$@" || MAIN_EXIT=$?
+  run_without_net_admin "$WRIX_AGENT_BIN" --mode rpc "$@" || MAIN_EXIT=$?
 elif [[ "$WRIX_AGENT" = "pi" || "$WRIX_AGENT" = "direct" ]]; then
-  run_without_net_admin unshare --user --map-user="$HOST_UID" --map-group="$HOST_UID" -- \
-    "$WRIX_AGENT_BIN" "$@" || MAIN_EXIT=$?
+  run_without_net_admin "$WRIX_AGENT_BIN" "$@" || MAIN_EXIT=$?
 elif [[ "$WRIX_AGENT" = "claude" ]] && [[ "${WRIX_STDIO:-}" = "1" ]]; then
   # Claude stream-json mode: loom drives the session from the host via piped
   # stdio. Symmetric to the pi branch above. Canonical claude args live here
   # (single source of truth) so workflow code doesn't have to thread them.
-  run_without_net_admin unshare --user --map-user="$HOST_UID" --map-group="$HOST_UID" -- \
-    claude \
+  run_without_net_admin claude \
       --dangerously-skip-permissions \
       --print \
       --verbose \
@@ -454,8 +414,7 @@ $(cat /workspace/docs/README.md)"
   if [[ -n "$SYSTEM_PROMPT" ]]; then
     CLAUDE_PROMPT_ARGS=(--append-system-prompt "$SYSTEM_PROMPT")
   fi
-  run_without_net_admin unshare --user --map-user="$HOST_UID" --map-group="$HOST_UID" -- \
-    claude --dangerously-skip-permissions "${CLAUDE_PROMPT_ARGS[@]}" "$@" || MAIN_EXIT=$?
+  run_without_net_admin claude --dangerously-skip-permissions "${CLAUDE_PROMPT_ARGS[@]}" "$@" || MAIN_EXIT=$?
 fi
 
 FILE_SYNC_EXIT=0

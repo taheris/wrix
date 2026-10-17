@@ -12,7 +12,7 @@ if [[ "$(uname -s)" != Linux ]]; then
   printf 'SKIP: Linux user/network namespaces required\n' >&2
   exit 77
 fi
-for tool in unshare nft iptables ip6tables capsh cc jq python3; do
+for tool in unshare nft iptables ip6tables capsh jq python3 stat; do
   if ! command -v "$tool" >/dev/null; then
     printf 'SKIP: %s is unavailable\n' "$tool" >&2
     exit 77
@@ -30,7 +30,9 @@ fail() {
 
 prepare_case() {
   local root="$1" agent="$2" tool real
-  mkdir -p "$root"/{tools,home,run,etc/wrix/pi-agent,workspace/bin,lib,tmp}
+  mkdir -p "$root"/{tools,home,run,etc/wrix/pi-agent,workspace/bin,tmp,nix/var/nix}
+  chmod 0755 "$root"/nix{,/var,/var/nix}
+  printf '1\n' >"$root/etc/wrix/private-nix-version"
   printf '%s\n' "$agent" >"$root/etc/wrix/image-agent"
   printf '%s\n' "$root/workspace/bin/probe" >"$root/etc/wrix/direct-executable"
   printf '{}\n' >"$root/etc/wrix/claude-config.json"
@@ -38,9 +40,7 @@ prepare_case() {
   printf '{}\n' >"$root/etc/wrix/pi-agent/settings.json"
   printf '{"schema":1,"runtime_selection":false,"servers":[]}\n' >"$root/etc/wrix/mcp-available.json"
   : >"$root/etc/resolv.conf"
-  cc -shared -fPIC -o "$root/lib/libfakeuid.so" "$REPO_ROOT/lib/sandbox/linux/fakeuid.c" -ldl
-
-  for tool in bash nft iptables ip6tables capsh getent awk sort grep nc sleep; do
+  for tool in bash nft iptables ip6tables capsh getent awk sort grep nc sleep stat; do
     ln -s "$(command -v "$tool")" "$root/tools/$tool"
   done
   real="$(command -v capsh)"
@@ -58,6 +58,7 @@ EOF
 
   python3 - "$REPO_ROOT" "$root" <<'PY'
 from pathlib import Path
+import re
 import shutil
 import sys
 repo, root = map(Path, sys.argv[1:])
@@ -81,9 +82,10 @@ for name, source in sources.items():
         ('/home/wrix', str(root / 'home')),
         ('/run/wrix-network-ready', str(root / 'run/wrix-network-ready')),
         ('/usr/local/libexec/wrix-network', str(root / 'tools')),
-        ('/lib/libfakeuid.so', str(root / 'lib/libfakeuid.so')),
+        ('/homeless-shelter', str(root / 'homeless-shelter')),
     ] + [('/' + script, str(root / script)) for script in sources]:
         text = text.replace(old, new)
+    text = re.sub(r'(?<![\w/-])/nix(?=/var(?:/|[\s";])|[\s";])', lambda _: str(root / 'nix'), text)
     dest = root / name
     dest.write_text(text)
     dest.chmod(0o755)
@@ -123,7 +125,9 @@ EOF
   cat >"$root/workspace/bin/probe" <<EOF
 #!$(command -v bash)
 set -euo pipefail
-[[ "\${LD_PRELOAD:-}" == "\${WRIX_TEST_PRELOAD:-}" ]]
+[[ -z "\${LD_PRELOAD:-}" ]]
+[[ "\$(id -u)" == 0 ]]
+trap '"$root/workspace/bin/mkdir" -p "$root/agent-exit-ran"' EXIT
 if "$(command -v nft)" flush ruleset >"$root/firewall-probe" 2>&1; then
   echo 'agent modified the firewall' >&2
   exit 1
@@ -142,17 +146,16 @@ EOF
 run_case() {
   local root="$1" agent="$2" boundary="$3" backend="$4" mode="$5"
   shift 5
-  local start="$root/network-bootstrap.sh" preload="" cmd=""
+  local start="$root/network-bootstrap.sh" cmd=""
   if [[ "$boundary" == krun ]]; then
     start="$root/krun-init.sh"
-    preload="$root/lib/libfakeuid.so"
     if [[ "$#" -gt 0 ]]; then
       printf -v cmd '%q ' "$@"
     fi
     set --
   fi
   env -i HOME="$root/home" PATH="$root/tools:$PATH" \
-    WRIX_AGENT="$agent" WRIX_STDIO=1 WRIX_TEST_PRELOAD="$preload" \
+    WRIX_AGENT="$agent" WRIX_STDIO=1 IS_SANDBOX=1 \
     WRIX_KRUN_CMD="$cmd" WRIX_TEST_AGENT_EXIT="${WRIX_TEST_AGENT_EXIT:-0}" \
     WRIX_FIREWALL_BACKEND="$backend" WRIX_NETWORK="$mode" \
     WRIX_NETWORK_ALLOWLIST="${WRIX_TEST_ALLOWLIST:-93.184.216.34}" \
@@ -176,7 +179,7 @@ test_setup_and_exit_lack_net_admin() {
       grep -q '^startup jq$' "$root/events" || fail "$boundary/$agent startup shim was not exercised"
       grep -q '^exit mkdir$' "$root/events" || fail 'exit shim was not exercised'
       [[ "$(head -1 "$root/events")" == drop ]] || fail 'workspace ran before capability drop'
-      jq -e '.exit_code == 23' "$root/workspace/.wrix/log/"*.json >/dev/null
+      [[ -d "$root/agent-exit-ran" ]] || fail 'agent exit handling was not exercised'
     done
   done
   printf 'PASS: startup and exit shims lack NET_ADMIN for every Linux agent/init path\n'
@@ -229,7 +232,7 @@ test_policy_and_argv() {
 
 test_fail_closed() {
   local failure root mode backend
-  for failure in firewall ipv6 capsh capability marker allowlist; do
+  for failure in firewall ipv6 capsh capability marker allowlist nix-version nix-symlink nix-mode purity daemon; do
     root="$TEST_TMP/fail-$failure"
     prepare_case "$root" claude
     backend=nft
@@ -240,6 +243,11 @@ test_fail_closed() {
       capability) printf '#!%s\nset -euo pipefail\nexec "%s"\n' "$(command -v bash)" "$root/entrypoint.sh" >"$root/tools/capsh" ;;
       marker) : >"$root/run/wrix-network-ready" ;;
       allowlist) ;;
+      nix-version) printf '2\n' >"$root/etc/wrix/private-nix-version" ;;
+      nix-symlink) ln -s "$root/nix/var" "$root/nix/alias"; mv "$root/nix/var" "$root/nix/actual"; mv "$root/nix/alias" "$root/nix/var" ;;
+      nix-mode) chmod 0777 "$root/nix/var/nix" ;;
+      purity) mkdir "$root/homeless-shelter" ;;
+      daemon) mkdir -p "$root/nix/var/nix/daemon-socket"; touch "$root/nix/var/nix/daemon-socket/socket" ;;
     esac
     mode=open
     [[ "$failure" != allowlist ]] || mode=limit

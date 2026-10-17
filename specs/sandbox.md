@@ -774,14 +774,12 @@ success. Actual launch rechecks prerequisites against current state.
   itself through `capsh` before workspace-controlled setup, the agent, or exit
   logging can execute.
 - Default boundary runs as rootless **container-root** (no `--userns=keep-id`),
-  which maps to the invoking host user — the owner of the baked `/nix/store` —
-  so store-mutating Nix ops succeed and `/workspace` files carry host UID/GID.
-  The launcher sets `IS_SANDBOX=1` so claude permits
-  `--dangerously-skip-permissions` while the process remains root, and does not
-  preload `libfakeuid`. The microVM path keeps `--userns=keep-id` (krun maps
-  host user→root inside the VM) and enters the same trusted bootstrap through
-  `krun-init.sh`; argv decoding and libfakeuid activation occur only after the
-  capability drop.
+  which maps to the invoking host user. Nix sees real root-owned protected
+  ancestors, store-mutating operations succeed, and workspace writes carry host
+  UID/GID. Every image sets `IS_SANDBOX=1` so Claude accepts root execution. No
+  UID-spoofing preload is used. The microVM path keeps `--userns=keep-id` (krun
+  maps host user→root inside the VM) and enters the same trusted bootstrap
+  through `krun-init.sh`; argv decoding occurs only after the capability drop.
 - `--pids-limit 4096` fork-bomb guard
 - `WRIX_MICROVM=1` selects `podman --runtime krun`; requested KVM must be
   present and usable, not merely an existing device path
@@ -805,7 +803,9 @@ success. Actual launch rechecks prerequisites against current state.
 - The ordinary caller-declared mount classifier handles `profile.mounts` and
   `SpawnConfig.mounts` uniformly — directories staged + copied at launch,
   regular files copy-from-parent-dir, Unix-socket sources rejected at launch
-- Entrypoint creates user matching host UID
+- The agent retains real guest-root identity, matching VirtioFS ownership and
+  Nix\'s protected ancestors. There is no passwd rewrite or additional user
+  namespace that changes Nix\'s ownership view.
 
 This copy classifier does not define Wrix-managed credential/cache delivery.
 [Pi credential storage](security.md#agent-api-credentials),
@@ -864,10 +864,10 @@ rootfs symlink. [check](nix build
   a flake target, and a store-mutating op against a baked root-owned path to
   completion (exit 0) with no `Operation not permitted` failure on a
   `/nix/store` path [system](verify:sandbox.nix-in-container)
-- The default container boundary sets `IS_SANDBOX=1` so claude permits
-  `--dangerously-skip-permissions` as root without UID spoofing, does not
-  `LD_PRELOAD` `libfakeuid`, and keeps libfakeuid restricted to the krun path
-  [test](../crates/wrix-sandbox/tests/launch.rs::linux_default_boundary_sets_is_sandbox_without_fakeuid)
+- Every image sets `IS_SANDBOX=1` so Claude permits root execution without UID
+  spoofing; launch commands do not inject a UID-spoofing preload. [check](nix
+  build .#legacyPackages.x86_64-linux.ciChecks.private-nix-artifacts)
+  [test](../crates/wrix-sandbox/tests/launch.rs::linux_default_boundary_preserves_real_identity)
 - In a fresh container built from the selected image, the runtime user completes
   `nix-store --verify --check-contents` and an additive `nix build` without
   store-integrity failures. The baked store/database guarantee is owned by
@@ -927,8 +927,8 @@ rootfs symlink. [check](nix build
 - `WRIX_MICROVM=1` selects `podman --runtime krun --userns=keep-id` on Linux
   when `/dev/kvm` is available, enters through the relay, serializes the
   requested command through `WRIX_KRUN_CMD`, passes terminal dimensions for PTY
-  setup, and reaches the krun-only init/libfakeuid boundary
-  [system](verify:sandbox.linux-microvm-runtime)
+  setup, and reaches the krun-only init with real guest-root identity and
+  working private Nix evaluation [system](verify:sandbox.linux-microvm-runtime)
 - MicroVM opt-in fails with the typed missing-KVM error before Podman runtime
   dispatch when the KVM device is absent
   [system](verify:sandbox.linux-microvm-missing-kvm)

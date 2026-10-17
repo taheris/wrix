@@ -60,8 +60,12 @@ set -euo pipefail
 
 [[ -x /krun-relay ]]
 [[ -x /krun-init.sh ]]
-[[ -f /lib/libfakeuid.so ]]
-[[ "${LD_PRELOAD:-}" == "/lib/libfakeuid.so" ]]
+[[ ! -e /lib/libfakeuid.so ]]
+[[ -z "${LD_PRELOAD:-}" ]]
+[[ "$(id -u)" == 0 ]]
+[[ "${IS_SANDBOX:-}" == 1 ]]
+[[ "$(stat -c %u:%a /nix/var/nix)" == 0:755 ]]
+nix --offline eval --expr '1 + 1' | grep -qx 2
 [[ "${WRIX_TERM_ROWS:-}" =~ ^[0-9]+$ ]]
 [[ "${WRIX_TERM_COLS:-}" =~ ^[0-9]+$ ]]
 [[ "${1:-}" == "alpha" ]]
@@ -78,10 +82,10 @@ INNER
   output=$(run_microvm_probe "$command_line") || return
 
   if [[ "$output" != *"MICROVM_BOUNDARY_OK=alpha|two words"* ]]; then
-    fail "live krun microVM did not reach the relay/init/libfakeuid boundary: $output"
+    fail "live krun microVM did not preserve the private Nix execution contract: $output"
     return 1
   fi
-  printf 'PASS: live launcher reached the krun relay/init/libfakeuid boundary\n'
+  printf 'PASS: live krun launcher preserves real identity and private Nix evaluation\n'
 }
 
 case "${1:-}" in

@@ -104,7 +104,6 @@ pkgs.writeShellScriptBin "test-darwin" ''
     -w / \
     -v "$WORKSPACE:/workspace" \
     -e BD_NO_DB=1 \
-    -e HOST_UID=$(id -u) \
     -e WRIX_PROMPT="test" \
     --network default \
     --dns 100.100.100.100 \
@@ -175,7 +174,6 @@ pkgs.writeShellScriptBin "test-darwin" ''
     -v "$CLAUDE_DIR_DEREF:/mnt/wrix/dir0" \
     -v "$CLAUDE_JSON_DIR:/mnt/wrix/file0" \
     -e BD_NO_DB=1 \
-    -e HOST_UID=$(id -u) \
     -e WRIX_DIR_MOUNTS="$DIR_MOUNTS" \
     -e WRIX_FILE_MOUNTS="$FILE_MOUNTS" \
     -e WRIX_NOTIFY_TCP=192.168.64.1:5959 \
@@ -217,7 +215,6 @@ pkgs.writeShellScriptBin "test-darwin" ''
     -w / \
     -v "$WORKSPACE:/workspace" \
     -e BD_NO_DB=1 \
-    -e HOST_UID=$(id -u) \
     -e WRIX_PROMPT="test" \
     --network default \
     --entrypoint /bin/bash \

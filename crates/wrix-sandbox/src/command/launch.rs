@@ -1020,9 +1020,6 @@ impl<'a> Plan<'a> {
                         writeln!(stdout, "MOUNT=-v {}", rendered.podman_arg())?;
                     }
                 }
-                for (key, value) in Self::linux_boundary_env_pairs() {
-                    writeln!(stdout, "ENV={key}={value}")?;
-                }
             }
             if let Some(socket) = &self.host_podman_socket {
                 socket.write_dry_run(stdout, &self.workspace, None)?;
@@ -1162,9 +1159,6 @@ impl<'a> Plan<'a> {
             for (key, value) in self.host_podman_socket_env_pairs(staged_beads.as_deref()) {
                 command.arg("-e").arg(format!("{key}={value}"));
             }
-            for (key, value) in Self::linux_boundary_env_pairs() {
-                command.arg("-e").arg(format!("{key}={value}"));
-            }
             if let Some(krun) = &krun {
                 for (key, value) in krun.env_pairs() {
                     command.arg("-e").arg(format!("{key}={value}"));
@@ -1241,9 +1235,6 @@ impl<'a> Plan<'a> {
             ) {
                 command.arg("-e").arg(format!("{key}={value}"));
             }
-            command
-                .arg("-e")
-                .arg(format!("HOST_UID={}", current_uid()?));
             if let Some(value) = darwin_mounts.dir_env() {
                 command.arg("-e").arg(format!("WRIX_DIR_MOUNTS={value}"));
             }
@@ -1367,6 +1358,7 @@ impl<'a> Plan<'a> {
                 self.image_digest.as_ref(),
             )?,
         )?;
+        image::require_private_nix(runtime, &self.image_ref)?;
         Ok(())
     }
 
@@ -1555,14 +1547,6 @@ impl<'a> Plan<'a> {
                     .join(","),
             ),
         ]
-    }
-
-    fn linux_boundary_env_pairs() -> Vec<(String, String)> {
-        if env_flag("WRIX_MICROVM") {
-            Vec::new()
-        } else {
-            vec![(String::from("IS_SANDBOX"), String::from("1"))]
-        }
     }
 
     const fn subcommand(&self) -> &'static str {

@@ -193,7 +193,7 @@ in
             -v "$CLAUDE_JSON_DIR:/mnt/wrix/file0" \
             -e BD_DB=/tmp/beads.db \
             -e BD_NO_DAEMON=1 \
-            -e HOST_UID=$(id -u "$REAL_USER") \
+
             -e WRIX_DIR_MOUNTS="$DIR_MOUNTS" \
             -e WRIX_FILE_MOUNTS="$FILE_MOUNTS" \
             -e WRIX_NOTIFY_TCP=192.168.64.1:5959 \

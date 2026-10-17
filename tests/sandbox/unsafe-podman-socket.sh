@@ -67,6 +67,7 @@ case "${1:-}" in
           '{{.Id}}') printf 'unsafe-image-id\n' ;;
           '{{.Digest}}') printf '%s\n' "${WRIX_TEST_DIGEST:?}" ;;
           '{{ index .Config.Labels "wrix.managed" }}') printf 'true\n' ;;
+          '{{ index .Config.Labels "wrix.nix.private" }}') printf '1\n' ;;
           *) printf 'unsafe-image-id\n' ;;
         esac
       fi

@@ -158,7 +158,7 @@ in
             -v "$WORKSPACE:/workspace" \
             -e BD_DB=/tmp/beads.db \
             -e BD_NO_DAEMON=1 \
-            -e HOST_UID=$(id -u "$REAL_USER") \
+
             -e WRIX_PROMPT="test" \
             --network default \
             --dns 100.100.100.100 \

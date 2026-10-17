@@ -402,6 +402,8 @@ pub enum ConfigError {
     SpawnConfigProfileOverride { field: String },
     /// SpawnConfig field {field} is not a documented per-launch override; use a matching ProfileConfig image
     SpawnConfigDigestOverride { field: String },
+    /// sandbox mounts and writable_dirs must use absolute paths outside the private Nix and trusted startup paths: {path}
+    InvalidMountDestination { path: String },
     /// SpawnConfig image_source requires image_source_kind
     SpawnConfigSourceKindRequired,
     /// SpawnConfig image_source_kind must be {expected} on {platform}
@@ -483,6 +485,12 @@ impl RawProfileConfig {
             writable_dirs: raw_profile.writable_dirs,
             network_allowlist: raw_profile.network_allowlist,
         };
+        for mount in &profile.mounts {
+            validate_mount_destination(&mount.dest)?;
+        }
+        for destination in &profile.writable_dirs {
+            validate_mount_destination(destination)?;
+        }
         let image = self.image.unwrap_or_default();
         let reference = image
             .reference
@@ -606,6 +614,9 @@ fn parse_spawn_value(value: Value, platform: Platform) -> Result<SpawnConfig, Co
             .any(|mount| mount.host_path.is_empty() || mount.container_path.is_empty())
     {
         return Err(ConfigError::InvalidSpawnConfigSchema);
+    }
+    for mount in &spawn.mounts {
+        validate_mount_destination(&mount.container_path)?;
     }
     if let Some(kind) = spawn.image_source_kind {
         let expected = platform.expected_source_kind();
@@ -743,6 +754,15 @@ fn is_bootstrap_sensitive_env(name: &str) -> bool {
         "BASH_ENV",
         "ENV",
         "GLIBC_TUNABLES",
+        "IS_SANDBOX",
+        "NIX_CONFIG",
+        "NIX_CONF_DIR",
+        "NIX_DAEMON_SOCKET_PATH",
+        "NIX_LOG_DIR",
+        "NIX_REMOTE",
+        "NIX_STATE_DIR",
+        "NIX_STORE_DIR",
+        "NIX_USER_CONF_FILES",
         "PATH",
         "PS4",
         "SHELLOPTS",
@@ -760,6 +780,35 @@ fn is_bootstrap_sensitive_env(name: &str) -> bool {
     ];
 
     EXACT_NAMES.contains(&name) || PREFIXES.iter().any(|prefix| name.starts_with(prefix))
+}
+
+fn validate_mount_destination(destination: &str) -> Result<(), ConfigError> {
+    const PROTECTED: &[&str] = &[
+        "/nix",
+        "/etc/nix",
+        "/etc/wrix/private-nix-version",
+        "/homeless-shelter",
+        "/network-bootstrap.sh",
+        "/network-ready.sh",
+        "/entrypoint.sh",
+        "/krun-init.sh",
+        "/krun-relay",
+        "/usr/local/libexec/wrix-network",
+    ];
+    let path = Path::new(destination);
+    if !path.is_absolute()
+        || destination
+            .split('/')
+            .any(|part| matches!(part, "." | ".."))
+        || PROTECTED
+            .iter()
+            .any(|protected| path.starts_with(protected) || Path::new(protected).starts_with(path))
+    {
+        return Err(ConfigError::InvalidMountDestination {
+            path: destination.to_owned(),
+        });
+    }
+    Ok(())
 }
 
 fn is_valid_env_name(name: &str) -> bool {
@@ -1099,6 +1148,116 @@ mod test {
             parse_spawn_value(spawn, Platform::Linux),
             Err(ConfigError::BootstrapEnvironmentInSpawnEnv { .. })
         ));
+    }
+
+    #[test]
+    fn private_nix_environment_cannot_be_overridden_on_any_config_surface() {
+        for name in [
+            "IS_SANDBOX",
+            "NIX_CONFIG",
+            "NIX_CONF_DIR",
+            "NIX_DAEMON_SOCKET_PATH",
+            "NIX_LOG_DIR",
+            "NIX_REMOTE",
+            "NIX_STATE_DIR",
+            "NIX_STORE_DIR",
+            "NIX_USER_CONF_FILES",
+        ] {
+            let mut profile = json!({
+                "schema": 1, "profile": {"name": "base"},
+                "image": {"ref": "wrix:test", "source": "/fixture", "source_kind": "nix-descriptor"},
+                "agent": {"kind": "direct"}
+            });
+            profile["profile"]["env"] = json!({(name): "override"});
+            assert!(
+                matches!(
+                    parse_profile_value(profile.clone(), Platform::Linux),
+                    Err(ConfigError::BootstrapEnvironmentInProfileEnv { .. })
+                ),
+                "{name}"
+            );
+            profile["profile"]["env"] = json!({});
+            profile["security"] = json!({"runtime_secrets": {(name): "optional"}});
+            assert!(
+                matches!(
+                    parse_profile_value(profile, Platform::Linux),
+                    Err(ConfigError::BootstrapEnvironmentInRuntimeSecrets { .. })
+                ),
+                "{name}"
+            );
+            let spawn =
+                json!({"workspace": "/workspace", "env": [[name, "override"]], "agent_args": []});
+            assert!(
+                matches!(
+                    parse_spawn_value(spawn, Platform::Linux),
+                    Err(ConfigError::BootstrapEnvironmentInSpawnEnv { .. })
+                ),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn private_nix_paths_cannot_be_shadowed_by_any_mount_surface() {
+        for destination in [
+            "/",
+            "/nix",
+            "//nix/store",
+            "/nix/var/nix",
+            "/etc",
+            "/etc/nix",
+            "/etc/wrix",
+            "/etc/wrix/private-nix-version",
+            "/homeless-shelter",
+            "/network-bootstrap.sh",
+            "/network-ready.sh",
+            "/entrypoint.sh",
+            "/krun-init.sh",
+            "/krun-relay",
+            "/usr/local/libexec/wrix-network",
+            "/tmp/../nix",
+            "relative",
+        ] {
+            let mut profile = json!({
+                "schema": 1, "profile": {"name": "base"},
+                "image": {"ref": "wrix:test", "source": "/fixture", "source_kind": "nix-descriptor"},
+                "agent": {"kind": "direct"}
+            });
+            profile["profile"]["mounts"] = json!([{"source": "/fixture", "dest": destination}]);
+            assert!(
+                matches!(
+                    parse_profile_value(profile.clone(), Platform::Linux),
+                    Err(ConfigError::InvalidMountDestination { .. })
+                ),
+                "{destination}"
+            );
+            profile["profile"]["mounts"] = json!([]);
+            profile["profile"]["writable_dirs"] = json!([destination]);
+            assert!(
+                matches!(
+                    parse_profile_value(profile, Platform::Linux),
+                    Err(ConfigError::InvalidMountDestination { .. })
+                ),
+                "{destination}"
+            );
+            let spawn = json!({
+                "workspace": "/workspace", "env": [], "agent_args": [],
+                "mounts": [{"host_path": "/fixture", "container_path": destination, "read_only": false}]
+            });
+            assert!(
+                matches!(
+                    parse_spawn_value(spawn, Platform::Linux),
+                    Err(ConfigError::InvalidMountDestination { .. })
+                ),
+                "{destination}"
+            );
+        }
+        for destination in ["/nix-other", "/etc/nixpkgs", "/tmp", "/home/wrix/.cargo"] {
+            assert!(
+                super::validate_mount_destination(destination).is_ok(),
+                "{destination}"
+            );
+        }
     }
 
     #[test]

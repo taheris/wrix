@@ -167,13 +167,11 @@ PROBE
 # IS_SANDBOX permits root execution without UID spoofing.
 set +e
 output=$(podman run --rm --network=pasta \
-  --passwd-entry "wrix:*:$(id -u):$(id -g)::/home/wrix:/bin/bash" \
   --mount type=tmpfs,destination=/home/wrix,U=true \
   --entrypoint /bin/bash \
   -v "$WORKSPACE:/workspace:rw" \
   -w /workspace \
   -e HOME=/home/wrix \
-  -e IS_SANDBOX=1 \
   "$IMAGE_REF" \
   -c "$IN_CONTAINER" 2>&1)
 status=$?

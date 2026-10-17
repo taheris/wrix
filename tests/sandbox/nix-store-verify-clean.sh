@@ -116,10 +116,8 @@ PROBE
 # reads only the baked store, so this invocation needs no network.
 set +e
 output=$(podman run --rm --network=none \
-  --passwd-entry "wrix:*:$(id -u):$(id -g)::/home/wrix:/bin/bash" \
   --entrypoint /bin/bash \
   -e HOME=/home/wrix \
-  -e IS_SANDBOX=1 \
   "$IMAGE_REF" \
   -c "$IN_CONTAINER" 2>&1)
 status=$?

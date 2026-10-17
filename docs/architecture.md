@@ -20,8 +20,8 @@ independently by this overview.
    execution is an explicit capability inside the service boundary
 2. **Worker least privilege** — Trusted startup establishes networking and drops
    setup capabilities before agent execution
-3. **User namespace mapping** — Files created in `/workspace` have correct host
-   ownership
+3. **Coherent execution identity** — Workspace writes retain correct host
+   ownership while Nix sees its real root-owned protected ancestors
 4. **Internet egress with local-network isolation** — Public internet is
    available in `open` mode, while LAN/private/host-local/VPN access is blocked
    in every mode
