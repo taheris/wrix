@@ -196,18 +196,21 @@ let
     "script-syntax"
   ];
 
-  ciChecks = rustChecks // {
-    inherit (smokeTests)
-      builder-keys-structure
-      image-builds
-      linux-pasta-port-forwarding-disabled
-      network-mode-configuration
-      package-runtime-path
-      package-service-image-contract
-      package-script-syntax
-      script-syntax
-      ;
-  };
+  ciChecks =
+    rustChecks
+    // builtins.intersectAttrs { image-policy-artifacts = null; } loomTests.checks
+    // {
+      inherit (smokeTests)
+        builder-keys-structure
+        image-builds
+        linux-pasta-port-forwarding-disabled
+        network-mode-configuration
+        package-runtime-path
+        package-service-image-contract
+        package-script-syntax
+        script-syntax
+        ;
+    };
 
   # README example verification
   readmeTest = {
@@ -276,7 +279,7 @@ let
       profile-images-launcher = import ./profiles/manifest.nix { inherit pkgs wrix; };
       verifier-inputs = import ./lib/inputs-test.nix { inherit pkgs; };
     }
-    // loomTests.checks
+    // removeAttrs loomTests.checks [ "image-policy-artifacts" ]
     // optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
       system-test-prerequisites = import ./services/vm-prerequisites.nix { inherit pkgs system; };
       crun-ring-buffer-constrained = import ./sandbox/crun-ring-buffer.nix { inherit linuxPkgs; };
@@ -465,6 +468,7 @@ let
           wrix-rust-clippy
           wrix-rust-nextest
           image-builds
+          ${if ciChecks ? image-policy-artifacts then "image-policy-artifacts" else ""}
           linux-pasta-port-forwarding-disabled
           network-mode-configuration
           package-runtime-path

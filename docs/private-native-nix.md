@@ -98,7 +98,7 @@ their original derivations.
 nix build --no-link \
   .#checks.x86_64-linux.image-policy-api \
   .#checks.x86_64-linux.image-policy-state-preservation \
-  .#checks.x86_64-linux.image-policy-artifacts
+  .#legacyPackages.x86_64-linux.ciChecks.image-policy-artifacts
 nix build .#profile-images --no-link --print-out-paths
 nix run .#legacyPackages.x86_64-linux.ciApps.test-loom-native-readiness
 ```

@@ -289,7 +289,8 @@ and absence of a daemon/socket/remote-store override are retained. The policy
 marker and label participate in both archive and nix-descriptor
 source/config-digest identities, and thus the generated profile-config identity.
 Unselected images retain their existing behavior; lower image tiers do not
-change. [check](nix build .#checks.x86_64-linux.image-policy-artifacts)
+change. [check](nix build
+.#legacyPackages.x86_64-linux.ciChecks.image-policy-artifacts)
 
 A fresh factory-produced Rust/Pi image is exercised as UID 1000 through Loom's
 native preflight and an actual Pi RPC `get_state` response, followed by Nix
