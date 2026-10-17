@@ -13,9 +13,8 @@ pub struct Policy {
     pub warm: Roots,
     pub warn_size: Option<Bytes>,
     pub pending_ttl: Option<Seconds>,
-    pub prune_interval: Option<Seconds>,
-    pub lock_timeout: Option<Seconds>,
-    pub explicit_lock_timeout: Option<Seconds>,
+    pub lock_timeout: Option<Milliseconds>,
+    pub explicit_lock_timeout: Option<Milliseconds>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
@@ -41,6 +40,15 @@ impl Bytes {
 pub struct Seconds(u64);
 
 impl Seconds {
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Milliseconds(u64);
+
+impl Milliseconds {
     pub const fn get(self) -> u64 {
         self.0
     }
@@ -92,12 +100,27 @@ impl<'de> Deserialize<'de> for Bytes {
     }
 }
 
+impl<'de> Deserialize<'de> for Milliseconds {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        match Quantity::deserialize(deserializer)? {
+            Quantity::Number(value) => value
+                .checked_mul(1000)
+                .map(Self)
+                .ok_or_else(|| de::Error::custom("duration overflows milliseconds")),
+            Quantity::Text(text) => crate::duration::milliseconds(&text)
+                .map(Self)
+                .map_err(de::Error::custom),
+        }
+    }
+}
+
 impl<'de> Deserialize<'de> for Seconds {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        scaled(
-            deserializer,
-            &[("", 1), ("s", 1), ("m", 60), ("h", 3600), ("d", 86400)],
-        )
-        .map(Self)
+        match Quantity::deserialize(deserializer)? {
+            Quantity::Number(value) => Ok(Self(value)),
+            Quantity::Text(text) => crate::duration::seconds(&text)
+                .map(Self)
+                .map_err(de::Error::custom),
+        }
     }
 }

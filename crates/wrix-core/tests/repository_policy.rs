@@ -269,20 +269,42 @@ fn cache_quantities_accept_documented_units_and_plain_numbers() {
         ("warn_size", "'12'", 12),
         ("pending_ttl", "'7d'", 604_800),
         ("pending_ttl", "12", 12),
-        ("prune_interval", "'24h'", 86_400),
-        ("lock_timeout", "'2m'", 120),
-        ("explicit_lock_timeout", "'1s'", 1),
+        ("lock_timeout", "'2m'", 120_000),
+        ("explicit_lock_timeout", "'1s'", 1000),
     ] {
         let policy = repository_policy::parse(&format!("cache.{key} = {value}")).unwrap();
         let actual = match key {
             "warn_size" => policy.cache.warn_size.unwrap().get(),
             "pending_ttl" => policy.cache.pending_ttl.unwrap().get(),
-            "prune_interval" => policy.cache.prune_interval.unwrap().get(),
             "lock_timeout" => policy.cache.lock_timeout.unwrap().get(),
             "explicit_lock_timeout" => policy.cache.explicit_lock_timeout.unwrap().get(),
             _ => panic!("unknown test field"),
         };
         assert_eq!(actual, expected);
+    }
+}
+
+#[test]
+fn cache_duration_strings_use_humantime() {
+    for (input, seconds) in [
+        ("1week 2days 3hours 4minutes 5seconds", 788_645),
+        ("1.5minutes", 90),
+        ("1500ms 500ms", 2),
+        ("0s", 0),
+    ] {
+        let policy = repository_policy::parse(&format!("cache.pending_ttl = '{input}'")).unwrap();
+        assert_eq!(policy.cache.pending_ttl.unwrap().get(), seconds);
+    }
+    for (input, milliseconds) in [("'1.5s'", 1500), ("'1ms'", 1), ("2", 2000)] {
+        let policy = repository_policy::parse(&format!(
+            "cache.lock_timeout = {input}\ncache.explicit_lock_timeout = {input}"
+        ))
+        .unwrap();
+        assert_eq!(policy.cache.lock_timeout.unwrap().get(), milliseconds);
+        assert_eq!(
+            policy.cache.explicit_lock_timeout.unwrap().get(),
+            milliseconds
+        );
     }
 }
 
@@ -293,8 +315,15 @@ fn invalid_cache_quantities_and_wrong_typed_roots_are_rejected() {
         "cache.warn_size = '1GiB'",
         "cache.warn_size = '18446744073709551615G'",
         "cache.pending_ttl = ''",
-        "cache.prune_interval = '1G'",
-        "cache.lock_timeout = '1.5s'",
+        "cache.prune_interval = '24h'",
+        "cache.pending_ttl = '1.5s'",
+        "cache.lock_timeout = '1us'",
+        "cache.lock_timeout = '18446744073709552s'",
+        "cache.lock_timeout = 18446744073709552",
+        "cache.pending_ttl = '18446744073709551616s'",
+        "cache.pending_ttl = -1",
+        "cache.pending_ttl = true",
+        "cache.lock_timeout = []",
         "cache.warn_size = true",
         "cache.warm = []",
         "cache.publish.packages = 'false'",

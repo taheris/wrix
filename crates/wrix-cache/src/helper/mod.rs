@@ -55,6 +55,8 @@ pub enum Error {
     ManifestJson { source: serde_json::Error },
     /// {0}
     Config(#[from] crate::config::ReadError),
+    /// {0}
+    Duration(#[from] wrix_core::duration::ParseError),
 }
 
 impl From<io::Error> for Error {
@@ -173,6 +175,15 @@ fn run(
             .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         write_help(helper, stdout)?;
+        return Ok(ExitCode::SUCCESS);
+    }
+    if helper == Helper::Publish && args.first().is_some_and(|arg| arg == "--duration-seconds") {
+        let [_, input] = args else {
+            return Err(Error::ExpectedArgument {
+                name: "--duration-seconds <duration>".to_owned(),
+            });
+        };
+        writeln!(stdout, "{}", wrix_core::duration::seconds(input)?)?;
         return Ok(ExitCode::SUCCESS);
     }
     match helper {
@@ -495,6 +506,29 @@ mod test {
         manifest_allows_drv,
         server::{handle_cache_request, parse_cache_target},
     };
+
+    #[test]
+    fn duration_normalization_uses_exact_seconds_without_workspace_state() {
+        for (input, expected) in [("1week 2days", "777600\n"), ("1500ms 500ms", "2\n")] {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let args = ["--duration-seconds".to_owned(), input.to_owned()];
+            assert_eq!(
+                super::run(super::Helper::Publish, &args, &mut stdout, &mut stderr).unwrap(),
+                std::process::ExitCode::SUCCESS
+            );
+            assert_eq!(String::from_utf8(stdout).unwrap(), expected);
+            assert_eq!(stderr, Vec::<u8>::new());
+        }
+        for input in ["1ms", "1G", "18446744073709551616s"] {
+            let mut stdout = Vec::new();
+            let args = ["--duration-seconds".to_owned(), input.to_owned()];
+            assert!(
+                super::run(super::Helper::Publish, &args, &mut stdout, &mut Vec::new()).is_err()
+            );
+            assert_eq!(stdout, Vec::<u8>::new());
+        }
+    }
 
     #[test]
     fn manifest_scope_accepts_matching_drv_path() {

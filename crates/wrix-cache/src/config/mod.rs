@@ -22,8 +22,6 @@ pub enum ReadError {
     Unicode { name: &'static str },
     /// environment variable {name} has invalid value {value}
     Environment { name: &'static str, value: String },
-    /// cache.{name} overflows milliseconds
-    Overflow { name: &'static str },
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -35,7 +33,6 @@ pub struct Settings {
     pub warm: Roots,
     pub soft_limit_bytes: u64,
     pub pending_retention_secs: u64,
-    pub prune_interval_secs: u64,
     pub lock_timeout_ms: u64,
     pub explicit_lock_timeout_ms: u64,
 }
@@ -69,7 +66,6 @@ impl Default for Settings {
             publish,
             soft_limit_bytes: 50 * 1024 * 1024 * 1024,
             pending_retention_secs: 7 * 24 * 60 * 60,
-            prune_interval_secs: 24 * 60 * 60,
             lock_timeout_ms: 30_000,
             explicit_lock_timeout_ms: 30_000,
         }
@@ -91,7 +87,6 @@ const ENV_NAMES: &[&str] = &[
     "WRIX_CACHE_WARM_EXCLUDE",
     "WRIX_CACHE_SOFT_LIMIT_BYTES",
     "WRIX_CACHE_PENDING_RETENTION_SECS",
-    "WRIX_CACHE_PRUNE_INTERVAL_SECS",
     "WRIX_CACHE_LOCK_TIMEOUT_MS",
     "WRIX_CACHE_EXPLICIT_LOCK_TIMEOUT_MS",
 ];
@@ -123,20 +118,16 @@ impl Settings {
         let lock_timeout_ms = number(
             env,
             "WRIX_CACHE_LOCK_TIMEOUT_MS",
-            milliseconds(
-                policy.lock_timeout,
-                defaults.lock_timeout_ms,
-                "lock_timeout",
-            )?,
+            policy
+                .lock_timeout
+                .map_or(defaults.lock_timeout_ms, cache::Milliseconds::get),
         )?;
         let explicit_lock_timeout_ms = number(
             env,
             "WRIX_CACHE_EXPLICIT_LOCK_TIMEOUT_MS",
-            milliseconds(
-                policy.explicit_lock_timeout,
-                lock_timeout_ms,
-                "explicit_lock_timeout",
-            )?,
+            policy
+                .explicit_lock_timeout
+                .map_or(lock_timeout_ms, cache::Milliseconds::get),
         )?;
         Ok(Self {
             enable: boolean(
@@ -166,13 +157,6 @@ impl Settings {
                 policy
                     .pending_ttl
                     .map_or(defaults.pending_retention_secs, cache::Seconds::get),
-            )?,
-            prune_interval_secs: number(
-                env,
-                "WRIX_CACHE_PRUNE_INTERVAL_SECS",
-                policy
-                    .prune_interval
-                    .map_or(defaults.prune_interval_secs, cache::Seconds::get),
             )?,
             lock_timeout_ms,
             explicit_lock_timeout_ms,
@@ -292,17 +276,4 @@ fn lines(env: &BTreeMap<String, String>, name: &str, default: &[String]) -> Vec<
                 .collect()
         },
     )
-}
-
-fn milliseconds(
-    value: Option<cache::Seconds>,
-    default: u64,
-    name: &'static str,
-) -> Result<u64, ReadError> {
-    value.map_or(Ok(default), |value| {
-        value
-            .get()
-            .checked_mul(1000)
-            .ok_or(ReadError::Overflow { name })
-    })
 }

@@ -14,11 +14,17 @@ let
     hasAttr
     isAttrs
     isString
+    isInt
     match
     readFile
     ;
 
-  inherit (pkgs.lib) escapeShellArgs optionalAttrs toShellVars;
+  inherit (pkgs.lib)
+    escapeShellArg
+    escapeShellArgs
+    optionalAttrs
+    toShellVars
+    ;
 
   hostNixConfig = pkgs.writeText "wrix-host-nix-config.sh" (readFile ../services/host-nix-config.sh);
   startIndependent = import ../services/start.nix { inherit (pkgs.stdenv.hostPlatform) isDarwin; };
@@ -48,16 +54,6 @@ let
     G = 1024 * 1024 * 1024;
     T = 1024 * 1024 * 1024 * 1024;
   };
-
-  durationSeconds =
-    name:
-    scaledValue name {
-      "" = 1;
-      s = 1;
-      m = 60;
-      h = 60 * 60;
-      d = 24 * 60 * 60;
-    };
 
 in
 {
@@ -115,7 +111,11 @@ in
           { }
         else
           throw "nixCache must be a boolean or attrset";
-      nixCacheEnabled = nixCacheOverrides.enable or true;
+      nixCacheEnabled =
+        if hasAttr "pruneInterval" nixCacheOverrides then
+          throw "nixCache.pruneInterval is no longer supported; collection is host-managed"
+        else
+          nixCacheOverrides.enable or true;
       overrideEnv =
         config: field: name: convert:
         optionalAttrs (hasAttr field config) { ${name} = convert config.${field}; };
@@ -132,12 +132,23 @@ in
         // rootsEnv "WRIX_CACHE_PUBLISH" (nixCacheOverrides.publish or { })
         // rootsEnv "WRIX_CACHE_WARM" (nixCacheOverrides.warm or { })
         // overrideEnv nixCacheOverrides "warnSize" "WRIX_CACHE_SOFT_LIMIT_BYTES" sizeBytes
-        // overrideEnv nixCacheOverrides "pendingTtl" "WRIX_CACHE_PENDING_RETENTION_SECS" (
-          durationSeconds "pendingTtl"
-        )
-        // overrideEnv nixCacheOverrides "pruneInterval" "WRIX_CACHE_PRUNE_INTERVAL_SECS" (
-          durationSeconds "pruneInterval"
-        );
+        // optionalAttrs (hasAttr "pendingTtl" nixCacheOverrides && isInt nixCacheOverrides.pendingTtl) {
+          WRIX_CACHE_PENDING_RETENTION_SECS = toString nixCacheOverrides.pendingTtl;
+        };
+      durationHook =
+        if
+          !(hasAttr "pendingTtl" nixCacheOverrides)
+          || isInt nixCacheOverrides.pendingTtl
+          || hasAttr "WRIX_CACHE_PENDING_RETENTION_SECS" env
+        then
+          ""
+        else
+          ''
+            WRIX_CACHE_PENDING_RETENTION_SECS=$(
+              ${rustCli.cachePublish}/bin/wrix-cache-publish --duration-seconds ${escapeShellArg nixCacheOverrides.pendingTtl}
+            ) || { return 1 2>/dev/null || exit 1; }
+            export WRIX_CACHE_PENDING_RETENTION_SECS
+          '';
       serviceEnv = {
         WRIX_SERVICE_IMAGE = serviceImage.ref;
         WRIX_SERVICE_IMAGE_SOURCE = "${serviceImage.source}";
@@ -186,6 +197,7 @@ in
         ];
       env = (resolvedProfile.hostEnv or resolvedProfile.env) // serviceEnv // cacheEnv // env;
       shellHook = ''
+        ${durationHook}
         ${serviceHook}
 
         ${beadsHook}

@@ -24,6 +24,7 @@ clap = { version = "4.5.50", default-features = false, features = ["std", "help"
 displaydoc = "0.2.5"
 fs2 = "0.4.3"
 httparse = "1.10.1"
+humantime = "2.4.0"
 socket2 = "0.6.1"
 libc = "0.2.186"
 rusqlite = { version = "0.40.2", features = ["bundled"] }

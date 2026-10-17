@@ -235,13 +235,9 @@ fn cache_layout_uses_exact_platform_roots_and_opt_out_creates_no_cache() -> Test
 }
 
 #[test]
-fn service_startup_pruning_uses_repository_interval() -> TestResult {
-    for (interval, retained) in [("1h", false), ("24h", true)] {
+fn service_startup_uses_builtin_legacy_pruning_interval() -> TestResult {
+    for elapsed in [3600, 172_800] {
         let fixture = Fixture::new()?;
-        fs::write(
-            fixture.workspace.join("wrix.toml"),
-            format!("cache.prune_interval = '{interval}'"),
-        )?;
         let mut command = fixture.command("podman")?;
         command
             .args(["service", "start"])
@@ -256,7 +252,7 @@ fn service_startup_pruning_uses_repository_interval() -> TestResult {
         let last_prune = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
             .as_secs()
-            .saturating_sub(7200);
+            .saturating_sub(elapsed);
         fs::write(
             state_root.join("cache-status.json"),
             serde_json::to_vec(&json!({
@@ -267,7 +263,7 @@ fn service_startup_pruning_uses_repository_interval() -> TestResult {
         fs::remove_file(fixture.root.path().join("running"))?;
         let output = run_command(&mut command)?;
         assert!(output.status.success(), "{}", output.stderr);
-        assert_eq!(stale.exists(), retained, "{interval}");
+        assert_eq!(stale.exists(), elapsed < 86_400, "{elapsed}");
     }
     Ok(())
 }

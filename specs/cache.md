@@ -1393,7 +1393,7 @@ valid unchanged key through the Celler publication/signing path.
   [test](../crates/wrix-core/tests/repository_policy.rs::cache_quantities_accept_documented_units_and_plain_numbers)
 - Human-readable cache duration strings use `humantime` with checked destination
   conversions, not the former hand-written suffix allowlist.
-  [test?](../crates/wrix-core/tests/repository_policy.rs::cache_duration_strings_use_humantime)
+  [test](../crates/wrix-core/tests/repository_policy.rs::cache_duration_strings_use_humantime)
 - Malformed cache quantities, overflowing sizes and wrong-typed root settings
   fail.
   [test](../crates/wrix-core/tests/repository_policy.rs::invalid_cache_quantities_and_wrong_typed_roots_are_rejected)

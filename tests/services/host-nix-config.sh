@@ -434,8 +434,7 @@ test_mkdevshell_nix_cache() {
             excludeRoots = [ ".#checks.skip" ];
           };
           warnSize = "1G";
-          pendingTtl = "2d";
-          pruneInterval = "3h";
+          pendingTtl = 172800;
         };
       };
     in {
@@ -456,7 +455,6 @@ test_mkdevshell_nix_cache() {
           WRIX_CACHE_WARM_EXCLUDE
           WRIX_CACHE_SOFT_LIMIT_BYTES
           WRIX_CACHE_PENDING_RETENTION_SECS
-          WRIX_CACHE_PRUNE_INTERVAL_SECS
           ;
       };
     }
@@ -498,7 +496,6 @@ test_mkdevshell_nix_cache() {
   [[ "$(json_get "$result_file" customEnv.WRIX_CACHE_WARM_EXCLUDE)" == ".#checks.skip" ]] || { fail "warm.excludeRoots did not map"; return 1; }
   [[ "$(json_get "$result_file" customEnv.WRIX_CACHE_SOFT_LIMIT_BYTES)" == "1073741824" ]] || { fail "warnSize did not map to bytes"; return 1; }
   [[ "$(json_get "$result_file" customEnv.WRIX_CACHE_PENDING_RETENTION_SECS)" == "172800" ]] || { fail "pendingTtl did not map to seconds"; return 1; }
-  [[ "$(json_get "$result_file" customEnv.WRIX_CACHE_PRUNE_INTERVAL_SECS)" == "10800" ]] || { fail "pruneInterval did not map to seconds"; return 1; }
 
   wrix_bin="$(build_wrix)"
   saved_path="$PATH"

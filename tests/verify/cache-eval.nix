@@ -55,12 +55,16 @@ ensure (cacheEnv (shell true) == { }) "default shell exports implicit cache defa
       ".#one"
       ".#two"
     ];
-    pendingTtl = "2d";
-    pruneInterval = "3h";
+    pendingTtl = 172800;
   }) == {
     WRIX_NIX_CACHE_REQUIRE_TRUSTED = "0";
     WRIX_CACHE_PUBLISH_EXCLUDE = ".#one\n.#two";
     WRIX_CACHE_PENDING_RETENTION_SECS = "172800";
-    WRIX_CACHE_PRUNE_INTERVAL_SECS = "10800";
   }
 ) "explicit overrides are not normalized for the runtime"
+&& ensure (
+  !(builtins.tryEval (shell { pruneInterval = "1h"; }).shellHook).success
+) "retired pruning option was accepted"
+&& ensure (builtins.isString
+  (shell { pendingTtl = "1week 2days"; }).shellHook
+) "human durations require evaluation-time parsing"

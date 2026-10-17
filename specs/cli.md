@@ -795,7 +795,7 @@ authorization. Verification diagnoses stale/missing helpers and hooks with
   [judge?](../tests/judges/cli-command-shape.md#information-and-actions)
 - Human-readable CLI duration inputs use `humantime`, with parse/domain errors
   rejected before actions rather than a separate hand-maintained syntax list.
-  [test?](../crates/wrix-cli/tests/durations.rs::human_duration_inputs_use_humantime)
+  [test](../crates/wrix-cli/tests/durations.rs::human_duration_inputs_use_humantime)
 
 ### Tool Cache Control Acceptance
 

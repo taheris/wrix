@@ -1322,7 +1322,7 @@ fn prune_is_stale(paths: &Paths) -> Result<bool> {
     let Some(last_prune) = read_cache_status(paths)?.last_prune_epoch else {
         return Ok(true);
     };
-    Ok(now_epoch()?.saturating_sub(last_prune) > paths.settings.prune_interval_secs)
+    Ok(now_epoch()?.saturating_sub(last_prune) > 24 * 60 * 60)
 }
 
 fn write_if_missing(path: &Path, content: impl AsRef<[u8]>) -> Result<()> {
