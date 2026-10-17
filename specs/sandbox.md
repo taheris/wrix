@@ -865,8 +865,10 @@ rootfs symlink. [check](nix build
   completion (exit 0) with no `Operation not permitted` failure on a
   `/nix/store` path [system](verify:sandbox.nix-in-container)
 - Every image sets `IS_SANDBOX=1` so Claude permits root execution without UID
-  spoofing; launch commands do not inject a UID-spoofing preload. [check](nix
-  build .#legacyPackages.x86_64-linux.ciChecks.private-nix-artifacts)
+  spoofing. [check](nix build
+  .#legacyPackages.x86_64-linux.ciChecks.private-nix-artifacts)
+- The default Linux launch command preserves real identity without injecting a
+  UID-spoofing preload.
   [test](../crates/wrix-sandbox/tests/launch.rs::linux_default_boundary_preserves_real_identity)
 - In a fresh container built from the selected image, the runtime user completes
   `nix-store --verify --check-contents` and an additive `nix build` without
