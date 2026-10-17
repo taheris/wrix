@@ -810,7 +810,7 @@ fn create_secure_dir(path: &Path) -> Result<(), Error> {
         path: path_string(path),
         source,
     })?;
-    set_mode(path, 0o700)
+    set_mode_if_needed(path, 0o700)
 }
 
 fn write_secure_file(path: &Path, content: &str, mode: u32) -> Result<(), Error> {

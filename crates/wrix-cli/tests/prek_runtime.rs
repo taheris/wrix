@@ -252,7 +252,7 @@ fn every_packaged_stage_propagates_hook_failure() -> TestResult {
 }
 
 #[test]
-fn packaged_launcher_initializes_binding_without_runner_on_path() -> TestResult {
+fn packaged_repo_init_resolves_runner_without_path() -> TestResult {
     let fixture = Fixture::new()?;
     let packaged = common::prek::packaged_wrix()?;
     symlink(common::command_path("ssh")?, fixture.tools.join("ssh"))?;
@@ -283,7 +283,7 @@ fn packaged_launcher_initializes_binding_without_runner_on_path() -> TestResult 
 }
 
 #[test]
-fn init_repairs_stale_runner_and_hook_path() -> TestResult {
+fn repo_init_repairs_stale_runner_and_hook_path() -> TestResult {
     let fixture = Fixture::new()?;
     run_git(
         fixture.repo.path(),
@@ -293,7 +293,20 @@ fn init_repairs_stale_runner_and_hook_path() -> TestResult {
         fixture.repo.path(),
         &["config", "core.hooksPath", "/missing/hooks"],
     )?;
-    let result = fixture.init()?;
+    let packaged = common::prek::packaged_wrix()?;
+    symlink(common::command_path("ssh")?, fixture.tools.join("ssh"))?;
+    let key = fixture.work.path().join("deploy-key");
+    write_empty_key(&key)?;
+    let apply = || -> TestResult<RunResult> {
+        run_command(
+            fixture
+                .command(&packaged, fixture.repo.path(), "host")
+                .args(["init", "repo", "--offline", "--key", "test-key"])
+                .env("WRIX_DEPLOY_KEY", &key)
+                .env_remove("WRIX_PREK_HOOKS"),
+        )
+    };
+    let result = apply()?;
     assert!(result.status.success(), "init: {}", result.stderr);
     assert_eq!(
         git_stdout(fixture.repo.path(), &["config", "core.hooksPath"])?,
@@ -310,8 +323,13 @@ fn init_repairs_stale_runner_and_hook_path() -> TestResult {
             .success()
     );
     let config = fs::read(fixture.repo.path().join(".git/config"))?;
-    assert!(fixture.init()?.status.success());
+    let modified = fs::metadata(fixture.repo.path().join(".git/config"))?.modified()?;
+    assert!(apply()?.status.success());
     assert_eq!(fs::read(fixture.repo.path().join(".git/config"))?, config);
+    assert_eq!(
+        fs::metadata(fixture.repo.path().join(".git/config"))?.modified()?,
+        modified
+    );
     Ok(())
 }
 

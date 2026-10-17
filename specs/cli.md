@@ -844,7 +844,7 @@ authorization. Verification diagnoses stale/missing helpers and hooks with
   [test](../crates/wrix-cli/tests/init_workflows.rs::standalone_deploy_only_provisions_keys)
 - Init repo applies requested Git/signing/hooks setup and verifies it, but never
   provisions missing keys without the explicit deploy modifier.
-  [test?](../crates/wrix-cli/tests/init_workflows.rs::repo_applies_and_verifies_without_implicit_provisioning)
+  [test](../crates/wrix-cli/tests/init_workflows.rs::repo_applies_and_verifies_without_implicit_provisioning)
 - Init repo --deploy uses standalone provisioning semantics before application;
   provisioning failure prevents application, and later verification failure
   cannot produce success.
@@ -860,7 +860,7 @@ authorization. Verification diagnoses stale/missing helpers and hooks with
 - Valid workflows need no wrix.toml and do not create one to record defaults;
   key selection uses flag > repository > supplied ProfileConfig > derived
   default, and remote/hooks/online policy uses flag > repository > defaults.
-  [test?](../crates/wrix-cli/tests/init_workflows.rs::defaults_and_overrides_do_not_create_policy)
+  [test](../crates/wrix-cli/tests/init_workflows.rs::defaults_and_overrides_do_not_create_policy)
 - Repository policy accepts root-level Git/init sections, dotted keys and inline
   tables without a redundant namespace.
   [test](../crates/wrix-core/tests/repository_policy.rs::supported_key_remote_and_init_overrides_are_typed)
@@ -869,11 +869,11 @@ authorization. Verification diagnoses stale/missing helpers and hooks with
   [test](../crates/wrix-cli/tests/init_workflows.rs::invalid_policy_and_profile_identity_precede_mutation)
 - Repo initialization applies context-stable transport/signing only to the
   invoked repository, leaving an independent nested integration clone unchanged.
-  [test?](../crates/wrix-cli/tests/init_workflows.rs::outer_repo_setup_does_not_mutate_integration_clone)
+  [test](../crates/wrix-cli/tests/init_workflows.rs::outer_repo_setup_does_not_mutate_integration_clone)
 - Repo initialization inside the independent integration clone applies/verifies
   that clone without mutating the outer repository; linked worktrees share the
   selected repository's common configuration.
-  [test?](../crates/wrix-cli/tests/init_workflows.rs::clone_and_linked_worktree_scope_is_preserved)
+  [test](../crates/wrix-cli/tests/init_workflows.rs::clone_and_linked_worktree_scope_is_preserved)
 - With HOME and effective-user home differing, transport obeys security.md's
   credential-resolution, pinned-host, SSH-permission and ambient-identity rules.
   [test](../crates/wrix-cli/tests/init_git_bootstrap.rs::strict_context_aware_ssh_helper)
@@ -888,12 +888,12 @@ authorization. Verification diagnoses stale/missing helpers and hooks with
 - Repo initialization leaves signing disabled by default; opting in configures
   signing and produces a verifiable disposable test signature/commit without
   changing sandbox grants.
-  [test?](../crates/wrix-cli/tests/init_workflows.rs::repo_signing_is_opt_in_and_verified)
+  [test](../crates/wrix-cli/tests/init_workflows.rs::repo_signing_is_opt_in_and_verified)
 - Missing required signing material fails instead of silently provisioning it.
-  [test?](../crates/wrix-cli/tests/init_workflows.rs::required_signing_material_is_not_implicitly_provisioned)
+  [test](../crates/wrix-cli/tests/init_workflows.rs::required_signing_material_is_not_implicitly_provisioned)
 - Sign/no-sign overrides repository signing policy without rewriting wrix.toml;
   repo applies the choice, bare init only verifies the expected state.
-  [test?](../crates/wrix-cli/tests/init_workflows.rs::signing_modes_apply_or_verify_without_rewriting_policy)
+  [test](../crates/wrix-cli/tests/init_workflows.rs::signing_modes_apply_or_verify_without_rewriting_policy)
 - Both provisioning entrypoints create separate passphraseless ed25519 deploy
   and signing keys with secure permissions when signing is enabled, registering
   repo write access and the operator's signing key respectively.
@@ -932,17 +932,17 @@ authorization. Verification diagnoses stale/missing helpers and hooks with
   [test](../crates/wrix-cli/tests/init_workflows.rs::standalone_provisioning_is_idempotent)
 - Repeated composed repo initialization avoids key, config, hook, helper,
   Git-object and file-metadata churn or remote mutation.
-  [test?](../crates/wrix-cli/tests/init_workflows.rs::composed_repo_initialization_is_idempotent)
+  [test](../crates/wrix-cli/tests/init_workflows.rs::composed_repo_initialization_is_idempotent)
 - Packaged repo initialization supplies the Nix-resolved runner even when it is
   absent from PATH.
-  [test?](../crates/wrix-cli/tests/prek_runtime.rs::packaged_repo_init_resolves_runner_without_path)
+  [test](../crates/wrix-cli/tests/prek_runtime.rs::packaged_repo_init_resolves_runner_without_path)
 - Packaged repo initialization repairs a stale runner binding before selecting
   the hook bundle and preserves identical configuration on repetition.
-  [test?](../crates/wrix-cli/tests/prek_runtime.rs::repo_init_repairs_stale_runner_and_hook_path)
+  [test](../crates/wrix-cli/tests/prek_runtime.rs::repo_init_repairs_stale_runner_and_hook_path)
 - Repo initialization configures the Wrix prek bundle only when enabled and
   present, respects independent-clone scope, and leaves hooks unchanged when
   disabled by flag/policy.
-  [test?](../crates/wrix-cli/tests/init_workflows.rs::repo_hooks_are_optional_and_clone_scoped)
+  [test](../crates/wrix-cli/tests/init_workflows.rs::repo_hooks_are_optional_and_clone_scoped)
 
 ### Scoped Gate Acceptance
 

@@ -3,7 +3,7 @@ mod common;
 use std::{
     collections::BTreeMap,
     fs,
-    os::unix::fs::PermissionsExt,
+    os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
     process::Command,
 };
@@ -85,7 +85,7 @@ impl Fixture {
     }
 }
 
-type Tree = BTreeMap<PathBuf, (u32, std::time::SystemTime, Vec<u8>)>;
+type Tree = BTreeMap<PathBuf, (u32, std::time::SystemTime, i64, i64, Vec<u8>)>;
 
 fn tree(root: &Path) -> TestResult<Tree> {
     fn visit(root: &Path, path: &Path, entries: &mut Tree) -> TestResult {
@@ -95,6 +95,8 @@ fn tree(root: &Path) -> TestResult<Tree> {
             (
                 metadata.permissions().mode(),
                 metadata.modified()?,
+                metadata.ctime(),
+                metadata.ctime_nsec(),
                 if metadata.is_file() {
                     fs::read(path)?
                 } else {
@@ -945,6 +947,346 @@ fn assert_minimal_online_env(label: &str, output: &str, deploy_key: &Path, home:
 
 fn assert_absent(path: &Path) {
     assert!(!path.exists(), "unexpected file exists: {}", path.display());
+}
+
+#[test]
+fn defaults_and_overrides_do_not_create_policy() -> TestResult {
+    const CHILD: &str = "WRIX_TEST_INIT_POLICY_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        let root = std::env::current_dir()?;
+        let profile = root.parent().unwrap().join("profile.json");
+        fs::write(&profile, r#"{"security":{"deploy_key":"profile-key"}}"#)?;
+        let derived = format!("{}-test-host", root.file_name().unwrap().to_str().unwrap());
+        run_git(
+            &root,
+            &[
+                "remote",
+                "add",
+                "upstream",
+                "git@github.com:example/upstream.git",
+            ],
+        )?;
+        for (input, key, flags) in [
+            (None, derived.as_str(), vec![]),
+            (Some(profile.as_path()), "profile-key", vec![]),
+            (Some(profile.as_path()), "repo-key", vec![]),
+            (
+                Some(profile.as_path()),
+                "flag-key",
+                vec![
+                    "--key",
+                    "flag-key",
+                    "--remote",
+                    "origin",
+                    "--offline",
+                    "--no-hooks",
+                    "--no-sign",
+                ],
+            ),
+        ] {
+            if key == "repo-key" {
+                fs::write(
+                    root.join("wrix.toml"),
+                    "[git]\ndeploy_key = 'repo-key'\nremote = 'upstream'\n[init]\nprek_hooks = false\nonline_verify = false\n",
+                )?;
+            }
+            if key == "flag-key" {
+                fs::write(
+                    root.join("wrix.toml"),
+                    "[git]\ndeploy_key = 'repo-key'\nremote = 'upstream'\nsign = true\n[init]\nprek_hooks = true\nonline_verify = true\n",
+                )?;
+            }
+            let policy = root.join("wrix.toml");
+            let before = if policy.exists() {
+                Some(tree(&policy)?)
+            } else {
+                None
+            };
+            let mut args = vec!["repo"];
+            args.extend(flags);
+            let args = args.into_iter().map(String::from).collect::<Vec<_>>();
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let result = wrix_cli::init::run(input, &args, &mut stdout, &mut stderr)?;
+            assert_eq!(
+                result,
+                std::process::ExitCode::SUCCESS,
+                "{}",
+                String::from_utf8_lossy(&stderr)
+            );
+            let stdout = String::from_utf8(stdout)?;
+            assert_contains("key precedence", &stdout, &format!("deploy_key: {key}\n"));
+            for line in ["sign: false", "prek_hooks: false"] {
+                assert_contains("policy", &stdout, line);
+            }
+            assert_contains(
+                "remote precedence",
+                &stdout,
+                if key == "repo-key" {
+                    "remote: upstream"
+                } else {
+                    "remote: origin"
+                },
+            );
+            assert_contains(
+                "online precedence",
+                &stdout,
+                if matches!(key, "repo-key" | "flag-key") {
+                    "online_verify: false"
+                } else {
+                    "online_verify: true"
+                },
+            );
+            if let Some(before) = before {
+                assert_eq!(tree(&policy)?, before);
+            } else {
+                assert!(!policy.exists());
+            }
+        }
+        return Ok(());
+    }
+    let fixture = Fixture::new()?;
+    let key = fixture.home.join("deploy-key");
+    write_empty_key(&key)?;
+    let mut command = Command::new(std::env::current_exe()?);
+    common::set_isolated_git_env(&mut command);
+    let result = run_command(
+        command
+            .args([
+                "--exact",
+                "defaults_and_overrides_do_not_create_policy",
+                "--nocapture",
+            ])
+            .current_dir(fixture.repo.path())
+            .env(CHILD, "1")
+            .env("HOSTNAME", "test-host")
+            .env("HOME", &fixture.home)
+            .env("WRIX_DEPLOY_KEY", key)
+            .env(
+                "PATH",
+                std::env::join_paths(
+                    std::iter::once(fixture.git.clone())
+                        .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+                )?,
+            ),
+    )?;
+    assert!(
+        result.status.success(),
+        "{} {}",
+        result.stdout,
+        result.stderr
+    );
+    Ok(())
+}
+
+#[test]
+fn required_signing_material_is_not_implicitly_provisioned() -> TestResult {
+    let fixture = Fixture::new()?;
+    for args in [
+        vec!["repo", "--offline", "--sign", "--key", "key"],
+        vec!["--offline", "--sign", "--key", "key"],
+    ] {
+        fixture.assert_rejected_unchanged(&args, "signing")?;
+    }
+    Ok(())
+}
+
+#[test]
+fn repo_applies_and_verifies_without_implicit_provisioning() -> TestResult {
+    let fixture = Fixture::new()?;
+    common::write_ed25519_key(&fixture.home.join(".ssh/deploy_keys/key"))?;
+    let home = tree(&fixture.home)?;
+    assert_success_with_clean_stderr(&fixture.run(&["repo", "--offline", "--key", "key"])?);
+    assert!(fixture.repo.path().join(".git/wrix/git-ssh").is_file());
+    assert_eq!(tree(&fixture.home)?, home);
+    assert_eq!(fixture.log("gh.log")?, "");
+    assert_eq!(fixture.log("keygen.log")?, "");
+    assert_success_with_clean_stderr(&fixture.run(&["--offline", "--key", "key"])?);
+    Ok(())
+}
+
+#[test]
+fn outer_repo_setup_does_not_mutate_integration_clone() -> TestResult {
+    let fixture = Fixture::new()?;
+    let integration = clone_integration(fixture.repo.path())?;
+    let before = tree(&integration)?;
+    assert_success_with_clean_stderr(
+        &fixture.run(&["repo", "--deploy", "--sign", "--key", "key"])?,
+    );
+    assert_eq!(tree(&integration)?, before);
+    assert!(!integration.join(".git/wrix").exists());
+    Ok(())
+}
+
+#[test]
+fn clone_and_linked_worktree_scope_is_preserved() -> TestResult {
+    let fixture = Fixture::new()?;
+    let integration = clone_integration(fixture.repo.path())?;
+    let outer = tree(&fixture.repo.path().join(".git"))?;
+    run_git(
+        &integration,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "git@github.com:example/integration.git",
+        ],
+    )?;
+    let mut command = fixture.command(&["repo", "--deploy", "--sign", "--key", "key"])?;
+    assert_success_with_clean_stderr(&run_command(command.current_dir(&integration))?);
+    assert_eq!(tree(&fixture.repo.path().join(".git"))?, outer);
+    let worktree = fixture.directory.path().join("linked");
+    run_git(
+        &integration,
+        &[
+            "worktree",
+            "add",
+            "-qb",
+            "linked",
+            worktree.to_str().unwrap(),
+        ],
+    )?;
+    assert_eq!(common_git_dir(&worktree)?, common_git_dir(&integration)?);
+    let before = tree(&integration.join(".git"))?;
+    let mut command = fixture.command(&["repo", "--offline", "--sign", "--key", "key"])?;
+    assert_success_with_clean_stderr(&run_command(command.current_dir(&worktree))?);
+    assert_eq!(tree(&integration.join(".git"))?, before);
+    for key in [
+        "core.sshCommand",
+        "user.signingkey",
+        "gpg.ssh.allowedSignersFile",
+    ] {
+        assert_eq!(
+            git_stdout(&worktree, &["config", key])?,
+            git_stdout(&integration, &["config", key])?
+        );
+    }
+    let mut command = fixture.command(&["--offline", "--sign", "--key", "key"])?;
+    assert_success_with_clean_stderr(&run_command(command.current_dir(&integration))?);
+    assert_eq!(tree(&fixture.repo.path().join(".git"))?, outer);
+    Ok(())
+}
+
+#[test]
+fn repo_signing_is_opt_in_and_verified() -> TestResult {
+    let fixture = Fixture::new()?;
+    let objects = tree(&fixture.repo.path().join(".git/objects"))?;
+    assert_success_with_clean_stderr(&fixture.run(&["repo", "--deploy", "--key", "key"])?);
+    assert_eq!(
+        git_stdout(fixture.repo.path(), &["config", "commit.gpgsign"])?,
+        "false"
+    );
+    assert!(!fixture.home.join(".ssh/deploy_keys/key-signing").exists());
+    assert_success_with_clean_stderr(
+        &fixture.run(&["repo", "--deploy", "--sign", "--key", "key"])?,
+    );
+    assert_eq!(
+        git_stdout(fixture.repo.path(), &["config", "commit.gpgsign"])?,
+        "true"
+    );
+    assert_eq!(tree(&fixture.repo.path().join(".git/objects"))?, objects);
+    let grants = wrix_core::repository_policy::read(fixture.repo.path())?.git;
+    assert!(!grants.deploy_enabled());
+    assert!(!grants.sign_enabled());
+    assert_passive(&fixture, &["--offline", "--sign", "--key", "key"], true)?;
+    Ok(())
+}
+
+#[test]
+fn signing_modes_apply_or_verify_without_rewriting_policy() -> TestResult {
+    let fixture = prepared_signed_fixture()?;
+    for policy in [true, false] {
+        let path = fixture.repo.path().join("wrix.toml");
+        fs::write(&path, format!("[git]\nsign = {policy}\n"))?;
+        let before = tree(&path)?;
+        for (flag, expected) in [("--no-sign", "false"), ("--sign", "true")] {
+            assert_success_with_clean_stderr(&fixture.run(&[
+                "repo",
+                "--offline",
+                flag,
+                "--key",
+                "key",
+            ])?);
+            assert_eq!(
+                git_stdout(fixture.repo.path(), &["config", "commit.gpgsign"])?,
+                expected
+            );
+            assert_passive(&fixture, &["--offline", flag, "--key", "key"], true)?;
+            let opposite = if flag == "--sign" {
+                "--no-sign"
+            } else {
+                "--sign"
+            };
+            assert_passive(&fixture, &["--offline", opposite, "--key", "key"], false)?;
+            assert_eq!(tree(&path)?, before);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn repo_hooks_are_optional_and_clone_scoped() -> TestResult {
+    let fixture = prepared_signed_fixture()?;
+    let integration = clone_integration(fixture.repo.path())?;
+    let clone_before = tree(&integration)?;
+    let runtime = common::prek::runtime()?;
+    let config = fixture.repo.path().join(".pre-commit-config.yaml");
+    let apply = |flags: &[&str]| -> TestResult {
+        let mut args = vec!["repo", "--offline", "--sign", "--key", "key"];
+        args.extend_from_slice(flags);
+        let mut command = fixture.command(&args)?;
+        command
+            .env("WRIX_PREK_RUNNER", &runtime.runner)
+            .env("WRIX_PREK_HOOKS", &runtime.hooks);
+        assert_success_with_clean_stderr(&run_command(&mut command)?);
+        Ok(())
+    };
+    apply(&[])?;
+    assert!(!git_stdout(fixture.repo.path(), &["config", "--list"])?.contains("core.hookspath="));
+    fs::write(&config, "repos: []\n")?;
+    apply(&[])?;
+    assert_eq!(
+        git_stdout(fixture.repo.path(), &["config", "core.hooksPath"])?,
+        runtime.hooks.display().to_string()
+    );
+    let installed = tree(&fixture.repo.path().join(".git"))?;
+    apply(&[])?;
+    assert_eq!(tree(&fixture.repo.path().join(".git"))?, installed);
+    for policy in [false, true] {
+        fs::write(
+            fixture.repo.path().join("wrix.toml"),
+            format!("[init]\nprek_hooks = {policy}\n"),
+        )?;
+        run_git(
+            fixture.repo.path(),
+            &["config", "core.hooksPath", "/custom/hooks"],
+        )?;
+        let before = tree(&fixture.repo.path().join(".git"))?;
+        apply(if policy { &["--no-hooks"] } else { &[] })?;
+        assert_eq!(tree(&fixture.repo.path().join(".git"))?, before);
+    }
+    assert_eq!(tree(&integration)?, clone_before);
+    Ok(())
+}
+
+#[test]
+fn composed_repo_initialization_is_idempotent() -> TestResult {
+    let fixture = prepared_signed_fixture()?;
+    let repo = tree(fixture.repo.path())?;
+    let home = tree(&fixture.home)?;
+    let remote = tree(&fixture.directory.path().join("state"))?;
+    let args = ["repo", "--deploy", "--sign", "--key", "key"];
+    fs::write(fixture.directory.path().join("gh.log"), "")?;
+    fs::write(fixture.directory.path().join("keygen.log"), "")?;
+    assert_success_with_clean_stderr(&fixture.run(&args)?);
+    assert_eq!(tree(fixture.repo.path())?, repo);
+    assert_eq!(tree(&fixture.home)?, home);
+    assert_eq!(tree(&fixture.directory.path().join("state"))?, remote);
+    assert_not_contains("reuse", &fixture.log("gh.log")?, "POST");
+    assert_not_contains("reuse", &fixture.log("gh.log")?, "DELETE");
+    assert_not_contains("reuse", &fixture.log("keygen.log")?, "-t\ned25519");
+    assert!(!fixture.repo.path().join("wrix.toml").exists());
+    Ok(())
 }
 
 fn prepared_signed_fixture() -> TestResult<Fixture> {
