@@ -334,6 +334,81 @@ fn repo_init_repairs_stale_runner_and_hook_path() -> TestResult {
 }
 
 #[test]
+fn repo_init_repairs_but_bare_init_only_reports() -> TestResult {
+    let fixture = Fixture::new()?;
+    let packaged = common::prek::packaged_wrix()?;
+    symlink(common::command_path("ssh")?, fixture.tools.join("ssh"))?;
+    let key = fixture.work.path().join("deploy-key");
+    write_empty_key(&key)?;
+    let invoke = |args: &[&str]| -> TestResult<RunResult> {
+        run_command(
+            fixture
+                .command(&packaged, fixture.repo.path(), "host")
+                .args(args)
+                .args(["--offline", "--no-sign", "--key", "test-key"])
+                .env("WRIX_DEPLOY_KEY", &key)
+                .env_remove("WRIX_PREK_HOOKS"),
+        )
+    };
+    let result = invoke(&["init", "repo"])?;
+    assert!(result.status.success(), "setup: {}", result.stderr);
+    run_git(
+        fixture.repo.path(),
+        &["config", &fixture.key("host"), "/missing/runner"],
+    )?;
+    for stale_hooks in [false, true] {
+        if stale_hooks {
+            run_git(
+                fixture.repo.path(),
+                &["config", "core.hooksPath", "/missing/hooks"],
+            )?;
+        }
+        let config_path = fixture.repo.path().join(".git/config");
+        let config = fs::read(&config_path)?;
+        let modified = fs::metadata(&config_path)?.modified()?;
+        let result = invoke(&["init"])?;
+        assert!(!result.status.success(), "bare init repaired hook drift");
+        assert!(
+            result.stderr.contains("wrix init repo"),
+            "{}",
+            result.stderr
+        );
+        if stale_hooks {
+            assert!(
+                result.stderr.contains("core.hooksPath"),
+                "{}",
+                result.stderr
+            );
+        } else {
+            assert!(
+                result.stderr.contains("/missing/runner"),
+                "{}",
+                result.stderr
+            );
+        }
+        assert_eq!(fs::read(&config_path)?, config);
+        assert_eq!(fs::metadata(&config_path)?.modified()?, modified);
+    }
+    let result = fixture.hook("post-merge", fixture.repo.path(), "host")?;
+    assert!(!result.status.success());
+    assert!(result.stderr.contains("missing or invalid hook runner"));
+    let result = invoke(&["init", "repo"])?;
+    assert!(result.status.success(), "repair: {}", result.stderr);
+    assert_eq!(
+        git_stdout(fixture.repo.path(), &["config", &fixture.key("host")])?,
+        fixture.runtime.runner.display().to_string()
+    );
+    assert_eq!(
+        git_stdout(fixture.repo.path(), &["config", "core.hooksPath"])?,
+        fixture.runtime.hooks.display().to_string()
+    );
+    let result = fixture.hook("post-merge", fixture.repo.path(), "host")?;
+    assert!(result.status.success(), "hook: {}", result.stderr);
+    assert!(invoke(&["init"])?.status.success());
+    Ok(())
+}
+
+#[test]
 fn devshell_entry_repairs_binding_even_when_hook_path_is_current() -> TestResult {
     let fixture = Fixture::new()?;
     run_git(
@@ -452,7 +527,7 @@ fn binding_rejects_missing_packaged_dependency_before_mutation() -> TestResult {
 }
 
 #[test]
-fn missing_binding_fails_with_repair_instructions() -> TestResult {
+fn missing_binding_names_repo_init_repair() -> TestResult {
     let fixture = Fixture::new()?;
     let result = fixture.hook("post-merge", fixture.repo.path(), "host")?;
     assert!(!result.status.success());
@@ -461,7 +536,9 @@ fn missing_binding_fails_with_repair_instructions() -> TestResult {
         "{}",
         result.stderr
     );
-    assert!(result.stderr.contains("reload") && result.stderr.contains("wrix init"));
+    assert!(result.stderr.contains("reload the Wrix devshell"));
+    assert!(result.stderr.contains("Nix-packaged wrix init repo"));
+    assert!(!result.stderr.contains("wrix init in this repository"));
     assert!(!fixture.repo.path().join("probe.log").exists());
     Ok(())
 }

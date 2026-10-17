@@ -225,7 +225,7 @@ marker. [system](verify:prek.ci-platform-policy)
 - Packaged `wrix init repo` repairs the stale current runner binding before hook
   selection; bare `wrix init` reports the problem without changing bindings or
   hook configuration.
-  [test?](../crates/wrix-cli/tests/prek_runtime.rs::repo_init_repairs_but_bare_init_only_reports)
+  [test](../crates/wrix-cli/tests/prek_runtime.rs::repo_init_repairs_but_bare_init_only_reports)
 - The repository's formatter hook passes clean files and rejects files needing
   formatting even when its evaluation cache cannot be opened
   [system](verify:prek.formatter-cache-independent)
@@ -253,7 +253,7 @@ marker. [system](verify:prek.ci-platform-policy)
   [test](../crates/wrix-cli/tests/prek_runtime.rs::git_commit_and_push_use_installed_bundle_with_minimal_path)
 - Missing bindings fail with actionable reload or `wrix init repo` instructions,
   not a suggestion that bare verification will repair the binding.
-  [test?](../crates/wrix-cli/tests/prek_runtime.rs::missing_binding_names_repo_init_repair)
+  [test](../crates/wrix-cli/tests/prek_runtime.rs::missing_binding_names_repo_init_repair)
 - Missing bootstrap dependencies produce actionable failures
   [test](../crates/wrix-cli/tests/prek_runtime.rs::missing_bootstrap_dependency_reports_actionable_failure)
 - A runner missing its packaged prek dependency fails with repair guidance
