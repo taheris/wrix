@@ -119,12 +119,11 @@ wrix_write_profile_config() {
   local image_ref="$2"
   local image_source="$3"
   local agent="$4"
-  local allowlist_csv="${5:-}"
+  local allowlist_json="${5:-[]}"
   local source_kind="${6:-}"
-  local allowlist_json digest
+  local digest
 
   [[ -n "$source_kind" ]] || source_kind=$(wrix_live_source_kind)
-  allowlist_json=$(jq -Rn --arg csv "$allowlist_csv" '$csv | split(",") | map(select(length > 0))')
   case "$source_kind" in
     nix-descriptor) digest=$(jq -er '.digest | strings | select(test("^sha256:[0-9a-f]{64}$"))' "$image_source") ;;
     docker-archive) digest="" ;;

@@ -29,6 +29,7 @@ WRIX_IP6TABLES_BIN="$WRIX_NETWORK_TOOL_DIR/ip6tables"
 WRIX_CAPSH_BIN="$WRIX_NETWORK_TOOL_DIR/capsh"
 WRIX_BASH_BIN="$WRIX_NETWORK_TOOL_DIR/bash"
 WRIX_GETENT_BIN="$WRIX_NETWORK_TOOL_DIR/getent"
+WRIX_JQ_BIN="$WRIX_NETWORK_TOOL_DIR/jq"
 WRIX_AWK_BIN="$WRIX_NETWORK_TOOL_DIR/awk"
 WRIX_SORT_BIN="$WRIX_NETWORK_TOOL_DIR/sort"
 WRIX_GREP_BIN="$WRIX_NETWORK_TOOL_DIR/grep"
@@ -40,6 +41,7 @@ for tool in \
   "$WRIX_CAPSH_BIN" \
   "$WRIX_BASH_BIN" \
   "$WRIX_GETENT_BIN" \
+  "$WRIX_JQ_BIN" \
   "$WRIX_AWK_BIN" \
   "$WRIX_SORT_BIN" \
   "$WRIX_GREP_BIN" \
@@ -273,20 +275,22 @@ wrix_block_special_ipv4_ranges() {
 }
 
 wrix_allow_limit_domains() {
-  local domain records ip
-  local -a allowlist_domains
-  IFS=',' read -ra allowlist_domains <<< "${WRIX_NETWORK_ALLOWLIST:-}"
-  for domain in "${allowlist_domains[@]}"; do
-    [[ -n "$domain" ]] || continue
+  local domain records ip port rule rules
+  rules=$("$WRIX_JQ_BIN" -c '.[]' <<< "${WRIX_NETWORK_ALLOWLIST:-[]}") || wrix_die "invalid network rules"
+  while IFS= read -r rule; do
+    [[ -n "$rule" ]] || continue
+    domain=$("$WRIX_JQ_BIN" -r '.host' <<< "$rule")
     records=$(wrix_resolve_ipv4 "$domain") || wrix_die "allowlist domain is unresolvable: $domain"
     while IFS= read -r ip; do
       [[ -n "$ip" ]] || continue
       if wrix_ipv4_is_special "$ip"; then
         wrix_die "allowlist domain resolves to blocked local/special address: $domain -> $ip"
       fi
-      wrix_firewall_allow_ipv4 "$ip" "" ""
+      while IFS= read -r port; do
+        wrix_firewall_allow_ipv4 "$ip" "$port" tcp
+      done < <("$WRIX_JQ_BIN" -r '.ports[]' <<< "$rule")
     done <<< "$records"
-  done
+  done <<< "$rules"
 }
 
 wrix_verify_nft_policy() {

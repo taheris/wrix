@@ -111,6 +111,7 @@ let
     mapAttrs (_: resourceCheck) (
       import (resources.fixtures.path + "/verify/agent-defaults.nix") { inherit flake system; }
     )
+    // mapAttrs (_: opaque) (import ./network-rules.nix { inherit wlib root; })
     // {
       "devshell.flake-module-does-not-own-hooks-path" = sourceCheck [ flakeDevshellSource ] (
         sources:

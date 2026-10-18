@@ -1,4 +1,4 @@
-mod config;
+pub mod config;
 mod launch;
 
 pub use config::{MountMode, ProfileMount, SpawnMount};

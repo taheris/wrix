@@ -77,7 +77,7 @@ test_nested_derive_profile() {
           SHARED_PROVIDER_TOKEN = "optional";
         };
         mounts = [ { source = "/tmp/first"; dest = "/mnt/first"; mode = "ro"; optional = true; } ];
-        networkAllowlist = [ "first.example" ];
+        networkAllowlist = [ { host = "first.example"; ports = [ 443 ]; } ];
       };
       second = wlib.deriveProfile first {
         packages = [ np.cowsay ];
@@ -91,7 +91,7 @@ test_nested_derive_profile() {
           SHARED_PROVIDER_TOKEN = "required";
         };
         mounts = [ { source = "/tmp/second"; dest = "/mnt/second"; mode = "rw"; optional = true; } ];
-        networkAllowlist = [ "second.example" ];
+        networkAllowlist = [ { host = "second.example"; ports = [ 443 ]; } ];
       };
     in {
       baseCore = builtins.length wlib.profiles.base.corePackages;
@@ -134,7 +134,7 @@ test_nested_derive_profile() {
   [[ "$(json_field "$result" hostEnvC)" == "second" ]] || fail "new common env value was not added to hostEnv"
   [[ "$(json_field "$result" hostOnly)" == "second" ]] || fail "hostEnv did not right-merge across derivation"
   jq -e '.mounts == ["/mnt/first", "/mnt/second"]' <<<"$result" >/dev/null || fail "mounts were not concatenated in order"
-  jq -e '.allowlist | index("first.example") and index("second.example")' <<<"$result" >/dev/null || fail "network allowlist did not include both extensions"
+  jq -e '.allowlist | map(.host) | index("first.example") and index("second.example")' <<<"$result" >/dev/null || fail "network allowlist did not include both extensions"
   jq -e '
     .runtimeSecrets.OPENAI_API_KEY == "optional" and
     .runtimeSecrets.FIRST_PROVIDER_TOKEN == "optional" and

@@ -171,7 +171,7 @@ pub fn write_profile_config(path: &Path, fixture: &ProfileFixture) -> TestResult
             "env": {},
             "mounts": fixture.mounts,
             "writable_dirs": [],
-            "network_allowlist": ["example.org"]
+            "network_allowlist": [{"host": "example.org", "ports": [443]}]
         },
         "image": {
             "ref": "localhost/wrix-test:latest",

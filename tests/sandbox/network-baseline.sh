@@ -102,7 +102,7 @@ configure_cache_service_image() {
 run_sandbox_probe() {
   local label="$1"
   local mode="$2"
-  local allowlist_csv="$3"
+  local allowlist_json="${3:-[]}"
   local probe="$4"
   local workspace="${5:-$TEST_TMP/workspace-$label}"
   local cache_enabled="${6:-false}"
@@ -113,7 +113,7 @@ run_sandbox_probe() {
   local err="$TEST_TMP/$label.err"
 
   mkdir -p "$workspace" || return
-  wrix_write_profile_config "$profile_config" "$IMAGE_REF" "$IMAGE_SOURCE" claude "$allowlist_csv" || return
+  wrix_write_profile_config "$profile_config" "$IMAGE_REF" "$IMAGE_SOURCE" claude "$allowlist_json" || return
   jq --argjson enabled "$cache_enabled" '.services.nix_cache.enable = $enabled' \
     "$profile_config" >"$profile_config_tmp" || return
   mv "$profile_config_tmp" "$profile_config" || return
@@ -204,7 +204,7 @@ fi
 PROBE
 )
 
-  run_sandbox_probe "$label" limit "cache.nixos.org" "$probe" || rc=$?
+  run_sandbox_probe "$label" limit '[{"host":"cache.nixos.org","ports":[443]}]' "$probe" || rc=$?
   if [[ "$rc" -ne 0 ]]; then
     fail "limit mode did not enforce the public allowlist"
     dump_probe_error "$label"
@@ -212,7 +212,7 @@ PROBE
   fi
 
   label="limit-unresolvable"
-  run_sandbox_probe "$label" limit "unresolvable.invalid" 'exit 0' && rc=0 || rc=$?
+  run_sandbox_probe "$label" limit '[{"host":"unresolvable.invalid","ports":[443]}]' 'exit 0' && rc=0 || rc=$?
   if [[ "$rc" -eq 0 ]]; then
     fail "limit mode accepted an unresolvable allowlist domain"
     return 1
@@ -260,7 +260,7 @@ test_fail_closed() {
   local label="fail-closed-special-allowlist"
   local rc=0
 
-  run_sandbox_probe "$label" limit "localhost" 'exit 0' && rc=0 || rc=$?
+  run_sandbox_probe "$label" limit '[{"host":"localhost","ports":[443]}]' 'exit 0' && rc=0 || rc=$?
   if [[ "$rc" -eq 0 ]]; then
     fail "limit mode accepted an allowlist domain resolving to a blocked address"
     return 1

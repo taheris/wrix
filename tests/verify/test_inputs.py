@@ -79,6 +79,7 @@ class VerifierInputs(unittest.TestCase):
 
     def fixture(self, malformed=False, system=False):
         for relative in ["tests/verify/profiles-eval.nix", "tests/verify/agent-defaults.nix",
+                         "tests/verify/network-rules.nix",
                          "tests/lib/inputs.nix", "tests/lib/browser-resources.nix"]:
             destination = self.root / relative
             destination.parent.mkdir(parents=True, exist_ok=True)

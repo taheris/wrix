@@ -40,7 +40,7 @@ prepare_case() {
   printf '{}\n' >"$root/etc/wrix/pi-agent/settings.json"
   printf '{"schema":1,"runtime_selection":false,"servers":[]}\n' >"$root/etc/wrix/mcp-available.json"
   : >"$root/etc/resolv.conf"
-  for tool in bash nft iptables ip6tables capsh getent awk sort grep nc sleep stat; do
+  for tool in bash nft iptables ip6tables capsh getent awk sort grep nc sleep stat jq; do
     ln -s "$(command -v "$tool")" "$root/tools/$tool"
   done
   real="$(command -v capsh)"
@@ -146,7 +146,8 @@ EOF
 run_case() {
   local root="$1" agent="$2" boundary="$3" backend="$4" mode="$5"
   shift 5
-  local start="$root/network-bootstrap.sh" cmd=""
+  local start="$root/network-bootstrap.sh" cmd="" rules
+  rules='[{"host":"93.184.216.34","ports":[443,8443]}]'
   if [[ "$boundary" == krun ]]; then
     start="$root/krun-init.sh"
     if [[ "$#" -gt 0 ]]; then
@@ -158,7 +159,7 @@ run_case() {
     WRIX_AGENT="$agent" WRIX_STDIO=1 IS_SANDBOX=1 \
     WRIX_KRUN_CMD="$cmd" WRIX_TEST_AGENT_EXIT="${WRIX_TEST_AGENT_EXIT:-0}" \
     WRIX_FIREWALL_BACKEND="$backend" WRIX_NETWORK="$mode" \
-    WRIX_NETWORK_ALLOWLIST="${WRIX_TEST_ALLOWLIST:-93.184.216.34}" \
+    WRIX_NETWORK_ALLOWLIST="${WRIX_TEST_ALLOWLIST:-$rules}" \
     WRIX_NETWORK_DNS_SERVERS=10.0.0.53 \
     WRIX_NETWORK_LOCAL_ENDPOINTS=10.1.0.2:3307/tcp,10.1.0.3:8080/tcp \
     unshare --user --map-root-user --net bash "$start" "$@" \
@@ -206,7 +207,11 @@ test_policy_and_argv() {
           if [[ "$mode" == open ]]; then
             grep -q 'meta nfproto ipv4 accept' "$root/rules.nft"
           else
-            grep -q 'ip daddr 93.184.216.34 accept' "$root/rules.nft"
+            grep -q 'ip daddr 93.184.216.34 tcp dport 443 accept' "$root/rules.nft"
+            grep -q 'ip daddr 93.184.216.34 tcp dport 8443 accept' "$root/rules.nft"
+            if grep -q 'ip daddr 93.184.216.34 accept' "$root/rules.nft"; then
+              fail 'limit mode lost explicit ports'
+            fi
             if grep -q 'meta nfproto ipv4 accept' "$root/rules.nft"; then
               fail 'limit mode permits all public egress'
             fi
@@ -218,7 +223,11 @@ test_policy_and_argv() {
           if [[ "$mode" == open ]]; then
             grep -qx -- '-A OUTPUT -j ACCEPT' "$root/rules.v4"
           else
-            grep -q -- '-A OUTPUT -d 93.184.216.34/32 -j ACCEPT' "$root/rules.v4"
+            grep -q -- '-A OUTPUT -d 93.184.216.34/32 -p tcp -m tcp --dport 443 -j ACCEPT' "$root/rules.v4"
+            grep -q -- '-A OUTPUT -d 93.184.216.34/32 -p tcp -m tcp --dport 8443 -j ACCEPT' "$root/rules.v4"
+            if grep -q -- '-A OUTPUT -d 93.184.216.34/32 -j ACCEPT' "$root/rules.v4"; then
+              fail 'limit mode lost explicit ports'
+            fi
             if grep -qx -- '-A OUTPUT -j ACCEPT' "$root/rules.v4"; then
               fail 'limit mode permits all public egress'
             fi
@@ -251,7 +260,7 @@ test_fail_closed() {
     esac
     mode=open
     [[ "$failure" != allowlist ]] || mode=limit
-    if WRIX_TEST_ALLOWLIST=127.0.0.1 run_case "$root" claude container "$backend" "$mode"; then
+    if WRIX_TEST_ALLOWLIST='[{"host":"127.0.0.1","ports":[443]}]' run_case "$root" claude container "$backend" "$mode"; then
       fail "$failure did not abort startup"
     fi
     [[ ! -e "$root/events" || "$(<"$root/events")" == drop ]] || fail "$failure executed workspace setup/exit handling"

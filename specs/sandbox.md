@@ -1196,7 +1196,7 @@ rootfs symlink. [check](nix build
 
 - Structured `profile.network_allowlist` host/ports objects round-trip through
   the Rust boundary, reject unknown rule fields, and match the documented JSON.
-  [test?](../crates/wrix-sandbox/tests/config_contract.rs::profile_network_rule_objects_match_documented_wire)
+  [test](../crates/wrix-sandbox/tests/config_contract.rs::profile_network_rule_objects_match_documented_wire)
 - `ProfileConfig` rejects unknown root and Wrix-owned nested fields before
   preparation while recognizing the complete supported Nix-generated shape.
   [test?](../crates/wrix-sandbox/tests/config_contract.rs::profile_owned_structures_reject_unknown_fields)

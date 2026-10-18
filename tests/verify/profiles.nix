@@ -95,6 +95,9 @@ in
   "sandbox.agent-default-and-direct-contract" = nixEval "sandbox.agent-default-and-direct-contract";
   "profiles.loom-source-only" = flakeCheck "loom-source-only";
   "profiles.loom-package-wiring" = flakeCheck "loom-package-wiring";
+  "profiles.network-rule-contract" = nixEval "profiles.network-rule-contract";
+  "profiles.builtin-network-ports" = nixEval "profiles.builtin-network-ports";
+  "profiles.network-rule-extension" = nixEval "profiles.network-rule-extension";
   "profiles.nested-derive" = profileComposition "test_nested_derive_profile";
   "profiles.no-dev-toolchain-lib" = nixEval "profiles.no-dev-toolchain-lib";
   "profiles.no-rust-with-toolchain" = nixEval "profiles.no-rust-with-toolchain";

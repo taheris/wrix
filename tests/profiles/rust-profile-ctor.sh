@@ -120,7 +120,7 @@ test_extension_args() {
     hostEnv = { CTOR_HOST_ONLY = \"host_value\"; SCCACHE_CACHE_SIZE = \"77G\"; };
     runtimeSecrets = { CTOR_PROVIDER_TOKEN = \"required\"; };
     mounts = [ { source = \"/host/ctor\"; dest = \"/ctn/ctor\"; mode = \"ro\"; optional = true; } ];
-    networkAllowlist = [ \"ctor.example.com\" ];
+    networkAllowlist = [ { host = \"ctor.example.com\"; ports = [ 443 ]; } ];
   }"
 
   local result
@@ -145,8 +145,8 @@ test_extension_args() {
       hostPackageImageAbsent = ! (builtins.elem pkgs.cowsay.outPath (map (p: p.outPath) ext.packages));
       imagePackageHostAbsent = ! (builtins.elem pkgs.hello.outPath (map (p: p.outPath) ext.hostPackages));
       mountDestPresent   = builtins.any (m: m.dest == \"/ctn/ctor\") ext.mounts;
-      networkPresent     = builtins.elem \"ctor.example.com\" ext.networkAllowlist;
-      baseNetworkPreserved = builtins.elem \"crates.io\" ext.networkAllowlist;
+      networkPresent     = builtins.elem { host = \"ctor.example.com\"; ports = [ 443 ]; } ext.networkAllowlist;
+      baseNetworkPreserved = builtins.elem { host = \"crates.io\"; ports = [ 443 ]; } ext.networkAllowlist;
     }
   "); then
     echo "FAIL: nix eval rustProfile extension args expression failed" >&2

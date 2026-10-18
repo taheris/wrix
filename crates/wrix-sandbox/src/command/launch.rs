@@ -1568,11 +1568,8 @@ impl<'a> Plan<'a> {
             ),
             (
                 String::from("WRIX_NETWORK_ALLOWLIST"),
-                self.request
-                    .profile_config
-                    .profile
-                    .network_allowlist
-                    .join(","),
+                serde_json::json!(self.request.profile_config.profile.network_allowlist)
+                    .to_string(),
             ),
         ]
     }

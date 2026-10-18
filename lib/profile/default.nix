@@ -43,7 +43,7 @@
       env = baseEnv // env;
       hostEnv = baseHostEnv // env // hostEnv;
       runtimeSecrets = sandbox.validateRuntimeSecrets (baseRuntimeSecrets // runtimeSecrets);
-      networkAllowlist = baseNetworkAllowlist ++ networkAllowlist;
+      networkAllowlist = sandbox.validateNetworkRules (baseNetworkAllowlist ++ networkAllowlist);
     };
 
   rustProfile =
@@ -72,6 +72,6 @@
       hostEnv = (base.hostEnv or { }) // env // hostEnv;
       runtimeSecrets = sandbox.validateRuntimeSecrets ((base.runtimeSecrets or { }) // runtimeSecrets);
       mounts = base.mounts ++ mounts;
-      networkAllowlist = base.networkAllowlist ++ networkAllowlist;
+      networkAllowlist = sandbox.validateNetworkRules (base.networkAllowlist ++ networkAllowlist);
     };
 }

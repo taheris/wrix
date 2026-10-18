@@ -192,6 +192,7 @@ let
         capsh = "${pkgs.libcap}/bin/capsh";
         bash = "${pkgs.bash}/bin/bash";
         getent = "${pkgs.getent.provider}/bin/getent";
+        jq = "${pkgs.jq}/bin/jq";
         awk = "${pkgs.gawk}/bin/awk";
         sort = "${pkgs.coreutils}/bin/sort";
         grep = "${pkgs.gnugrep}/bin/grep";

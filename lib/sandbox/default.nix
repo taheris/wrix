@@ -96,6 +96,8 @@ let
     elem name bootstrapSensitiveEnvNames
     || builtins.any (prefix: hasPrefix prefix name) bootstrapSensitiveEnvPrefixes;
 
+  validateNetworkRules = import ./network-rules.nix;
+
   validateRuntimeSecrets =
     runtimeSecrets:
     if !isAttrs runtimeSecrets then
@@ -324,7 +326,7 @@ let
         env = (profile.env or { }) // env;
         hostEnv = (profile.hostEnv or profile.env or { }) // env;
         runtimeSecrets = (profile.runtimeSecrets or { }) // runtimeSecrets;
-        networkAllowlist = (profile.networkAllowlist or [ ]) ++ networkAllowlist;
+        networkAllowlist = validateNetworkRules ((profile.networkAllowlist or [ ]) ++ networkAllowlist);
       }
     );
 
@@ -598,6 +600,7 @@ in
     serviceImage
     baseClaudeSettings
     validateRuntimeSecrets
+    validateNetworkRules
     ;
   inherit (manifest) mkProfileImages;
   capabilities.privateNix = privateNix.version;

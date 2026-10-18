@@ -656,14 +656,41 @@ in
       allowlistChecks =
         assert elem "nftables" basePackageNames;
         assert elem "iptables" basePackageNames;
-        assert elem "api.anthropic.com" baseAllowlist;
-        assert elem "github.com" baseAllowlist;
-        assert elem "cache.nixos.org" baseAllowlist;
-        assert elem "crates.io" rustAllowlist;
-        assert elem "static.crates.io" rustAllowlist;
-        assert elem "index.crates.io" rustAllowlist;
-        assert elem "pypi.org" pythonAllowlist;
-        assert elem "files.pythonhosted.org" pythonAllowlist;
+        assert elem {
+          host = "api.anthropic.com";
+          ports = [ 443 ];
+        } baseAllowlist;
+        assert elem {
+          host = "github.com";
+          ports = [
+            22
+            443
+          ];
+        } baseAllowlist;
+        assert elem {
+          host = "cache.nixos.org";
+          ports = [ 443 ];
+        } baseAllowlist;
+        assert elem {
+          host = "crates.io";
+          ports = [ 443 ];
+        } rustAllowlist;
+        assert elem {
+          host = "static.crates.io";
+          ports = [ 443 ];
+        } rustAllowlist;
+        assert elem {
+          host = "index.crates.io";
+          ports = [ 443 ];
+        } rustAllowlist;
+        assert elem {
+          host = "pypi.org";
+          ports = [ 443 ];
+        } pythonAllowlist;
+        assert elem {
+          host = "files.pythonhosted.org";
+          ports = [ 443 ];
+        } pythonAllowlist;
         true;
     in
     assert allowlistChecks;
@@ -684,7 +711,7 @@ in
         profile_config="$PWD/profile-config.json"
         mkdir -p "$workspace" "$home"
         cat > "$profile_config" <<'JSON'
-        {"schema":1,"system":"test","profile":{"name":"base","env":{},"mounts":[],"writable_dirs":[],"network_allowlist":["api.anthropic.com"]},"image":{"ref":"wrix-base:test","source":"/nix/store/fake-image","source_kind":"${
+        {"schema":1,"system":"test","profile":{"name":"base","env":{},"mounts":[],"writable_dirs":[],"network_allowlist":[{"host":"api.anthropic.com","ports":[443]}]},"image":{"ref":"wrix-base:test","source":"/nix/store/fake-image","source_kind":"${
           if isLinux then "nix-descriptor" else "docker-archive"
         }","digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"},"agent":{"kind":"direct"},"resources":{"cpus":null,"memory_mb":4096,"pids_limit":4096},"security":{"deploy_key":null},"network":{"default_mode":"open","ipv6":"disabled"},"services":{"beads":{"enable":"auto"},"nix_cache":{"enable":false}},"features":{"mcp_runtime":false}}
         JSON

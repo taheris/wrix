@@ -142,11 +142,27 @@ let
 
   # Base network allowlist for WRIX_NETWORK=limit mode
   # These domains are always permitted regardless of profile
+  validateNetworkRules = import ./network-rules.nix;
   baseNetworkAllowlist = [
-    "api.anthropic.com" # Claude API
-    "cache.nixos.org" # Nix binary cache
-    "github.com" # git operations
-    "ssh.github.com" # git SSH (port 443 fallback)
+    {
+      host = "api.anthropic.com";
+      ports = [ 443 ];
+    }
+    {
+      host = "cache.nixos.org";
+      ports = [ 443 ];
+    }
+    {
+      host = "github.com";
+      ports = [
+        22
+        443
+      ];
+    }
+    {
+      host = "ssh.github.com";
+      ports = [ 443 ];
+    }
   ];
 
   # Construct a profile with separate image and host package/environment surfaces.
@@ -179,7 +195,7 @@ let
       hostEnv = baseEnv // hostEnv;
       runtimeSecrets = baseRuntimeSecrets // runtimeSecrets;
       mounts = baseMounts ++ mounts;
-      networkAllowlist = baseNetworkAllowlist ++ networkAllowlist;
+      networkAllowlist = validateNetworkRules (baseNetworkAllowlist ++ networkAllowlist);
     };
 
   # Two fenix package sets so the rust profile can serve both the image (always
@@ -384,9 +400,18 @@ let
       ];
 
       networkAllowlist = [
-        "crates.io"
-        "static.crates.io"
-        "index.crates.io"
+        {
+          host = "crates.io";
+          ports = [ 443 ];
+        }
+        {
+          host = "static.crates.io";
+          ports = [ 443 ];
+        }
+        {
+          host = "index.crates.io";
+          ports = [ 443 ];
+        }
       ];
 
       # Linux tmpfs parents stay writable when optional cache mounts are absent.
@@ -481,8 +506,14 @@ in
     ];
 
     networkAllowlist = [
-      "pypi.org"
-      "files.pythonhosted.org"
+      {
+        host = "pypi.org";
+        ports = [ 443 ];
+      }
+      {
+        host = "files.pythonhosted.org";
+        ports = [ 443 ];
+      }
     ];
   };
 }

@@ -204,7 +204,7 @@ revocation mechanism.
 - Wrix-owned network rules use structured `host`/`ports` objects; bare strings,
   unknown rule fields and missing, empty or invalid ports fail before service
   preparation or container startup.
-  [test?](../crates/wrix-cli/tests/proxy_policy.rs::missing_empty_or_invalid_ports_fail_before_preparation)
+  [test](../crates/wrix-cli/tests/proxy_policy.rs::missing_empty_or_invalid_ports_fail_before_preparation)
 - Authenticated HTTP and CONNECT requests are admitted only for explicitly
   listed host/port pairs under the selected immutable launch policy, without
   implied ports, unioning other workspace permissions or trusting source IP.

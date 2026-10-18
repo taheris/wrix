@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fmt, fs, io, path::Path};
+use std::{collections::BTreeMap, fmt, fs, io, num::NonZeroU16, path::Path};
 
 use displaydoc::Display;
 use serde::{Deserialize, Deserializer, Serialize, de};
@@ -114,7 +114,57 @@ pub struct Profile {
     #[serde(default)]
     pub writable_dirs: Vec<String>,
     #[serde(default)]
-    pub network_allowlist: Vec<String>,
+    pub network_allowlist: Vec<NetworkRule>,
+}
+
+/// One explicitly admitted host and its TCP destination ports.
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(try_from = "RawNetworkRule")]
+pub struct NetworkRule {
+    host: String,
+    ports: Vec<NonZeroU16>,
+}
+
+impl NetworkRule {
+    pub fn host(&self) -> &str {
+        &self.host
+    }
+
+    pub fn ports(&self) -> &[NonZeroU16] {
+        &self.ports
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawNetworkRule {
+    host: String,
+    ports: Vec<NonZeroU16>,
+}
+
+#[derive(Debug, Error, Display)]
+pub enum NetworkRuleParseError {
+    /// network rule requires a nonempty host
+    EmptyHost,
+    /// network rule requires explicit TCP ports
+    EmptyPorts,
+}
+
+impl TryFrom<RawNetworkRule> for NetworkRule {
+    type Error = NetworkRuleParseError;
+
+    fn try_from(raw: RawNetworkRule) -> Result<Self, Self::Error> {
+        if raw.host.is_empty() {
+            return Err(NetworkRuleParseError::EmptyHost);
+        }
+        if raw.ports.is_empty() {
+            return Err(NetworkRuleParseError::EmptyPorts);
+        }
+        Ok(Self {
+            host: raw.host,
+            ports: raw.ports,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -695,7 +745,7 @@ struct RawProfile {
     #[serde(default)]
     writable_dirs: Vec<String>,
     #[serde(default)]
-    network_allowlist: Vec<String>,
+    network_allowlist: Vec<NetworkRule>,
 }
 
 #[derive(Debug, Default, Deserialize)]

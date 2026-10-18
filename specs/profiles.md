@@ -880,13 +880,13 @@ without introducing a reciprocal flake dependency.
 - Base, derived and project-pinned profile constructors accept structured
   `{ host, ports }` rules and reject bare strings, shorthand, unknown fields,
   empty hosts and missing/empty/non-integer/out-of-range ports.
-  [check?](verify:profiles.network-rule-contract)
+  [check](verify:profiles.network-rule-contract)
 - Built-in base/Rust/Python rules contain exactly the documented hosts and
   explicit ports, with no implicit web/SSH or all-port permissions.
-  [check?](verify:profiles.builtin-network-ports)
+  [check](verify:profiles.builtin-network-ports)
 - Nested derivation and Rust constructor extensions preserve structured rules
   through list concatenation without adding unlisted host/port permissions.
-  [check?](verify:profiles.network-rule-extension)
+  [check](verify:profiles.network-rule-extension)
 
 ## Requirements
 

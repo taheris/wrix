@@ -112,6 +112,7 @@ fn documented_spawn_config_fields_render_into_launch_plan() -> TestResult {
         "STDIO=1",
         "PROFILE_AGENT=direct",
         "ENV=WRIX_AGENT=direct",
+        "ENV=WRIX_NETWORK_ALLOWLIST=[{\"host\":\"example.org\",\"ports\":[443]}]",
         "IMAGE_OVERRIDE_REF=wrix-override:test",
         "IMAGE_OVERRIDE_SOURCE=/nix/store/fake-override",
         "ENV=FOO=bar",
