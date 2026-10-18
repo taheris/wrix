@@ -76,6 +76,8 @@ let
         nativeBuildInputs = [ pkgs.makeWrapper ];
       }
       ''
+        set -euo pipefail
+
         mkdir -p "$out/bin"
         makeWrapper "${workspace.bin}/bin/wrix-host-controller" "$out/bin/wrix-host-controller" \
           --prefix PATH : "${controllerRuntime}/bin"

@@ -20,6 +20,8 @@ let
   '';
   rustProfile.buildPackage = _: {
     bin = pkgs.runCommand "controller-package-fixture" { } ''
+      set -euo pipefail
+
       mkdir -p "$out/bin"
       ln -s '${binary}/bin/wrix' "$out/bin/wrix"
       ln -s '${binary}/bin/wrix' "$out/bin/wrix-host-controller"
