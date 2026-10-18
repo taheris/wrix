@@ -454,10 +454,20 @@ fn native_cargo_workers_share_locks_tracking_and_git_data_not_configuration() ->
             .contains("Blocking waiting for file lock")
     });
     FileExt::unlock(&download_lock)?;
-    std::thread::sleep(Duration::from_millis(100));
-    let mutate_blocked = workers
-        .iter_mut()
-        .all(|(child, _, _)| child.try_wait().unwrap().is_none());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !workers.iter().all(|(_, _, log)| {
+        fs::read_to_string(log)
+            .unwrap()
+            .contains("shared package cache")
+    }) && Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let mutate_blocked = workers.iter().all(|(_, _, log)| {
+        fs::read_to_string(log)
+            .unwrap()
+            .contains("shared package cache")
+    });
     FileExt::unlock(&mutate_lock)?;
     for (index, (child, project, log)) in workers.iter_mut().enumerate() {
         assert!(child.wait()?.success(), "{}", fs::read_to_string(log)?);
