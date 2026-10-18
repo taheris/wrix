@@ -1181,7 +1181,7 @@ rootfs symlink. [check](nix build
 - Both dry-run renderings report the shared resolver's effective tool-cache mode
   for run/spawn without creating, reading prewarms into or populating cache
   data.
-  [test?](../crates/wrix-cli/tests/preflight.rs::preview_reports_effective_tool_cache_mode_without_preparation)
+  [test](../crates/wrix-cli/tests/preflight.rs::preview_reports_effective_tool_cache_mode_without_preparation)
 
 - Restricted Rust with resolved shared mode fails before preparation in
   run/spawn; effective private mode remains valid with Nix/Celler enabled, and
@@ -1190,7 +1190,7 @@ rootfs symlink. [check](nix build
 - Both preflight renderings retain the resolvable plan and explain the
   restricted Rust/private-cache conflict as a nonzero blocker without starting
   services, staging credentials or allocating compiler/cache views.
-  [test?](../crates/wrix-cli/tests/preflight.rs::restricted_rust_cache_conflict_is_read_only_and_actionable)
+  [test](../crates/wrix-cli/tests/preflight.rs::restricted_rust_cache_conflict_is_read_only_and_actionable)
 
 ### Strict Configuration Acceptance
 
@@ -1246,35 +1246,35 @@ rootfs symlink. [check](nix build
 - Default human-readable and explicit `--dry-run --json` output describe the
   same plan and findings; JSON includes a schema version and stable finding
   codes and is not mixed with probe output, including on readiness failure.
-  [test?](../crates/wrix-cli/tests/preflight.rs::dry_run_renderings_share_a_versioned_report)
+  [test](../crates/wrix-cli/tests/preflight.rs::dry_run_renderings_share_a_versioned_report)
 - `--json` requires `--dry-run` in the launcher-option position and obeys the
   existing boundary for forwarded agent arguments; it does not select agent
   stdio behavior.
-  [test?](../crates/wrix-cli/tests/preflight.rs::dry_run_json_is_only_a_preview_rendering_option)
+  [test](../crates/wrix-cli/tests/preflight.rs::dry_run_json_is_only_a_preview_rendering_option)
 - Both renderings, findings and inspection diagnostics omit environment values,
   agent argument contents, opaque consumer payloads and credential contents,
   including when invalid inputs or probe failures are reported.
-  [test?](../crates/wrix-cli/tests/preflight.rs::dry_run_summaries_do_not_dump_sensitive_inputs)
+  [test](../crates/wrix-cli/tests/preflight.rs::dry_run_summaries_do_not_dump_sensitive_inputs)
 - Production `run` recognizes `--dry-run` only in its launcher-option prefix,
   preserves occurrences in agent arguments, and `spawn` accepts it with
   `--spawn-config` and `--stdio` without executing the agent.
-  [test?](../crates/wrix-cli/tests/preflight.rs::dry_run_parses_explicit_launch_options)
+  [test](../crates/wrix-cli/tests/preflight.rs::dry_run_parses_explicit_launch_options)
 - Retired dry-run environment variables neither select inspection nor reject an
   invocation, and the service-binary override cannot redirect service dispatch.
-  [test?](../crates/wrix-cli/tests/preflight.rs::dry_run_ignores_retired_environment_switches)
+  [test](../crates/wrix-cli/tests/preflight.rs::dry_run_ignores_retired_environment_switches)
 - Inspection and launch resolve the same profile, image, agent, mount intents,
   network policy, resources and independent Git grants from the same inputs,
   including repository-policy and invocation-override precedence.
-  [test?](../crates/wrix-cli/tests/preflight.rs::dry_run_reports_launch_policy_and_provenance)
+  [test](../crates/wrix-cli/tests/preflight.rs::dry_run_reports_launch_policy_and_provenance)
 - Credential inspection reports names, selected sources and availability without
   reading credential-file contents or disclosing built-in or declared
   runtime-secret values.
-  [test?](../crates/wrix-cli/tests/preflight.rs::dry_run_reports_credential_availability_without_values)
+  [test](../crates/wrix-cli/tests/preflight.rs::dry_run_reports_credential_availability_without_values)
 - Both inspection modes leave auth storage, private keys, mount contents,
   workspace records and host configuration unchanged, create no staging
   directories, and invoke no service/container start or stop, image installation
   or retention update.
-  [test?](../crates/wrix-cli/tests/preflight.rs::dry_run_is_read_only)
+  [test](../crates/wrix-cli/tests/preflight.rs::dry_run_is_read_only)
 - Readiness inspects the selected runtime and applicable required mount and
   credential sources without provisioning them, and reports detected blockers.
   [test?](../crates/wrix-cli/tests/preflight.rs::dry_run_checks_selected_launch_prerequisites)

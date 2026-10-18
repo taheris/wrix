@@ -553,11 +553,11 @@ section is a reference index only.
 - Production `run --dry-run` human and JSON reports identify built-in provider
   credential names without exposing their environment values in reports or
   diagnostics.
-  [test?](../crates/wrix-cli/tests/preflight.rs::dry_run_redacts_builtin_provider_credentials)
+  [test](../crates/wrix-cli/tests/preflight.rs::dry_run_redacts_builtin_provider_credentials)
 - Production `run --dry-run` resolves a custom `runtimeSecrets` declaration from
   the host environment and reports its name/availability without exposing its
   value in either rendering or diagnostics.
-  [test?](../crates/wrix-cli/tests/preflight.rs::dry_run_redacts_custom_runtime_secrets)
+  [test](../crates/wrix-cli/tests/preflight.rs::dry_run_redacts_custom_runtime_secrets)
 - A missing `"required"` runtime-secret source fails before the container starts
   [test](../crates/wrix-sandbox/tests/launch.rs::required_runtime_secret_fails_before_container_start)
 - `profile.env`, `profile.hostEnv`, `mkSandbox.env`, and agent-settings env
@@ -571,7 +571,7 @@ section is a reference index only.
 - Production `spawn --dry-run` recognizes a declared runtime secret supplied
   through `SpawnConfig.env` as satisfying required-source policy without
   exposing its value in human/JSON reports or diagnostics.
-  [test?](../crates/wrix-cli/tests/preflight.rs::spawn_dry_run_redacts_declared_secret_overrides)
+  [test](../crates/wrix-cli/tests/preflight.rs::spawn_dry_run_redacts_declared_secret_overrides)
 - Both platforms expose only durable Pi credential storage, preserve completed
   writes before exit, share refreshes across overlapping containers and
   repositories, and retain credentials after killed launchers and restarts.
