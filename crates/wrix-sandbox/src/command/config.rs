@@ -793,8 +793,6 @@ enum System {
     ArmLinux,
     #[serde(rename = "aarch64-darwin")]
     ArmDarwin,
-    #[serde(rename = "x86_64-darwin")]
-    X86Darwin,
 }
 
 #[derive(Debug, Deserialize)]
