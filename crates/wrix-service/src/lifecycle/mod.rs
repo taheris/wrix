@@ -27,8 +27,8 @@ use wrix_core::{
     path::{ContainerName, Workspace, WorkspaceHash},
 };
 use wrix_sandbox::image::{
-    self as runtime_image, CommandStore, Digest, ImageRef, InstallRequest, RetentionRequest,
-    Runtime as ImageRuntime, Source, SourceKind,
+    self as runtime_image, CommandStore, Digest, ImageRef, InstallRequest, Runtime as ImageRuntime,
+    Source, SourceKind,
 };
 
 const SCHEMA_VERSION: u8 = 1;
@@ -1520,17 +1520,6 @@ impl Runtime {
         runtime_image::install(
             &mut store,
             &InstallRequest::new(runtime, &self.image, &source.source, source.digest.as_ref())?,
-        )?;
-        let mru_path = runtime_image::default_mru_path();
-        runtime_image::remember_and_prune(
-            &mut store,
-            &RetentionRequest {
-                runtime,
-                image_ref: &self.image,
-                source: Some(&source.source),
-                digest: source.digest.as_ref(),
-                mru_path: &mru_path,
-            },
         )?;
         if self.image_exists()? {
             Ok(())

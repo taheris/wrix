@@ -383,51 +383,12 @@ test_linux_delta_bounded_uses_descriptor_transport() {
   printf 'PASS: live Rust delta install path uses descriptor transport for changed images\n'
 }
 
-test_linux_image_retention_cleanup_live_path() {
-  require_linux
-  local tmp wrix workspace descriptor layout profile_config digest first_ref
-  tmp=$(mktemp -d -t wrix-live.XXXXXX)
-  register_tmp "$tmp"
-  setup_fake_runtime "$tmp"
-  wrix=$(wrix_bin)
-  workspace="$tmp/workspace"
-  descriptor="$tmp/descriptor.json"
-  layout="$tmp/oci-layout"
-  profile_config="$tmp/profile.json"
-  digest="sha256:1212121212121212121212121212121212121212121212121212121212121212"
-  write_descriptor "$descriptor" "$layout" "$digest"
-  write_profile_config "$profile_config" "$workspace" "$descriptor" "$digest"
-  cat >"$tmp/state/image-mru.json" <<'JSON'
-[{"ref":"localhost/wrix-recent:old","id":"recent-id"}]
-JSON
-  cat >"$tmp/state/images-list" <<'IMAGES'
-localhost/wrix-live test live-id
-localhost/wrix-recent old recent-id
-localhost/wrix-stale old stale-id
-docker.io/library/ubuntu latest user-id
-IMAGES
-
-  run_live_run "$tmp" "$profile_config" "$workspace" "$digest" "$wrix"
-
-  first_ref=$(jq -r '.[0].ref' "$tmp/state/image-mru.json")
-  [[ "$first_ref" = "localhost/wrix-live:test" ]] || fail "MRU did not record the live launcher image first"
-  grep -qFx -- 'localhost/wrix-stale:old' "$tmp/state/rmi.log" || fail "stale wrix image was not pruned"
-  if grep -qFx -- 'localhost/wrix-recent:old' "$tmp/state/rmi.log"; then
-    fail "recent MRU image was pruned"
-  fi
-  if grep -qFx -- 'docker.io/library/ubuntu:latest' "$tmp/state/rmi.log"; then
-    fail "non-wrix user image was pruned"
-  fi
-  printf 'PASS: live Rust launcher records MRU and prunes stale wrix images\n'
-}
-
 if [[ $# -eq 0 ]]; then
   test_linux_custom_mounts_env_reach_live_launcher
   test_linux_checks_private_nix_without_uid_spoofing
   test_linux_archiveless_install_uses_oci_layout
   test_linux_second_spawn_skips_loaded_image
   test_linux_delta_bounded_uses_descriptor_transport
-  test_linux_image_retention_cleanup_live_path
 else
   "$1"
 fi

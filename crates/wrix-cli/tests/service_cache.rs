@@ -269,7 +269,7 @@ fn service_startup_uses_builtin_legacy_pruning_interval() -> TestResult {
 }
 
 #[test]
-fn service_start_uses_shared_image_digest_preflight_and_retention() -> TestResult {
+fn service_start_uses_shared_image_digest_preflight_without_pruning() -> TestResult {
     for (runtime, kind) in [
         ("podman", "nix-descriptor"),
         ("container", "docker-archive"),
@@ -317,10 +317,13 @@ fn service_start_uses_shared_image_digest_preflight_and_retention() -> TestResul
                 };
                 assert!(args.contains(&source_arg.as_str()));
             }
-            let records: Value =
-                serde_json::from_slice(&fs::read(fixture.root.path().join("mru.json"))?)?;
-            assert_eq!(records[0]["ref"], "wrix-service:test");
-            assert_eq!(records[0]["digest"], digest);
+            assert!(!fixture.root.path().join("mru.json").exists());
+            assert!(!args.contains(&"images"));
+            assert!(!args.contains(&"rmi"));
+            assert_eq!(
+                args.iter().filter(|arg| **arg == "delete").count(),
+                usize::from(!installed && runtime == "container")
+            );
             let args = fs::read(fixture.root.path().join("run.argv"))?;
             assert!(
                 args.split(|byte| *byte == 0)

@@ -783,7 +783,7 @@ tenant or component compromise/fault isolation.
 - `wrix service start` delegates image installation/digest reuse to the shared
   installer using `image-builder.md` source metadata without broad image
   pruning, MRU-eight eviction or a separate service-specific installer
-  [test?](../crates/wrix-cli/tests/service_cache.rs::service_start_uses_shared_image_digest_preflight_without_pruning)
+  [test](../crates/wrix-cli/tests/service_cache.rs::service_start_uses_shared_image_digest_preflight_without_pruning)
 
 - Cache-only service startup is suppressed for temp-directory scratch
   workspaces, so tests and integration runs do not create infrastructure solely

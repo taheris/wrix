@@ -2,6 +2,7 @@
 set -euo pipefail
 
 runtime="${0##*/}"
+printf '%s\n' "$*" >>"${WRIX_TEST_ARGV:?}.calls"
 case "${1:-} ${2:-}" in
   '-n get')
     [[ "$runtime" == route && "$#" == 3 && "$3" == default ]] || exit 91

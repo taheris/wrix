@@ -1087,10 +1087,10 @@ rootfs symlink. [check](nix build
   [test](../crates/wrix-sandbox/tests/image_install.rs::already_loaded_image_performs_no_store_writes)
 - Run/spawn preserve digest reuse and necessary installation without broadly
   pruning cached images, including when more than eight images are present.
-  [test?](../crates/wrix-sandbox/tests/image_gc.rs::launch_installation_does_not_prune_cached_images)
+  [test](../crates/wrix-sandbox/tests/image_gc.rs::launch_installation_does_not_prune_cached_images)
 - Image information is read-only: it does not install/prune images or write
   usage/retention bookkeeping.
-  [test?](../crates/wrix-sandbox/tests/image_gc.rs::image_inventory_is_read_only)
+  [test](../crates/wrix-sandbox/tests/image_gc.rs::image_inventory_is_read_only)
 - Runtime listings parse into typed store targets
   [test](../crates/wrix-sandbox/src/image.rs::podman_rows_parse_typed_references_ids_and_absent_fields)
 - Explicit image collection preserves existing-container references and

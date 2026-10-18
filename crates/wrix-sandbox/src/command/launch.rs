@@ -27,9 +27,7 @@ use wrix_core::{
     repository_policy,
 };
 
-use crate::image::{
-    self, CommandStore, Digest, ImageRef, InstallRequest, RetentionRequest, Runtime, Source,
-};
+use crate::image::{self, CommandStore, Digest, ImageRef, InstallRequest, Runtime, Source};
 
 use super::config::{
     AgentKind, EnvName, GitGrants, MountMode, NetworkMode, Platform, ProfileConfig, ProfileMount,
@@ -1000,7 +998,6 @@ impl<'a> Plan<'a> {
         observed_status: &mut Option<ExitStatus>,
     ) -> Result<ExitCode, LaunchError> {
         self.install_image(Runtime::Podman)?;
-        self.remember_and_prune_images(Runtime::Podman)?;
         Staging::with(|staging| {
             let mut volumes = self.linux_volumes(staging, services)?;
             let credentials = self.credentials(staging)?;
@@ -1115,7 +1112,6 @@ impl<'a> Plan<'a> {
     ) -> Result<ExitCode, LaunchError> {
         let vpn_conflict = fix_darwin_vmnet_route()?;
         self.install_image(Runtime::Container)?;
-        self.remember_and_prune_images(Runtime::Container)?;
         Staging::with(|staging| {
             let credentials = self.credentials(staging)?;
             let pi_auth = self.pi_auth()?;
@@ -1286,22 +1282,6 @@ impl<'a> Plan<'a> {
             )?,
         )?;
         image::require_private_nix(runtime, &self.image_ref)?;
-        Ok(())
-    }
-
-    fn remember_and_prune_images(&self, runtime: Runtime) -> Result<(), LaunchError> {
-        let mru_path = image::default_mru_path();
-        let mut store = CommandStore;
-        image::remember_and_prune(
-            &mut store,
-            &RetentionRequest {
-                runtime,
-                image_ref: &self.image_ref,
-                source: Some(&self.image_source),
-                digest: self.image_digest.as_ref(),
-                mru_path: &mru_path,
-            },
-        )?;
         Ok(())
     }
 

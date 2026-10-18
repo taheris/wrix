@@ -1,12 +1,10 @@
 use std::{
-    collections::BTreeSet,
     env, fs, io,
     path::{Path, PathBuf},
     process::{Command as ProcessCommand, Output, Stdio},
 };
 
 use displaydoc::Display;
-use fs2::FileExt;
 use serde::{Deserialize, Deserializer, Serialize, de};
 use serde_json::Value;
 use thiserror::Error;
@@ -341,15 +339,6 @@ impl<'a> InstallRequest<'a> {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct RetentionRequest<'a> {
-    pub runtime: Runtime,
-    pub image_ref: &'a ImageRef,
-    pub source: Option<&'a Source>,
-    pub digest: Option<&'a Digest>,
-    pub mru_path: &'a Path,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OciSource {
     pub digest: Digest,
@@ -363,29 +352,6 @@ pub struct Layer {
     pub digest: Digest,
     #[serde(default)]
     pub size: u64,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-pub struct Record {
-    #[serde(
-        default,
-        rename = "ref",
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "deserialize_optional_image_ref"
-    )]
-    pub ref_name: Option<ImageRef>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "deserialize_optional_digest"
-    )]
-    pub digest: Option<Digest>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "deserialize_optional_image_id"
-    )]
-    pub id: Option<ImageId>,
 }
 
 #[expect(
@@ -412,8 +378,8 @@ pub enum Error {
     },
     /// invalid image descriptor JSON: {source}
     DescriptorJson { source: serde_json::Error },
-    /// invalid image MRU JSON: {source}
-    MruJson { source: serde_json::Error },
+    /// runtime image metadata has an unsupported shape
+    InvalidMetadata,
     /// {source}
     Digest { source: DigestParseError },
     /// {source}
@@ -511,42 +477,6 @@ pub fn install(store: &mut impl Store, request: &InstallRequest<'_>) -> Result<(
     Ok(())
 }
 
-pub fn remember_and_prune(
-    store: &mut impl Store,
-    request: &RetentionRequest<'_>,
-) -> Result<(), Error> {
-    let digest = request
-        .source
-        .map(|source| desired_digest(store, source, request.digest))
-        .transpose()?
-        .or_else(|| request.digest.cloned());
-    with_mru_lock(request.mru_path, || {
-        remember(
-            store,
-            request.runtime,
-            request.mru_path,
-            request.image_ref,
-            digest.as_ref(),
-        )?;
-        prune(
-            store,
-            request.runtime,
-            request.mru_path,
-            request.image_ref,
-            digest.as_ref(),
-        )
-    })
-}
-
-pub fn default_mru_path() -> PathBuf {
-    if let Some(path) = env::var_os("WRIX_IMAGE_KEEP_FILE") {
-        return PathBuf::from(path);
-    }
-    env::var_os("XDG_CACHE_HOME")
-        .map_or_else(|| home_dir().join(".cache"), PathBuf::from)
-        .join("wrix/image-mru.json")
-}
-
 fn desired_digest(
     store: &mut impl Store,
     source: &Source,
@@ -569,118 +499,6 @@ fn desired_digest(
                 path: source.path().display().to_string(),
             }),
     }
-}
-
-fn remember(
-    store: &mut impl Store,
-    runtime: Runtime,
-    path: &Path,
-    image_ref: &ImageRef,
-    digest: Option<&Digest>,
-) -> Result<(), Error> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let id = store.image_id(runtime, &Target::Reference(image_ref.clone()))?;
-    let mut records = read_records(path)?;
-    records.insert(
-        0,
-        Record {
-            ref_name: Some(image_ref.clone()),
-            digest: digest.cloned(),
-            id,
-        },
-    );
-    let mut seen = BTreeSet::new();
-    let records = records
-        .into_iter()
-        .filter(|record| seen.insert(record.clone()))
-        .take(8)
-        .collect::<Vec<_>>();
-    let json =
-        serde_json::to_string_pretty(&records).map_err(|source| Error::MruJson { source })?;
-    let temporary = path.with_extension(format!("mru-{}.tmp", std::process::id()));
-    fs::write(&temporary, format!("{json}\n"))?;
-    fs::rename(temporary, path)?;
-    Ok(())
-}
-
-fn prune(
-    store: &mut impl Store,
-    runtime: Runtime,
-    mru_path: &Path,
-    image_ref: &ImageRef,
-    digest: Option<&Digest>,
-) -> Result<(), Error> {
-    let mut keep_refs = BTreeSet::new();
-    let mut keep_ids = BTreeSet::new();
-    let mut keep_digests = BTreeSet::new();
-    keep_refs.insert(image_ref.clone());
-    let target = Target::Reference(image_ref.clone());
-    if let Some(digest) = digest {
-        keep_digests.insert(digest.clone());
-    }
-    if let Some(id) = store.image_id(runtime, &target)? {
-        keep_ids.insert(id);
-    }
-    if let Some(actual_digest) = store.image_digest(runtime, &target)? {
-        keep_digests.insert(actual_digest);
-    }
-    for record in read_records(mru_path)? {
-        if let Some(ref_name) = record.ref_name {
-            keep_refs.insert(ref_name);
-        }
-        if let Some(id) = record.id {
-            keep_ids.insert(id);
-        }
-        if let Some(digest) = record.digest {
-            keep_digests.insert(digest);
-        }
-    }
-    for image in list_images(store, runtime)? {
-        if !image.managed && !image.legacy {
-            continue;
-        }
-        if image
-            .ref_name
-            .as_ref()
-            .is_some_and(|ref_name| keep_refs.contains(ref_name))
-            || keep_ids.contains(&image.id)
-            || image
-                .digest
-                .as_ref()
-                .is_some_and(|digest| keep_digests.contains(digest))
-        {
-            continue;
-        }
-        if store.image_in_use(runtime, &image.target)? {
-            continue;
-        }
-        if let Err(error) = store.delete_image(runtime, &image.target) {
-            tracing::warn!(
-                ?runtime,
-                image_target = image.target.as_str(),
-                error = %error,
-                "could not prune stale image"
-            );
-        }
-    }
-    Ok(())
-}
-
-fn with_mru_lock<T>(path: &Path, operation: impl FnOnce() -> Result<T, Error>) -> Result<T, Error> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let lock_path = path.with_extension("lock");
-    let lock = fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(lock_path)?;
-    FileExt::lock_exclusive(&lock)?;
-    operation()
 }
 
 #[derive(Debug, Deserialize)]
@@ -714,13 +532,14 @@ impl Descriptor {
     }
 }
 
-struct ListedImage {
-    ref_name: Option<ImageRef>,
-    target: Target,
-    id: ImageId,
-    digest: Option<Digest>,
-    managed: bool,
-    legacy: bool,
+/// Passive runtime-store metadata; not authorization to remove an image.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Inspection {
+    pub target: Target,
+    pub id: ImageId,
+    pub digest: Option<Digest>,
+    pub managed: bool,
+    pub in_use: bool,
 }
 
 fn read_descriptor(path: &Path) -> Result<Descriptor, Error> {
@@ -728,57 +547,34 @@ fn read_descriptor(path: &Path) -> Result<Descriptor, Error> {
     serde_json::from_str(&content).map_err(|source| Error::DescriptorJson { source })
 }
 
-fn read_records(path: &Path) -> Result<Vec<Record>, Error> {
-    if !path.is_file() {
-        return Ok(Vec::new());
-    }
-    let content = fs::read_to_string(path)?;
-    match serde_json::from_str::<Vec<Record>>(&content) {
-        Ok(records) => Ok(records),
-        Err(source) => {
-            tracing::warn!(
-                mru_path = %path.display(),
-                error = %source,
-                "resetting invalid image MRU"
-            );
-            Ok(Vec::new())
-        }
-    }
+/// Inspect the host user's shared runtime store without preparing services or images.
+pub fn inventory(store: &mut impl Store, runtime: Runtime) -> Result<Vec<Inspection>, Error> {
+    store
+        .image_rows(runtime)?
+        .into_iter()
+        .map(|row| inspect(store, runtime, &row.target))
+        .collect()
 }
 
-fn list_images(store: &mut impl Store, runtime: Runtime) -> Result<Vec<ListedImage>, Error> {
-    let mut images = Vec::new();
-    for ImageRow {
-        target,
-        id: listed_id,
-    } in store.image_rows(runtime)?
-    {
-        let ref_name = match &target {
-            Target::Reference(value) => Some(value.clone()),
-            _ => None,
-        };
-        let id = store
-            .image_id(runtime, &target)?
-            .or(listed_id)
-            .ok_or_else(|| Error::MissingImageId {
-                target: target.as_str().to_owned(),
-            })?;
-        let digest = store.image_digest(runtime, &target)?;
-        let managed = store.image_managed(runtime, &target)?;
-        let legacy = runtime == Runtime::Podman
-            && ref_name
-                .as_ref()
-                .is_some_and(|name| name.as_str().starts_with("localhost/wrix-"));
-        images.push(ListedImage {
-            ref_name,
-            target,
-            id,
-            digest,
-            managed,
-            legacy,
-        });
-    }
-    Ok(images)
+/// Require current identity, ownership and container-reference evidence.
+pub fn inspect(
+    store: &mut impl Store,
+    runtime: Runtime,
+    target: &Target,
+) -> Result<Inspection, Error> {
+    let id = store
+        .image_id(runtime, target)?
+        .ok_or_else(|| Error::MissingImageId {
+            target: target.as_str().to_owned(),
+        })?;
+    let identity = Target::Id(id.clone());
+    Ok(Inspection {
+        target: target.clone(),
+        digest: store.image_digest(runtime, &identity)?,
+        managed: store.image_managed(runtime, &identity)?,
+        in_use: store.image_in_use(runtime, &identity)?,
+        id,
+    })
 }
 
 fn image_row_from_line(runtime: Runtime, line: &str) -> Result<Option<ImageRow>, Error> {
@@ -808,39 +604,6 @@ fn image_row_from_line(runtime: Runtime, line: &str) -> Result<Option<ImageRow>,
         .map(Target::Reference)
         .or_else(|| id.clone().map(Target::Id))
         .map(|target| ImageRow { target, id }))
-}
-
-fn deserialize_optional_image_ref<'de, D>(deserializer: D) -> Result<Option<ImageRef>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value = Option::<String>::deserialize(deserializer)?;
-    value
-        .and_then(|value| normalized_value(&value))
-        .map(|value| ImageRef::parse(&value).map_err(de::Error::custom))
-        .transpose()
-}
-
-fn deserialize_optional_digest<'de, D>(deserializer: D) -> Result<Option<Digest>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value = Option::<String>::deserialize(deserializer)?;
-    value
-        .and_then(|value| normalized_value(&value))
-        .map(|value| Digest::parse(&value).map_err(de::Error::custom))
-        .transpose()
-}
-
-fn deserialize_optional_image_id<'de, D>(deserializer: D) -> Result<Option<ImageId>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value = Option::<String>::deserialize(deserializer)?;
-    value
-        .and_then(|value| normalized_value(&value))
-        .map(|value| ImageId::parse(&value).map_err(de::Error::custom))
-        .transpose()
 }
 
 fn normalized_value(value: &str) -> Option<String> {
@@ -965,7 +728,12 @@ impl Store for CommandStore {
             Runtime::Podman => {
                 let output = run_required_output(
                     "podman",
-                    &["images", "--format", "{{.Repository}} {{.Tag}} {{.ID}}"],
+                    &[
+                        "images",
+                        "--no-trunc",
+                        "--format",
+                        "{{.Repository}} {{.Tag}} {{.ID}}",
+                    ],
                 )?;
                 String::from_utf8_lossy(&output.stdout)
                     .lines()
@@ -993,7 +761,9 @@ impl Store for CommandStore {
     }
 
     fn image_managed(&mut self, runtime: Runtime, target: &Target) -> Result<bool, Error> {
-        Ok(inspect_value(runtime, target, InspectField::Managed)?.as_deref() == Some("true"))
+        let managed = inspect_value(runtime, target, InspectField::Managed)?;
+        let kind = inspect_value(runtime, target, InspectField::Kind)?;
+        Ok(managed_ownership(managed.as_deref(), kind.as_deref()))
     }
 
     fn image_in_use(&mut self, runtime: Runtime, target: &Target) -> Result<bool, Error> {
@@ -1007,10 +777,17 @@ impl Store for CommandStore {
                 Ok(!trim_stdout(&output.stdout).is_empty())
             }
             Runtime::Container => {
-                let id = self.image_id(runtime, target)?;
+                let id = match target {
+                    Target::Id(id) => id.clone(),
+                    _ => self
+                        .image_id(runtime, target)?
+                        .ok_or_else(|| Error::MissingImageId {
+                            target: target.as_str().to_owned(),
+                        })?,
+                };
                 let output =
                     run_required_output("container", &["list", "--all", "--format", "json"])?;
-                container_image_in_use(&output.stdout, target, id.as_ref())
+                container_image_in_use(&output.stdout, target, Some(&id))
             }
         }
     }
@@ -1076,6 +853,7 @@ enum InspectField {
     Id,
     Digest,
     Managed,
+    Kind,
     PrivateNix,
 }
 
@@ -1091,6 +869,7 @@ fn inspect_value(
                 InspectField::Id => "{{.Id}}",
                 InspectField::Digest => "{{.Digest}}",
                 InspectField::Managed => "{{ index .Config.Labels \"wrix.managed\" }}",
+                InspectField::Kind => "{{ index .Config.Labels \"wrix.image.kind\" }}",
                 InspectField::PrivateNix => "{{ index .Config.Labels \"wrix.nix.private\" }}",
             };
             run_output("podman", &["image", "inspect", "--format", format, target])?
@@ -1098,7 +877,14 @@ fn inspect_value(
         Runtime::Container => run_output("container", &["image", "inspect", target])?,
     };
     if !output.status.success() {
-        return Ok(None);
+        return Err(Error::ProcessFailed {
+            program: match runtime {
+                Runtime::Podman => "podman",
+                Runtime::Container => "container",
+            }
+            .to_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        });
     }
     match runtime {
         Runtime::Podman => Ok(normalized_value(&trim_stdout(&output.stdout))),
@@ -1106,38 +892,55 @@ fn inspect_value(
     }
 }
 
+fn managed_ownership(managed: Option<&str>, kind: Option<&str>) -> bool {
+    managed == Some("true") && matches!(kind, Some("profile" | "service" | "builder"))
+}
+
 fn inspect_container_value(stdout: &[u8], field: InspectField) -> Result<Option<String>, Error> {
     let value = serde_json::from_slice::<Value>(stdout)
         .map_err(|source| Error::DescriptorJson { source })?;
-    let pointer = match field {
-        InspectField::Id => "/0/id",
-        InspectField::Digest => "/0/digest",
-        InspectField::Managed => "/0/labels/wrix.managed",
-        InspectField::PrivateNix => "/0/labels/wrix.nix.private",
-    };
-    let value = value.pointer(pointer).or_else(|| match field {
-        InspectField::Managed => value
-            .pointer("/0/Labels/wrix.managed")
-            .or_else(|| container_variant_label(&value, "wrix.managed")),
-        InspectField::PrivateNix => value
-            .pointer("/0/Labels/wrix.nix.private")
-            .or_else(|| container_variant_label(&value, "wrix.nix.private")),
-        _ => None,
-    });
-    Ok(value.and_then(Value::as_str).and_then(normalized_value))
+    match field {
+        InspectField::Id => Ok(value
+            .pointer("/0/id")
+            .and_then(Value::as_str)
+            .and_then(normalized_value)),
+        InspectField::Digest => {
+            Ok(container_content_digest(&value)?.map(|digest| digest.as_str().to_owned()))
+        }
+        InspectField::Managed => consistent_container_label(&value, "wrix.managed"),
+        InspectField::Kind => consistent_container_label(&value, "wrix.image.kind"),
+        InspectField::PrivateNix => consistent_container_label(&value, "wrix.nix.private"),
+    }
 }
 
-fn container_variant_label<'a>(image: &'a Value, label: &str) -> Option<&'a Value> {
-    image
-        .pointer("/0/variants")?
-        .as_array()?
+fn consistent_container_label(image: &Value, label: &str) -> Result<Option<String>, Error> {
+    let images = image.as_array().ok_or(Error::InvalidMetadata)?;
+    let [image] = images.as_slice() else {
+        return Err(Error::InvalidMetadata);
+    };
+    let mut labels = Vec::new();
+    for name in ["labels", "Labels"] {
+        if let Some(map) = image.get(name) {
+            labels.push(map.get(label).and_then(Value::as_str));
+        }
+    }
+    if let Some(variants) = image.get("variants") {
+        for variant in variants.as_array().ok_or(Error::InvalidMetadata)? {
+            labels.push(
+                variant
+                    .pointer("/config/config/Labels")
+                    .and_then(|map| map.get(label))
+                    .and_then(Value::as_str),
+            );
+        }
+    }
+    let Some(Some(first)) = labels.first() else {
+        return Ok(None);
+    };
+    Ok(labels
         .iter()
-        .find_map(|variant| {
-            variant
-                .pointer("/config/config/Labels")?
-                .as_object()?
-                .get(label)
-        })
+        .all(|value| *value == Some(*first))
+        .then(|| (*first).to_owned()))
 }
 
 fn container_image_rows(stdout: &[u8]) -> Result<Vec<ImageRow>, Error> {
@@ -1145,9 +948,9 @@ fn container_image_rows(stdout: &[u8]) -> Result<Vec<ImageRow>, Error> {
         .map_err(|source| Error::DescriptorJson { source })?;
     value
         .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|image| container_image_row(image).transpose())
+        .ok_or(Error::InvalidMetadata)?
+        .iter()
+        .map(|image| container_image_row(image)?.ok_or(Error::InvalidMetadata))
         .collect()
 }
 
@@ -1180,7 +983,9 @@ fn container_image_in_use(
     let target = target.as_str();
     let target = target.strip_prefix("docker.io/library/").unwrap_or(target);
     let id = id.map(|value| value.as_str().trim_start_matches("sha256:"));
-    Ok(value.as_array().into_iter().flatten().any(|container| {
+    let containers = value.as_array().ok_or(Error::InvalidMetadata)?;
+    let mut in_use = false;
+    for container in containers {
         let reference = container
             .pointer("/configuration/image/reference")
             .and_then(Value::as_str)
@@ -1193,8 +998,10 @@ fn container_image_in_use(
             .pointer("/configuration/image/descriptor/digest")
             .and_then(Value::as_str)
             .map(|digest| digest.trim_start_matches("sha256:"));
-        reference == Some(target) || id.is_some_and(|id| descriptor == Some(id))
-    }))
+        ImageId::parse(descriptor.ok_or(Error::InvalidMetadata)?)?;
+        in_use |= reference == Some(target) || id.is_some_and(|id| descriptor == Some(id));
+    }
+    Ok(in_use)
 }
 
 fn darwin_image_for_digest(digest: &Digest) -> Result<Option<Target>, Error> {
@@ -1332,10 +1139,6 @@ fn trim_stdout(stdout: &[u8]) -> String {
     String::from_utf8_lossy(stdout).trim().to_owned()
 }
 
-fn home_dir() -> PathBuf {
-    env::var_os("HOME").map_or_else(|| PathBuf::from("."), PathBuf::from)
-}
-
 #[cfg(test)]
 mod test {
     use serde_json::json;
@@ -1452,16 +1255,6 @@ mod test {
         for runtime in [Runtime::Podman, Runtime::Container] {
             assert!(InstallRequest::new(runtime, &reference, &archive, None).is_ok());
         }
-    }
-
-    #[test]
-    fn mru_round_trips_typed_identifiers_and_accepts_legacy_empty_fields() {
-        let value = json!({"ref":"localhost/wrix-test:old", "id":"sha256:image-id", "digest": format!("sha256:{}", "c".repeat(64))});
-        let record: super::Record = serde_json::from_value(value.clone()).unwrap();
-        assert_eq!(serde_json::to_value(record).unwrap(), value);
-        let record: super::Record =
-            serde_json::from_value(json!({"ref":"", "id":"<none>", "digest":"null"})).unwrap();
-        assert!(record.ref_name.is_none() && record.id.is_none() && record.digest.is_none());
     }
 
     #[test]
@@ -1593,6 +1386,51 @@ mod test {
             row.id,
             Some(ImageId::parse("untagged-index-digest").expect("valid ID"))
         );
+    }
+
+    #[test]
+    fn ownership_requires_both_labels_for_every_supported_kind() {
+        for kind in ["profile", "service", "builder"] {
+            assert!(super::managed_ownership(Some("true"), Some(kind)));
+            assert!(!super::managed_ownership(None, Some(kind)));
+            assert!(!super::managed_ownership(Some("false"), Some(kind)));
+        }
+        assert!(!super::managed_ownership(Some("true"), None));
+        assert!(!super::managed_ownership(Some("true"), Some("unknown")));
+    }
+
+    #[test]
+    fn apple_ambiguous_ownership_is_not_management_evidence() {
+        let output = serde_json::to_vec(&json!([{
+            "labels": {"wrix.managed": "true", "wrix.image.kind": "profile"},
+            "variants": [{"config": {"config": {"Labels": {
+                "wrix.managed": "false", "wrix.image.kind": "service"
+            }}}}]
+        }]))
+        .unwrap();
+        for field in [InspectField::Managed, InspectField::Kind] {
+            assert_eq!(inspect_container_value(&output, field).unwrap(), None);
+        }
+    }
+
+    #[test]
+    fn apple_uncertain_container_metadata_is_not_unused_evidence() {
+        for value in [
+            json!({}),
+            json!([{}]),
+            json!([{"configuration": {
+                "image": {"descriptor": {"digest": ""}}
+            }}]),
+        ] {
+            assert!(
+                container_image_in_use(
+                    &serde_json::to_vec(&value).unwrap(),
+                    &Target::Id(ImageId::parse("selected-id").unwrap()),
+                    None
+                )
+                .is_err()
+            );
+        }
     }
 
     #[test]
