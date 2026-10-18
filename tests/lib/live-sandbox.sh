@@ -117,8 +117,18 @@ wrix_build_live_launcher() {
   nix build --no-link --print-out-paths --no-warn-dirty .#wrix
 }
 
-wrix_build_packaged_live_sandbox() {
-  nix build --no-link --print-out-paths --no-warn-dirty .#sandbox
+wrix_build_command_profile_config() {
+  local system
+  system=$(nix eval --raw --impure --expr builtins.currentSystem)
+  nix build --no-link --print-out-paths --no-warn-dirty --impure --expr "
+    let
+      flake = builtins.getFlake \"git+file://$REPO_ROOT\";
+      imageSystem = if \"${system}\" == \"aarch64-darwin\" then \"aarch64-linux\" else \"${system}\";
+      pkgs = flake.inputs.nixpkgs.legacyPackages.\${imageSystem};
+      lib = flake.legacyPackages.${system}.lib;
+      runner = import ($REPO_ROOT + \"/tests/sandbox/fixtures/command-runner.nix\") { inherit pkgs; };
+    in (lib.mkSandbox { agent = \"direct\"; agentPkg = runner; }).image.profileConfig
+  "
 }
 
 wrix_realize_test_image_source() {

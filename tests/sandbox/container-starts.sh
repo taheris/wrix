@@ -66,13 +66,14 @@ test_darwin_container_starts() {
   wrix_require_live_sandbox_darwin
   cd "$REPO_ROOT"
 
-  local command_line result sandbox workspace
+  local command_line result sandbox workspace profile_config
   local -a command
-  sandbox=$(wrix_build_packaged_live_sandbox)
+  sandbox=$(wrix_build_live_launcher)
+  profile_config=$(wrix_build_command_profile_config)
   workspace="$TEST_TMP/darwin-workspace"
   mkdir -p "$workspace"
   command=(
-    "$sandbox/bin/wrix" run "$workspace"
+    "$sandbox/bin/wrix" --profile-config "$profile_config" run "$workspace"
     /bin/bash -c 'printf "container-started\\n"; grep localhost /etc/hosts'
   )
   printf -v command_line '%q ' "${command[@]}"

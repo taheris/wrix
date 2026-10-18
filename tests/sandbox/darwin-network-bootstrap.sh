@@ -33,7 +33,7 @@ test_darwin_network_bootstrap() {
   cd "$REPO_ROOT"
 
   local command_line image_ref image_source launcher output poison_error poison_profile
-  local profile_config sandbox spawn_config stage_line verification_line workspace
+  local profile_config spawn_config stage_line verification_line workspace
   local -a command
   workspace="$TEST_TMP/workspace"
   mkdir -p "$workspace/bin"
@@ -121,9 +121,8 @@ EOF
   fi
   assert_contains "SpawnConfig bootstrap env rejection" "$(<"$poison_error")" "bootstrap-sensitive" || return 1
 
-  sandbox=$(wrix_build_packaged_live_sandbox)
   command=(
-    "$sandbox/bin/wrix" run "$workspace"
+    "$launcher/bin/wrix" --profile-config "$profile_config" run "$workspace"
     /workspace/assert-bootstrap.sh alpha 'two words'
   )
   printf -v command_line '%q ' "${command[@]}"

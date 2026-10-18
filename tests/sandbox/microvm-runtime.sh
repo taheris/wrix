@@ -48,18 +48,15 @@ test_microvm_probe_reports_launch_failure() {
 }
 
 test_linux_microvm_runtime() {
-  local command_line output sandbox workspace image_source profile_config spawn_config status
+  local command_line output sandbox workspace profile_config
   local -a command
   wrix_require_live_sandbox_linux
   [[ -c /dev/kvm && -r /dev/kvm && -w /dev/kvm ]] || wrix_live_skip "accessible KVM is required for the live microVM verifier"
   command -v krun >/dev/null || wrix_live_skip "krun is not on PATH"
   cd "$REPO_ROOT"
 
-  sandbox=$(nix build --no-link --print-out-paths --no-warn-dirty .#wrix)
-  image_source=$(nix build --no-link --print-out-paths --no-warn-dirty .#test-image-git-credentials.source)
-  IMAGE_REF=$(wrix_live_image_ref "test-microvm-runtime-$$")
-  profile_config="$TEST_TMP/profile.json"
-  wrix_write_profile_config "$profile_config" "$IMAGE_REF" "$image_source" direct
+  sandbox=$(wrix_build_live_launcher)
+  profile_config=$(wrix_build_command_profile_config)
   workspace="$TEST_TMP/workspace"
   mkdir -p "$workspace"
 
@@ -89,8 +86,8 @@ INNER
   chmod +x "$workspace/assert-microvm.sh"
 
   command=(
-    "$sandbox/bin/wrix" --profile-config "$profile_config" run "$workspace" --
-    /bin/bash /workspace/assert-microvm.sh alpha "two words"
+    "$sandbox/bin/wrix" --profile-config "$profile_config" run "$workspace"
+    /workspace/assert-microvm.sh alpha "two words"
   )
   printf -v command_line '%q ' "${command[@]}"
   output=$(run_microvm_probe "$command_line") || return

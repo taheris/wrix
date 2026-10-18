@@ -479,14 +479,15 @@ run_spawned_container_check() {
   local repo_root="$3"
   local runtime_dir="$4"
   local deploy_key="$5"
-  local rc=0
+  local rc=0 profile_config
+  profile_config=$(REPO_ROOT="$repo_root" bash -c 'source "$REPO_ROOT/tests/lib/live-sandbox.sh"; wrix_build_command_profile_config')
 
   (
     cd "$repo_root"
     XDG_RUNTIME_DIR="$runtime_dir" \
       WRIX_DEPLOY_KEY="$deploy_key" \
       WRIX_GIT_SIGN=0 \
-      nix run --no-warn-dirty .#sandbox -- spawn --spawn-config "$spawn_config"
+      nix run --no-warn-dirty .#wrix -- --profile-config "$profile_config" spawn --spawn-config "$spawn_config"
   ) >"$output_file" 2>&1 || rc="$?"
 
   if [[ "$rc" -ne 0 ]]; then

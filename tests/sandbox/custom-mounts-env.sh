@@ -302,7 +302,7 @@ test_wrix_cli_added_to_sandbox_profile() {
   fi
 
   local source profile_env uname_s
-  if ! source=$(nix build --no-link --print-out-paths --no-warn-dirty "$REPO_ROOT#sandbox.image.source"); then
+  if ! source=$(nix build --no-link --print-out-paths --no-warn-dirty "$REPO_ROOT#image-base"); then
     fail "building the default sandbox image source failed"
     return 1
   fi

@@ -125,8 +125,8 @@ class LiveExecution(unittest.TestCase):
         cls.launcher = build(".#wrix") / "bin/wrix"
         cls.packaged_profiles = {
             "direct": build(f"{fixtures}.profileConfig"),
-            "claude": build(".#sandbox-claude.profileConfig"),
-            "pi": build(".#sandbox-pi.profileConfig"),
+            "claude": build(".#image-base-claude.image.profileConfig"),
+            "pi": build(".#image-base-pi.image.profileConfig"),
         }
         cls.runtime_name = "podman" if platform.system() == "Linux" else "container"
         cls.runtime = shutil.which(cls.runtime_name)
