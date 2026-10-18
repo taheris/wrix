@@ -9,6 +9,10 @@ use tokio::{
 };
 use wrix_service::route::{FrontDoor, Generation, Listeners, Port, Role};
 
+use wrix_service::control::{
+    Access, Client, Controller, Namespace, Operation, Permission, Policy, Reply,
+};
+
 type TestError = Box<dyn std::error::Error + Send + Sync>;
 type TestResult<T = ()> = Result<T, TestError>;
 
@@ -338,4 +342,306 @@ async fn capacity_rejects_excess_streams_without_interrupting_admitted_work() {
     })
     .await
     .unwrap();
+}
+
+fn namespace(digit: char) -> Result<Namespace, wrix_core::path::WorkspaceHashParseError> {
+    Namespace::try_from(
+        digit
+            .to_string()
+            .repeat(wrix_core::path::WorkspaceHash::HEX_LEN),
+    )
+}
+
+const POLICY: Policy = Policy {
+    dolt: Access::Allowed,
+    private_cache_read: Access::Allowed,
+    common_cache_read: Access::Denied,
+    egress: Access::Allowed,
+    compiler: Access::Denied,
+};
+
+async fn control_request(
+    controller: &Controller,
+    client: &Client,
+    operation: Operation,
+) -> TestResult<Reply> {
+    let (served, reply) = tokio::join!(controller.serve_one(), client.request(operation));
+    served?;
+    Ok(reply?)
+}
+
+async fn raw_control(
+    controller: &Controller,
+    root: &std::path::Path,
+    request: serde_json::Value,
+) -> Result<serde_json::Value, wrix_service::control::Error> {
+    let exchange = async {
+        let mut stream = tokio::net::UnixStream::connect(root.join("control.sock")).await?;
+        let bytes = serde_json::to_vec(&request)?;
+        stream
+            .write_u32(
+                u32::try_from(bytes.len()).map_err(|_| wrix_service::control::Error::FrameLimit)?,
+            )
+            .await?;
+        stream.write_all(&bytes).await?;
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).await?;
+        Ok::<_, wrix_service::control::Error>(response)
+    };
+    let (served, response) = tokio::join!(controller.serve_one(), exchange);
+    served?;
+    let response = response?;
+    Ok(serde_json::from_slice(&response[4..])?)
+}
+
+fn envelope(
+    root: &std::path::Path,
+    operation: &serde_json::Value,
+) -> TestResult<serde_json::Value> {
+    Ok(
+        serde_json::json!({"version":1, "management":std::fs::read(root.join("management.key"))?, "operation":operation}),
+    )
+}
+
+#[tokio::test]
+async fn control_operations_are_typed_authenticated_and_host_only() {
+    timeout(BUDGET, async {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap().join("controller");
+        let controller = Controller::bind(&root).unwrap();
+        assert!(
+            Controller::bind(&root).is_err(),
+            "competing owner acquired control"
+        );
+        let client = Client::open(&root).unwrap();
+        let operation = Operation::Register {
+            namespace: namespace('a').unwrap(),
+            policy: POLICY,
+        };
+        assert_eq!(
+            control_request(&controller, &client, operation.clone())
+                .await
+                .unwrap(),
+            Reply::Applied
+        );
+        assert_eq!(
+            control_request(&controller, &client, operation)
+                .await
+                .unwrap(),
+            Reply::Applied
+        );
+        let conflicting = Operation::Register {
+            namespace: namespace('a').unwrap(),
+            policy: Policy {
+                compiler: Access::Allowed,
+                ..POLICY
+            },
+        };
+        assert_eq!(
+            control_request(&controller, &client, conflicting)
+                .await
+                .unwrap(),
+            Reply::Conflict
+        );
+        let peer = Operation::Register {
+            namespace: namespace('b').unwrap(),
+            policy: POLICY,
+        };
+        assert_eq!(
+            control_request(&controller, &client, peer).await.unwrap(),
+            Reply::Applied
+        );
+        let mut bad_auth = envelope(
+            &root,
+            &serde_json::json!({"operation":"retire", "namespace":namespace('a').unwrap()}),
+        )
+        .unwrap();
+        bad_auth["management"] = serde_json::json!([0; 32].to_vec());
+        assert!(matches!(
+            raw_control(&controller, &root, bad_auth).await,
+            Err(wrix_service::control::Error::Unauthorized)
+        ));
+        let mut incompatible = envelope(
+            &root,
+            &serde_json::json!({"operation":"retire", "namespace":namespace('a').unwrap()}),
+        )
+        .unwrap();
+        incompatible["version"] = serde_json::json!(99);
+        assert_eq!(
+            raw_control(&controller, &root, incompatible).await.unwrap(),
+            serde_json::json!({"result":"incompatible"})
+        );
+        assert_eq!(
+            control_request(
+                &controller,
+                &client,
+                Operation::Retire {
+                    namespace: namespace('a').unwrap()
+                }
+            )
+            .await
+            .unwrap(),
+            Reply::Applied
+        );
+        let Reply::Snapshot {
+            namespaces,
+            version,
+        } = control_request(&controller, &client, Operation::Inspect {})
+            .await
+            .unwrap()
+        else {
+            panic!("missing snapshot")
+        };
+        assert_eq!(version, 1);
+        assert_eq!(namespaces.len(), 1);
+        assert_eq!(namespaces.get(&namespace('b').unwrap()), Some(&POLICY));
+        assert!(matches!(
+            controller.authorize(&namespace('a').unwrap(), Permission::Sql),
+            Err(wrix_service::control::Error::UnknownNamespace)
+        ));
+        assert!(matches!(
+            controller.authorize(&namespace('b').unwrap(), Permission::Compiler),
+            Err(wrix_service::control::Error::PermissionDenied)
+        ));
+        assert!(matches!(
+            controller.authorize(&namespace('b').unwrap(), Permission::CommonCacheRead),
+            Err(wrix_service::control::Error::PermissionDenied)
+        ));
+        let authorization = controller
+            .authorize(&namespace('b').unwrap(), Permission::PrivateCacheRead)
+            .unwrap();
+        assert_eq!(authorization.namespace(), &namespace('b').unwrap());
+        assert_eq!(authorization.permission(), Permission::PrivateCacheRead);
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn private_authority_is_not_delegated_to_service_observations() {
+    use std::os::unix::fs::PermissionsExt;
+    timeout(BUDGET, async {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap().join("controller");
+        let controller = Controller::bind(&root).unwrap();
+        let client = Client::open(&root).unwrap();
+        for operation in [
+            serde_json::json!({"operation":"execute", "command":"true"}),
+            serde_json::json!({"operation":"inspect", "path":"/nix/store"}),
+            serde_json::json!({"operation":"inspect", "mounts":["/home"]}),
+            serde_json::json!({"operation":"inspect", "destination":"127.0.0.1:22"}),
+            serde_json::json!({"operation":"release_owner", "role":"sql", "container_report":"stopped"}),
+            serde_json::json!({"operation":"register", "namespace":"../peer", "policy": POLICY}),
+            serde_json::json!({"operation":"register", "namespace":namespace('a').unwrap(), "policy": {"dolt":"allowed", "private_cache_read":"allowed", "common_cache_read":"denied", "egress":"allowed", "compiler":"denied", "management":true}}),
+            serde_json::json!({"operation":"inspect", "workspace_pointer":{"host_authority":true}}),
+        ] {
+            assert!(matches!(raw_control(&controller, &root, envelope(&root, &operation).unwrap()).await, Err(wrix_service::control::Error::Encoding(_))));
+            assert!(Controller::bind(&root).is_err(), "untrusted report released ownership");
+        }
+        let snapshot = control_request(&controller, &client, Operation::Inspect {}).await.unwrap();
+        assert_eq!(serde_json::to_value(snapshot).unwrap(), serde_json::json!({"result":"snapshot", "version":1, "namespaces":{}}));
+        assert_eq!(std::fs::metadata(&root).unwrap().permissions().mode() & 0o777, 0o700);
+        for name in ["management.key", "ownership", "control.sock"] {
+            assert_eq!(std::fs::metadata(root.join(name)).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+    }).await.unwrap();
+}
+
+#[tokio::test]
+async fn private_control_rejects_oversized_frames_before_allocation() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap().join("controller");
+    let controller = Controller::bind(&root).unwrap();
+    let exchange = async {
+        let mut stream = tokio::net::UnixStream::connect(root.join("control.sock"))
+            .await
+            .unwrap();
+        stream.write_u32(u32::MAX).await.unwrap();
+    };
+    let (served, ()) = tokio::join!(controller.serve_one(), exchange);
+    assert!(matches!(
+        served,
+        Err(wrix_service::control::Error::FrameLimit)
+    ));
+}
+
+#[tokio::test]
+async fn concurrent_registration_cannot_overwrite_an_admitted_policy() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap().join("controller");
+    let controller = Controller::bind(&root).unwrap();
+    let first = Client::open(&root).unwrap();
+    let second = Client::open(&root).unwrap();
+    let changed = Policy {
+        compiler: Access::Allowed,
+        ..POLICY
+    };
+    let first_operation = Operation::Register {
+        namespace: namespace('a').unwrap(),
+        policy: POLICY,
+    };
+    let second_operation = Operation::Register {
+        namespace: namespace('a').unwrap(),
+        policy: changed,
+    };
+    let (served_first, served_second, first_reply, second_reply) = tokio::join!(
+        controller.serve_one(),
+        controller.serve_one(),
+        first.request(first_operation),
+        second.request(second_operation)
+    );
+    served_first.unwrap();
+    served_second.unwrap();
+    let first_reply = first_reply.unwrap();
+    let second_reply = second_reply.unwrap();
+    let winner = match (&first_reply, &second_reply) {
+        (Reply::Applied, Reply::Conflict) => POLICY,
+        (Reply::Conflict, Reply::Applied) => changed,
+        _ => panic!("unexpected registration results: {first_reply:?}, {second_reply:?}"),
+    };
+    let Reply::Snapshot { namespaces, .. } =
+        control_request(&controller, &first, Operation::Inspect {})
+            .await
+            .unwrap()
+    else {
+        panic!("missing registry")
+    };
+    assert_eq!(namespaces.len(), 1);
+    assert_eq!(namespaces.get(&namespace('a').unwrap()), Some(&winner));
+}
+
+#[tokio::test]
+async fn private_control_rejects_shared_and_symlinked_authority_roots() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap().join("shared");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(matches!(
+        Controller::bind(&root),
+        Err(wrix_service::control::Error::PrivateRoot)
+    ));
+    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
+    let alias = directory.path().canonicalize().unwrap().join("alias");
+    symlink(&root, &alias).unwrap();
+    assert!(matches!(
+        Controller::bind(&alias),
+        Err(wrix_service::control::Error::PrivateRoot)
+    ));
+    assert!(matches!(
+        Controller::bind(&alias.join("nested")),
+        Err(wrix_service::control::Error::PrivateRoot)
+    ));
+    assert!(!root.join("nested").exists());
+}
+
+#[tokio::test]
+async fn private_control_client_never_provisions_authority() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap().join("absent");
+    assert!(Client::open(&root).is_err());
+    assert!(!root.exists());
+    std::fs::create_dir(&root).unwrap();
+    assert!(Client::open(&root).is_err());
+    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
 }

@@ -807,10 +807,10 @@ tenant or component compromise/fault isolation.
 - One host-user controller serializes deployment and namespace ownership through
   authenticated typed local operations, excluding guest control, arbitrary
   execution, paths, mounts and forwarding destinations.
-  [test?](../crates/wrix-service/tests/host_control.rs::control_operations_are_typed_authenticated_and_host_only)
+  [test](../crates/wrix-service/tests/host_control.rs::control_operations_are_typed_authenticated_and_host_only)
 - Issuer/management state remains outside service mounts/data routes; container
   observations cannot authorize host paths or prove backend ownership release.
-  [test?](../crates/wrix-service/tests/host_control.rs::private_authority_is_not_delegated_to_service_observations)
+  [test](../crates/wrix-service/tests/host_control.rs::private_authority_is_not_delegated_to_service_observations)
 - Rama fixed-role routes pin established connections while selection changes new
   connections, without SQL parsing, protocol sniffing or general proxying.
   [test](../crates/wrix-service/tests/host_control.rs::fixed_role_routes_preserve_connections_without_general_proxying)
