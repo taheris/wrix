@@ -25,6 +25,25 @@ let
     options: !(tryEval (deepSeq (lib.mkSandbox { mcp.tmux = options; }).profile true)).success;
   cargo = fromTOML (readFile (root + "/Cargo.toml"));
   lock = fromTOML (readFile (root + "/Cargo.lock"));
+  nativeCargo =
+    manifest: resolved:
+    !(elem "lib/mcp/tmux/tmux-mcp" manifest.workspace.members)
+    && !(manifest.workspace.dependencies ? signal-hook)
+    && !(manifest.workspace.dependencies ? signal-hook-registry)
+    && all (
+      package:
+      !(elem package.name [
+        "tmux-mcp"
+        "signal-hook"
+      ])
+    ) resolved.package;
+  fixture = dependencies: {
+    workspace = {
+      members = [ ];
+      inherit dependencies;
+    };
+  };
+  transitiveRegistry.package = [ { name = "signal-hook-registry"; } ];
   verifiers = import ./default.nix {
     inherit pkgs system;
     focusBinary = lib.rustPackage.focusNotification;
@@ -54,16 +73,19 @@ assert
     auditFull = true;
   };
 assert elem imagePkgs.tmux lib.profiles.base.packages;
-assert !(elem "lib/mcp/tmux/tmux-mcp" cargo.workspace.members);
-assert !(cargo.workspace.dependencies ? signal-hook);
-assert all (
-  package:
-  !(elem package.name [
-    "tmux-mcp"
-    "signal-hook"
-    "signal-hook-registry"
-  ])
-) lock.package;
+assert nativeCargo cargo lock;
+assert nativeCargo (fixture { }) transitiveRegistry;
+assert !(nativeCargo (fixture { signal-hook-registry = "1"; }) transitiveRegistry);
+assert !(nativeCargo (fixture { signal-hook = "1"; }) transitiveRegistry);
+assert !(nativeCargo (fixture { }) { package = [ { name = "tmux-mcp"; } ]; });
+assert !(nativeCargo (fixture { }) { package = [ { name = "signal-hook"; } ]; });
+assert
+  !(nativeCargo {
+    workspace = {
+      members = [ "lib/mcp/tmux/tmux-mcp" ];
+      dependencies = { };
+    };
+  } transitiveRegistry);
 assert all (path: !(pathExists (root + "/${path}"))) [
   "lib/mcp/tmux"
   "lib/sandbox/pi-mcp-extension.ts"
