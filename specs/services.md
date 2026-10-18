@@ -817,7 +817,7 @@ tenant or component compromise/fault isolation.
 - Native controller lifecycle adapters serialize start, preserve explicit-stop
   intent, pin active package closures and reject unsupported supervision without
   an unsupervised fallback.
-  [test?](../crates/wrix-service/tests/host_control.rs::supervision_preserves_stop_intent_and_active_closures)
+  [test](../crates/wrix-service/tests/host_control.rs::supervision_preserves_stop_intent_and_active_closures)
 - Linux/Darwin user supervision preserves caller-independent singleton lifetime;
   explicit host stop prevents resurrection and temporary Nix provision retains
   the active controller closure.

@@ -1,5 +1,7 @@
 //! Versioned private host authority; never mount this socket or its directory into guests.
 
+pub mod supervision;
+
 use std::{
     collections::BTreeMap,
     fs::{self, DirBuilder, File, OpenOptions},
@@ -266,6 +268,14 @@ impl Controller {
             uid: metadata.uid(),
             namespaces: Mutex::new(BTreeMap::new()),
         })
+    }
+
+    /// Release the endpoint during a clean supervised stop, retaining private authority on disk.
+    pub fn close(self) -> Result<(), Error> {
+        let address = self.listener.local_addr()?;
+        let path = address.as_pathname().ok_or(Error::PrivateRoot)?;
+        fs::remove_file(path)?;
+        Ok(())
     }
 
     /// Accept one bounded authenticated request; callers retain supervision of the serving loop.

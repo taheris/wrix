@@ -1,4 +1,30 @@
+#[cfg(test)]
+#[path = "common/supervision/mod.rs"]
+mod supervision;
+
 use std::{net::SocketAddr, num::NonZeroUsize, time::Duration};
+
+#[test]
+fn supervision_preserves_stop_intent_and_active_closures() {
+    supervision::exercise();
+}
+
+#[tokio::test]
+async fn clean_controller_stop_releases_endpoint_without_rotating_private_authority() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap().join("authority");
+    let controller = Controller::bind(&root).unwrap();
+    let credential = std::fs::read(root.join("management.key")).unwrap();
+    assert!(Controller::bind(&root).is_err());
+    controller.close().unwrap();
+    assert!(!root.join("control.sock").exists());
+    let resumed = Controller::bind(&root).unwrap();
+    assert_eq!(
+        std::fs::read(root.join("management.key")).unwrap(),
+        credential
+    );
+    resumed.close().unwrap();
+}
 
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -12,6 +38,61 @@ use wrix_service::route::{FrontDoor, Generation, Listeners, Port, Role};
 use wrix_service::control::{
     Access, Client, Controller, Namespace, Operation, Permission, Policy, Reply,
 };
+
+#[tokio::test]
+async fn private_controller_process_is_singleton_and_resumes_after_clean_stop() {
+    struct Process(std::process::Child);
+    impl Drop for Process {
+        fn drop(&mut self) {
+            if self.0.try_wait().unwrap().is_none() {
+                self.0.kill().unwrap();
+                self.0.wait().unwrap();
+            }
+        }
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let start = || {
+        Process(
+            std::process::Command::new(env!("CARGO_BIN_EXE_wrix-host-controller"))
+                .arg(&root)
+                .spawn()
+                .unwrap(),
+        )
+    };
+    for _ in 0..2 {
+        let mut owner = start();
+        timeout(BUDGET, async {
+            while !root.join("authority/control.sock").exists() {
+                assert!(owner.0.try_wait().unwrap().is_none());
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let reply = Client::open(&root.join("authority"))
+            .unwrap()
+            .request(Operation::Inspect {})
+            .await
+            .unwrap();
+        assert!(matches!(reply, Reply::Snapshot { version: 1, .. }));
+        let mut competitor = start();
+        assert!(!competitor.0.wait().unwrap().success());
+        assert!(
+            std::process::Command::new("python3")
+                .args([
+                    "-c",
+                    "import os,signal,sys; os.kill(int(sys.argv[1]), signal.SIGTERM)",
+                    &owner.0.id().to_string()
+                ])
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(owner.0.wait().unwrap().success());
+        assert!(!root.join("authority/control.sock").exists());
+    }
+}
 
 type TestError = Box<dyn std::error::Error + Send + Sync>;
 type TestResult<T = ()> = Result<T, TestError>;

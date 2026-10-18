@@ -2006,6 +2006,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "wrix-cache",
  "wrix-cli",
  "wrix-core",

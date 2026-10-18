@@ -58,6 +58,35 @@ let
     image = serviceImage;
   };
 
+  controllerRuntime = pkgs.symlinkJoin {
+    name = "wrix-controller-runtime";
+    paths = [
+      pkgs.nix
+      pkgs.skopeo
+    ]
+    ++ optionals pkgs.stdenv.hostPlatform.isLinux [
+      pkgs.systemd
+      pkgs.podman
+      (import ../sandbox/linux/krun-runtime.nix { linuxPkgs = pkgs; })
+    ];
+  };
+  controllerPackage =
+    pkgs.runCommand "wrix-host-controller"
+      {
+        nativeBuildInputs = [ pkgs.makeWrapper ];
+      }
+      ''
+        mkdir -p "$out/bin"
+        makeWrapper "${workspace.bin}/bin/wrix-host-controller" "$out/bin/wrix-host-controller" \
+          --prefix PATH : "${controllerRuntime}/bin"
+      '';
+  controllerBinding = import ./control-binding.nix {
+    inherit pkgs;
+    controller = controllerPackage;
+    runtime = controllerRuntime;
+    image = serviceImage;
+  };
+
   wrixPackage = mkWrappedBinaryPackage "wrix" (
     [
       "--set"
@@ -78,6 +107,9 @@ let
       "--set"
       "WRIX_SERVICE_PACKAGE_BINDING"
       "${serviceBinding}"
+      "--set"
+      "WRIX_CONTROLLER_PACKAGE_BINDING"
+      "${controllerBinding}"
       "--prefix"
       "PATH"
       ":"
@@ -158,6 +190,7 @@ in
   package = workspace.bin;
   wrix = wrixPackage;
   binding = serviceBinding;
+  inherit controllerBinding controllerPackage;
   focusNotification = mkBinaryPackage "wrix-focus-notification";
   cacheHook = mkBinaryPackage "wrix-cache-hook";
   cachePublish = mkBinaryPackage "wrix-cache-publish";
