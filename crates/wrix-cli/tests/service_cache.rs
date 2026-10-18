@@ -57,6 +57,7 @@ impl Fixture {
             .env("WRIX_TEST_DIGEST", format!("sha256:{}", "a".repeat(64)))
             .env_remove("WRIX_SERVICE_ALLOW_TEMP_CACHE")
             .env_remove("WRIX_DOLT_TRANSPORT")
+            .env_remove("WRIX_SERVICE_IMAGE")
             .env_remove("WRIX_SERVICE_IMAGE_SOURCE")
             .env_remove("WRIX_SERVICE_IMAGE_SOURCE_KIND")
             .env_remove("WRIX_SERVICE_IMAGE_DIGEST");
@@ -91,6 +92,26 @@ impl Fixture {
         assert!(output.status.success(), "{}", output.stderr);
         Ok(serde_json::from_str(&output.stdout)?)
     }
+}
+
+#[test]
+fn service_fixture_removes_ambient_image_metadata() -> TestResult {
+    let fixture = Fixture::new()?;
+    let command = fixture.command("podman")?;
+    for name in [
+        "WRIX_SERVICE_IMAGE",
+        "WRIX_SERVICE_IMAGE_SOURCE",
+        "WRIX_SERVICE_IMAGE_SOURCE_KIND",
+        "WRIX_SERVICE_IMAGE_DIGEST",
+    ] {
+        assert!(
+            command
+                .get_envs()
+                .any(|(key, value)| key == name && value.is_none()),
+            "fixture must remove inherited {name}"
+        );
+    }
+    Ok(())
 }
 
 #[test]
