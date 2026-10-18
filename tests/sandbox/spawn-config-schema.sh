@@ -70,7 +70,7 @@ fi
 
 PROFILE_CONFIG="$TEST_TMP/profile-config.json"
 cat >"$PROFILE_CONFIG" <<JSON
-{"schema":1,"system":"test","profile":{"name":"base","env":{},"mounts":[],"writable_dirs":[],"network_allowlist":[]},"image":{"ref":"wrix-base:test","source":"/nix/store/fake-image","source_kind":"$EXPECTED_SOURCE_KIND","digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"},"agent":{"kind":"direct"},"resources":{"cpus":null,"memory_mb":4096,"pids_limit":4096},"security":{"deploy_key":null},"network":{"default_mode":"open","ipv6":"disabled"},"services":{"beads":{"enable":"auto"},"nix_cache":{"enable":true}},"features":{"mcp_runtime":false}}
+{"schema":1,"system":"x86_64-linux","profile":{"name":"base","env":{},"mounts":[],"writable_dirs":[],"network_allowlist":[]},"image":{"ref":"wrix-base:test","source":"/nix/store/fake-image","source_kind":"$EXPECTED_SOURCE_KIND","digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"},"agent":{"kind":"direct"},"resources":{"cpus":null,"memory_mb":4096,"pids_limit":4096},"security":{"deploy_key":null},"network":{"default_mode":"open","ipv6":"disabled"},"services":{"beads":{"enable":"auto"},"nix_cache":{"enable":true}},"features":{"mcp_runtime":false}}
 JSON
 
 WORKSPACE="$TEST_TMP/workspace"
@@ -91,8 +91,7 @@ write_valid_spawn_config() {
       env: [["FOO", "bar"], ["EMPTY", ""]],
       agent_args: ["--print", "hello"],
       mounts: [{host_path: $mount_host, container_path: "/mnt/schema", read_only: true}],
-      initial_prompt: "ignored by launcher",
-      repin: true
+      extensions: {initial_prompt: "ignored by launcher", repin: true}
     }' >"$out_file"
 }
 
@@ -233,7 +232,7 @@ test_spawn_rejects_profile_override_fields() {
       fail "ProfileConfig override field $field was accepted"
       return 1
     fi
-    assert_file_contains "override $field" "$err" "cannot change the ProfileConfig agent/profile/image-agent field: $field" || return 1
+    assert_file_contains "override $field" "$err" "invalid SpawnConfig schema" || return 1
   done
   pass "SpawnConfig rejects agent/profile/image-agent overrides"
 }
@@ -248,8 +247,7 @@ test_spawn_rejects_undocumented_digest_override() {
     fail "undocumented image_digest_path override was accepted"
     return 1
   fi
-  assert_file_contains "digest override" "$err" "image_digest_path" || return 1
-  assert_file_contains "digest override" "$err" "not a documented per-launch override" || return 1
+  assert_file_contains "digest override" "$err" "invalid SpawnConfig schema" || return 1
   pass "SpawnConfig rejects undocumented image_digest_path override"
 }
 

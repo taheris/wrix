@@ -165,7 +165,7 @@ pub fn run_command_child() -> TestResult {
 pub fn write_profile_config(path: &Path, fixture: &ProfileFixture) -> TestResult {
     let value = json!({
         "schema": 1,
-        "system": "test",
+        "system": "x86_64-linux",
         "profile": {
             "name": "base",
             "env": {},

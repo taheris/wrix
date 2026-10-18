@@ -953,7 +953,7 @@ rootfs symlink. [check](nix build
   [test](../crates/wrix-cli/tests/sandbox_launch.rs::duplicate_profile_config_fields_fail_at_the_json_boundary)
 - Complete `ProfileConfig` parsing permits opaque metadata only through its
   explicit `extensions` object and preserves platform-specific source semantics
-  [test?](../crates/wrix-sandbox/tests/config_contract.rs::explicit_profile_extensions_preserve_source_semantics)
+  [test](../crates/wrix-sandbox/tests/config_contract.rs::explicit_profile_extensions_preserve_source_semantics)
 - Image installer construction rejects empty source paths and contradictory
   runtime/source combinations before store operations
   [test](../crates/wrix-sandbox/src/image.rs::installation_constructor_rejects_contradictory_sources)
@@ -982,7 +982,7 @@ rootfs symlink. [check](nix build
 - Namespaced `SpawnConfig.extensions` payloads remain available unchanged to the
   in-container entrypoint through the read-only original config mount and
   `WRIX_SPAWN_CONFIG`
-  [test?](../crates/wrix-sandbox/tests/spawn_config.rs::consumer_extensions_are_mounted_for_entrypoint)
+  [test](../crates/wrix-sandbox/tests/spawn_config.rs::consumer_extensions_are_mounted_for_entrypoint)
 - On Linux, each `SpawnConfig.mounts` entry becomes a
   `-v <host_path>:<container_path>` podman argument, with `:ro` appended when
   `read_only: true`. A missing or empty `mounts` list produces no additional
@@ -1199,24 +1199,24 @@ rootfs symlink. [check](nix build
   [test](../crates/wrix-sandbox/tests/config_contract.rs::profile_network_rule_objects_match_documented_wire)
 - `ProfileConfig` rejects unknown root and Wrix-owned nested fields before
   preparation while recognizing the complete supported Nix-generated shape.
-  [test?](../crates/wrix-sandbox/tests/config_contract.rs::profile_owned_structures_reject_unknown_fields)
+  [test](../crates/wrix-sandbox/tests/config_contract.rs::profile_owned_structures_reject_unknown_fields)
 - `SpawnConfig` rejects unknown root and Wrix-owned nested fields before
   preparation, including former flat consumer payload fields.
-  [test?](../crates/wrix-sandbox/tests/config_contract.rs::spawn_owned_structures_reject_unknown_fields)
+  [test](../crates/wrix-sandbox/tests/config_contract.rs::spawn_owned_structures_reject_unknown_fields)
 - Both configs accept an omitted or object-valued top-level `extensions`, reject
   other extension-container types, and leave its contents opaque.
-  [test?](../crates/wrix-sandbox/tests/config_contract.rs::explicit_extensions_are_optional_opaque_objects)
+  [test](../crates/wrix-sandbox/tests/config_contract.rs::explicit_extensions_are_optional_opaque_objects)
 - Extension contents cannot alter any resolved Wrix launch field.
-  [test?](../crates/wrix-sandbox/tests/config_contract.rs::extension_payloads_do_not_override_launch_policy)
+  [test](../crates/wrix-sandbox/tests/config_contract.rs::extension_payloads_do_not_override_launch_policy)
 - Unknown-field rejection preserves validated open environment/runtime-secret
   maps, defaults, omission rules and duplicate-field rejection.
-  [test?](../crates/wrix-sandbox/tests/config_contract.rs::strict_boundaries_preserve_existing_map_and_default_semantics)
+  [test](../crates/wrix-sandbox/tests/config_contract.rs::strict_boundaries_preserve_existing_map_and_default_semantics)
 - Real Nix-generated built-in configuration is accepted by the Rust parser with
   the intended declared fields and platform-specific source semantics.
   [system?](test-ci:test-profile-config-parser-agreement)
 - The documented namespaced `SpawnConfig` example parses through the Rust
   boundary and requires no formal schema validator.
-  [test?](../crates/wrix-sandbox/tests/config_contract.rs::documented_spawn_example_matches_parser)
+  [test](../crates/wrix-sandbox/tests/config_contract.rs::documented_spawn_example_matches_parser)
 
 ### Network and Mount Enforcement Acceptance
 

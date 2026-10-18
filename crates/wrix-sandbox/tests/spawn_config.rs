@@ -230,7 +230,7 @@ fn runtime_shim_apple_image_listing_preserves_cached_reference() -> TestResult {
 }
 
 #[test]
-fn consumer_spawn_config_fields_are_mounted_for_entrypoint() -> TestResult {
+fn consumer_extensions_are_mounted_for_entrypoint() -> TestResult {
     let fixture = SpawnFixture::new("spawn-consumer-fields")?;
     let config = fixture.write(
         "consumer-fields",
@@ -239,11 +239,14 @@ fn consumer_spawn_config_fields_are_mounted_for_entrypoint() -> TestResult {
             "env": [],
             "agent_args": [],
             "mounts": [],
-            "initial_prompt": "consumer field",
-            "repin": true
+            "extensions": {
+                "initial_prompt": "consumer field",
+                "repin": true
+            }
         }),
     )?;
 
+    let original = fs::read(&config)?;
     let runtime = write_runtime_shims(fixture.root.path())?;
     let run = common::run_child(
         "spawn_config_child",
@@ -274,6 +277,7 @@ fn consumer_spawn_config_fields_are_mounted_for_entrypoint() -> TestResult {
     )?;
 
     assert!(run.success, "{}", run.stderr);
+    assert_eq!(fs::read(&config)?, original);
     assert!(
         fixture
             .root
@@ -452,10 +456,7 @@ fn spawn_config_cannot_override_agent() -> TestResult {
     let run = fixture.run("agent-override", &config)?;
 
     assert!(!run.success);
-    assert!(
-        run.stderr
-            .contains("SpawnConfig cannot change the ProfileConfig agent")
-    );
+    assert!(run.stderr.contains("invalid SpawnConfig schema"));
     Ok(())
 }
 

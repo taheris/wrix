@@ -55,13 +55,13 @@ impl Fixture {
         fs::write(
             &profile,
             serde_json::to_vec(&json!({
-                "schema": 1, "system": "test", "profile": {"name": "base"},
+                "schema": 1, "system": "x86_64-linux", "profile": {"name": "base"},
                 "image": {
                     "ref": IMAGE, "source": "/missing/image-source",
                     "source_kind": source_kind, "digest": digest()
                 },
                 "agent": {"kind": "direct"},
-                "services": {"beads": {"enable": false}, "nix_cache": {"enable": false}}
+                "services": {"beads": {"enable": "auto"}, "nix_cache": {"enable": false}}
             }))?,
         )?;
         fs::write(

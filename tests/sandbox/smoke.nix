@@ -212,7 +212,7 @@ in
         profile_config="$PWD/profile-config.json"
         mkdir -p "$workspace" "$home"
         cat > "$profile_config" <<'JSON'
-        {"schema":1,"system":"test","profile":{"name":"base","env":{},"mounts":[],"writable_dirs":[],"network_allowlist":[]},"image":{"ref":"wrix-base:test","source":"/nix/store/fake-image","source_kind":"${
+        {"schema":1,"system":"x86_64-linux","profile":{"name":"base","env":{},"mounts":[],"writable_dirs":[],"network_allowlist":[]},"image":{"ref":"wrix-base:test","source":"/nix/store/fake-image","source_kind":"${
           if isLinux then "nix-descriptor" else "docker-archive"
         }","digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"},"agent":{"kind":"direct"},"resources":{"cpus":null,"memory_mb":4096,"pids_limit":4096},"security":{"deploy_key":null},"network":{"default_mode":"open","ipv6":"disabled"},"services":{"beads":{"enable":"auto"},"nix_cache":{"enable":false}},"features":{"mcp_runtime":false}}
         JSON
@@ -611,7 +611,7 @@ in
           profile_config="$PWD/profile-config.json"
           mkdir -p "$workspace" "$home"
           cat > "$profile_config" <<'JSON'
-          {"schema":1,"system":"test","profile":{"name":"base","env":{},"mounts":[],"writable_dirs":[],"network_allowlist":[]},"image":{"ref":"wrix-base:test","source":"/nix/store/fake-image","source_kind":"nix-descriptor","digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"},"agent":{"kind":"direct"},"resources":{"cpus":null,"memory_mb":4096,"pids_limit":4096},"security":{"deploy_key":null},"network":{"default_mode":"open","ipv6":"disabled"},"services":{"beads":{"enable":"auto"},"nix_cache":{"enable":false}},"features":{"mcp_runtime":false}}
+          {"schema":1,"system":"x86_64-linux","profile":{"name":"base","env":{},"mounts":[],"writable_dirs":[],"network_allowlist":[]},"image":{"ref":"wrix-base:test","source":"/nix/store/fake-image","source_kind":"nix-descriptor","digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"},"agent":{"kind":"direct"},"resources":{"cpus":null,"memory_mb":4096,"pids_limit":4096},"security":{"deploy_key":null},"network":{"default_mode":"open","ipv6":"disabled"},"services":{"beads":{"enable":"auto"},"nix_cache":{"enable":false}},"features":{"mcp_runtime":false}}
           JSON
 
           output=$(HOME="$home" WRIX_DRY_RUN=1 ${wrixLauncher}/bin/wrix --profile-config "$profile_config" run "$workspace" true)
@@ -711,7 +711,7 @@ in
         profile_config="$PWD/profile-config.json"
         mkdir -p "$workspace" "$home"
         cat > "$profile_config" <<'JSON'
-        {"schema":1,"system":"test","profile":{"name":"base","env":{},"mounts":[],"writable_dirs":[],"network_allowlist":[{"host":"api.anthropic.com","ports":[443]}]},"image":{"ref":"wrix-base:test","source":"/nix/store/fake-image","source_kind":"${
+        {"schema":1,"system":"x86_64-linux","profile":{"name":"base","env":{},"mounts":[],"writable_dirs":[],"network_allowlist":[{"host":"api.anthropic.com","ports":[443]}]},"image":{"ref":"wrix-base:test","source":"/nix/store/fake-image","source_kind":"${
           if isLinux then "nix-descriptor" else "docker-archive"
         }","digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"},"agent":{"kind":"direct"},"resources":{"cpus":null,"memory_mb":4096,"pids_limit":4096},"security":{"deploy_key":null},"network":{"default_mode":"open","ipv6":"disabled"},"services":{"beads":{"enable":"auto"},"nix_cache":{"enable":false}},"features":{"mcp_runtime":false}}
         JSON

@@ -66,7 +66,7 @@ pub struct ProfileConfig {
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Network {
     pub default_mode: NetworkMode,
     pub ipv6: Ipv6Policy,
@@ -105,6 +105,7 @@ impl NetworkMode {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Profile {
     pub name: ProfileName,
     #[serde(default)]
@@ -204,6 +205,7 @@ pub struct ProfileNameParseError {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProfileMount {
     pub source: String,
     pub dest: String,
@@ -233,6 +235,7 @@ pub struct Agent {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Resources {
     #[serde(default)]
     pub cpus: Option<u32>,
@@ -340,8 +343,24 @@ fn deserialize_git_grants<'de, D>(deserializer: D) -> Result<GitGrants, D::Error
 where
     D: Deserializer<'de>,
 {
-    let fields = serde_json::Map::<String, Value>::deserialize(deserializer)?;
-    serde_json::from_value(Value::Object(fields)).map_err(de::Error::custom)
+    struct GrantsVisitor;
+
+    impl<'de> de::Visitor<'de> for GrantsVisitor {
+        type Value = GitGrants;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("an object with optional boolean deploy/sign grants")
+        }
+
+        fn visit_map<A>(self, map: A) -> Result<Self::Value, A::Error>
+        where
+            A: de::MapAccess<'de>,
+        {
+            GitGrants::deserialize(de::value::MapAccessDeserializer::new(map))
+        }
+    }
+
+    deserializer.deserialize_map(GrantsVisitor)
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -366,6 +385,7 @@ impl<'de> Deserialize<'de> for BeadId {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawSpawnConfig {
     bead_id: Option<BeadId>,
     image_ref: Option<ImageRef>,
@@ -380,11 +400,12 @@ struct RawSpawnConfig {
     tool_caches: wrix_core::tool_cache::Preference,
     #[serde(default)]
     mounts: Vec<SpawnMount>,
-    #[serde(flatten)]
-    extensions: BTreeMap<String, Value>,
+    #[serde(default, rename = "extensions")]
+    _extensions: serde_json::Map<String, Value>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpawnMount {
     pub host_path: String,
     pub container_path: String,
@@ -451,10 +472,6 @@ pub enum ConfigError {
     },
     /// invalid SpawnConfig schema: expected workspace string, optional image_ref/image_source/image_source_kind strings, env [key,value] string pairs, agent_args strings, git with independent boolean deploy/sign overrides, and mounts with host_path/container_path/read_only
     InvalidSpawnConfigSchema,
-    /// SpawnConfig cannot change the ProfileConfig agent/profile/image-agent field: {field}
-    SpawnConfigProfileOverride { field: String },
-    /// SpawnConfig field {field} is not a documented per-launch override; use a matching ProfileConfig image
-    SpawnConfigDigestOverride { field: String },
     /// sandbox mounts and writable_dirs must use absolute paths outside the private Nix and trusted startup paths: {path}
     InvalidMountDestination { path: String },
     /// SpawnConfig image_source requires image_source_kind
@@ -640,28 +657,6 @@ fn parse_spawn_value(value: Value, platform: Platform) -> Result<SpawnConfig, Co
 }
 
 fn parse_spawn(spawn: RawSpawnConfig, platform: Platform) -> Result<SpawnConfig, ConfigError> {
-    if let Some(field) = first_present_field(
-        &spawn.extensions,
-        &[
-            "agent",
-            "agent_kind",
-            "wrix_agent",
-            "WRIX_AGENT",
-            "profile",
-            "profile_name",
-            "profile_config",
-            "image_agent",
-            "image-agent",
-        ],
-    ) {
-        return Err(ConfigError::SpawnConfigProfileOverride { field });
-    }
-    if let Some(field) =
-        first_present_field(&spawn.extensions, &["image_digest", "image_digest_path"])
-    {
-        return Err(ConfigError::SpawnConfigDigestOverride { field });
-    }
-
     if let Some((name, _value)) = spawn
         .env
         .iter()
@@ -712,15 +707,15 @@ fn parse_spawn(spawn: RawSpawnConfig, platform: Platform) -> Result<SpawnConfig,
     })
 }
 
-fn first_present_field(value: &BTreeMap<String, Value>, fields: &[&str]) -> Option<String> {
-    fields
-        .iter()
-        .find(|field| value.get(**field).is_some())
-        .map(|field| (*field).to_owned())
-}
-
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawProfileConfig {
+    #[serde(default, rename = "system")]
+    _system: Option<System>,
+    #[serde(default, rename = "features")]
+    _features: Option<Features>,
+    #[serde(default, rename = "extensions")]
+    _extensions: serde_json::Map<String, Value>,
     schema: Option<i64>,
     #[serde(default)]
     network: Network,
@@ -736,6 +731,7 @@ struct RawProfileConfig {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawProfile {
     name: Option<String>,
     #[serde(default)]
@@ -749,6 +745,7 @@ struct RawProfile {
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawImage {
     #[serde(rename = "ref")]
     reference: Option<String>,
@@ -758,11 +755,13 @@ struct RawImage {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawAgent {
     kind: Option<AgentKind>,
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawSecurity {
     #[serde(default)]
     deploy_key: Option<String>,
@@ -771,15 +770,51 @@ struct RawSecurity {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawServices {
+    #[serde(default, rename = "beads")]
+    _beads: Option<BeadsService>,
     #[serde(default)]
     nix_cache: Option<RawNixCacheService>,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawNixCacheService {
     #[serde(default)]
     enable: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+enum System {
+    #[serde(rename = "x86_64-linux")]
+    X86Linux,
+    #[serde(rename = "aarch64-linux")]
+    ArmLinux,
+    #[serde(rename = "aarch64-darwin")]
+    ArmDarwin,
+    #[serde(rename = "x86_64-darwin")]
+    X86Darwin,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Features {
+    #[serde(default, rename = "mcp_runtime")]
+    _mcp_runtime: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BeadsService {
+    #[serde(rename = "enable")]
+    _enable: BeadsMode,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum BeadsMode {
+    Auto,
 }
 
 impl Default for Resources {
@@ -905,13 +940,13 @@ mod test {
     }
 
     #[test]
-    fn spawn_config_keeps_consumer_fields_but_rejects_agent_override() {
+    fn spawn_config_namespaces_consumer_fields_and_rejects_agent_override() {
         let value = json!({
             "workspace": "/workspace",
             "env": [],
             "agent_args": [],
             "mounts": [],
-            "initial_prompt": "consumer field"
+            "extensions": {"initial_prompt": "consumer field"}
         });
         let spawn = parse_spawn_value(value, Platform::Linux).unwrap();
         assert_eq!(spawn.workspace, "/workspace");
@@ -924,10 +959,7 @@ mod test {
             "agent": { "kind": "pi" }
         });
         let error = parse_spawn_value(value, Platform::Linux).unwrap_err();
-        assert!(matches!(
-            error,
-            ConfigError::SpawnConfigProfileOverride { .. }
-        ));
+        assert!(matches!(error, ConfigError::InvalidSpawnConfigSchema));
     }
 
     #[test]
@@ -937,13 +969,13 @@ mod test {
             (Platform::Darwin, "docker-archive"),
         ] {
             let value = json!({
-                "schema":1, "system":"future-system", "future_extension":{"enabled":true},
-                "profile":{"name":"base", "future_profile_field":[1,2]},
-                "image":{"ref":"wrix:test", "source":"/not-yet-realized", "source_kind":kind, "future_image_field":true},
-                "agent":{"kind":"pi", "future_agent_field":true},
-                "services":{"beads":{"enable":"auto"}, "future_service":{}},
+                "schema":1, "system":"aarch64-linux", "extensions":{"future_extension":{"enabled":true}},
+                "profile":{"name":"base"},
+                "image":{"ref":"wrix:test", "source":"/not-yet-realized", "source_kind":kind},
+                "agent":{"kind":"pi"},
+                "services":{"beads":{"enable":"auto"}},
                 "features":{"mcp_runtime":true},
-                "network":{"default_mode":"limit", "future_network_field":true}
+                "network":{"default_mode":"limit"}
             });
             let config = parse_profile_value(value, platform).unwrap();
             assert_eq!(config.image.source.kind(), platform.expected_source_kind());

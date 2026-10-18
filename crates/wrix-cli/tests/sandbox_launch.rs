@@ -26,7 +26,7 @@ impl Fixture {
         };
         let mut value = json!({
             "schema": 1,
-            "system": "test",
+            "system": "x86_64-linux",
             "profile": { "name": "base" },
             "image": {
                 "ref": "localhost/wrix-test:latest",
@@ -742,6 +742,78 @@ fn malformed_profile_config_fails_before_subprocesses() -> TestResult {
             "{pointer}: {}",
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+    Ok(())
+}
+
+#[test]
+fn unknown_owned_config_fields_fail_before_preparation() -> TestResult {
+    for spawn in [false, true] {
+        let pointers: &[&str] = if spawn {
+            &["", "/git", "/tool_caches", "/mounts/0"]
+        } else {
+            &[
+                "",
+                "/profile",
+                "/profile/mounts/0",
+                "/image",
+                "/agent",
+                "/resources",
+                "/security",
+                "/network",
+                "/services",
+                "/services/beads",
+                "/services/nix_cache",
+                "/features",
+            ]
+        };
+        for pointer in pointers {
+            let fixture = Fixture::new(None)?;
+            let mut value: Value = if spawn {
+                json!({"workspace": fixture.workspace, "env": [], "agent_args": [],
+                    "git": {}, "tool_caches": {}, "mounts": [{"host_path": "/missing", "container_path": "/data", "read_only": true}]})
+            } else {
+                let mut profile: Value = serde_json::from_slice(&fs::read(&fixture.profile)?)?;
+                profile["profile"]["mounts"] = json!([{"source": "/missing", "dest": "/data"}]);
+                profile["resources"] = json!({});
+                profile["security"] = json!({});
+                profile["network"] = json!({});
+                profile["services"]["beads"] = json!({"enable": "auto"});
+                profile["features"] = json!({});
+                profile
+            };
+            value.pointer_mut(pointer).ok_or("missing fixture object")?["initial_prompt"] =
+                json!("flat payload");
+            let mut command = if spawn {
+                let path = fixture.root.path().join("spawn.json");
+                fs::write(&path, serde_json::to_vec(&value)?)?;
+                let mut command = Command::new(env!("CARGO_BIN_EXE_wrix"));
+                command
+                    .arg("--profile-config")
+                    .arg(&fixture.profile)
+                    .args(["spawn", "--spawn-config"])
+                    .arg(path)
+                    .env("HOME", fixture.root.path().join("home"));
+                command
+            } else {
+                fs::write(&fixture.profile, serde_json::to_vec(&value)?)?;
+                fixture.command()
+            };
+            fixture.forbid_subprocesses(&mut command)?;
+            let output = command.output()?;
+            assert!(!output.status.success(), "accepted spawn={spawn} {pointer}");
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains(if spawn {
+                    "invalid SpawnConfig schema"
+                } else {
+                    "unknown field"
+                }),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(!fixture.root.path().join("calls").exists());
+            assert!(!fixture.root.path().join("home").exists());
+        }
     }
     Ok(())
 }

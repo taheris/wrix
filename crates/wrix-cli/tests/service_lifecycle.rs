@@ -222,7 +222,7 @@ impl Fixture {
             &profile,
             serde_json::to_vec(&json!({
                 "schema": 1,
-                "system": "test",
+                "system": "x86_64-linux",
                 "profile": {"name": "base"},
                 "image": {
                     "ref": "localhost/wrix-test:latest",

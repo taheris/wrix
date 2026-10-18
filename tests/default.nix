@@ -161,6 +161,18 @@ let
     inherit pkgs linuxPkgs;
   };
 
+  profileConfigParserAgreement = import ./sandbox/profile-config-parser.nix {
+    inherit
+      pkgs
+      linuxPkgs
+      crane
+      fenix
+      treefmt
+      ;
+    serviceCli = wrix.rustPackage.wrix;
+    rustNextest = wrix.rustPackage.nextest;
+  };
+
   rustChecks = {
     wrix-rust-clippy = wrix.rustPackage.clippy;
     wrix-rust-nextest = wrix.rustPackage.nextest;
@@ -203,6 +215,9 @@ let
 
   ciChecks =
     rustChecks
+    // {
+      profile-config-parser-agreement = profileConfigParserAgreement;
+    }
     // builtins.intersectAttrs { private-nix-artifacts = null; } loomTests.checks
     // {
       inherit (smokeTests)
@@ -427,6 +442,7 @@ let
     (mkCiApp testProfileImagesManifestShape "test-profile-images-manifest-shape")
     (mkCiApp testProfileConfigImageSourceKind "test-profile-config-image-source-kind")
     (mkCiApp testProfileConfigWrapper "test-profile-config-wrapper")
+    (mkCiApp testProfileConfigParserAgreement "test-profile-config-parser-agreement")
     (mkCiApp testContainerPreCommit "test-container-pre-commit")
     (mkCiApp testContainerPrePush "test-container-pre-push")
     (mkCiApp testWrixCliInProfile "test-wrix-cli-in-profile")
@@ -724,6 +740,12 @@ let
     name = "test-profile-config-image-source-kind";
     script = "tests/sandbox/profile-config-wrapper.sh";
     args = [ "test_image_source_kind" ];
+  };
+  testProfileConfigParserAgreement = pkgs.writeShellApplication {
+    name = "test-profile-config-parser-agreement";
+    text = ''
+      test -e ${profileConfigParserAgreement}
+    '';
   };
   testProfileConfigWrapper = mkRepoScriptCiApp {
     name = "test-profile-config-wrapper";
