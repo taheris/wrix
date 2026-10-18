@@ -176,6 +176,7 @@ impl Fixture {
                 "WRIX_TEST_SERVICE_NAME",
                 self.metadata["container_name"].as_str().unwrap_or("unused"),
             )
+            .env_remove("WRIX_SERVICE_IMAGE")
             .env_remove("WRIX_SERVICE_IMAGE_SOURCE")
             .env_remove("WRIX_SERVICE_IMAGE_SOURCE_KIND")
             .env_remove("WRIX_SERVICE_IMAGE_DIGEST");
@@ -916,6 +917,26 @@ fn concurrent_service_starts_share_one_lifecycle_owner() -> TestResult {
         1,
         "{log}"
     );
+    Ok(())
+}
+
+#[test]
+fn service_fixture_removes_ambient_image_metadata() -> TestResult {
+    let fixture = Fixture::new()?;
+    let command = fixture.command()?;
+    for name in [
+        "WRIX_SERVICE_IMAGE",
+        "WRIX_SERVICE_IMAGE_SOURCE",
+        "WRIX_SERVICE_IMAGE_SOURCE_KIND",
+        "WRIX_SERVICE_IMAGE_DIGEST",
+    ] {
+        assert!(
+            command
+                .get_envs()
+                .any(|(key, value)| key == name && value.is_none()),
+            "fixture must remove inherited {name}"
+        );
+    }
     Ok(())
 }
 
