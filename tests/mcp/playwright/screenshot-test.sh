@@ -105,8 +105,6 @@ PY
         fi
         sleep 0.2
     done
-
-    cat "$port_file"
 }
 
 start_mcp_server() {
@@ -174,7 +172,8 @@ test_screenshot_returns_png() {
     new_temp_dir
     local python_bin port id response server_name nav_error call_error b64_data decoded_file decoded_header data_len
     python_bin=$(playwright_find_python) || return 1
-    port=$(start_http_server "$python_bin") || return 1
+    start_http_server "$python_bin" || return 1
+    port=$(<"${TEMP_DIR}/http_port")
     log_info "HTTP server on port $port"
 
     start_mcp_server "${TEMP_DIR}/user-data" || return 1
@@ -234,6 +233,12 @@ test_screenshot_returns_png() {
     log_pass "test_screenshot_returns_png"
 }
 
+test_setup_failure_cleans_http_server() {
+    local python_bin
+    python_bin=$(playwright_find_python) || return 1
+    "$python_bin" "${SCRIPT_DIR}/screenshot-cleanup-test.py"
+}
+
 main() {
     echo ""
     log_info "=========================================="
@@ -243,13 +248,20 @@ main() {
 
     local passed=0
     local failed=0
-
-    if test_screenshot_returns_png; then
-        passed=$((passed + 1))
-    else
-        failed=$((failed + 1))
+    local test
+    local tests=(test_setup_failure_cleans_http_server test_screenshot_returns_png)
+    if [[ $# -gt 0 ]]; then
+        tests=("$@")
     fi
-    echo ""
+
+    for test in "${tests[@]}"; do
+        if "$test"; then
+            passed=$((passed + 1))
+        else
+            failed=$((failed + 1))
+        fi
+        echo ""
+    done
 
     echo "=========================================="
     log_info "Results: $passed passed, $failed failed"
