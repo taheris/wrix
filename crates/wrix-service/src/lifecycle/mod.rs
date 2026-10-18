@@ -107,6 +107,14 @@ pub enum Error {
     AppleJson { source: serde_json::Error },
     /// invalid persisted workspace hash: {value}
     InvalidPersistedWorkspaceHash { value: String },
+    /// persisted service metadata at {path} must be a regular file, not a symlink or directory
+    InvalidRegistrationPath { path: PathBuf },
+    /// persisted service metadata at {path} belongs to another workspace
+    WorkspaceMismatch { path: PathBuf },
+    /// persisted service endpoint at {path} is not loopback-only in its assigned port range
+    InvalidPortLease { path: PathBuf },
+    /// planned service port {port} is already leased to another workspace
+    PortLeaseConflict { port: u16 },
     /// {source}
     BeadsConfig { source: ReadError },
     /// {0}
@@ -246,7 +254,8 @@ impl Plan {
         cache_settings: wrix_cache::config::Settings,
     ) -> Result<Self> {
         let container_name = select_container_name(&workspace, &paths)?;
-        let prior_ports = PortLease::read(&paths.services_path())?;
+        let prior_ports = PortLease::read(&paths.services_path(), workspace.hash())?;
+        let peer_ports = peer_port_leases(&paths, workspace.hash())?;
         let cache_port = match cache_mode {
             CacheMode::Enabled
                 if cache_settings.enable
@@ -257,6 +266,7 @@ impl Plan {
                     CACHE_PORT_START,
                     CACHE_PORT_WIDTH,
                     workspace.hash(),
+                    &peer_ports,
                 )?)
             }
             CacheMode::Enabled | CacheMode::Disabled => None,
@@ -273,6 +283,7 @@ impl Plan {
                         DOLT_PORT_START,
                         DOLT_PORT_WIDTH,
                         workspace.hash(),
+                        &peer_ports,
                     )?)?,
                 },
             })
@@ -353,7 +364,24 @@ impl Plan {
     }
 
     pub fn ensure_layout(&self) -> Result<()> {
-        self.authorize()?;
+        self.validate_registration()?;
+        let _lock = self.paths.lock_registration()?;
+        self.ensure_layout_locked()
+    }
+
+    fn validate_registration(&self) -> Result<()> {
+        PortLease::read(&self.paths.services_path(), self.workspace.hash())?;
+        let peer_ports = peer_port_leases(&self.paths, self.workspace.hash())?;
+        for port in self.selected_host_ports() {
+            if peer_ports.contains(&port) {
+                return Err(Error::PortLeaseConflict { port });
+            }
+        }
+        Ok(())
+    }
+
+    fn ensure_layout_locked(&self) -> Result<()> {
+        self.validate_registration()?;
         fs::create_dir_all(self.paths.state_root())?;
         if self.cache_enabled() {
             fs::create_dir_all(self.paths.cache_root())?;
@@ -559,6 +587,21 @@ impl Paths {
         self.state_root.parent()
     }
 
+    fn lock_registration(&self) -> Result<fs::File> {
+        let base = self.state_base().ok_or_else(|| Error::Operation {
+            message: String::from("workspace state root has no parent"),
+        })?;
+        fs::create_dir_all(base)?;
+        let lock = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(base.join("service-registration.lock"))?;
+        lock.lock_exclusive()?;
+        Ok(lock)
+    }
+
     pub fn cache_root(&self) -> &Path {
         self.cache_root.as_path()
     }
@@ -644,7 +687,7 @@ pub fn start(cache_mode: CacheMode) -> Result<Status> {
         plan = Plan::for_current_dir(cache_mode)?;
     }
     runtime.refresh_unavailable_ports(&mut plan)?;
-    plan.ensure_layout()?;
+    plan.ensure_layout_locked()?;
     if plan.has_services() {
         runtime.ensure_running(&plan)?;
     }
@@ -657,19 +700,18 @@ fn locked_plan(cache_mode: CacheMode) -> Result<(Plan, fs::File)> {
     let settings = wrix_cache::config::Settings::for_workspace(&workspace)?;
     let paths = Paths::for_workspace(workspace.hash())?;
     let branch = read_sync_branch(workspace.canonical_path())?;
-    selection.authorize_effects()?;
-    fs::create_dir_all(paths.state_root())?;
-    let lock = fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(paths.state_root().join("service.lock"))?;
-    lock.lock_exclusive()?;
-    selection.authorize_effects()?;
-    let mut plan = Plan::from_parsed(workspace, cache_mode, paths, branch, settings)?;
-    plan.selection = Some(selection);
-    Ok((plan, lock))
+    Plan::from_parsed(
+        workspace.clone(),
+        cache_mode,
+        paths.clone(),
+        branch.clone(),
+        settings.clone(),
+    )?;
+    let lock = paths.lock_registration()?;
+    Ok((
+        Plan::from_parsed(workspace, cache_mode, paths, branch, settings)?,
+        lock,
+    ))
 }
 
 pub fn stop(cache_mode: CacheMode) -> Result<Status> {
@@ -796,27 +838,42 @@ struct PersistedEndpoint {
 }
 
 impl PersistedEndpoint {
-    fn loopback_port(&self) -> Option<u16> {
-        self.host.is_loopback().then_some(self.port.get())
+    fn scoped_port(&self, start: u16, width: u16, path: &Path) -> Result<u16> {
+        let port = self.port.get();
+        if self.host != Ipv4Addr::LOCALHOST || !(start..start + width).contains(&port) {
+            return Err(Error::InvalidPortLease {
+                path: path.to_path_buf(),
+            });
+        }
+        Ok(port)
     }
 }
 
 impl PortLease {
-    fn read(path: &Path) -> Result<Self> {
+    fn read(path: &Path, workspace_hash: &WorkspaceHash) -> Result<Self> {
         let Some(services) = read_persisted_services(path)? else {
             return Ok(Self::default());
         };
+        if !services.workspace_hash.matches(workspace_hash) {
+            return Err(Error::WorkspaceMismatch {
+                path: path.to_path_buf(),
+            });
+        }
+        Self::from_endpoints(&services.endpoints, path)
+    }
+
+    fn from_endpoints(endpoints: &PersistedEndpoints, path: &Path) -> Result<Self> {
         Ok(Self {
-            cache_http_port: services
-                .endpoints
+            cache_http_port: endpoints
                 .cache_http
                 .as_ref()
-                .and_then(PersistedEndpoint::loopback_port),
-            dolt_tcp_port: services
-                .endpoints
+                .map(|endpoint| endpoint.scoped_port(CACHE_PORT_START, CACHE_PORT_WIDTH, path))
+                .transpose()?,
+            dolt_tcp_port: endpoints
                 .dolt_tcp
                 .as_ref()
-                .and_then(PersistedEndpoint::loopback_port),
+                .map(|endpoint| endpoint.scoped_port(DOLT_PORT_START, DOLT_PORT_WIDTH, path))
+                .transpose()?,
         })
     }
 }
@@ -873,16 +930,25 @@ where
 }
 
 fn read_persisted_services(path: &Path) -> Result<Option<PersistedServices>> {
-    let content = match wrix_state::namespace::read_at(path)? {
-        wrix_state::namespace::Source::Host(Some(content)) => content,
-        wrix_state::namespace::Source::Host(None) => return Ok(None),
-        wrix_state::namespace::Source::Observer => match fs::read(path) {
-            Ok(content) => content,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error.into()),
-        },
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+            ) =>
+        {
+            return Ok(None);
+        }
+        Err(error) => return Err(error.into()),
     };
-    serde_json::from_slice(&content)
+    if !metadata.is_file() {
+        return Err(Error::InvalidRegistrationPath {
+            path: path.to_path_buf(),
+        });
+    }
+    let content = fs::read_to_string(path)?;
+    serde_json::from_str(&content)
         .map(Some)
         .map_err(|source| Error::PersistedServicesJson {
             path: path.display().to_string(),
@@ -1288,6 +1354,9 @@ impl Runtime {
     }
 
     fn port_available_for_plan(&self, port: u16, plan: &Plan) -> Result<bool> {
+        if peer_port_leases(plan.paths(), plan.workspace().hash())?.contains(&port) {
+            return Ok(false);
+        }
         if let Some(owner) = self.container_port_owner(port)? {
             return Ok(
                 owner.name == plan.container_name().as_str() && owner.belongs_to_workspace(plan)
@@ -1722,16 +1791,48 @@ fn temp_roots() -> Vec<PathBuf> {
     roots
 }
 
-fn select_port(prior: Option<u16>, start: u16, width: u16, hash: &WorkspaceHash) -> Result<u16> {
+fn peer_port_leases(paths: &Paths, hash: &WorkspaceHash) -> Result<Vec<u16>> {
+    let Some(base) = paths.state_base() else {
+        return Ok(Vec::new());
+    };
+    let entries = match fs::read_dir(base) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error.into()),
+    };
+    let mut ports = Vec::new();
+    for entry in entries {
+        let path = entry?.path().join("services.json");
+        let Some(services) = read_persisted_services(&path)? else {
+            continue;
+        };
+        if services.workspace_hash.matches(hash) {
+            continue;
+        }
+        let lease = PortLease::from_endpoints(&services.endpoints, &path)?;
+        ports.extend(lease.cache_http_port);
+        ports.extend(lease.dolt_tcp_port);
+    }
+    Ok(ports)
+}
+
+fn select_port(
+    prior: Option<u16>,
+    start: u16,
+    width: u16,
+    hash: &WorkspaceHash,
+    peer_ports: &[u16],
+) -> Result<u16> {
     if let Some(port) = prior
         && (start..start + width).contains(&port)
+        && !peer_ports.contains(&port)
     {
         return Ok(port);
     }
     let preferred = start + hash.port_offset(width);
     for offset in 0..width {
         let port = start + ((preferred - start + offset) % width);
-        if is_loopback_port_available(port) {
+        if !peer_ports.contains(&port) && is_loopback_port_available(port) {
             return Ok(port);
         }
     }
