@@ -1213,7 +1213,7 @@ rootfs symlink. [check](nix build
   [test](../crates/wrix-sandbox/tests/config_contract.rs::strict_boundaries_preserve_existing_map_and_default_semantics)
 - Real Nix-generated built-in configuration is accepted by the Rust parser with
   the intended declared fields and platform-specific source semantics.
-  [system?](test-ci:test-profile-config-parser-agreement)
+  [system](test-ci:test-profile-config-parser-agreement)
 - The documented namespaced `SpawnConfig` example parses through the Rust
   boundary and requires no formal schema validator.
   [test](../crates/wrix-sandbox/tests/config_contract.rs::documented_spawn_example_matches_parser)
