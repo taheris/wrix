@@ -117,6 +117,63 @@ fn tree(root: &Path) -> TestResult<Tree> {
 }
 
 #[test]
+fn fixture_git_disables_automatic_maintenance_despite_inherited_configuration() -> TestResult {
+    const CHILD: &str = "WRIX_TEST_FIXTURE_MAINTENANCE_CHILD";
+    const TEST: &str = "fixture_git_disables_automatic_maintenance_despite_inherited_configuration";
+    if std::env::var_os(CHILD).is_some() {
+        let fixture = Fixture::new()?;
+        for (key, expected) in [("maintenance.auto", "false"), ("gc.auto", "0")] {
+            assert_eq!(
+                git_stdout(fixture.repo.path(), &["config", "--get", key])?,
+                expected
+            );
+        }
+        offline_policy_rejects_provisioning_before_mutation()?;
+        required_signing_material_is_not_implicitly_provisioned()?;
+        return Ok(());
+    }
+    let directory = tempfile::tempdir()?;
+    let trace = directory.path().join("git-trace.jsonl");
+    let result = run_command(
+        Command::new(std::env::current_exe()?)
+            .args(["--exact", TEST, "--nocapture"])
+            .env(CHILD, "1")
+            .env("GIT_CONFIG_COUNT", "2")
+            .env("GIT_CONFIG_KEY_0", "maintenance.auto")
+            .env("GIT_CONFIG_VALUE_0", "true")
+            .env("GIT_CONFIG_KEY_1", "gc.auto")
+            .env("GIT_CONFIG_VALUE_1", "1")
+            .env(
+                "GIT_CONFIG_PARAMETERS",
+                "'maintenance.auto=true' 'gc.auto=1'",
+            )
+            .env("GIT_TRACE2_EVENT", &trace),
+    )?;
+    assert_success_with_clean_stderr(&result);
+    let events = fs::read_to_string(trace)?
+        .lines()
+        .map(serde_json::from_str::<serde_json::Value>)
+        .collect::<Result<Vec<_>, _>>()?;
+    assert!(events.iter().any(|event| {
+        event["event"] == "start"
+            && event["argv"]
+                .as_array()
+                .is_some_and(|args| args.iter().any(|arg| arg == "commit"))
+    }));
+    for event in events
+        .iter()
+        .filter(|event| event["event"] == "child_start")
+    {
+        let args = event["argv"].as_array().unwrap();
+        assert!(
+            !args.iter().any(|arg| arg == "maintenance" || arg == "gc"),
+            "fixture launched automatic maintenance: {event}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn workflow_help_is_complete_and_non_mutating() -> TestResult {
     let fixture = Fixture::new()?;
     let before = tree(fixture.repo.path())?;
