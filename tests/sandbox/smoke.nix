@@ -217,9 +217,9 @@ in
         }","digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"},"agent":{"kind":"direct"},"resources":{"cpus":null,"memory_mb":4096,"pids_limit":4096},"security":{"deploy_key":null},"network":{"default_mode":"open","ipv6":"disabled"},"services":{"beads":{"enable":"auto"},"nix_cache":{"enable":false}},"features":{"mcp_runtime":false}}
         JSON
 
-        output=$(HOME="$home" WRIX_DRY_RUN=1 ${wrixLauncher}/bin/wrix --profile-config "$profile_config" run "$workspace" true)
+        output=$(HOME="$home" ${wrixLauncher}/bin/wrix --profile-config "$profile_config" run --dry-run --json "$workspace" true)
         case "$output" in
-          *"SUBCOMMAND=run"*"PROFILE_AGENT=direct"*"WORKSPACE=$workspace"*"CMD=true"*) ;;
+          *'"schema":1'*'"agent":"direct"'*"\"workspace\":\"$workspace\""*) ;;
           *)
             printf 'launcher dry-run did not expose expected Rust launcher state:\n%s\n' "$output" >&2
             exit 1
@@ -614,17 +614,23 @@ in
           {"schema":1,"system":"x86_64-linux","profile":{"name":"base","env":{},"mounts":[],"writable_dirs":[],"network_allowlist":[]},"image":{"ref":"wrix-base:test","source":"/nix/store/fake-image","source_kind":"nix-descriptor","digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"},"agent":{"kind":"direct"},"resources":{"cpus":null,"memory_mb":4096,"pids_limit":4096},"security":{"deploy_key":null},"network":{"default_mode":"open","ipv6":"disabled"},"services":{"beads":{"enable":"auto"},"nix_cache":{"enable":false}},"features":{"mcp_runtime":false}}
           JSON
 
-          output=$(HOME="$home" WRIX_DRY_RUN=1 ${wrixLauncher}/bin/wrix --profile-config "$profile_config" run "$workspace" true)
+          mkdir bin
+          cp ${../../crates/wrix-cli/tests/fixtures/launch-runtime.sh} bin/podman
+          chmod +x bin/podman
+          HOME="$home" PATH="$PWD/bin:$PATH" WRIX_TEST_ARGV="$PWD/argv" \
+            WRIX_TEST_DIGEST=sha256:0000000000000000000000000000000000000000000000000000000000000000 \
+            ${wrixLauncher}/bin/wrix --profile-config "$profile_config" run "$workspace" true
+          output=$(${pkgs.coreutils}/bin/tr '\0' '\n' < argv)
           case "$output" in
-            *"PODMAN_NETWORK=pasta:"*"--map-host-loopback,169.254.1.2"*"--map-guest-addr,none"*"-t,none"*"-u,none"*"-T,none"*"-U,none"*) ;;
+            *"pasta:"*"--map-host-loopback,169.254.1.2"*"--map-guest-addr,none"*"-t,none"*"-u,none"*"-T,none"*"-U,none"*) ;;
             *)
-              printf 'launcher dry-run did not disable pasta auto-forwarding:\n%s\n' "$output" >&2
+              printf 'launcher did not disable pasta auto-forwarding:\n%s\n' "$output" >&2
               exit 1
               ;;
           esac
           case "$output" in
             *"-t,auto"*|*"-u,auto"*|*"-T,auto"*|*"-U,auto"*)
-              printf 'launcher dry-run enabled pasta auto-forwarding:\n%s\n' "$output" >&2
+              printf 'launcher enabled pasta auto-forwarding:\n%s\n' "$output" >&2
               exit 1
               ;;
           esac
@@ -715,12 +721,12 @@ in
           if isLinux then "nix-descriptor" else "docker-archive"
         }","digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"},"agent":{"kind":"direct"},"resources":{"cpus":null,"memory_mb":4096,"pids_limit":4096},"security":{"deploy_key":null},"network":{"default_mode":"open","ipv6":"disabled"},"services":{"beads":{"enable":"auto"},"nix_cache":{"enable":false}},"features":{"mcp_runtime":false}}
         JSON
-        output=$(HOME="$home" WRIX_DRY_RUN=1 WRIX_NETWORK=limit ${wrixLauncher}/bin/wrix --profile-config "$profile_config" run "$workspace" true)
+        output=$(HOME="$home" WRIX_NETWORK=limit ${wrixLauncher}/bin/wrix --profile-config "$profile_config" run --dry-run --json "$workspace" true)
         case "$output" in
-          *"PROFILE_AGENT=direct"*) ;;
+          *'"agent":"direct"'*'"network":"limit"'*) ;;
           *) printf 'launcher dry-run did not accept WRIX_NETWORK=limit:\n%s\n' "$output" >&2; exit 1 ;;
         esac
-        if HOME="$home" WRIX_DRY_RUN=1 WRIX_NETWORK=unsafe ${wrixLauncher}/bin/wrix --profile-config "$profile_config" run "$workspace" true >/tmp/wrix-network.out 2>/tmp/wrix-network.err; then
+        if HOME="$home" WRIX_NETWORK=unsafe ${wrixLauncher}/bin/wrix --profile-config "$profile_config" run "$workspace" true >/tmp/wrix-network.out 2>/tmp/wrix-network.err; then
           echo "FAIL: launcher accepted invalid WRIX_NETWORK" >&2
           exit 1
         fi

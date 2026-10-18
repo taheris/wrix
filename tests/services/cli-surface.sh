@@ -106,16 +106,14 @@ JSON
 {
   "workspace": "$REPO_ROOT",
   "image_ref": "localhost/wrix-test:latest",
-  "image_source": "",
   "env": [],
   "agent_args": ["echo", "hello"],
   "mounts": []
 }
 JSON
 
-  output="$(WRIX_DRY_RUN=1 "$package/bin/wrix" --profile-config "$profile_config" spawn --spawn-config "$spawn_config" --stdio)"
-  assert_contains "spawn dry run" "$output" "SUBCOMMAND=spawn"
-  assert_contains "spawn dry run" "$output" "STDIO=1"
+  output="$("$package/bin/wrix" --profile-config "$profile_config" spawn --dry-run --json --spawn-config "$spawn_config" --stdio)"
+  jq -e '.schema == 1 and .plan.agent == "direct"' <<<"$output" >/dev/null
   if [[ "$output" == *"unavailable in this build"* ]]; then
     fail "wrix spawn still points at the Rust stub"
   fi

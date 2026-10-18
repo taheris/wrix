@@ -17,7 +17,7 @@ pub struct ChildSpec {
     pub profile_config: Option<PathBuf>,
     pub args: Vec<String>,
     pub env: Vec<(String, OsString)>,
-    pub dry_run: bool,
+    pub capture_runtime: bool,
 }
 
 pub struct ChildRun {
@@ -105,10 +105,29 @@ pub fn run_child(
         .env_remove("CUSTOM_PROVIDER_TOKEN")
         .env_remove("WRIX_REQUIRED_SECRET_TEST_VALUE")
         .env_remove("TMUX");
-    if spec.dry_run {
-        command.env("WRIX_DRY_RUN", "1");
-    } else {
-        command.env_remove("WRIX_DRY_RUN");
+    let argv = root.join("argv");
+    if argv.exists() {
+        fs::remove_file(&argv)?;
+    }
+    if spec.capture_runtime {
+        let bin = root.join("capture-bin");
+        fs::create_dir_all(&bin)?;
+        for name in ["podman", "container", "route"] {
+            use std::os::unix::fs::PermissionsExt;
+            let path = bin.join(name);
+            fs::write(
+                &path,
+                include_str!("../../../wrix-cli/tests/fixtures/launch-runtime.sh"),
+            )?;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
+        }
+        let path = env::join_paths(std::iter::once(bin).chain(env::split_paths(
+            &env::var_os("PATH").ok_or("PATH missing")?,
+        )))?;
+        command
+            .env("PATH", path)
+            .env("WRIX_TEST_ARGV", &argv)
+            .env("WRIX_TEST_DIGEST", format!("sha256:{}", "a".repeat(64)));
     }
     if let Some(profile_config) = spec.profile_config {
         command.env("WRIX_SANDBOX_PROFILE_CONFIG", profile_config);
@@ -131,7 +150,11 @@ pub fn run_child(
     }
 
     Ok(ChildRun {
-        stdout: fs::read_to_string(stdout)?,
+        stdout: if spec.capture_runtime && argv.exists() {
+            String::from_utf8(fs::read(argv)?)?.replace('\0', "\n")
+        } else {
+            fs::read_to_string(stdout)?
+        },
         stderr: fs::read_to_string(stderr)?,
         success: fs::read_to_string(status)?.trim() == "0",
     })

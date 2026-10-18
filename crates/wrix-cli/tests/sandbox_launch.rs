@@ -473,23 +473,23 @@ fn run_preserves_independent_optional_git_overrides_in_launch_plan() -> TestResu
     ] {
         let fixture = Fixture::new(None)?;
         let mut command = fixture.capture_runtime()?;
-        let output = command.args(flags).env("WRIX_DRY_RUN", "1").output()?;
+        let output = command.args(["--dry-run", "--json"]).args(flags).output()?;
         assert!(
             output.status.success(),
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
-        let stdout = String::from_utf8(output.stdout)?;
-        for (name, expected) in [("GIT_DEPLOY_OVERRIDE", deploy), ("GIT_SIGN_OVERRIDE", sign)] {
-            let records: Vec<_> = stdout
-                .lines()
-                .filter(|line| line.starts_with(name))
-                .collect();
-            let expected: Vec<_> = expected
-                .into_iter()
-                .map(|value| format!("{name}={value}"))
-                .collect();
-            assert_eq!(records, expected);
+        let report: Value = serde_json::from_slice(&output.stdout)?;
+        for (name, expected) in [("git_deploy", deploy), ("git_sign", sign)] {
+            assert_eq!(report["plan"][name]["enabled"], expected.unwrap_or(false));
+            assert_eq!(
+                report["plan"][name]["origin"],
+                if expected.is_some() {
+                    "invocation"
+                } else {
+                    "default"
+                }
+            );
         }
         assert!(!fixture.root.path().join("argv").exists());
     }
@@ -694,8 +694,10 @@ fn profile_network_defaults_and_explicit_environment_precedence() -> TestResult 
         (Some(json!({"default_mode":"open"})), Some("limit"), "limit"),
     ] {
         let fixture = Fixture::new(network)?;
-        let mut command = fixture.command();
-        command.env("WRIX_DRY_RUN", "1");
+        let mut command = fixture.run_command();
+        command
+            .args(["--dry-run", "--json"])
+            .arg(&fixture.workspace);
         if let Some(mode) = override_mode {
             command.env("WRIX_NETWORK", mode);
         }
@@ -705,9 +707,8 @@ fn profile_network_defaults_and_explicit_environment_precedence() -> TestResult 
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
-        assert!(
-            String::from_utf8(output.stdout)?.contains(&format!("ENV=WRIX_NETWORK={expected}"))
-        );
+        let report: Value = serde_json::from_slice(&output.stdout)?;
+        assert_eq!(report["plan"]["network"], expected);
     }
     Ok(())
 }

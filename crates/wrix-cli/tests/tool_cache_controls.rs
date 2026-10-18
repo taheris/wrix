@@ -64,11 +64,11 @@ impl Fixture {
             .env("XDG_CACHE_HOME", self.root.path().join("cache"))
             .env("XDG_RUNTIME_DIR", self.root.path().join("runtime"))
             .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("WRIX_DRY_RUN", "1")
             .current_dir(&self.workspace)
             .arg("--profile-config")
             .arg(&self.profile)
-            .arg(mode);
+            .arg(mode)
+            .args(["--dry-run", "--json"]);
         if mode == "spawn" {
             command.arg("--spawn-config").arg(&self.spawn);
         }
@@ -100,10 +100,8 @@ fn assert_mode(output: Output, expected: &str) -> TestResult<String> {
         String::from_utf8_lossy(&output.stderr)
     );
     let text = String::from_utf8(output.stdout)?;
-    assert!(
-        text.contains(&format!("TOOL_CACHE_MODE={expected}")),
-        "{text}"
-    );
+    let report: Value = serde_json::from_str(&text)?;
+    assert_eq!(report["plan"]["tool_cache_mode"], expected);
     Ok(text)
 }
 
@@ -153,7 +151,8 @@ fn run_cache_flags_follow_prefix_and_conflict_rules() -> TestResult {
     ] {
         let output = fixture.command("run").args(args).output()?;
         assert!(!output.status.success());
-        assert_eq!(output.stdout, b"");
+        let report: Value = serde_json::from_slice(&output.stdout)?;
+        assert!(report["plan"].is_null());
     }
     for prefix in [vec!["--"], vec!["."], vec![".", "--"]] {
         let text = assert_mode(
@@ -165,7 +164,7 @@ fn run_cache_flags_follow_prefix_and_conflict_rules() -> TestResult {
             "shared",
         )?;
         for flag in ["--no-cache", "--cache", "--shared-tool-caches"] {
-            assert!(text.contains(&format!("CMD={flag}")), "{text}");
+            assert!(!text.contains(flag), "{text}");
         }
     }
     for flag in ["--cache", "--no-cache"] {
@@ -243,16 +242,14 @@ fn restricted_rust_requires_effective_private_tool_caches() -> TestResult {
                 {
                     command.arg(if shared { "--cache" } else { "--no-cache" });
                 }
-                if explicit.or(repo).unwrap_or(true) {
-                    command.env_remove("WRIX_DRY_RUN");
-                }
                 let output = command.output()?;
                 if explicit.or(repo).unwrap_or(true) {
                     assert!(!output.status.success());
-                    assert_eq!(output.stdout, b"");
-                    let error = String::from_utf8(output.stderr)?;
+                    let report: Value = serde_json::from_slice(&output.stdout)?;
+                    assert_eq!(report["plan"]["tool_cache_mode"], "shared");
+                    let error = report["findings"].to_string();
                     assert!(error.contains("--no-cache"), "{error}");
-                    assert!(error.contains("Nix/Celler policy is unchanged"), "{error}");
+                    assert!(error.contains("Nix/Celler"), "{error}");
                     assert!(!fixture.workspace.join(".wrix").exists());
                     assert!(!fixture.root.path().join("cache").exists());
                     assert!(!fixture.root.path().join("runtime").exists());

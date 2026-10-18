@@ -113,6 +113,8 @@ fn public_flags_have_descriptions() -> TestResult {
             vec!["run", "--help"],
             vec![
                 "--profile-config <file>",
+                "--dry-run",
+                "--json",
                 "--cache",
                 "--no-cache",
                 "--git-deploy",
@@ -128,6 +130,8 @@ fn public_flags_have_descriptions() -> TestResult {
             vec![
                 "--profile-config <file>",
                 "--spawn-config <file>",
+                "--dry-run",
+                "--json",
                 "--stdio",
                 "-h, --help",
             ],

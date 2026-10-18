@@ -107,14 +107,14 @@ fn unsafe_podman_socket_opt_in_mounts_existing_socket() -> TestResult {
 
     assert!(run.success, "{}", run.stderr);
     assert!(run.stdout.contains(&format!(
-        "MOUNT=-v {}:/run/podman/podman.sock",
+        "{}:/run/podman/podman.sock",
         socket_path.display()
     )));
     assert!(
         run.stdout
-            .contains("ENV=CONTAINER_HOST=unix:///run/podman/podman.sock")
+            .contains("CONTAINER_HOST=unix:///run/podman/podman.sock")
     );
-    assert!(run.stdout.contains("ENV=GC_HOST_WORKSPACE="));
+    assert!(run.stdout.contains("GC_HOST_WORKSPACE="));
     Ok(())
 }
 
@@ -518,7 +518,7 @@ fn deploy_key_mount_uses_container_key_dir_without_public_key() -> TestResult {
     assert!(run.stdout.contains(":/etc/wrix/keys:ro"));
     assert!(
         run.stdout
-            .contains("ENV=WRIX_DEPLOY_KEY=/etc/wrix/keys/repo-key")
+            .contains("WRIX_DEPLOY_KEY=/etc/wrix/keys/repo-key")
     );
     assert!(!run.stdout.contains("repo-key.pub"));
     assert!(!run.stdout.contains(&key_path.display().to_string()));
@@ -596,10 +596,8 @@ fn host_provider_credentials_reach_run_environment() -> TestResult {
     )?;
 
     assert!(run.success, "{}", run.stderr);
-    assert!(run.stdout.contains("ENV=OPENAI_API_KEY=[REDACTED]"));
-    assert!(run.stdout.contains("ENV=ANTHROPIC_API_KEY=[REDACTED]"));
-    assert!(!run.stdout.contains("openai-test"));
-    assert!(!run.stdout.contains("anthropic-test"));
+    assert!(run.stdout.contains("OPENAI_API_KEY=openai-test"));
+    assert!(run.stdout.contains("ANTHROPIC_API_KEY=anthropic-test"));
     Ok(())
 }
 
@@ -634,8 +632,10 @@ fn declared_custom_runtime_secret_reaches_run_environment() -> TestResult {
     )?;
 
     assert!(run.success, "{}", run.stderr);
-    assert!(run.stdout.contains("ENV=CUSTOM_PROVIDER_TOKEN=[REDACTED]"));
-    assert!(!run.stdout.contains("custom-secret-value"));
+    assert!(
+        run.stdout
+            .contains("CUSTOM_PROVIDER_TOKEN=custom-secret-value")
+    );
     Ok(())
 }
 
@@ -826,12 +826,12 @@ fn pi_auth_file_uses_platform_delivery_path() -> TestResult {
 
     assert!(run.success, "{}", run.stderr);
     assert!(run.stdout.contains(&format!(
-        "MOUNT=-v {}.wrix-auth:/mnt/wrix/pi-agent-auth",
+        "{}.wrix-auth:/mnt/wrix/pi-agent-auth",
         auth.display()
     )));
     assert!(
         run.stdout
-            .contains("ENV=WRIX_PI_AUTH_JSON=/mnt/wrix/pi-agent-auth/auth.json")
+            .contains("WRIX_PI_AUTH_JSON=/mnt/wrix/pi-agent-auth/auth.json")
     );
     assert!(!run.stdout.contains("sibling"));
     assert!(auth.is_symlink());
@@ -1090,7 +1090,7 @@ fn run_launch(
             profile_config: Some(profile_config.to_path_buf()),
             args: vec![workspace.display().to_string(), String::from("true")],
             env,
-            dry_run: true,
+            capture_runtime: true,
         },
     )
 }
@@ -1115,7 +1115,7 @@ fn run_spawn_launch(
                 String::from("--stdio"),
             ],
             env,
-            dry_run: true,
+            capture_runtime: true,
         },
     )
 }
@@ -1149,7 +1149,7 @@ fn deploy_key_fixture() -> ProfileFixture {
 
 fn assert_key_environment(output: &str, deploy: bool, sign: bool) {
     assert!(
-        output.contains(&format!("ENV=WRIX_EFFECTIVE_GIT_SIGN={}\n", u8::from(sign))),
+        output.contains(&format!("WRIX_EFFECTIVE_GIT_SIGN={}\n", u8::from(sign))),
         "{output}"
     );
     for (name, granted, path) in [
@@ -1158,10 +1158,10 @@ fn assert_key_environment(output: &str, deploy: bool, sign: bool) {
     ] {
         let actual = output
             .lines()
-            .filter(|line| line.starts_with(&format!("ENV={name}=")))
+            .filter(|line| line.starts_with(&format!("{name}=")))
             .collect::<Vec<_>>();
         let expected = if granted {
-            vec![format!("ENV={name}={path}")]
+            vec![format!("{name}={path}")]
         } else {
             Vec::new()
         };
@@ -1271,7 +1271,7 @@ impl GrantFixture {
         mode: Command,
         grants: GitGrants,
         environment: Vec<(String, OsString)>,
-        dry_run: bool,
+        capture_runtime: bool,
     ) -> TestResult<common::ChildRun> {
         let mut args = Vec::new();
         match mode {
@@ -1343,7 +1343,7 @@ impl GrantFixture {
                 profile_config: Some(self.profile.clone()),
                 args,
                 env,
-                dry_run,
+                capture_runtime,
             },
         )
     }

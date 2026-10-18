@@ -236,6 +236,32 @@ fn dry_run_reports_launch_policy_and_provenance() -> TestResult {
         profile["resources"] = json!({"cpus": 2, "memory_mb": 1234, "pids_limit": 99});
         profile["profile"]["network_allowlist"] = json!([{"host": "example.org", "ports": [443]}]);
     })?;
+    for mode in ["run", "spawn"] {
+        let output = fixture
+            .preview(mode, true)
+            .env("WRIX_DEPLOY_KEY", &fixture.profile)
+            .output()?;
+        assert!(output.status.success());
+        let value = report(&output)?;
+        assert_eq!(
+            value["plan"]["git_deploy"],
+            json!({"enabled": true, "origin": "repository"})
+        );
+        assert_eq!(
+            value["plan"]["git_sign"],
+            json!({"enabled": false, "origin": "repository"})
+        );
+        assert_eq!(
+            value["plan"]["workspace"],
+            fixture.workspace.to_str().unwrap()
+        );
+        assert_eq!(value["plan"]["image_source"], "/missing/source");
+        assert_eq!(value["plan"]["agent"], "direct");
+        assert_eq!(
+            value["plan"]["allowlist"],
+            json!([{"host": "example.org", "ports": [443]}])
+        );
+    }
     let mut preview = fixture.preview("run", true);
     preview
         .args(["--no-git-deploy", "--git-sign"])
@@ -304,9 +330,25 @@ fn dry_run_is_read_only() -> TestResult {
     let fixture = Fixture::new()?;
     let auth = fixture.root.path().join("auth.json");
     fs::write(&auth, b"credential bytes are opaque\xff")?;
+    let directory = fixture.root.path().join("mount-directory");
+    fs::create_dir(&directory)?;
+    fs::write(directory.join("sentinel"), b"must not be copied or changed")?;
+    fs::create_dir(fixture.workspace.join(".beads"))?;
+    fs::write(
+        fixture.workspace.join(".beads/config.yaml"),
+        "backend: dolt\n",
+    )?;
+    fs::write(
+        fixture.workspace.join("wrix.toml"),
+        "[git]\ndeploy = true\nsign = true\n",
+    )?;
     fixture.change_profile(|profile| {
         profile["agent"]["kind"] = json!("pi");
-        profile["profile"]["mounts"] = json!([{"source": auth, "dest": "/test", "mode": "ro"}]);
+        profile["services"]["nix_cache"]["enable"] = json!(true);
+        profile["profile"]["mounts"] = json!([
+            {"source": auth, "dest": "/test", "mode": "ro"},
+            {"source": directory, "dest": "/directory", "mode": "ro"}
+        ]);
     })?;
     for mode in ["run", "spawn"] {
         for json in [false, true] {
@@ -314,6 +356,8 @@ fn dry_run_is_read_only() -> TestResult {
             let output = fixture
                 .preview(mode, json)
                 .env("WRIX_PI_AUTH_FILE", &auth)
+                .env("WRIX_DEPLOY_KEY", &auth)
+                .env("WRIX_SIGNING_KEY", &auth)
                 .output()?;
             assert!(
                 output.status.success(),

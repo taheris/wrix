@@ -58,15 +58,14 @@ fn profile_config_agent_cannot_be_overridden_by_env() -> TestResult {
             profile_config: Some(profile_config),
             args: vec![workspace_arg(&workspace), String::from("true")],
             env: vec![(String::from("WRIX_AGENT"), "pi".into())],
-            dry_run: true,
+            capture_runtime: true,
         },
     )?;
 
     assert!(run.success, "{}", run.stderr);
     assert!(run.stderr.is_empty(), "{}", run.stderr);
-    assert!(run.stdout.contains("PROFILE_AGENT=direct"));
-    assert!(run.stdout.contains("ENV=WRIX_AGENT=direct"));
-    assert!(!run.stdout.contains("ENV=WRIX_AGENT=pi"));
+    assert!(run.stdout.contains("WRIX_AGENT=direct"));
+    assert!(!run.stdout.contains("WRIX_AGENT=pi"));
 
     Ok(())
 }

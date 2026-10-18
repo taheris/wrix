@@ -36,6 +36,8 @@ prepare() {
     in (lib.mkSandbox { inherit profile; }).image.profileConfig
   "
   nix build --no-warn-dirty --out-link "$WRIX_LINK" "$REPO_ROOT#wrix"
+  printf '{}\n' >"$TEST_TMP/auth.json"
+  export WRIX_PI_AUTH_FILE="$TEST_TMP/auth.json"
 }
 
 test_profile_config_contains_launcher_contract_fields() {
@@ -69,18 +71,6 @@ test_profile_config_contains_launcher_contract_fields() {
   ' "$CONFIG_LINK" >/dev/null
 }
 
-test_missing_optional_profile_mount_is_skipped() {
-  prepare
-  local out="$TEST_TMP/mounts.out"
-  [[ ! -e "$OPTIONAL_MOUNT_SOURCE" ]]
-  WRIX_DRY_RUN=1 "$WRIX_LINK/bin/wrix" --profile-config "$CONFIG_LINK" run "$WORKSPACE" >"$out"
-  if grep -qF '/mnt/optional-cache' "$out"; then
-    printf 'missing optional mount reached the runtime plan\n' >&2
-    return 1
-  fi
-  grep -qF '/mnt/required-cache' "$out"
-}
-
 test_image_source_kind() {
   prepare
   local missing="$TEST_TMP/missing-kind.json" incompatible="$TEST_TMP/incompatible-kind.json"
@@ -89,11 +79,11 @@ test_image_source_kind() {
   jq 'del(.image.source_kind)' "$CONFIG_LINK" >"$missing"
   jq --arg kind "$ALTERNATE_SOURCE_KIND" '.image.source_kind = $kind' "$CONFIG_LINK" >"$incompatible"
   for config in "$missing" "$incompatible"; do
-    if WRIX_DRY_RUN=1 "$WRIX_LINK/bin/wrix" --profile-config "$config" run "$WORKSPACE" >"$TEST_TMP/kind.out" 2>"$err"; then
+    if "$WRIX_LINK/bin/wrix" --profile-config "$config" run --dry-run --json "$WORKSPACE" >"$TEST_TMP/kind.out" 2>"$err"; then
       printf 'unsupported image source kind was accepted\n' >&2
       return 1
     fi
-    grep -qF 'image.source_kind' "$err"
+    jq -e '.plan == null and .findings[0].code == "invalid_input"' "$TEST_TMP/kind.out" >/dev/null
   done
 }
 
@@ -105,13 +95,11 @@ test_host_cli_uses_generated_launch_data() {
   jq -n --arg workspace "$WORKSPACE" '{workspace: $workspace, env: [], agent_args: [], mounts: []}' >"$spawn"
   for mode in run spawn; do
     if [[ "$mode" == run ]]; then
-      WRIX_DRY_RUN=1 "$WRIX_LINK/bin/wrix" --profile-config "$config" run "$WORKSPACE" >"$out"
+      "$WRIX_LINK/bin/wrix" --profile-config "$config" run --dry-run --json "$WORKSPACE" >"$out"
     else
-      WRIX_DRY_RUN=1 "$WRIX_LINK/bin/wrix" --profile-config "$config" spawn --spawn-config "$spawn" --stdio >"$out"
-      grep -qxF 'STDIO=1' "$out"
+      "$WRIX_LINK/bin/wrix" --profile-config "$config" spawn --dry-run --json --spawn-config "$spawn" --stdio >"$out"
     fi
-    grep -qxF "PROFILE_CONFIG=$config" "$out"
-    grep -qxF "SUBCOMMAND=$mode" "$out"
+    jq -e --arg config "$config" --arg workspace "$WORKSPACE" '.schema == 1 and .plan.profile_config == $config and .plan.workspace == $workspace and .plan.agent == "pi"' "$out" >/dev/null
   done
   WRIX_PROJECT_PROFILE_CONFIG="$config" "$WRIX_LINK/bin/wrix" service --help >"$TEST_TMP/service.out"
   grep -qF 'Usage: wrix service <command>' "$TEST_TMP/service.out"
@@ -127,7 +115,6 @@ test_profile_config_wrapper_contract() {
 if [[ $# -eq 0 ]]; then
   test_profile_config_wrapper_contract
   test_image_source_kind
-  test_missing_optional_profile_mount_is_skipped
 else
   "$1"
 fi

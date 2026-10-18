@@ -12,6 +12,8 @@ Restricted Rust requires private mode; use --no-cache with WRIX_NETWORK=limit.
 
 Options:
   --profile-config <file>  Override generated project launch data with <file>.
+  --dry-run                Inspect without preparing or executing a launch.
+  --json                   Render the dry-run report as versioned JSON.
   --cache                  Reuse shared worker tool caches for this launch.
   --no-cache               Use fresh private writable local tool caches for this launch.
   --git-deploy             Grant the deploy key for this launch; conflicts with --no-git-deploy.

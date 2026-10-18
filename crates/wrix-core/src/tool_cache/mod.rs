@@ -3,7 +3,7 @@
 use std::fmt;
 
 use serde::{
-    Deserialize, Deserializer,
+    Deserialize, Deserializer, Serialize,
     de::{self, MapAccess, Visitor},
 };
 
@@ -50,7 +50,8 @@ impl<'de> Deserialize<'de> for Preference {
 }
 
 /// The effective all-cache mode for one launch.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Mode {
     Shared,
     Private,

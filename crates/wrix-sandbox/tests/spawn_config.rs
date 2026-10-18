@@ -6,7 +6,10 @@ use std::{collections::BTreeMap, ffi::OsString, fs};
 use std::os::unix::fs::PermissionsExt;
 
 use serde_json::{Value, json};
-use wrix_sandbox::command::Command;
+use wrix_sandbox::command::{
+    Command,
+    config::{Platform, load_spawn_config},
+};
 
 use common::{ChildSpec, ProfileFixture, TestResult};
 
@@ -25,20 +28,8 @@ fn tool_cache_sharing_parses_owned_optional_boolean() -> TestResult {
             value["tool_caches"] = choice;
         }
         let config = fixture.write("choice", &value)?;
-        let run = fixture.run("choice", &config)?;
-        assert!(run.success, "{}", run.stderr);
-        assert!(run.stdout.contains(if expected == Some(false) {
-            "TOOL_CACHE_MODE=private"
-        } else {
-            "TOOL_CACHE_MODE=shared"
-        }));
-        match expected {
-            Some(shared) => assert!(
-                run.stdout
-                    .contains(&format!("TOOL_CACHE_SHARED_OVERRIDE={shared}"))
-            ),
-            None => assert!(!run.stdout.contains("TOOL_CACHE_SHARED_OVERRIDE=")),
-        }
+        let parsed = load_spawn_config(&config, Platform::CURRENT)?;
+        assert_eq!(parsed.tool_caches.shared, expected);
     }
     for choice in [
         json!(null),
@@ -100,6 +91,28 @@ fn documented_spawn_config_fields_render_into_launch_plan() -> TestResult {
         }),
     )?;
 
+    let parsed = load_spawn_config(&config, Platform::CURRENT)?;
+    assert_eq!(
+        parsed
+            .image_ref
+            .as_ref()
+            .map(wrix_sandbox::image::ImageRef::as_str),
+        Some("wrix-override:test")
+    );
+    let source = parsed.image_source.ok_or("missing image override")?;
+    assert_eq!(
+        source.path(),
+        std::path::Path::new("/nix/store/fake-override")
+    );
+    assert_eq!(source.kind().as_str(), common::expected_source_kind());
+    let mut runtime_config: Value = serde_json::from_slice(&fs::read(&config)?)?;
+    let fields = runtime_config
+        .as_object_mut()
+        .ok_or("expected config object")?;
+    for field in ["image_ref", "image_source", "image_source_kind"] {
+        fields.remove(field);
+    }
+    let config = fixture.write("documented-runtime", &runtime_config)?;
     let run = fixture.run_with_env(
         "documented",
         &config,
@@ -109,17 +122,15 @@ fn documented_spawn_config_fields_render_into_launch_plan() -> TestResult {
     assert!(run.success, "{}", run.stderr);
     assert!(run.stderr.is_empty(), "{}", run.stderr);
     for expected in [
-        "STDIO=1",
-        "PROFILE_AGENT=direct",
-        "ENV=WRIX_AGENT=direct",
-        "ENV=WRIX_NETWORK_ALLOWLIST=[{\"host\":\"example.org\",\"ports\":[443]}]",
-        "IMAGE_OVERRIDE_REF=wrix-override:test",
-        "IMAGE_OVERRIDE_SOURCE=/nix/store/fake-override",
-        "ENV=FOO=bar",
-        "ENV=EMPTY=",
-        "ENV=WRIX_MCP=spawn-selected",
-        "CMD=--print",
-        "CMD=hello",
+        "WRIX_STDIO=1",
+        "WRIX_AGENT=direct",
+        "WRIX_NETWORK_ALLOWLIST=[{\"host\":\"example.org\",\"ports\":[443]}]",
+        "localhost/wrix-test:latest",
+        "FOO=bar",
+        "EMPTY=",
+        "WRIX_MCP=spawn-selected",
+        "--print",
+        "hello",
         "/mnt/schema",
     ] {
         assert!(
@@ -128,10 +139,6 @@ fn documented_spawn_config_fields_render_into_launch_plan() -> TestResult {
             run.stdout
         );
     }
-    assert!(run.stdout.contains(&format!(
-        "IMAGE_OVERRIDE_SOURCE_KIND={}",
-        common::expected_source_kind()
-    )));
     assert!(!run.stdout.contains("ambient-host"));
     Ok(())
 }
@@ -153,7 +160,9 @@ fn git_grants_preserve_omission_and_explicit_false() -> TestResult {
             }))?;
             let output = fixture.run("grants", &config)?;
             assert!(output.success, "{}", output.stderr);
-            assert_spawn_git_overrides(&output.stdout, deploy, sign);
+            let parsed = load_spawn_config(&config, Platform::CURRENT)?;
+            assert_eq!(parsed.git.deploy, deploy);
+            assert_eq!(parsed.git.sign, sign);
         }
     }
     let config = fixture.write(
@@ -164,7 +173,9 @@ fn git_grants_preserve_omission_and_explicit_false() -> TestResult {
     )?;
     let output = fixture.run("omitted", &config)?;
     assert!(output.success, "{}", output.stderr);
-    assert_spawn_git_overrides(&output.stdout, None, None);
+    let parsed = load_spawn_config(&config, Platform::CURRENT)?;
+    assert_eq!(parsed.git.deploy, None);
+    assert_eq!(parsed.git.sign, None);
     for git in [
         json!(null),
         json!(false),
@@ -272,7 +283,7 @@ fn consumer_extensions_are_mounted_for_entrypoint() -> TestResult {
                 ),
                 (String::from("WRIX_GIT_SIGN"), OsString::from("0")),
             ],
-            dry_run: false,
+            capture_runtime: false,
         },
     )?;
 
@@ -296,7 +307,7 @@ fn consumer_extensions_are_mounted_for_entrypoint() -> TestResult {
 }
 
 #[test]
-fn provider_credentials_in_spawn_config_are_redacted() -> TestResult {
+fn provider_credentials_in_spawn_config_reach_runtime() -> TestResult {
     let fixture = SpawnFixture::new("spawn-provider-redaction")?;
     common::write_profile_config(
         &fixture.profile_config,
@@ -322,8 +333,7 @@ fn provider_credentials_in_spawn_config_are_redacted() -> TestResult {
     let run = fixture.run("provider-redaction", &config)?;
 
     assert!(run.success, "{}", run.stderr);
-    assert!(run.stdout.contains("ENV=OPENAI_API_KEY=[REDACTED]"));
-    assert!(!run.stdout.contains("spawn-secret"));
+    assert!(run.stdout.contains("OPENAI_API_KEY=spawn-secret"));
     Ok(())
 }
 
@@ -571,7 +581,7 @@ impl SpawnFixture {
                     String::from("--stdio"),
                 ],
                 env,
-                dry_run: true,
+                capture_runtime: true,
             },
         )
     }
@@ -626,24 +636,10 @@ fn write_executable(path: &std::path::Path, content: &str) -> TestResult {
     Ok(())
 }
 
-fn assert_spawn_git_overrides(output: &str, deploy: Option<bool>, sign: Option<bool>) {
-    for (name, value) in [("GIT_DEPLOY_OVERRIDE", deploy), ("GIT_SIGN_OVERRIDE", sign)] {
-        let actual = output
-            .lines()
-            .filter(|line| line.starts_with(name))
-            .collect::<Vec<_>>();
-        let expected = value
-            .map(|value| format!("{name}={value}"))
-            .into_iter()
-            .collect::<Vec<_>>();
-        assert_eq!(actual, expected);
-    }
-}
-
 fn spawn_mount_lines(output: &str) -> Vec<&str> {
     output
         .lines()
-        .filter(|line| line.starts_with("MOUNT=-v ") && !line.contains("spawn-config.json"))
+        .filter(|line| line.contains(":/mnt/"))
         .collect()
 }
 

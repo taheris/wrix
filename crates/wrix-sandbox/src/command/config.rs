@@ -79,7 +79,7 @@ pub enum Ipv6Policy {
     Disabled,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum NetworkMode {
     #[default]
