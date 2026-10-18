@@ -20,6 +20,7 @@ _:
       devShells.default = sandbox.devShell {
         env = {
           LOOM_PROFILES_MANIFEST = "${config.packages.profile-images}";
+          LOOM_NATIVE_PREFLIGHT_MANIFEST = "${config.packages.profile-images.nativePreflight}";
           WRIX_AGENT = "pi";
           WRIX_TEST_CELLERD = "${wrix.rustPackage.celler}/bin/cellerd";
         };

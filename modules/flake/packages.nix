@@ -1,4 +1,4 @@
-{ inputs, ... }:
+_:
 
 {
   perSystem =
@@ -9,12 +9,12 @@
       wrix,
       linuxPkgs,
       linuxLoomCli,
+      loomLib,
       ...
     }:
     let
       inherit (builtins) concatMap elem listToAttrs;
       inherit (wrix) profiles;
-      loomLib = import "${inputs.loom-src}/nix/lib.nix";
 
       agents = [
         "claude"
@@ -23,43 +23,17 @@
       sandboxes = [
         {
           name = "base";
-          package = "sandbox";
           profile = profiles.base;
         }
         {
           name = "rust";
-          package = "sandbox-rust";
           profile = profiles.rust;
         }
         {
           name = "python";
-          package = "sandbox-python";
           profile = profiles.python;
         }
       ];
-      variants = [
-        {
-          suffix = "";
-          extra = { };
-        }
-        {
-          suffix = "-mcp";
-          extra = {
-            mcpRuntime = true;
-          };
-        }
-      ];
-
-      mkProfile = sandbox: suffix: extra: {
-        name = "${sandbox.package}${suffix}";
-        value = (mkSandboxFor sandbox extra).package;
-      };
-      mkProfileVariants =
-        prefix: baseExtra:
-        concatMap (
-          variant:
-          map (sandbox: mkProfile sandbox "${prefix}${variant.suffix}" (baseExtra // variant.extra)) sandboxes
-        ) variants;
       mkSandboxFor =
         sandbox: extra:
         wrix.mkSandbox (
@@ -75,7 +49,9 @@
       mkImagePackages = suffix: images: listToAttrs (map (mkImagePackage suffix images) sandboxes);
       mkImagePackage = suffix: images: p: {
         name = "image-${p.name}${suffix}";
-        value = images.${p.name}.source;
+        value = images.${p.name}.source // {
+          image = images.${p.name};
+        };
       };
 
       profileImages = mkProfileImages "pi";
@@ -93,20 +69,6 @@
       imageOverlays = listToAttrs (
         concatMap (agent: map (mkImagePackage "-${agent}" (mkProfileImages agent)) sandboxes) agents
       );
-      sandboxPkgs = listToAttrs (mkProfileVariants "" { agent = "pi"; }) // {
-        debug =
-          (wrix.mkSandbox {
-            agent = "pi";
-            profile = profiles.rust;
-            packages = [
-              linuxLoomCli
-              linuxPkgs.podman
-            ];
-          }).package;
-      };
-      sandboxOverlays = listToAttrs (
-        concatMap (agent: mkProfileVariants "-${agent}" { inherit agent; }) agents
-      );
 
       isLinux = elem system [
         "aarch64-linux"
@@ -116,16 +78,16 @@
     in
     {
       packages =
-        sandboxPkgs
-        // sandboxOverlays
-        // imagePkgs
+        imagePkgs
         // imageOverlays
         // {
           inherit (pkgs) beads;
           test-image-git-credentials = test.testImages.gitCredentials;
-          test-tmux-sandbox = test.tmuxTests.sandbox.package;
+          test-tmux-sandbox = test.tmuxTests.sandbox.image.source // {
+            profileConfig = test.tmuxTests.sandbox.image.profileConfig;
+          };
 
-          default = sandboxOverlays.sandbox-rust-pi;
+          default = wrix.rustPackage.wrix;
           nodejs = linuxPkgs.nodejs_22;
           profile-images = loomLib.mkProfileManifest {
             inherit pkgs;

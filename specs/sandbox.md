@@ -913,7 +913,7 @@ separate from network metadata and remains required.
   `mcpRuntime`, `agent`, `agentPkg`, `agentSettings`) and returns
   `{ image, profile, devShell }` with generated configuration in
   `image.profileConfig` and no configured executable outputs.
-  [check?](verify:sandbox.data-only-constructor)
+  [check](verify:sandbox.data-only-constructor)
 - Platform dispatch picks the Linux implementation on Linux hosts and the macOS
   implementation on Darwin hosts [check](verify:sandbox.platform-dispatch)
 - Evaluating `mkSandbox` on an unsupported system throws at evaluation time

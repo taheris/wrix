@@ -30,7 +30,7 @@ result=$(nix eval --impure --no-warn-dirty --json --expr "
       agent = \"direct\";
       agentPkg = runner;
       agentSettings = { env.WRIX_AGENT_SETTINGS_PROBE = \"direct\"; };
-    }).package.drvPath);
+    }).image.source.drvPath);
     direct = lib.mkSandbox {
       profile = lib.profiles.base;
       agent = \"direct\";

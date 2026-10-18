@@ -5,7 +5,6 @@
   crane,
   fenix,
   treefmt,
-  serviceCli,
 }:
 
 let
@@ -28,7 +27,6 @@ let
       crane
       fenix
       treefmt
-      serviceCli
       ;
   };
 

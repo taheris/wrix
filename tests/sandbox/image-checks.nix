@@ -38,7 +38,6 @@ let
       crane
       fenix
       treefmt
-      serviceCli
       ;
   };
   mkConsumerRunner =

@@ -5,7 +5,6 @@
   crane,
   fenix,
   treefmt,
-  serviceCli,
 }:
 
 let
@@ -25,8 +24,6 @@ let
     concatStringsSep
     hasPrefix
     isDerivation
-    makeBinPath
-    optionals
     recursiveUpdate
     ;
 
@@ -35,11 +32,8 @@ let
     "aarch64-linux"
     "x86_64-linux"
   ];
-  krunRuntime = import ./linux/krun-runtime.nix { inherit linuxPkgs; };
-
   manifest = import ./manifest.nix {
     inherit pkgs;
-    launcher = serviceCli;
   };
   imageTagLib = import ../util/image-tag.nix { };
   privateNix = import ./private-nix.nix { inherit (pkgs) lib; };
@@ -428,30 +422,6 @@ let
 
       finalPiSettings = recursiveUpdate basePiSettings (if agent == "pi" then agentSettings else { });
 
-      launcher = if isLinux || isDarwin then serviceCli else throw "Unsupported system: ${system}";
-      launcherRuntimePath = makeBinPath (
-        [ pkgs.nix ]
-        ++ optionals isLinux [
-          krunRuntime
-          pkgs.podman
-          pkgs.skopeo
-        ]
-        ++ optionals isDarwin [ pkgs.skopeo ]
-      );
-      launcherRuntimePathSetup = ''
-        if [[ -n "''${PATH:-}" ]]; then
-          export PATH="${launcherRuntimePath}:$PATH"
-        else
-          export PATH="${launcherRuntimePath}"
-        fi
-      '';
-      serviceImageEnvSetup = ''
-        export WRIX_SERVICE_IMAGE="''${WRIX_SERVICE_IMAGE:-${serviceImage.ref}}"
-        export WRIX_SERVICE_IMAGE_SOURCE="''${WRIX_SERVICE_IMAGE_SOURCE:-${serviceImage.source}}"
-        export WRIX_SERVICE_IMAGE_SOURCE_KIND="''${WRIX_SERVICE_IMAGE_SOURCE_KIND:-${serviceImage.source_kind}}"
-        export WRIX_SERVICE_IMAGE_DIGEST="''${WRIX_SERVICE_IMAGE_DIGEST:-${serviceImage.digest}}"
-      '';
-
       image = mkImage {
         profile = finalProfile;
         entrypointSh =
@@ -536,72 +506,23 @@ let
           '';
 
       imageWithConfig = image // {
+        ref = mkImageRef image;
         inherit agent profileConfig;
       };
 
       packageName = "wrix-${finalProfile.name}${packageSuffix}";
       packageSuffix = if agent == "direct" then "" else "-${agent}";
-      package =
-        pkgs.runCommand packageName
-          {
-            passthru = {
-              image = imageWithConfig;
-              inherit launcher profileConfig;
-            };
-            meta.mainProgram = "wrix-run";
-          }
-          ''
-            mkdir -p "$out/bin"
-            cat > "$out/bin/wrix" <<'WRIX_WRAPPER'
-            #!${pkgs.runtimeShell}
-            set -euo pipefail
-            ${launcherRuntimePathSetup}
-            ${serviceImageEnvSetup}
-            case "''${1:-}" in
-              run|spawn)
-                exec ${launcher}/bin/wrix --profile-config ${profileConfig} "$@"
-                ;;
-              *)
-                exec ${launcher}/bin/wrix "$@"
-                ;;
-            esac
-            WRIX_WRAPPER
-            cat > "$out/bin/wrix-run" <<'WRIX_RUN_WRAPPER'
-            #!${pkgs.runtimeShell}
-            set -euo pipefail
-            ${launcherRuntimePathSetup}
-            ${serviceImageEnvSetup}
-            case "''${1:-}" in
-              run|spawn)
-                exec ${launcher}/bin/wrix --profile-config ${profileConfig} "$@"
-                ;;
-              service|beads|init|notify|help)
-                exec ${launcher}/bin/wrix "$@"
-                ;;
-              *)
-                exec ${launcher}/bin/wrix --profile-config ${profileConfig} run "$@"
-                ;;
-            esac
-            WRIX_RUN_WRAPPER
-            cat > "$out/bin/wrix-git-sign" <<'WRIX_GIT_SIGN_WRAPPER'
-            #!${pkgs.runtimeShell}
-            set -euo pipefail
-            exec ${launcher}/bin/wrix-git-sign "$@"
-            WRIX_GIT_SIGN_WRAPPER
-            ln -s "${launcher}/bin/wrix-prek" "$out/bin/wrix-prek"
-            chmod +x "$out/bin/wrix"
-            chmod +x "$out/bin/wrix-run"
-            chmod +x "$out/bin/wrix-git-sign"
-          '';
 
     in
-    seq finalProfile (
-      seq finalAgentPkg {
-        inherit package launcher profileConfig;
-        image = imageWithConfig;
-        profile = finalProfile;
-      }
-    );
+    if !isLinux && !isDarwin then
+      throw "Unsupported system: ${system}"
+    else
+      seq finalProfile (
+        seq finalAgentPkg {
+          image = imageWithConfig;
+          profile = finalProfile;
+        }
+      );
 
 in
 {

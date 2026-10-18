@@ -10,7 +10,6 @@
 let
   beads = import ./beads {
     inherit pkgs;
-    inherit (rustCli) wrix;
   };
 
   devshell = import ./devshell {
@@ -18,7 +17,6 @@ let
       pkgs
       rustCli
       beads
-      serviceImage
       ;
   };
 
@@ -45,7 +43,6 @@ let
       fenix
       treefmt
       ;
-    serviceCli = rustCli.wrix;
   };
 
   inherit (sandboxLib) serviceImage;

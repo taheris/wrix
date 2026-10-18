@@ -29,7 +29,7 @@ run_in_guest() {
         "$REPO_ROOT#legacyPackages.${current_system}.testApps.playwright-mcp-sandbox")
     command=(
         env WRIX_NETWORK=limit
-        "$sandbox/bin/wrix" run "$REPO_ROOT"
+        wrix --profile-config "$sandbox" run "$REPO_ROOT"
         /bin/bash "/workspace/tests/mcp/playwright/$test_script" "$@"
     )
     printf -v command_line '%q ' "${command[@]}"

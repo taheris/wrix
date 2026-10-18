@@ -159,7 +159,6 @@ let
       fenix
       treefmt
       ;
-    serviceCli = wrix.rustPackage.wrix;
   };
 
   piMcpTests = import ./sandbox/pi-mcp-native.nix { inherit pkgs wrix src; };
@@ -191,7 +190,6 @@ let
       fenix
       treefmt
       ;
-    serviceCli = wrix.rustPackage.wrix;
     rustNextest = wrix.rustPackage.nextest;
   };
 
@@ -322,7 +320,7 @@ let
             touch "$out"
           '';
       pi-auth-storage = import ./security/pi-auth.nix { inherit pkgs; };
-      profile-images-launcher = import ./profiles/manifest.nix { inherit pkgs wrix; };
+      profile-images-data = import ./profiles/manifest.nix { inherit pkgs wrix; };
       verifier-inputs = import ./lib/inputs-test.nix { inherit pkgs; };
     }
     // removeAttrs loomTests.checks [ "private-nix-artifacts" ]
@@ -514,7 +512,7 @@ let
   );
   testAppDerivations = ciAppDerivations // {
     playwright-mcp-registry = playwrightMcpTests.registryTripleCheck.package;
-    playwright-mcp-sandbox = playwrightMcpTests.sandbox.package;
+    playwright-mcp-sandbox = playwrightMcpTests.sandbox.image.profileConfig;
     test-notify = testNotify;
   };
 

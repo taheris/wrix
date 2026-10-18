@@ -114,7 +114,7 @@ wrix_agent_image_attr() {
 }
 
 wrix_build_live_launcher() {
-  nix build --no-link --print-out-paths --no-warn-dirty .#sandbox-claude.launcher
+  nix build --no-link --print-out-paths --no-warn-dirty .#wrix
 }
 
 wrix_build_packaged_live_sandbox() {

@@ -50,20 +50,18 @@ test_platform_dispatch_current_system() {
     in
     {
       sourceKind = sandbox.image.source_kind;
-      mainProgram = sandbox.package.meta.mainProgram or \"\";
-      launcherIsWrix = sandbox.launcher == flake.packages.\${system}.wrix;
+      fields = builtins.attrNames sandbox;
     }
   ")
 
   if ! jq -e --arg expected "$expected" '
     .sourceKind == $expected and
-    .mainProgram == "wrix-run" and
-    .launcherIsWrix == true
+    .fields == ["devShell", "image", "profile"]
   ' <<<"$result" >/dev/null; then
     fail "mkSandbox did not dispatch to the current platform implementation: $result"
   fi
 
-  printf 'PASS: mkSandbox dispatches current platform image/source-kind and launcher metadata\n' >&2
+  printf 'PASS: mkSandbox dispatches current platform image/source-kind metadata\n' >&2
 }
 
 assert_unsupported_system() {
@@ -92,7 +90,7 @@ assert_unsupported_system() {
         treefmt = flake.formatter.\${current};
       };
     in
-    (unsupported.mkSandbox { profile = unsupported.profiles.base; }).launcher
+    (unsupported.mkSandbox { profile = unsupported.profiles.base; }).image.source_kind
   " >"$out_file" 2>"$err_file"
   rc="$?"
   set -e

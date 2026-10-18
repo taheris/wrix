@@ -49,7 +49,9 @@ let
     let
       fakeConfig = {
         packages = {
-          profile-images = writeText "profile-images" "{}";
+          profile-images = (writeText "profile-images" "{}") // {
+            nativePreflight = writeText "native" "{}";
+          };
           loom = writeShellScriptBin "loom" "exit 0";
         };
         treefmt.build.wrapper = writeShellScriptBin "treefmt" "exit 0";

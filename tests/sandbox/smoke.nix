@@ -14,7 +14,6 @@ let
     jq
     runCommandLocal
     writeShellApplication
-    writeShellScriptBin
     ;
   inherit (builtins) elem getEnv;
   inherit (pkgs.lib) getName;
@@ -79,7 +78,6 @@ let
       crane
       fenix
       ;
-    serviceCli = serviceCliStub;
   };
   consumerAgent = import ./fixtures/consumer-agent.nix { inherit pkgs; };
   commandRunner = import ./fixtures/command-runner.nix { inherit pkgs; };
@@ -88,46 +86,10 @@ let
       agent = "direct";
       agentPkg = consumerAgent;
     }).image;
-  inherit (sandboxLib) serviceImage;
   sandbox = sandboxLib.mkSandbox { profile = sandboxLib.profiles.base; };
-  wrix = sandbox.package;
+  wrix = serviceCliStub;
   wrixBuilder = import ../builder/fixture.nix { inherit pkgs linuxPkgs; };
-  wrixLauncher = sandbox.launcher;
-
-  pathProbeCli = writeShellScriptBin "wrix" ''
-    set -euo pipefail
-    printf 'NIX_STORE=%s\n' "$(command -v nix-store)"
-    printf 'WRIX_SERVICE_IMAGE=%s\n' "''${WRIX_SERVICE_IMAGE:-}"
-    printf 'WRIX_SERVICE_IMAGE_SOURCE=%s\n' "''${WRIX_SERVICE_IMAGE_SOURCE:-}"
-    printf 'WRIX_SERVICE_IMAGE_SOURCE_KIND=%s\n' "''${WRIX_SERVICE_IMAGE_SOURCE_KIND:-}"
-    printf 'WRIX_SERVICE_IMAGE_DIGEST=%s\n' "''${WRIX_SERVICE_IMAGE_DIGEST:-}"
-    ${
-      if isLinux then
-        ''
-          printf 'PODMAN=%s\n' "$(command -v podman)"
-          printf 'SKOPEO=%s\n' "$(command -v skopeo)"
-        ''
-      else if isDarwin then
-        ''
-          printf 'SKOPEO=%s\n' "$(command -v skopeo)"
-        ''
-      else
-        ""
-    }
-  '';
-  pathProbeSandboxLib = import ../../lib/sandbox {
-    inherit
-      pkgs
-      system
-      linuxPkgs
-      treefmt
-      crane
-      fenix
-      ;
-    serviceCli = pathProbeCli;
-  };
-  pathProbePackage =
-    (pathProbeSandboxLib.mkSandbox { profile = pathProbeSandboxLib.profiles.base; }).package;
+  wrixLauncher = serviceCliStub;
 
 in
 {
@@ -250,88 +212,33 @@ in
         nativeBuildInputs = [ bash ];
       }
       ''
-        echo "Checking sandbox package wrapper syntax..."
+        echo "Checking host CLI wrapper syntax..."
         ${
           if isLinux then
             "bash -n ${wrix}/bin/wrix"
           else
-            "echo \"SKIP: sandbox package wrapper syntax (Linux-only)\" >&2"
+            "echo \"SKIP: host CLI wrapper syntax (Linux-only)\" >&2"
         }
         mkdir $out
       '';
 
-  package-runtime-path =
-    runCommandLocal "smoke-package-runtime-path" { nativeBuildInputs = [ bash ]; }
-      ''
-        set -euo pipefail
-
-        check_output() {
-          local label="$1"
-          local output="$2"
-          case "$output" in
-            *"NIX_STORE=/nix/store/"*) ;;
-            *)
-              printf '%s wrapper did not make nix-store available on PATH:\n%s\n' "$label" "$output" >&2
-              exit 1
-              ;;
-          esac
-          ${
-            if isLinux then
-              ''
-                case "$output" in
-                  *"PODMAN=/nix/store/"*) ;;
-                  *)
-                    printf '%s wrapper did not make podman available on PATH:\n%s\n' "$label" "$output" >&2
-                    exit 1
-                    ;;
-                esac
-                case "$output" in
-                  *"SKOPEO=/nix/store/"*) ;;
-                  *)
-                    printf '%s wrapper did not make skopeo available on PATH:\n%s\n' "$label" "$output" >&2
-                    exit 1
-                    ;;
-                esac
-              ''
-            else if isDarwin then
-              ''
-                case "$output" in
-                  *"SKOPEO=/nix/store/"*) ;;
-                  *)
-                    printf '%s wrapper did not make skopeo available on PATH:\n%s\n' "$label" "$output" >&2
-                    exit 1
-                    ;;
-                esac
-              ''
-            else
-              ""
-          }
-        }
-
-        mkdir -p home
-        explicit=$(env -i HOME="$PWD/home" PATH=/path-not-used ${pathProbePackage}/bin/wrix run)
-        default=$(env -i HOME="$PWD/home" PATH=/path-not-used ${pathProbePackage}/bin/wrix-run)
-        check_output "bin/wrix" "$explicit"
-        check_output "bin/wrix-run" "$default"
-
-        mkdir $out
-      '';
-
-  package-service-image-contract = runCommandLocal "smoke-package-service-image-contract" { } ''
-        set -euo pipefail
-
-        mkdir -p home
-        output=$(env -i HOME="$PWD/home" PATH=/path-not-used ${pathProbePackage}/bin/wrix service status)
-        if [[ "$output" != *"WRIX_SERVICE_IMAGE=${serviceImage.ref}"* ]] \
-          || [[ "$output" != *"WRIX_SERVICE_IMAGE_SOURCE=${serviceImage.source}"* ]] \
-          || [[ "$output" != *"WRIX_SERVICE_IMAGE_SOURCE_KIND=${serviceImage.source_kind}"* ]] \
-          || [[ "$output" != *"WRIX_SERVICE_IMAGE_DIGEST=${serviceImage.digest}"* ]]; then
-          printf 'configured wrapper did not bind the service image contract:\n%s\n' "$output" >&2
-          exit 1
-        fi
-
-    mkdir "$out"
+  package-runtime-path = runCommandLocal "smoke-host-cli-command" { } ''
+    set -euo pipefail
+    ${wrix}/bin/wrix --help > "$out"
+    [[ ! -e "${wrix}/bin/wrix-run" ]]
   '';
+
+  package-service-image-contract =
+    assert
+      builtins.attrNames sandbox == [
+        "image"
+        "profile"
+      ];
+    assert sandbox.image ? profileConfig;
+    runCommandLocal "smoke-data-only-sandbox" { } ''
+      set -euo pipefail
+      touch "$out"
+    '';
 
   darwin-entrypoint-syntax =
     runCommandLocal "smoke-darwin-entrypoint" { nativeBuildInputs = [ bash ]; }

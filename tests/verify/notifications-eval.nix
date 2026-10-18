@@ -43,9 +43,7 @@ let
       writeShellApplication = args: args.text;
     };
   };
-  settings = fromJSON (
-    readFile flake.packages.${system}.sandbox-claude.passthru.image.claudeSettingsJson
-  );
+  settings = fromJSON (readFile flake.packages.${system}.image-base-claude.image.claudeSettingsJson);
   stopCommands = concatLists (map (entry: entry.hooks or [ ]) (settings.hooks.Stop or [ ]));
   invokesNotifyClient = any (
     hook:

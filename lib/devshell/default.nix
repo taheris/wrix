@@ -2,7 +2,6 @@
   pkgs,
   rustCli,
   beads,
-  serviceImage,
 }:
 
 let
@@ -77,7 +76,18 @@ in
           profile
         else
           throw "mkDevShell requires either `profile` or `sandbox`";
-      wrixPackage = if sandbox == null then rustCli.wrix else sandbox.package;
+      projectEnv =
+        if sandbox == null then
+          { }
+        else
+          {
+            WRIX_PROJECT_PROFILE_CONFIG = toString sandbox.image.profileConfig;
+          };
+      checkedEnv =
+        if sandbox != null && env ? WRIX_PROJECT_PROFILE_CONFIG then
+          throw "WRIX_PROJECT_PROFILE_CONFIG is constructor-owned"
+        else
+          env;
       hooksTarget =
         if prekHooks == false then
           null
@@ -149,18 +159,12 @@ in
             ) || { return 1 2>/dev/null || exit 1; }
             export WRIX_CACHE_PENDING_RETENTION_SECS
           '';
-      serviceEnv = {
-        WRIX_SERVICE_IMAGE = serviceImage.ref;
-        WRIX_SERVICE_IMAGE_SOURCE = "${serviceImage.source}";
-        WRIX_SERVICE_IMAGE_SOURCE_KIND = serviceImage.source_kind;
-        WRIX_SERVICE_IMAGE_DIGEST = "${serviceImage.digest}";
-      };
       serviceHook =
         if !nixCacheEnabled then
           beads.shellHook
         else
           ''
-            _wrix_service_bin="''${WRIX_BIN:-${wrixPackage}/bin/wrix}"
+            _wrix_service_bin="''${WRIX_BIN:-wrix}"
             ${startIndependent {
               command = ''"$_wrix_service_bin" service start'';
               onFailure = "return 1 2>/dev/null || exit 1";
@@ -192,11 +196,10 @@ in
         (resolvedProfile.hostPackages or resolvedProfile.packages)
         ++ packages
         ++ [
-          wrixPackage
           prekWrappers.prePushChecks
           prekWrappers.skipIfMissing
         ];
-      env = (resolvedProfile.hostEnv or resolvedProfile.env) // serviceEnv // cacheEnv // env;
+      env = (resolvedProfile.hostEnv or resolvedProfile.env) // cacheEnv // checkedEnv // projectEnv;
       shellHook = ''
         ${durationHook}
         ${serviceHook}

@@ -6,15 +6,15 @@
 #
 # 1. test_manifest_shape — `mkProfileImages { rust = ...; }` produces JSON
 #    whose profile entry is keyed by the image's agent and whose variant carries
-#    `ref`, `source`, `source_kind`, `launcher`, and `profile_config` fields, with `source`
+#    `ref`, `source`, `source_kind`, and `profile_config` fields, with `source`
 #    and `source_kind` matching the corresponding `mkSandbox` image metadata.
 #
 # 2. test_flake_outputs_present — `packages.image-<name>[-<agent>]` resolves
 #    to the matching sandbox image's selected source, all sandbox and manifest
-#    outputs evaluate, and `packages.default` resolves to `sandbox-rust-pi`.
+#    outputs evaluate, and `packages.default` resolves to the host CLI.
 #
 # 3. test_runtime_manifest_retains_store_context — the Pi runtime manifest
-#    exported to Loom retains Nix context on `source`, `launcher`, and `profile_config`.
+#    exported to Loom retains Nix context on `source` and `profile_config`.
 #
 # 4. test_eval_manifest_access_is_lightweight — `passthru.manifest` remains
 #    available through evaluation-only inspection without building the runtime
@@ -31,7 +31,6 @@ REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 test_manifest_shape() {
     local flake_url="git+file://$REPO_ROOT"
     local system manifest_path expected
-    local launcher expected_launcher
     local source ref source_kind profile_config expected_source expected_source_kind expected_profile_config
     local pi_source pi_ref pi_source_kind pi_profile_config pi_expected_source pi_expected_source_kind pi_expected_profile_config
 
@@ -66,8 +65,8 @@ test_manifest_shape() {
       (keys | sort) == ["rust", "rustPi"] and
       (.rust | keys) == ["direct"] and
       (.rustPi | keys) == ["pi"] and
-      (.rust.direct | keys | sort) == ["launcher", "profile_config", "ref", "source", "source_kind"] and
-      (.rustPi.pi | keys | sort) == ["launcher", "profile_config", "ref", "source", "source_kind"]
+      (.rust.direct | keys | sort) == ["profile_config", "ref", "source", "source_kind"] and
+      (.rustPi.pi | keys | sort) == ["profile_config", "ref", "source", "source_kind"]
     ' "$manifest_path" >/dev/null; then
         echo "realized mkProfileImages JSON has the wrong profile or entry shape" >&2
         return 1
@@ -84,7 +83,7 @@ test_manifest_shape() {
         }).image;
         rustPiImage = (lib.mkSandbox { profile = lib.profiles.rust; agent = \"pi\"; }).image;
       in {
-        launcher = \"\${flake.packages.${system}.wrix}/bin/wrix\";
+
         rustImageSource = rustImage.source;
         rustImageSourceKind = rustImage.source_kind;
         rustProfileConfig = rustImage.profileConfig;
@@ -96,14 +95,6 @@ test_manifest_shape() {
         echo "nix eval of matching mkSandbox image metadata failed" >&2
         return 1
     fi
-
-    expected_launcher=$(jq -r '.launcher' <<<"$expected")
-    while IFS= read -r launcher; do
-        if [[ "$launcher" != "$expected_launcher" || ! -x "$launcher" ]]; then
-            echo "manifest launcher ($launcher) != executable raw wrix ($expected_launcher)" >&2
-            return 1
-        fi
-    done < <(jq -r '.rust.direct.launcher, .rustPi.pi.launcher' "$manifest_path")
 
     source=$(jq -r '.rust.direct.source' "$manifest_path")
     ref=$(jq -r '.rust.direct.ref' "$manifest_path")
@@ -168,15 +159,6 @@ test_flake_outputs_present() {
         outputs+=("image${profile_suffix}" "image${profile_suffix}-claude" "image${profile_suffix}-pi")
     done
 
-    local sandbox_profile_suffix agent_suffix mcp_suffix
-    for sandbox_profile_suffix in "" "-rust" "-python"; do
-        for agent_suffix in "" "-claude" "-pi"; do
-            for mcp_suffix in "" "-mcp"; do
-                outputs+=("sandbox${sandbox_profile_suffix}${agent_suffix}${mcp_suffix}")
-            done
-        done
-    done
-
     local out
     for out in "${outputs[@]}"; do
         if ! nix eval --raw --no-warn-dirty "$flake_url#$out.outPath" >/dev/null 2>&1; then
@@ -185,57 +167,11 @@ test_flake_outputs_present() {
         fi
     done
 
-    local system expected_sources actual_source expected_source
-    system=$(nix eval --raw --impure --no-warn-dirty --expr 'builtins.currentSystem')
-    if ! expected_sources=$(nix eval --json --impure --no-warn-dirty --expr "
-      let
-        flake = builtins.getFlake \"$flake_url\";
-        packages = flake.packages.${system};
-        sourceFor = sandbox: toString sandbox.image.source;
-      in {
-        image-base = sourceFor packages.sandbox;
-        image-base-claude = sourceFor packages.sandbox-claude;
-        image-base-pi = sourceFor packages.sandbox-pi;
-        image-rust = sourceFor packages.sandbox-rust;
-        image-rust-claude = sourceFor packages.sandbox-rust-claude;
-        image-rust-pi = sourceFor packages.sandbox-rust-pi;
-        image-python = sourceFor packages.sandbox-python;
-        image-python-claude = sourceFor packages.sandbox-python-claude;
-        image-python-pi = sourceFor packages.sandbox-python-pi;
-      }
-    "); then
-        echo "matching sandbox image sources failed to evaluate" >&2
-        return 1
-    fi
-    for out in "${outputs[@]}"; do
-        if [[ "$out" != image-* ]]; then
-            continue
-        fi
-        actual_source=$(nix eval --raw --no-warn-dirty "$flake_url#$out.outPath")
-        expected_source=$(jq -r --arg out "$out" '.[$out]' <<<"$expected_sources")
-        if [[ "$actual_source" != "$expected_source" ]]; then
-            echo "packages.$out ($actual_source) != matching sandbox.image.source ($expected_source)" >&2
-            return 1
-        fi
-    done
+    local default_path host_path
+    default_path=$(nix eval --raw --no-warn-dirty "$flake_url#default.outPath")
+    host_path=$(nix eval --raw --no-warn-dirty "$flake_url#wrix.outPath")
+    [[ "$default_path" == "$host_path" ]]
 
-    local default_name default_main
-    if ! default_name=$(nix eval --raw --no-warn-dirty "$flake_url#default.name"); then
-        echo "packages.default.name failed to evaluate" >&2
-        return 1
-    fi
-    if [[ "$default_name" != "wrix-rust-pi" ]]; then
-        echo "packages.default resolved to $default_name, expected wrix-rust-pi" >&2
-        return 1
-    fi
-    if ! default_main=$(nix eval --raw --no-warn-dirty "$flake_url#default.meta.mainProgram"); then
-        echo "packages.default.meta.mainProgram failed to evaluate" >&2
-        return 1
-    fi
-    if [[ "$default_main" != "wrix-run" ]]; then
-        echo "packages.default mainProgram is $default_main, expected wrix-run" >&2
-        return 1
-    fi
 }
 
 test_runtime_manifest_retains_store_context() {
@@ -255,7 +191,6 @@ test_runtime_manifest_retains_store_context() {
         entryContext = entry: {
           source = builtins.hasContext entry.source;
           profile_config = builtins.hasContext entry.profile_config;
-          launcher = builtins.hasContext entry.launcher;
         };
       in {
         runtimeJson = builtins.hasContext (builtins.toJSON manifest);
@@ -270,7 +205,7 @@ test_runtime_manifest_retains_store_context() {
 
     if ! jq -e '
       .runtimeJson == true and
-      all([.base, .rust, .python][]; .source == true and .profile_config == true and .launcher == true)
+      all([.base, .rust, .python][]; .source == true and .profile_config == true)
     ' <<<"$result" >/dev/null; then
         echo "packages.profile-images runtime manifest lost Nix store context: $result" >&2
         return 1

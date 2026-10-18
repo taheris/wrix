@@ -16,7 +16,6 @@ let
     "pi"
   ];
   fields = [
-    "launcher"
     "profile_config"
     "ref"
     "source"
@@ -36,13 +35,10 @@ let
     in
     attrNames manifest.passthru.manifest.base == [ agent ]
     && attrNames entry == fields
-    && entry.launcher == "${sandbox.launcher}/bin/wrix"
-    && entry.launcher != "${sandbox.package}/bin/wrix"
-    && entry.profile_config == toString sandbox.profileConfig
+    && entry.profile_config == toString sandbox.image.profileConfig
     && entry.source == toString sandbox.image.source
     && entry.source_kind == sandbox.image.source_kind
     && all hasContext [
-      entry.launcher
       entry.profile_config
       entry.source
       (toJSON manifest.passthru.manifest)
@@ -55,7 +51,7 @@ let
 in
 assert all entryMatchesSandbox agents;
 assert !missingConfig.success;
-pkgs.runCommand "test-profile-images-launcher" { } ''
+pkgs.runCommand "test-profile-images-data" { } ''
   set -euo pipefail
   touch "$out"
 ''

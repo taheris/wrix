@@ -14,19 +14,15 @@ let
   inherit (pkgs.lib) concatMapStrings hasPrefix optionalString;
   resources = import ./lib/browser-resources.nix { };
   sourceNode = lock.nodes.${lock.nodes.root.inputs.loom-src};
-  sandboxNames = builtins.filter (hasPrefix "sandbox") (attrNames packages) ++ [
-    "default"
-    "debug"
-  ];
+  sandboxNames = builtins.filter (hasPrefix "image-") (attrNames packages);
   environmentFor = name: packages.${name}.image.profileEnv;
   hostTools = devShell.nativeBuildInputs ++ devShell.buildInputs;
   profileManifest = packages.profile-images;
   nativeEntry = profileManifest.manifest.rust.pi;
   nativeSandbox = profileManifest.sandboxes.rust.pi;
-  sharedNixTests = import ./sandbox/shared-nix.nix {
-    inherit pkgs linuxPkgs wrix;
-    profileSandboxes = profileManifest.sandboxes;
-  };
+  nativeAgent = builtins.head (
+    pkgs.lib.subtractLists nativeSandbox.image.stableProfileImage.lowerTiersContents nativeSandbox.image.agentImage.lowerTiersContents
+  );
 
   nativeProfiles =
     assert
@@ -36,7 +32,16 @@ let
         "rust"
       ];
     assert all (profile: attrNames profile == [ "pi" ]) (builtins.attrValues profileManifest.manifest);
-    assert nativeEntry.native_preflight == "rust";
+    assert
+      profileManifest.nativeCapabilities.${builtins.unsafeDiscardStringContext nativeEntry.profile_config}
+      == "rust";
+    assert
+      attrNames nativeEntry == [
+        "profile_config"
+        "ref"
+        "source"
+        "source_kind"
+      ];
     assert nativeSandbox.image.labels."wrix.nix.private" == "1";
     assert all
       (
@@ -56,17 +61,25 @@ let
       "python"
       "rust"
     ];
-    assert nativeEntry.runtime == "pi";
     assert nativeEntry.source == toString nativeSandbox.image.source;
-    assert nativeEntry.profile_config == toString nativeSandbox.profileConfig;
-    assert nativeEntry.launcher == "${nativeSandbox.launcher}/bin/wrix";
+    assert nativeEntry.profile_config == toString nativeSandbox.image.profileConfig;
     assert all builtins.hasContext [
       nativeEntry.source
       nativeEntry.profile_config
-      nativeEntry.launcher
     ];
     pkgs.runCommand "test-loom-native-profiles" { } ''
       set -euo pipefail
+      ${optionalString pkgs.stdenv.hostPlatform.isLinux ''
+        mkdir empty-path
+        if PATH="$PWD/empty-path" LOOM_NATIVE_PREFLIGHT=rust ${nativeAgent}/bin/pi >probe.log 2>&1; then
+          printf 'native wrapper admitted an executor without required tools\\n' >&2
+          exit 1
+        else
+          status=$?
+          [[ "$status" == 78 ]]
+          grep -F 'required verification remains unavailable' probe.log
+        fi
+      ''}
       touch "$out"
     '';
 

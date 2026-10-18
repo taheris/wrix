@@ -85,7 +85,6 @@ let
     crane = throw "description evaluated compiler tools";
     fenix = throw "description evaluated toolchains";
     treefmt = throw "description evaluated formatting tools";
-    serviceCli = throw "description evaluated service packages";
   };
 in
 assert builtins.length (builtins.attrNames loomInputs) == builtins.length loom.ciApps;

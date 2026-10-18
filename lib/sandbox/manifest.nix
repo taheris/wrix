@@ -2,26 +2,15 @@
 #
 # Builds a `profile-images.json` derivation mapping each profile name to one
 # agent variant (`direct`, `claude`, or `pi`) with the image ref, image source,
-# source kind, raw launcher, and profile config needed to spawn that variant. Orchestrators (e.g. Loom via
+# source kind and profile config needed to spawn that variant. Orchestrators (e.g. Loom via
 # `LOOM_PROFILES_MANIFEST`) read this at startup and use the selected variant to
 # populate `wrix spawn` inputs per bead.
 #
 # See specs/profiles.md § Profile-Image Manifest.
-{
-  pkgs,
-  launcher,
-}:
+{ pkgs }:
 
 let
   inherit (builtins) elem mapAttrs toString;
-
-  imageTagLib = import ../util/image-tag.nix { };
-
-  # podman accepts `localhost/<name>:<tag>` refs; Apple's `container` CLI
-  # rejects the `localhost/` prefix and uses bare `<name>:<tag>`. Match the
-  # platform convention used by the corresponding launcher (linux/darwin
-  # sandbox default.nix).
-  refPrefix = if pkgs.stdenv.hostPlatform.isDarwin then "" else "localhost/";
 
   mkImageEntry =
     image:
@@ -30,10 +19,9 @@ let
       source = image.source or image;
     in
     {
-      ref = "${refPrefix}${image.imageName}:${imageTagLib.mkImageTag image}";
+      inherit (image) ref;
       source = toString source;
       source_kind = sourceKind;
-      launcher = "${launcher}/bin/wrix";
       profile_config = toString (
         image.profileConfig or (throw "mkProfileImages: image.profileConfig is required")
       );

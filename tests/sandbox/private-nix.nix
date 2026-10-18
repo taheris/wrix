@@ -14,7 +14,7 @@ let
     {
       inherit name;
       layout = toString selected.image.ociLayout;
-      config = toString selected.profileConfig;
+      config = toString selected.image.profileConfig;
       source = toString selected.image.source;
       digestFile = toString selected.image.digest;
     }

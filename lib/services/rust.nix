@@ -119,10 +119,16 @@ let
       "--prefix"
       "PATH"
       ":"
-      "${makeBinPath [
-        pkgs.nix
-        pkgs.skopeo
-      ]}"
+      "${makeBinPath (
+        [
+          pkgs.nix
+          pkgs.skopeo
+        ]
+        ++ optionals pkgs.stdenv.hostPlatform.isLinux [
+          pkgs.podman
+          (import ../sandbox/linux/krun-runtime.nix { linuxPkgs = pkgs; })
+        ]
+      )}"
     ]
   );
 

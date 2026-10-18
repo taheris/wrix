@@ -40,7 +40,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-PACKAGE=$(nix build --no-link --print-out-paths --no-warn-dirty .#test-tmux-sandbox)
+PACKAGE=$(nix build --no-link --print-out-paths --no-warn-dirty .#wrix)
 PROFILE_CONFIG=$(nix eval --raw --no-warn-dirty .#test-tmux-sandbox.profileConfig)
 mkdir -p "$TEST_TMP/home" "$TEST_TMP/cache"
 
@@ -78,7 +78,7 @@ start_sandbox() {
     "$spawn_config" >"$spawn_config.tmp"
   mv "$spawn_config.tmp" "$spawn_config"
   HOME="$TEST_TMP/home" XDG_CACHE_HOME="$TEST_TMP/cache" WRIX_MICROVM=0 \
-    timeout --kill-after=5 180 "$PACKAGE/bin/wrix" spawn --spawn-config "$spawn_config" >"$TEST_TMP/$name.log" 2>&1 &
+    timeout --kill-after=5 180 "$PACKAGE/bin/wrix" --profile-config "$PROFILE_CONFIG" spawn --spawn-config "$spawn_config" >"$TEST_TMP/$name.log" 2>&1 &
   pid=$!
   LAUNCH_PIDS+=("$pid")
   if ! WAIT_ATTEMPTS=1200 wait_for test -f "$workspace/ready"; then

@@ -70,11 +70,10 @@ test_mksandbox_accepts_documented_parameters() {
         agentPkg = flake.inputs.nixpkgs.legacyPackages.${system}.hello;
         agentSettings = { };
       };
-      required = [ "package" "image" "launcher" "profile" "devShell" ];
+      required = [ "image" "profile" "devShell" ];
     in {
       required_present = builtins.all (name: builtins.hasAttr name sandbox) required;
-      launcher_is_raw_wrix = sandbox.launcher == flake.packages.${system}.wrix;
-      package_main_program = sandbox.package.meta.mainProgram or "";
+      data_only = builtins.attrNames sandbox == [ "devShell" "image" "profile" ];
       profile_name = sandbox.profile.name;
       env_value = sandbox.profile.env.WRIX_API_CONTRACT or "";
       runtime_secret_policy = sandbox.profile.runtimeSecrets.WRIX_API_SECRET or "";
@@ -93,8 +92,7 @@ test_mksandbox_accepts_documented_parameters() {
 
   assert_json "$result" '
     .required_present == true and
-    .launcher_is_raw_wrix == true and
-    .package_main_program == "wrix-run" and
+    .data_only == true and
     .profile_name == "base" and
     .env_value == "1" and
     .runtime_secret_policy == "required" and

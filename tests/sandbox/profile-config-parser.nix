@@ -4,7 +4,6 @@
   crane,
   fenix,
   treefmt,
-  serviceCli,
   rustNextest,
 }:
 let
@@ -21,7 +20,6 @@ let
               crane
               fenix
               treefmt
-              serviceCli
               system
               ;
           };

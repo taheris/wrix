@@ -695,17 +695,17 @@ without introducing a reciprocal flake dependency.
   `ref`, `source`, `source_kind` and `profile_config`, no launcher executable,
   and Nix-context-preserving image/configuration references; missing
   configuration is an evaluation error.
-  [check?](verify:profiles.data-only-manifest)
+  [check](verify:profiles.data-only-manifest)
 - Built-in image outputs select Pi by default and explicit Claude/Pi variants
   resolve to their selected sources, without a placeholder direct runner.
-  [check?](verify:profiles.image-only-output-contract)
+  [check](verify:profiles.image-only-output-contract)
 - The only Wrix CLI/default package is the host package; runnable sandbox/MCP
   variants, configured default/debug launchers and project `wrix-run` exports
   are absent, not aliases or host-CLI forwarding adapters.
-  [check?](verify:profiles.host-cli-package-outputs)
+  [check](verify:profiles.host-cli-package-outputs)
 - The bundled Pi manifest and custom direct manifests use the data-only contract
   with no per-entry executable or redundant Pi manifest.
-  [check?](verify:profiles.pi-data-manifest)
+  [check](verify:profiles.pi-data-manifest)
 - `profiles.rust.buildPackage` is exposed and returns an attrset with `bin`,
   `clippy`, `nextest`, and `cargoArtifacts` fields
   [check](verify:profiles.rust-build-package-exposed)

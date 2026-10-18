@@ -1,0 +1,1219 @@
+diff --git a/crates/loom-agent/src/claude/backend.rs b/crates/loom-agent/src/claude/backend.rs
+index c9da263..192f871 100644
+--- a/crates/loom-agent/src/claude/backend.rs
++++ b/crates/loom-agent/src/claude/backend.rs
+@@ -51,7 +51,7 @@ impl AgentBackend for ClaudeBackend {
+         register_native_skills::<NoNativeRegistrar>(config)?;
+         let spawn_config = prepare_runtime(config)?;
+
+-        let wrix_bin = resolve_wrix_spawn_bin(config)?;
++        let wrix_bin = resolve_wrix_spawn_bin(config);
+         info!(
+             wrix = %wrix_bin.to_string_lossy(),
+             spawn_config = %spawn_config.path().display(),
+diff --git a/crates/loom-agent/src/direct/backend.rs b/crates/loom-agent/src/direct/backend.rs
+index 5b490e9..705732c 100644
+--- a/crates/loom-agent/src/direct/backend.rs
++++ b/crates/loom-agent/src/direct/backend.rs
+@@ -50,7 +50,7 @@ impl AgentBackend for DirectBackend {
+         register_native_skills::<NoNativeRegistrar>(config)?;
+         let spawn_config = prepare_runtime(config)?;
+
+-        let wrix_bin = resolve_wrix_spawn_bin(config)?;
++        let wrix_bin = resolve_wrix_spawn_bin(config);
+         info!(
+             wrix = %wrix_bin.to_string_lossy(),
+             spawn_config = %spawn_config.path().display(),
+diff --git a/crates/loom-agent/src/lib.rs b/crates/loom-agent/src/lib.rs
+index 24e9d01..9a3d18f 100644
+--- a/crates/loom-agent/src/lib.rs
++++ b/crates/loom-agent/src/lib.rs
+@@ -15,14 +15,8 @@ pub use claude::ClaudeBackend;
+ pub use direct::DirectBackend;
+ pub use pi::PiBackend;
+
+-pub(crate) fn resolve_wrix_spawn_bin(config: &SpawnConfig) -> Result<OsString, ProtocolError> {
+-    let launcher = config.wrix_launcher.as_deref().ok_or_else(|| {
+-        io::Error::new(
+-            io::ErrorKind::InvalidInput,
+-            "missing manifest Wrix launcher",
+-        )
+-    })?;
+-    Ok(loom_driver::wrix::resolve_launcher(launcher, None).into_os_string())
++pub(crate) fn resolve_wrix_spawn_bin(config: &SpawnConfig) -> OsString {
++    loom_driver::wrix::resolve_launcher(config.wrix_launcher.as_deref()).into_os_string()
+ }
+
+ pub(crate) fn build_wrix_command(
+diff --git a/crates/loom-agent/src/pi/backend.rs b/crates/loom-agent/src/pi/backend.rs
+index a507bbe..7e692f4 100644
+--- a/crates/loom-agent/src/pi/backend.rs
++++ b/crates/loom-agent/src/pi/backend.rs
+@@ -90,7 +90,7 @@ impl PiBackend {
+     ///
+     /// Returns an error when agent startup, protocol handling, or tool execution fails.
+     pub async fn spawn_bridge(config: &SpawnConfig) -> Result<AgentSession<Idle>, ProtocolError> {
+-        let wrix_bin = resolve_wrix_spawn_bin(config)?;
++        let wrix_bin = resolve_wrix_spawn_bin(config);
+         Self::spawn_bridge_with_wrix_bin(config, &wrix_bin).await
+     }
+
+@@ -148,7 +148,7 @@ impl PiBackend {
+
+ impl AgentBackend for PiBackend {
+     async fn spawn(config: &SpawnConfig) -> Result<AgentSession<Idle>, ProtocolError> {
+-        let wrix_bin = resolve_wrix_spawn_bin(config)?;
++        let wrix_bin = resolve_wrix_spawn_bin(config);
+         Self::spawn_with_wrix_bin(config, &wrix_bin).await
+     }
+
+diff --git a/crates/loom-driver/src/profile_manifest/manifest.rs b/crates/loom-driver/src/profile_manifest/manifest.rs
+index 4e9916a..12c7118 100644
+--- a/crates/loom-driver/src/profile_manifest/manifest.rs
++++ b/crates/loom-driver/src/profile_manifest/manifest.rs
+@@ -8,13 +8,9 @@ use crate::identifier::ProfileName;
+
+ use super::error::ProfileError;
+
+-/// Environment variable that points at the profile-image manifest produced by
+-/// Loom's Nix glue around `wrix.lib.${system}.mkProfileImages` at flake-build
+-/// time.
+ pub const ENV_VAR: &str = "LOOM_PROFILES_MANIFEST";
+-
+-/// Driver-package-owned profile closure used to upgrade legacy native feedback images.
+ pub const PROVISIONED_ENV_VAR: &str = "LOOM_PROVISIONED_PROFILES_MANIFEST";
++pub const NATIVE_ENV_VAR: &str = "LOOM_NATIVE_PREFLIGHT_MANIFEST";
+
+ #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+ #[serde(rename_all = "kebab-case")]
+@@ -22,69 +18,26 @@ pub enum NativePreflight {
+     Rust,
+ }
+
+-/// One profile-image manifest entry.
+-///
+-/// Contains the podman ref to spawn, the Nix store path of the image source
+-/// that materializes it, the source kind selecting the wrix
+-/// install path, the raw wrix launcher that accepts a per-spawn
+-/// `ProfileConfig`, the wrix `ProfileConfig` path matching that image variant,
+-/// and (when produced by the flake glue) the image content-digest file.
++/// Immutable Wrix image data, independent of host executables and Loom capabilities.
+ #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+ pub struct ImageEntry {
+-    /// Podman ref (e.g. `localhost/wrix-rust-pi:abc123`) handed to `podman run`.
+     #[serde(rename = "ref")]
+     pub r#ref: String,
+-    /// Nix store path of the image source handed to the launcher install step.
+     pub source: PathBuf,
+-    /// Explicit source kind selecting the wrix launcher install path.
+     pub source_kind: ImageSourceKind,
+-    /// Raw, profile-agnostic Wrix launcher; never a configured wrapper.
+-    pub launcher: PathBuf,
+-    /// Immutable Wrix profile configuration matching this image and runtime.
+     pub profile_config: PathBuf,
+-    /// Optional Nix store path containing the image content digest. The
+-    /// matching `ProfileConfig` carries the digest to wrix; Loom parses this
+-    /// manifest field for compatibility and must not serialize it as a
+-    /// per-launch `SpawnConfig` override.
+-    #[serde(default, skip_serializing_if = "Option::is_none")]
+-    pub digest: Option<PathBuf>,
+-    /// Optional typed runtime metadata emitted by newer manifest builders.
+-    /// When present, it must agree with the runtime key that selected this
+-    /// entry.
+-    #[serde(default, skip_serializing_if = "Option::is_none")]
+-    pub runtime: Option<AgentRuntime>,
+-    /// Image-owned availability probes run before the implementation agent starts.
+-    #[serde(default, skip_serializing_if = "Option::is_none")]
+-    pub native_preflight: Option<NativePreflight>,
+ }
+
+-/// Parsed profile-image manifest keyed by workspace profile, then runtime.
++/// Provisioned native wrappers keyed by their exact immutable `ProfileConfig` path.
++#[derive(Debug, Clone, Default, Serialize, Deserialize)]
++pub struct NativeCapabilities(BTreeMap<PathBuf, Option<NativePreflight>>);
++
+ #[derive(Debug, Clone)]
+ pub struct ProfileImageManifest {
+     entries: BTreeMap<ProfileName, BTreeMap<AgentRuntime, ImageEntry>>,
+     manifest_path: PathBuf,
+-    provisioned_path: Option<PathBuf>,
+-}
+-
+-fn validate_runtime_metadata(
+-    entries: &BTreeMap<ProfileName, BTreeMap<AgentRuntime, ImageEntry>>,
+-    path: &Path,
+-) -> Result<(), ProfileError> {
+-    for (profile, runtimes) in entries {
+-        for (runtime_key, entry) in runtimes {
+-            if let Some(entry_runtime) = entry.runtime
+-                && entry_runtime != *runtime_key
+-            {
+-                return Err(ProfileError::RuntimeMetadataMismatch {
+-                    profile: profile.clone(),
+-                    runtime_key: *runtime_key,
+-                    entry_runtime,
+-                    manifest_path: path.to_path_buf(),
+-                });
+-            }
+-        }
+-    }
+-    Ok(())
++    native: NativeCapabilities,
++    native_path: Option<PathBuf>,
+ }
+
+ impl ProfileImageManifest {
+@@ -93,100 +46,73 @@ impl ProfileImageManifest {
+             profile.as_str() == "rust"
+                 && runtimes
+                     .values()
+-                    .any(|entry| entry.native_preflight != Some(NativePreflight::Rust))
++                    .any(|entry| self.native_preflight(entry).is_none())
+         })
+     }
+
+-    /// Read the manifest path from `LOOM_PROFILES_MANIFEST` and parse it.
+-    ///
++    /// Read selected image data and independently provisioned native capabilities.
+     /// # Errors
+-    ///
+-    /// Returns an error when the profile manifest cannot be read, parsed, or validated.
++    /// Rejects missing, malformed or unavailable profile inputs.
+     pub fn from_env() -> Result<Self, ProfileError> {
+         let raw = std::env::var_os(ENV_VAR).ok_or(ProfileError::ManifestEnvUnset)?;
+         let manifest = Self::from_path(Path::new(&raw))?;
+-        match std::env::var_os(PROVISIONED_ENV_VAR) {
+-            Some(path) => Ok(manifest.provision_native_from(&Self::from_path(Path::new(&path))?)),
++        match std::env::var_os(NATIVE_ENV_VAR) {
++            Some(path) => manifest.with_native_capabilities(Path::new(&path)),
+             None => Ok(manifest),
+         }
+     }
+
+-    /// Upgrade declared legacy native entries from the installed driver's explicit closure.
+-    ///
+-    /// Profile and runtime selection remain unchanged. This provisions feedback tools;
+-    /// it does not establish required verification or authorize candidate execution.
++    /// Attach capabilities only to matching configurations; never replace project images.
+     #[must_use]
+     pub fn provision_native_from(mut self, provisioned: &Self) -> Self {
+-        for (profile, runtimes) in &mut self.entries {
+-            for (runtime, entry) in runtimes {
+-                if entry.native_preflight.is_some() {
+-                    continue;
+-                }
+-                let Some(replacement) = provisioned
+-                    .entries
+-                    .get(profile)
+-                    .and_then(|r| r.get(runtime))
+-                else {
+-                    continue;
+-                };
+-                if replacement.native_preflight == Some(NativePreflight::Rust) {
+-                    tracing::info!(
+-                        %profile, %runtime,
+-                        previous_manifest = %self.manifest_path.display(),
+-                        provisioned_manifest = %provisioned.manifest_path.display(),
+-                        "provisioning native feedback from the installed driver closure; required verification remains pending"
+-                    );
+-                    entry.clone_from(replacement);
+-                    self.provisioned_path = Some(provisioned.manifest_path.clone());
+-                }
+-            }
++        if self.native_path.is_some() {
++            return self;
+         }
++        self.native = provisioned.native.clone();
++        self.native_path.clone_from(&provisioned.native_path);
+         self
+     }
+
+-    /// Preserve the selected immutable profile inputs across trusted driver subprocesses.
++    /// Load Loom-owned capability declarations independently of Wrix image entries.
++    /// # Errors
++    /// Rejects missing, malformed or unavailable profile inputs.
++    pub fn with_native_capabilities(mut self, path: &Path) -> Result<Self, ProfileError> {
++        self.native = read_json(path)?;
++        self.native_path = Some(path.to_path_buf());
++        Ok(self)
++    }
++
++    /// Availability requests worker probing; it is not evidence of verification success.
++    pub fn native_preflight(&self, entry: &ImageEntry) -> Option<NativePreflight> {
++        self.native.0.get(&entry.profile_config).copied().flatten()
++    }
++
+     pub fn configure_driver(&self, command: &mut tokio::process::Command) {
+         command.env(ENV_VAR, &self.manifest_path);
+-        match &self.provisioned_path {
++        command.env_remove(PROVISIONED_ENV_VAR);
++        match &self.native_path {
+             Some(path) => {
+-                command.env(PROVISIONED_ENV_VAR, path);
++                command.env(NATIVE_ENV_VAR, path);
+             }
+             None => {
+-                command.env_remove(PROVISIONED_ENV_VAR);
++                command.env_remove(NATIVE_ENV_VAR);
+             }
+         }
+     }
+
+-    /// Parse a manifest from `path`. Read errors map to
+-    /// [`ProfileError::ManifestNotFound`]; JSON-shape errors map to
+-    /// [`ProfileError::ManifestMalformed`].
+-    ///
+     /// # Errors
+-    ///
+-    /// Returns an error when the profile manifest cannot be read, parsed, or validated.
++    /// Rejects missing, malformed or unavailable profile inputs.
+     pub fn from_path(path: &Path) -> Result<Self, ProfileError> {
+-        let bytes = std::fs::read(path).map_err(|source| ProfileError::ManifestNotFound {
+-            path: path.to_path_buf(),
+-            source,
+-        })?;
+-        let entries: BTreeMap<ProfileName, BTreeMap<AgentRuntime, ImageEntry>> =
+-            serde_json::from_slice(&bytes).map_err(|source| ProfileError::ManifestMalformed {
+-                path: path.to_path_buf(),
+-                source,
+-            })?;
+-        validate_runtime_metadata(&entries, path)?;
+         Ok(Self {
+-            entries,
++            entries: read_json(path)?,
+             manifest_path: path.to_path_buf(),
+-            provisioned_path: None,
++            native: NativeCapabilities::default(),
++            native_path: None,
+         })
+     }
+
+-    /// Look up a profile/runtime image entry.
+-    ///
+     /// # Errors
+-    ///
+-    /// Returns an error when the profile manifest cannot be read, parsed, or validated.
++    /// Rejects missing, malformed or unavailable profile inputs.
+     pub fn lookup(
+         &self,
+         profile: &ProfileName,
+@@ -209,17 +135,12 @@ impl ProfileImageManifest {
+             })
+     }
+
+-    /// Disk path the manifest was loaded from.
+     pub fn manifest_path(&self) -> &Path {
+         &self.manifest_path
+     }
+-
+-    /// Profile names the manifest declares, in `BTreeMap` key order.
+     pub fn declared_profiles(&self) -> impl ExactSizeIterator<Item = &ProfileName> {
+         self.entries.keys()
+     }
+-
+-    /// Runtime names declared for `profile`, in `BTreeMap` key order.
+     pub fn declared_runtimes(
+         &self,
+         profile: &ProfileName,
+@@ -228,458 +149,133 @@ impl ProfileImageManifest {
+             .get(profile)
+             .map(|runtimes| runtimes.keys().copied())
+     }
+-
+-    /// Number of declared profiles (used by tests and the rebuild summary).
+     pub fn len(&self) -> usize {
+         self.entries.len()
+     }
+-
+-    /// Whether the manifest declares no profiles.
+     pub fn is_empty(&self) -> bool {
+         self.entries.is_empty()
+     }
+ }
+
++fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, ProfileError> {
++    let bytes = std::fs::read(path).map_err(|source| ProfileError::ManifestNotFound {
++        path: path.to_path_buf(),
++        source,
++    })?;
++    serde_json::from_slice(&bytes).map_err(|source| ProfileError::ManifestMalformed {
++        path: path.to_path_buf(),
++        source,
++    })
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+-    use anyhow::{Result, anyhow};
+
+-    fn write_manifest(dir: &Path, body: &str) -> Result<PathBuf> {
+-        let path = dir.join("profile-images.json");
+-        std::fs::write(&path, body)?;
+-        Ok(path)
++    fn manifest(dir: &Path, config: &str) -> ProfileImageManifest {
++        let path = dir.join("images.json");
++        std::fs::write(&path, serde_json::json!({"rust":{"pi":{
++            "ref":"image", "source":"/image", "source_kind":"nix-descriptor", "profile_config":config
++        }}}).to_string()).unwrap();
++        ProfileImageManifest::from_path(&path).unwrap()
+     }
+
+     #[test]
+-    fn installed_native_closure_repairs_legacy_metadata_without_changing_selection() -> Result<()> {
+-        let legacy = tempfile::tempdir()?;
+-        let installed = tempfile::tempdir()?;
+-        let entry = serde_json::json!({
+-            "ref":"legacy", "source":"/old-image", "source_kind":"nix-descriptor",
+-            "launcher":"/old-wrix", "profile_config":"/old-profile"
+-        });
+-        let mut replacement = entry.clone();
+-        replacement["ref"] = "provisioned".into();
+-        replacement["source"] = "/nix/store/pinned-image".into();
+-        replacement["native_preflight"] = "rust".into();
+-        let original = ProfileImageManifest::from_path(&write_manifest(
+-            legacy.path(),
+-            &serde_json::json!({"rust":{"pi":entry},"base":{"pi":entry}}).to_string(),
+-        )?)?;
+-        let provisioned = ProfileImageManifest::from_path(&write_manifest(installed.path(),
+-            &serde_json::json!({"rust":{"pi":replacement,"direct":replacement},"python":{"pi":replacement}}).to_string())?)?;
+-        let repaired = original.provision_native_from(&provisioned);
+-        let rust = ProfileName::new("rust")?;
++    fn four_field_manifest_roundtrips_without_executable_or_capability_metadata() {
++        let dir = tempfile::tempdir().unwrap();
++        let manifest = manifest(dir.path(), "/project-a/config");
++        let entry = manifest
++            .lookup(&ProfileName::new("rust").unwrap(), AgentRuntime::Pi)
++            .unwrap();
+         assert_eq!(
+-            repaired.lookup(&rust, AgentRuntime::Pi)?.source,
+-            Path::new("/nix/store/pinned-image")
++            serde_json::to_value(entry)
++                .unwrap()
++                .as_object()
++                .unwrap()
++                .len(),
++            4
+         );
++        assert_eq!(entry.profile_config, Path::new("/project-a/config"));
++        assert_eq!(manifest.native_preflight(entry), None);
++        assert!(manifest.legacy_native());
++        assert_eq!(manifest.declared_profiles().count(), 1);
+         assert_eq!(
+-            repaired
+-                .lookup(&ProfileName::new("base")?, AgentRuntime::Pi)?
+-                .r#ref,
+-            "legacy"
++            manifest
++                .declared_runtimes(&ProfileName::new("rust").unwrap())
++                .unwrap()
++                .collect::<Vec<_>>(),
++            [AgentRuntime::Pi]
+         );
+         assert!(matches!(
+-            repaired.lookup(&rust, AgentRuntime::Direct),
+-            Err(ProfileError::UnknownRuntimeForProfile { .. })
++            manifest.lookup(&ProfileName::base(), AgentRuntime::Pi),
++            Err(ProfileError::UnknownProfile { .. })
+         ));
+         assert!(matches!(
+-            repaired.lookup(&ProfileName::new("python")?, AgentRuntime::Pi),
+-            Err(ProfileError::UnknownProfile { .. })
++            manifest.lookup(&ProfileName::new("rust").unwrap(), AgentRuntime::Direct),
++            Err(ProfileError::UnknownRuntimeForProfile { .. })
+         ));
+-        Ok(())
+-    }
+-
+-    #[test]
+-    fn installed_closure_does_not_replace_an_explicit_native_profile() -> Result<()> {
+-        let original = tempfile::tempdir()?;
+-        let installed = tempfile::tempdir()?;
+-        let entry = serde_json::json!({
+-            "ref":"explicit", "source":"/explicit-image", "source_kind":"nix-descriptor",
+-            "launcher":"/wrix", "profile_config":"/profile", "native_preflight":"rust"
+-        });
+-        let mut replacement = entry.clone();
+-        replacement["ref"] = "installed".into();
+-        let original = ProfileImageManifest::from_path(&write_manifest(
+-            original.path(),
+-            &serde_json::json!({"rust":{"pi":entry}}).to_string(),
+-        )?)?;
+-        let installed = ProfileImageManifest::from_path(&write_manifest(
+-            installed.path(),
+-            &serde_json::json!({"rust":{"pi":replacement}}).to_string(),
+-        )?)?;
+-        assert_eq!(
+-            original
+-                .provision_native_from(&installed)
+-                .lookup(&ProfileName::new("rust")?, AgentRuntime::Pi)?
+-                .r#ref,
+-            "explicit"
+-        );
+-        Ok(())
+-    }
+-
+-    #[tokio::test]
+-    async fn provisioned_profile_inputs_survive_actual_driver_subprocess_environment() -> Result<()>
+-    {
+-        let original = tempfile::tempdir()?;
+-        let installed = tempfile::tempdir()?;
+-        let entry = serde_json::json!({"ref":"image", "source":"/image", "source_kind":"nix-descriptor", "launcher":"/wrix", "profile_config":"/profile"});
+-        let original_path = write_manifest(
+-            original.path(),
+-            &serde_json::json!({"rust":{"pi":entry}}).to_string(),
+-        )?;
+-        let mut replacement = entry;
+-        replacement["native_preflight"] = "rust".into();
+-        let provisioned_path = write_manifest(
+-            installed.path(),
+-            &serde_json::json!({"rust":{"pi":replacement}}).to_string(),
+-        )?;
+-        let manifest = ProfileImageManifest::from_path(&original_path)?
+-            .provision_native_from(&ProfileImageManifest::from_path(&provisioned_path)?);
+-        let mut command = tokio::process::Command::new("bash");
+-        command.args(["-euc", "printf '%s\\n%s\\n' \"$LOOM_PROFILES_MANIFEST\" \"$LOOM_PROVISIONED_PROFILES_MANIFEST\""]);
+-        manifest.configure_driver(&mut command);
+-        let output = command.output().await?;
+-        assert!(output.status.success());
+-        assert_eq!(
+-            String::from_utf8(output.stdout)?
+-                .lines()
+-                .collect::<Vec<_>>(),
+-            [
+-                original_path.to_str().unwrap(),
+-                provisioned_path.to_str().unwrap()
+-            ]
+-        );
+-        Ok(())
+-    }
+-
+-    #[test]
+-    fn manifest_env_unset_display_names_remediation() {
+-        let msg = ProfileError::ManifestEnvUnset.to_string();
+-        assert!(msg.contains("spawn-bound commands require"), "{msg}");
+-        assert!(msg.contains("nix develop"), "{msg}");
+-        assert!(msg.contains("nix run .#loom-wrix"), "{msg}");
+-    }
+-
+-    #[test]
+-    fn from_path_parses_well_formed_manifest() -> Result<()> {
+-        let dir = tempfile::tempdir()?;
+-        let body = r#"{
+-          "base": {
+-            "claude": { "ref": "localhost/wrix-base-claude:abc", "source": "/nix/store/aaa-image-base-claude", "source_kind": "nix-descriptor", "launcher": "/raw/wrix", "profile_config": "/profile.json" },
+-            "pi": { "ref": "localhost/wrix-base-pi:def", "source": "/nix/store/bbb-image-base-pi", "source_kind": "nix-descriptor", "launcher": "/raw/wrix", "profile_config": "/profile.json" }
+-          },
+-          "rust": {
+-            "direct": { "ref": "localhost/wrix-rust-direct:ghi", "source": "/nix/store/ccc-image-rust-direct", "source_kind": "nix-descriptor", "launcher": "/raw/wrix", "profile_config": "/profile.json" }
+-          }
+-        }"#;
+-        let path = write_manifest(dir.path(), body)?;
+-        let manifest = ProfileImageManifest::from_path(&path)?;
+-        assert_eq!(manifest.len(), 2);
+-        assert_eq!(manifest.manifest_path(), path.as_path());
+-        let base_pi = manifest.lookup(&ProfileName::new("base").unwrap(), AgentRuntime::Pi)?;
+-        assert_eq!(base_pi.r#ref, "localhost/wrix-base-pi:def");
+-        assert_eq!(
+-            base_pi.source,
+-            PathBuf::from("/nix/store/bbb-image-base-pi")
+-        );
+-        assert_eq!(base_pi.source_kind, ImageSourceKind::NixDescriptor);
+-        assert_eq!(base_pi.launcher, PathBuf::from("/raw/wrix"));
+-        assert_eq!(base_pi.digest, None);
+-        assert_eq!(base_pi.runtime, None);
+-        let rust_direct =
+-            manifest.lookup(&ProfileName::new("rust").unwrap(), AgentRuntime::Direct)?;
+-        assert_eq!(rust_direct.r#ref, "localhost/wrix-rust-direct:ghi");
+-        assert_eq!(rust_direct.profile_config, PathBuf::from("/profile.json"));
+-        Ok(())
+-    }
+-
+-    #[test]
+-    fn from_path_parses_raw_launcher_path() -> Result<()> {
+-        let dir = tempfile::tempdir()?;
+-        let body = r#"{
+-          "rust": {
+-            "pi": {
+-              "ref": "localhost/wrix-rust-pi:def",
+-              "source": "/nix/store/bbb-image-rust-pi", "source_kind": "nix-descriptor",
+-              "launcher": "/nix/store/lll-wrix/bin/wrix", "profile_config": "/profile.json"
+-            }
+-          }
+-        }"#;
+-        let path = write_manifest(dir.path(), body)?;
+-        let manifest = ProfileImageManifest::from_path(&path)?;
+-        let rust = manifest.lookup(&ProfileName::new("rust").unwrap(), AgentRuntime::Pi)?;
+-        assert_eq!(rust.launcher, PathBuf::from("/nix/store/lll-wrix/bin/wrix"));
+-        Ok(())
+     }
+
+     #[test]
+-    fn from_path_parses_profile_config_path() -> Result<()> {
+-        let dir = tempfile::tempdir()?;
+-        let body = r#"{
+-          "rust": {
+-            "pi": {
+-              "ref": "localhost/wrix-rust-pi:def",
+-              "source": "/nix/store/bbb-image-rust-pi", "source_kind": "nix-descriptor",
+-              "profile_config": "/nix/store/eee-wrix-rust-pi-profile-config.json", "launcher": "/raw/wrix"
+-            }
+-          }
+-        }"#;
+-        let path = write_manifest(dir.path(), body)?;
+-        let manifest = ProfileImageManifest::from_path(&path)?;
+-        let rust = manifest.lookup(&ProfileName::new("rust").unwrap(), AgentRuntime::Pi)?;
+-        assert_eq!(
+-            rust.profile_config,
+-            PathBuf::from("/nix/store/eee-wrix-rust-pi-profile-config.json")
+-        );
+-        Ok(())
+-    }
+-
+-    #[test]
+-    fn from_path_parses_optional_digest_path() -> Result<()> {
+-        let dir = tempfile::tempdir()?;
+-        let body = r#"{
+-          "rust": {
+-            "pi": {
+-              "ref": "localhost/wrix-rust-pi:def",
+-              "source": "/nix/store/bbb-image-rust-pi", "source_kind": "nix-descriptor",
+-              "digest": "/nix/store/ddd-image-digest", "launcher": "/raw/wrix", "profile_config": "/profile.json"
+-            }
+-          }
+-        }"#;
+-        let path = write_manifest(dir.path(), body)?;
+-        let manifest = ProfileImageManifest::from_path(&path)?;
+-        let rust = manifest.lookup(&ProfileName::new("rust").unwrap(), AgentRuntime::Pi)?;
+-        assert_eq!(
+-            rust.digest,
+-            Some(PathBuf::from("/nix/store/ddd-image-digest"))
+-        );
+-        Ok(())
+-    }
+-
+-    #[test]
+-    fn from_path_rejects_missing_source_kind() -> Result<()> {
+-        let dir = tempfile::tempdir()?;
+-        let path = write_manifest(
+-            dir.path(),
+-            r#"{ "rust": { "pi": { "ref": "r", "source": "/s" } } }"#,
+-        )?;
+-        let Err(err) = ProfileImageManifest::from_path(&path) else {
+-            return Err(anyhow!("expected malformed manifest without source_kind"));
+-        };
+-        if let ProfileError::ManifestMalformed {
+-            path: errored_path, ..
+-        } = err
+-        {
+-            assert_eq!(errored_path, path);
+-            Ok(())
+-        } else {
+-            Err(anyhow!("expected ManifestMalformed, got {err:?}"))
+-        }
+-    }
+-
+-    #[test]
+-    fn from_path_accepts_matching_runtime_metadata() -> Result<()> {
+-        let dir = tempfile::tempdir()?;
+-        let body = r#"{
+-          "rust": {
+-            "pi": {
+-              "ref": "localhost/wrix-rust-pi:def",
+-              "source": "/nix/store/bbb-image-rust-pi", "source_kind": "nix-descriptor",
+-              "runtime": "pi", "launcher": "/raw/wrix", "profile_config": "/profile.json"
+-            }
+-          }
+-        }"#;
+-        let path = write_manifest(dir.path(), body)?;
+-        let manifest = ProfileImageManifest::from_path(&path)?;
+-        let rust = manifest.lookup(&ProfileName::new("rust").unwrap(), AgentRuntime::Pi)?;
+-        assert_eq!(rust.runtime, Some(AgentRuntime::Pi));
+-        Ok(())
+-    }
+-
+-    #[test]
+-    fn runtime_metadata_mismatch_fails_before_spawn_lookup() -> Result<()> {
+-        let dir = tempfile::tempdir()?;
+-        let body = r#"{
+-          "rust": {
+-            "pi": {
+-              "ref": "localhost/wrix-rust-pi:def",
+-              "source": "/nix/store/bbb-image-rust-pi", "source_kind": "nix-descriptor",
+-              "runtime": "claude", "launcher": "/raw/wrix", "profile_config": "/profile.json"
+-            }
+-          }
+-        }"#;
+-        let path = write_manifest(dir.path(), body)?;
+-        let Err(err) = ProfileImageManifest::from_path(&path) else {
+-            return Err(anyhow!("expected runtime metadata mismatch"));
+-        };
+-        if let ProfileError::RuntimeMetadataMismatch {
+-            profile,
+-            runtime_key,
+-            entry_runtime,
+-            manifest_path,
+-        } = err
+-        {
+-            assert_eq!(profile, ProfileName::new("rust").unwrap());
+-            assert_eq!(runtime_key, AgentRuntime::Pi);
+-            assert_eq!(entry_runtime, AgentRuntime::Claude);
+-            assert_eq!(manifest_path, path);
+-            Ok(())
+-        } else {
+-            Err(anyhow!("expected RuntimeMetadataMismatch, got {err:?}"))
+-        }
+-    }
+-
+-    #[test]
+-    fn from_path_rejects_unknown_runtime_before_lookup() -> Result<()> {
+-        let dir = tempfile::tempdir()?;
+-        let path = write_manifest(
+-            dir.path(),
+-            r#"{ "base": { "gpt": { "ref": "r", "source": "/s", "source_kind": "nix-descriptor" } } }"#,
+-        )?;
+-        let Err(err) = ProfileImageManifest::from_path(&path) else {
+-            return Err(anyhow!("expected malformed-manifest error"));
+-        };
+-        if let ProfileError::ManifestMalformed {
+-            path: errored_path, ..
+-        } = err
+-        {
+-            assert_eq!(errored_path, path);
+-            Ok(())
+-        } else {
+-            Err(anyhow!("expected ManifestMalformed, got {err:?}"))
++    fn capability_provisioning_preserves_distinct_project_configs_and_requires_exact_match() {
++        let a = tempfile::tempdir().unwrap();
++        let b = tempfile::tempdir().unwrap();
++        let capabilities = a.path().join("native.json");
++        std::fs::write(&capabilities, r#"{"/project-a/config":"rust"}"#).unwrap();
++        let provisioned = manifest(a.path(), "/project-a/config")
++            .with_native_capabilities(&capabilities)
++            .unwrap();
++        for (dir, config, available) in [
++            (a.path(), "/project-a/config", true),
++            (b.path(), "/project-b/config", false),
++        ] {
++            let selected = manifest(dir, config).provision_native_from(&provisioned);
++            let entry = selected
++                .lookup(&ProfileName::new("rust").unwrap(), AgentRuntime::Pi)
++                .unwrap();
++            assert_eq!(entry.profile_config, Path::new(config));
++            assert_eq!(selected.native_preflight(entry).is_some(), available);
++            assert_eq!(selected.legacy_native(), !available);
+         }
+     }
+
+     #[test]
+-    fn manifest_rejects_missing_launcher_or_profile_config() -> Result<()> {
+-        for field in ["launcher", "profile_config"] {
+-            let dir = tempfile::tempdir()?;
+-            let mut entry = serde_json::json!({
+-                "ref": "image", "source": "/image", "source_kind": "nix-descriptor",
+-                "launcher": "/raw/wrix", "profile_config": "/profile.json"
+-            });
+-            entry.as_object_mut().unwrap().remove(field);
+-            let path = write_manifest(
+-                dir.path(),
+-                &serde_json::json!({"base": {"claude": entry}}).to_string(),
+-            )?;
+-            let err = ProfileImageManifest::from_path(&path).unwrap_err();
+-            assert!(err.to_string().contains("regenerate"));
+-            let ProfileError::ManifestMalformed { source, .. } = err else {
+-                panic!("expected malformed manifest")
+-            };
+-            assert!(source.to_string().contains(field), "{source}");
+-        }
+-        Ok(())
+-    }
+-
+-    #[test]
+-    fn from_path_missing_file_returns_manifest_not_found() -> Result<()> {
+-        let missing = Path::new("/does/not/exist.json");
+-        let Err(err) = ProfileImageManifest::from_path(missing) else {
+-            return Err(anyhow!("expected error for missing manifest"));
+-        };
+-        if let ProfileError::ManifestNotFound { path, .. } = err {
+-            assert_eq!(path, missing);
+-            Ok(())
+-        } else {
+-            Err(anyhow!("expected ManifestNotFound, got {err:?}"))
+-        }
+-    }
+-
+-    #[test]
+-    fn from_path_malformed_json_returns_manifest_malformed() -> Result<()> {
+-        let dir = tempfile::tempdir()?;
+-        let path = write_manifest(dir.path(), "{ not json")?;
+-        let Err(err) = ProfileImageManifest::from_path(&path) else {
+-            return Err(anyhow!("expected malformed-json error"));
+-        };
+-        if let ProfileError::ManifestMalformed {
+-            path: errored_path, ..
+-        } = err
+-        {
+-            assert_eq!(errored_path, path);
+-            Ok(())
+-        } else {
+-            Err(anyhow!("expected ManifestMalformed, got {err:?}"))
+-        }
+-    }
+-
+-    #[test]
+-    fn declared_profiles_yields_keys_in_btreemap_order() -> Result<()> {
+-        let dir = tempfile::tempdir()?;
+-        let body = r#"{
+-          "rust":   { "pi": { "ref": "r1", "source": "/s1", "source_kind": "nix-descriptor", "launcher": "/raw/wrix", "profile_config": "/profile.json" } },
+-          "base":   { "pi": { "ref": "r2", "source": "/s2", "source_kind": "nix-descriptor", "launcher": "/raw/wrix", "profile_config": "/profile.json" } },
+-          "python": { "pi": { "ref": "r3", "source": "/s3", "source_kind": "nix-descriptor", "launcher": "/raw/wrix", "profile_config": "/profile.json" } }
+-        }"#;
+-        let path = write_manifest(dir.path(), body)?;
+-        let manifest = ProfileImageManifest::from_path(&path)?;
+-        let names: Vec<&str> = manifest
+-            .declared_profiles()
+-            .map(ProfileName::as_str)
+-            .collect();
+-        assert_eq!(names, vec!["base", "python", "rust"]);
+-        Ok(())
+-    }
+-
+-    #[test]
+-    fn lookup_unknown_profile_carries_manifest_path() -> Result<()> {
+-        let dir = tempfile::tempdir()?;
+-        let body = r#"{ "base": { "pi": { "ref": "r", "source": "/s", "source_kind": "nix-descriptor", "launcher": "/raw/wrix", "profile_config": "/profile.json" } } }"#;
+-        let path = write_manifest(dir.path(), body)?;
+-        let manifest = ProfileImageManifest::from_path(&path)?;
+-        let Err(err) = manifest.lookup(&ProfileName::new("rust").unwrap(), AgentRuntime::Pi) else {
+-            return Err(anyhow!("expected unknown-profile error"));
+-        };
+-        if let ProfileError::UnknownProfile {
+-            name,
+-            manifest_path,
+-        } = err
+-        {
+-            assert_eq!(name.as_str(), "rust");
+-            assert_eq!(manifest_path, path);
+-            Ok(())
+-        } else {
+-            Err(anyhow!("expected UnknownProfile, got {err:?}"))
++    fn rejects_malformed_owned_entries_and_unknown_runtimes() {
++        let dir = tempfile::tempdir().unwrap();
++        let path = dir.path().join("invalid.json");
++        for body in [
++            "{",
++            r#"{"rust":{"unknown":{}}}"#,
++            r#"{"rust":{"pi":{"ref":"x","source":"/x"}}}"#,
++        ] {
++            std::fs::write(&path, body).unwrap();
++            assert!(matches!(
++                ProfileImageManifest::from_path(&path),
++                Err(ProfileError::ManifestMalformed { .. })
++            ));
+         }
++        assert!(matches!(
++            ProfileImageManifest::from_path(&dir.path().join("missing")),
++            Err(ProfileError::ManifestNotFound { .. })
++        ));
+     }
+
+-    #[test]
+-    fn lookup_missing_runtime_for_profile_carries_profile_and_runtime() -> Result<()> {
+-        let dir = tempfile::tempdir()?;
+-        let body = r#"{
+-          "rust": {
+-            "claude": { "ref": "r1", "source": "/s1", "source_kind": "nix-descriptor", "launcher": "/raw/wrix", "profile_config": "/profile.json" },
+-            "pi": { "ref": "r2", "source": "/s2", "source_kind": "nix-descriptor", "launcher": "/raw/wrix", "profile_config": "/profile.json" }
+-          }
+-        }"#;
+-        let path = write_manifest(dir.path(), body)?;
+-        let manifest = ProfileImageManifest::from_path(&path)?;
+-        let Err(err) = manifest.lookup(&ProfileName::new("rust").unwrap(), AgentRuntime::Direct)
+-        else {
+-            return Err(anyhow!("expected unknown-runtime error"));
+-        };
+-        if let ProfileError::UnknownRuntimeForProfile {
+-            profile,
+-            runtime,
+-            declared_runtimes,
+-            manifest_path,
+-        } = err
+-        {
+-            assert_eq!(profile.as_str(), "rust");
+-            assert_eq!(runtime, AgentRuntime::Direct);
+-            assert_eq!(
+-                declared_runtimes,
+-                vec![AgentRuntime::Pi, AgentRuntime::Claude]
+-            );
+-            assert_eq!(manifest_path, path);
+-            Ok(())
+-        } else {
+-            Err(anyhow!("expected UnknownRuntimeForProfile, got {err:?}"))
+-        }
++    #[tokio::test]
++    async fn native_capability_path_survives_driver_subprocess() {
++        let dir = tempfile::tempdir().unwrap();
++        let capabilities = dir.path().join("native.json");
++        std::fs::write(&capabilities, "{}").unwrap();
++        let manifest = manifest(dir.path(), "/config")
++            .with_native_capabilities(&capabilities)
++            .unwrap();
++        let mut command = tokio::process::Command::new("printenv");
++        command.arg(NATIVE_ENV_VAR);
++        manifest.configure_driver(&mut command);
++        let output = command.output().await.unwrap();
++        assert!(output.status.success());
++        assert_eq!(
++            String::from_utf8(output.stdout).unwrap().trim(),
++            capabilities.to_str().unwrap()
++        );
+     }
+ }
+diff --git a/crates/loom-driver/src/profile_manifest/mod.rs b/crates/loom-driver/src/profile_manifest/mod.rs
+index 1229e4e..976e5e9 100644
+--- a/crates/loom-driver/src/profile_manifest/mod.rs
++++ b/crates/loom-driver/src/profile_manifest/mod.rs
+@@ -14,6 +14,6 @@ mod provision;
+
+ pub use error::ProfileError;
+ pub use manifest::{
+-    ENV_VAR, ImageEntry, NativePreflight, PROVISIONED_ENV_VAR, ProfileImageManifest,
++    ENV_VAR, ImageEntry, NATIVE_ENV_VAR, NativePreflight, PROVISIONED_ENV_VAR, ProfileImageManifest,
+ };
+ pub use provision::{ProvisionError, bootstrap_loop};
+diff --git a/crates/loom-driver/src/profile_manifest/provision.rs b/crates/loom-driver/src/profile_manifest/provision.rs
+index a64e164..1d8ced1 100644
+--- a/crates/loom-driver/src/profile_manifest/provision.rs
++++ b/crates/loom-driver/src/profile_manifest/provision.rs
+@@ -207,7 +207,11 @@ fn store_manifest(bytes: &[u8]) -> Result<ProfileImageManifest, ProvisionError>
+             reason: "the factory manifest is not an immutable store file",
+         });
+     }
+-    Ok(ProfileImageManifest::from_path(&path)?)
++    let manifest = ProfileImageManifest::from_path(&path)?;
++    match build.outputs.get("nativePreflight") {
++        Some(path) => Ok(manifest.with_native_capabilities(path)?),
++        None => Ok(manifest),
++    }
+ }
+
+ #[cfg(test)]
+diff --git a/crates/loom-driver/src/wrix.rs b/crates/loom-driver/src/wrix.rs
+index a2174c3..d3a7ad6 100644
+--- a/crates/loom-driver/src/wrix.rs
++++ b/crates/loom-driver/src/wrix.rs
+@@ -7,13 +7,14 @@ use std::process::Command;
+ /// Explicit raw-launcher override; never a configured profile wrapper.
+ pub const LAUNCHER_OVERRIDE: &str = "LOOM_WRIX_SPAWN_BIN";
+
+-/// Resolve an explicit raw launcher, then the environment override, then the manifest launcher.
++/// Resolve an explicit host launcher, then an environment override, then host PATH.
+ /// Overrides change only the executable, not the selected profile configuration.
+-pub fn resolve_launcher(manifest_launcher: &Path, explicit: Option<&Path>) -> PathBuf {
++pub fn resolve_launcher(explicit: Option<&Path>) -> PathBuf {
+     explicit.map_or_else(
+         || {
+             std::env::var_os(LAUNCHER_OVERRIDE)
+-                .map_or_else(|| manifest_launcher.to_path_buf(), PathBuf::from)
++                .or_else(|| std::env::var_os("LOOM_WRIX_BIN"))
++                .map_or_else(|| PathBuf::from("wrix"), PathBuf::from)
+         },
+         Path::to_path_buf,
+     )
+@@ -51,10 +52,7 @@ mod tests {
+
+     #[test]
+     fn explicit_raw_launcher_override_wins_without_changing_profile_config() {
+-        let launcher = resolve_launcher(
+-            Path::new("/manifest/wrix"),
+-            Some(Path::new("/override/wrix")),
+-        );
++        let launcher = resolve_launcher(Some(Path::new("/override/wrix")));
+         let command = command(launcher.as_os_str(), Path::new("/selected-profile.json"));
+         assert_eq!(command.get_program(), "/override/wrix");
+         assert_eq!(
+diff --git a/crates/loom-workflow/src/inbox/chat.rs b/crates/loom-workflow/src/inbox/chat.rs
+index 4a23b62..10144d3 100644
+--- a/crates/loom-workflow/src/inbox/chat.rs
++++ b/crates/loom-workflow/src/inbox/chat.rs
+@@ -200,7 +200,7 @@ pub fn run(workspace: &Path, opts: &ChatOpts) -> Result<ChatReport, ChatError> {
+
+     let scratch = ScratchSession::open(workspace, &key, &prompt_body, "loom inbox chat")?;
+     let restored_skills = skill_plan.materialize(scratch.path(), workspace)?;
+-    let bin = loom_driver::wrix::resolve_launcher(&image.launcher, opts.wrix_bin.as_deref());
++    let bin = loom_driver::wrix::resolve_launcher(opts.wrix_bin.as_deref());
+
+     let stdout = match selection.kind() {
+         AgentKind::Claude => {
+diff --git a/crates/loom-workflow/src/loop/production.rs b/crates/loom-workflow/src/loop/production.rs
+index 62b9149..ca5d8be 100644
+--- a/crates/loom-workflow/src/loop/production.rs
++++ b/crates/loom-workflow/src/loop/production.rs
+@@ -4428,28 +4428,18 @@ mod tests {
+     async fn parallel_handoff_propagates_provisioned_profiles_to_actual_review_child() {
+         let dir = tempfile::tempdir().expect("fixture");
+         let original = write_manifest(dir.path());
+-        let mut entries: serde_json::Value =
+-            serde_json::from_slice(&std::fs::read(original.manifest_path()).expect("manifest"))
+-                .expect("json");
+-        for entry in entries["base"]
+-            .as_object_mut()
+-            .expect("runtimes")
+-            .values_mut()
+-        {
+-            entry["native_preflight"] = "rust".into();
+-        }
+-        let installed_path = dir.path().join("installed.json");
+-        std::fs::write(&installed_path, serde_json::to_vec(&entries).expect("json"))
+-            .expect("installed");
+-        let manifest = (*original).clone().provision_native_from(
+-            &ProfileImageManifest::from_path(&installed_path).expect("installed manifest"),
+-        );
++        let installed_path = dir.path().join("native.json");
++        std::fs::write(&installed_path, "{}").expect("capabilities");
++        let manifest = (*original)
++            .clone()
++            .with_native_capabilities(&installed_path)
++            .expect("native metadata");
+         let workspace = dir.path().join("workspace");
+         let git = git_workspace(&workspace);
+         let marker = dir.path().join("review-environment-observed");
+         let stub = dir.path().join("review-child.sh");
+         loom_test_support::write_executable_bash_script(&stub, &format!(
+-            "set -euo pipefail\n[[ \"$LOOM_PROFILES_MANIFEST\" == {original:?} ]]\n[[ \"$LOOM_PROVISIONED_PROFILES_MANIFEST\" == {installed_path:?} ]]\ntest -r \"$LOOM_PROFILES_MANIFEST\"\ntest -r \"$LOOM_PROVISIONED_PROFILES_MANIFEST\"\nprintf 'observed\\n' > {marker:?}\nexit 1\n",
++            "set -euo pipefail\n[[ \"$LOOM_PROFILES_MANIFEST\" == {original:?} ]]\n[[ \"$LOOM_NATIVE_PREFLIGHT_MANIFEST\" == {installed_path:?} ]]\ntest -r \"$LOOM_PROFILES_MANIFEST\"\ntest -r \"$LOOM_NATIVE_PREFLIGHT_MANIFEST\"\nprintf 'observed\\n' > {marker:?}\nexit 1\n",
+             original = original.manifest_path(),
+         )).expect("external child");
+         let bd = BdClient::with_runner(molecule_lookup_script(
+diff --git a/crates/loom-workflow/src/loop/worker.rs b/crates/loom-workflow/src/loop/worker.rs
+index 629b1d0..fc40c68 100644
+--- a/crates/loom-workflow/src/loop/worker.rs
++++ b/crates/loom-workflow/src/loop/worker.rs
+@@ -271,8 +271,8 @@ pub async fn prepare_with_bd<R: CommandRunner>(
+         Ok(spawn) => spawn,
+         Err(error) => return profile_rejection(error, manifest).map(Preparation::Rejected),
+     };
+-    let native_feedback =
+-        manifest.lookup(&profile, runtime)?.native_preflight == Some(NativePreflight::Rust);
++    let native_feedback = manifest.native_preflight(manifest.lookup(&profile, runtime)?)
++        == Some(NativePreflight::Rust);
+     if native_feedback
+         || tracked_files
+             .iter()
+@@ -467,9 +467,26 @@ exec "$LOOM_PREFLIGHT_BASH" -euo pipefail -c 'source "$1"; require_tool nix' --
+             let manifest_path = dir.path().join("images.json");
+             std::fs::write(&manifest_path, serde_json::to_vec(&serde_json::json!({
+                 (profile.to_string()): {(runtime.to_string()): {"ref":"fixture", "source":"/fixture/image", "source_kind":"nix-descriptor",
+-                    "launcher":launcher, "profile_config":profile_config, "native_preflight":capability}}
++                    "profile_config":profile_config}}
+             })).unwrap()).unwrap();
+-            let manifest = ProfileImageManifest::from_path(&manifest_path).unwrap();
++            let capabilities = dir.path().join("native.json");
++            std::fs::write(
++                &capabilities,
++                serde_json::json!(
++                    capability
++                        .map(|value| std::collections::BTreeMap::from([(
++                            profile_config.clone(),
++                            Some(value)
++                        )]))
++                        .unwrap_or_default()
++                )
++                .to_string(),
++            )
++            .unwrap();
++            let manifest = ProfileImageManifest::from_path(&manifest_path)
++                .unwrap()
++                .with_native_capabilities(&capabilities)
++                .unwrap();
+             let prepared = prepare(Request {
+                 bead: &bead,
+                 workspace: &workspace,
+@@ -511,9 +528,10 @@ exec "$LOOM_PREFLIGHT_BASH" -euo pipefail -c 'source "$1"; require_tool nix' --
+                 );
+                 continue;
+             }
+-            let Preparation::Ready(worker) = prepared else {
++            let Preparation::Ready(mut worker) = prepared else {
+                 panic!("provisioned worker rejected")
+             };
++            worker.spawn.wrix_launcher = Some(launcher.clone());
+             let result = match runtime {
+                 AgentRuntime::Pi => {
+                     run_prepared_backend::<loom_agent::PiBackend>(&worker.spawn).await
+diff --git a/crates/loom-workflow/src/mint/acceptance/dispatch_tests.rs b/crates/loom-workflow/src/mint/acceptance/dispatch_tests.rs
+index 53b6ab3..c59862b 100644
+--- a/crates/loom-workflow/src/mint/acceptance/dispatch_tests.rs
++++ b/crates/loom-workflow/src/mint/acceptance/dispatch_tests.rs
+@@ -190,7 +190,8 @@ mod cases {
+             "unbound task must not reach external agent"
+         );
+         fixture.bind().await;
+-        let worker = ready(fixture.prepare().await);
++        let mut worker = ready(fixture.prepare().await);
++        worker.spawn.wrix_launcher = Some(launcher);
+         let mut text = String::new();
+         let result = crate::agent::run_agent_classified::<loom_agent::pi::backend::PiBackend>(
+             &worker.spawn,
+diff --git a/crates/loom-workflow/src/plan/runner.rs b/crates/loom-workflow/src/plan/runner.rs
+index b2cfda0..31338f3 100644
+--- a/crates/loom-workflow/src/plan/runner.rs
++++ b/crates/loom-workflow/src/plan/runner.rs
+@@ -132,7 +132,7 @@ pub fn run_with_timeout(
+     loom_driver::spec::context::write(&package_context, scratch.path())?;
+     let _restored_skills = skill_plan.materialize(scratch.path(), workspace)?;
+
+-    let bin = loom_driver::wrix::resolve_launcher(&image.launcher, opts.wrix_bin.as_deref());
++    let bin = loom_driver::wrix::resolve_launcher(opts.wrix_bin.as_deref());
+     let argv = match selection.kind() {
+         AgentKind::Claude => {
+             let claude_settings_path =
+diff --git a/crates/loom-workflow/src/spawn.rs b/crates/loom-workflow/src/spawn.rs
+index bb65a7b..e411c4e 100644
+--- a/crates/loom-workflow/src/spawn.rs
++++ b/crates/loom-workflow/src/spawn.rs
+@@ -41,7 +41,7 @@ pub fn build_spawn_config(
+         image_ref: diagnostics.image_ref,
+         image_source: entry.source.clone(),
+         image_source_kind,
+-        wrix_launcher: Some(entry.launcher.clone()),
++        wrix_launcher: None,
+         profile_config: Some(entry.profile_config.clone()),
+         workspace,
+         env,
+@@ -147,11 +147,40 @@ mod tests {
+             r#ref: "localhost/wrix-rust-pi:test".into(),
+             source: PathBuf::from("/nix/store/image-rust-pi"),
+             source_kind: ImageSourceKind::NixDescriptor,
+-            launcher: PathBuf::from("/nix/store/raw-wrix/bin/wrix"),
+             profile_config: PathBuf::from("/nix/store/wrix-rust-pi-profile-config.json"),
+-            digest: Some(PathBuf::from("/nix/store/image-rust-pi-digest")),
+-            runtime: Some(AgentRuntime::Pi),
+-            native_preflight: None,
++        }
++    }
++
++    #[test]
++    fn four_field_project_manifests_preserve_selected_config_with_one_host_launcher() {
++        for config in ["/project-a/config", "/project-b/config"] {
++            let image: ImageEntry = serde_json::from_value(serde_json::json!({
++                "ref":"image", "source":"/image", "source_kind":"nix-descriptor",
++                "profile_config":config
++            }))
++            .unwrap();
++            let spawn = build_spawn_config(
++                &image,
++                AgentRuntime::Pi,
++                "/workspace".into(),
++                "prompt".into(),
++                "/scratch".into(),
++                vec![],
++                vec![],
++                vec![],
++                vec![],
++            );
++            assert!(spawn.wrix_launcher.is_none());
++            let host = loom_driver::wrix::resolve_launcher(Some(Path::new("/host/wrix")));
++            let command = loom_driver::wrix::command(
++                host.as_os_str(),
++                spawn.profile_config.as_deref().unwrap(),
++            );
++            assert_eq!(command.get_program(), "/host/wrix");
++            assert_eq!(
++                command.get_args().collect::<Vec<_>>(),
++                ["--profile-config", config]
++            );
+         }
+     }
+
+diff --git a/nix/lib.nix b/nix/lib.nix
+index f6ce8d6..c4a5b71 100644
+--- a/nix/lib.nix
++++ b/nix/lib.nix
+@@ -131,51 +131,38 @@ in
+       ) sandboxes;
+       profileManifests = mapAttrs (_profileName: byRuntime: wrixLib.mkProfileImages byRuntime) images;
+       manifest = mapAttrs (
+-        profileName: profileManifest:
+-        mapAttrs (
+-          runtime: entry:
+-          let
+-            image = images.${profileName}.${runtime};
+-          in
+-          entry.${runtime}
+-          // {
+-            inherit runtime;
+-            # wrix's manifest helper serializes path strings for portability,
+-            # but strips their Nix string context. Re-attach the concrete
+-            # image source here so LOOM_PROFILES_MANIFEST keeps runtime inputs
+-            # alive in the store after GC / on fresh machines.
+-            source = "${image.source or image}";
+-          }
+-          // {
+-            # The raw launcher accepts Loom's per-bead ProfileConfig. Do not
+-            # use `sandbox.package` here: that configured wrapper already
+-            # injects its own `--profile-config`, which would collide with the
+-            # runtime-selected one below.
+-            launcher = "${sandboxes.${profileName}.${runtime}.launcher}/bin/wrix";
+-          }
+-          // {
+-            # Image-backed launches require the immutable ProfileConfig; keep
+-            # it as a real Nix reference, not just inert JSON text.
+-            profile_config = "${image.profileConfig}";
+-          }
+-          // optionalAttrs (profileName == "rust") {
+-            native_preflight = "rust";
+-          }
+-          // optionalAttrs (image ? digest) {
+-            digest = "${image.digest}";
+-          }
+-        ) profileManifest.passthru.manifest
++        _profileName: profileManifest:
++        mapAttrs (runtime: entry: {
++          inherit (entry.${runtime}) ref source source_kind profile_config;
++        }) profileManifest.passthru.manifest
+       ) profileManifests;
++      nativeCapabilities = builtins.listToAttrs (
++        builtins.concatLists (
++          builtins.attrValues (
++            mapAttrs (profileName: byRuntime:
++              if profileName == "rust" then
++                map (sandbox: {
++                  name = builtins.unsafeDiscardStringContext (toString sandbox.image.profileConfig);
++                  value = "rust";
++                }) (builtins.attrValues byRuntime)
++              else [ ]
++            ) sandboxes
++          )
++        )
++      );
+     in
+-    pkgs.writeTextFile {
+-      name = "profile-images.json";
+-      text = builtins.toJSON manifest;
++    pkgs.runCommand "profile-images.json" {
++      outputs = [ "out" "nativePreflight" ];
+       passthru = {
+-        inherit manifest sandboxes;
++        inherit manifest sandboxes nativeCapabilities;
+         profiles = attrNames profiles;
+         runtimes = attrNames runtimes;
+       };
+-    };
++    } ''
++      set -euo pipefail
++      cp ${pkgs.writeText "images.json" (builtins.toJSON manifest)} "$out"
++      cp ${pkgs.writeText "native-preflight.json" (builtins.toJSON nativeCapabilities)} "$nativePreflight"
++    '';
+
+   # Wrap the raw loom binary with the matching sandbox launcher defaults, so a
+   # consumer only needs the wrapped binary on PATH to run loom end-to-end.
+@@ -211,7 +198,7 @@ in
+         makeWrapper ${loomBuild.bin}/bin/loom "$out/bin/loom" \
+           --prefix PATH : ${wrixLauncher}/bin:${launcherRuntimePath} \
+           --set-default LOOM_WRIX_BIN ${wrixLauncher}/bin/wrix \
+-          --set LOOM_PROVISIONED_PROFILES_MANIFEST ${profileManifest} \
++          --set LOOM_NATIVE_PREFLIGHT_MANIFEST ${profileManifest.nativePreflight} \
+           --set-default LOOM_PROFILES_MANIFEST ${profileManifest}
+       '';
+ }

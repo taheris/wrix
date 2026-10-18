@@ -61,7 +61,6 @@ let
   mkDevShell = function: repoScript "tests/profiles/mkdevshell.sh" function;
   mkDevShellPrek = function: repoScript "tests/profiles/mkdevshell-prek.sh" function;
   profileComposition = function: repoScript "tests/profiles/profile-composition.sh" function;
-  profileImages = function: repoScript "tests/profiles/profile-images-manifest.sh" function;
   rustProfileCtor = function: repoScript "tests/profiles/rust-profile-ctor.sh" function;
 in
 {
@@ -89,10 +88,11 @@ in
   "profiles.core-membership" = corePackages "test_core_membership";
   "profiles.extra-packages-not-core" = corePackages "test_extra_not_in_core";
   "profiles.host-image-package-split" = profileComposition "test_host_packages_split";
-  "profiles.image-flake-outputs" = profileImages "test_flake_outputs_present";
-  "profiles.manifest-launcher" = flakeCheck "profile-images-launcher";
-  "profiles.pi-default-outputs" = nixEval "profiles.pi-default-outputs";
-  "profiles.pi-default-manifest" = nixEval "profiles.pi-default-manifest";
+  "profiles.image-only-output-contract" = nixEval "profiles.image-only-output-contract";
+  "profiles.host-cli-package-outputs" = nixEval "profiles.host-cli-package-outputs";
+  "sandbox.data-only-constructor" = nixEval "sandbox.data-only-constructor";
+  "profiles.data-only-manifest" = nixEval "profiles.data-only-manifest";
+  "profiles.pi-data-manifest" = nixEval "profiles.pi-data-manifest";
   "sandbox.agent-default-and-direct-contract" = nixEval "sandbox.agent-default-and-direct-contract";
   "profiles.loom-source-only" = flakeCheck "loom-source-only";
   "profiles.loom-package-wiring" = flakeCheck "loom-package-wiring";
