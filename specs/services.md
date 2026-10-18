@@ -813,7 +813,7 @@ tenant or component compromise/fault isolation.
   [test?](../crates/wrix-service/tests/host_control.rs::private_authority_is_not_delegated_to_service_observations)
 - Rama fixed-role routes pin established connections while selection changes new
   connections, without SQL parsing, protocol sniffing or general proxying.
-  [test?](../crates/wrix-service/tests/host_control.rs::fixed_role_routes_preserve_connections_without_general_proxying)
+  [test](../crates/wrix-service/tests/host_control.rs::fixed_role_routes_preserve_connections_without_general_proxying)
 - Native controller lifecycle adapters serialize start, preserve explicit-stop
   intent, pin active package closures and reject unsupported supervision without
   an unsupervised fallback.
