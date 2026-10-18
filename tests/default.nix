@@ -217,6 +217,7 @@ let
     rustChecks
     // {
       profile-config-parser-agreement = profileConfigParserAgreement;
+      host-service-package-binding = import ./services/package-binding.nix { inherit pkgs wrix; };
     }
     // builtins.intersectAttrs { private-nix-artifacts = null; } loomTests.checks
     // {
@@ -252,7 +253,6 @@ let
     // piMcpTests.checks
     // {
       builder-vmnet-route = builderRouteTest;
-      host-service-package-binding = import ./services/package-binding.nix { inherit pkgs wrix; };
       rust-source-fixtures = import ./services/rust-source.nix {
         inherit pkgs;
         inherit (wrix) rustPackage;
@@ -496,6 +496,7 @@ let
           wrix-rust-clippy
           wrix-rust-nextest
           profile-config-parser-agreement
+          host-service-package-binding
           image-builds
           ${if ciChecks ? private-nix-artifacts then "private-nix-artifacts" else ""}
           linux-pasta-port-forwarding-disabled
