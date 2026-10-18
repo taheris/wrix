@@ -152,6 +152,49 @@ let
         ) "profiles, sandboxes, and devshells must disable Beads metrics"
       );
 
+      "profiles.tool-cache-boundary" = opaque (
+        let
+          inherit (wlib.profiles) base rust python;
+          noHostBacking = profile: profile.mounts == [ ];
+          noHostRedirect =
+            profile:
+            !(hasAttr "CARGO_HOME" profile.hostEnv)
+            && !(hasAttr "CARGO_TARGET_DIR" profile.hostEnv)
+            && !(hasAttr "SCCACHE_DIR" profile.hostEnv)
+            && !(hasAttr "UV_CACHE_DIR" profile.hostEnv);
+        in
+        ensure (
+          all noHostBacking [
+            base
+            rust
+            python
+          ]
+          && all noHostRedirect [
+            base
+            rust
+            python
+          ]
+          && base.toolCaches == [ ]
+          &&
+            rust.toolCaches == [
+              "cargo"
+              "sccache"
+            ]
+          && python.toolCaches == [ "uv" ]
+          && rust.env.SCCACHE_DIR == "/home/wrix/.cache/sccache"
+          && python.env.UV_CACHE_DIR == "/home/wrix/.cache/uv"
+          &&
+            rust.writableDirs == [
+              "/home/wrix/.cargo"
+              "/home/wrix/.cache"
+            ]
+          && python.writableDirs == [ "/home/wrix/.cache" ]
+          && !(hasAttr "CARGO_HOME" rust.env)
+          && !(hasAttr "CARGO_TARGET_DIR" rust.env)
+          && (wlib.deriveProfile rust { env.EXAMPLE = "value"; }).toolCaches == rust.toolCaches
+        ) "built-in tool caches must be sandbox-only with separate host defaults"
+      );
+
       "profiles.no-dev-toolchain-lib" = opaque (
         ensure (!(hasAttr "devToolchain" wlib)) "wrix.devToolchain is still exposed"
       );

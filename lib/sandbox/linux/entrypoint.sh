@@ -23,6 +23,10 @@ fi
 # git config below and the agent config seeding both need $HOME.
 export HOME="${HOME:-/home/wrix}"
 
+# shellcheck source=/dev/null
+. /tool-cache.sh
+wrix_link_tool_caches /mnt/wrix/tool-caches "$HOME"
+
 KNOWN_HOSTS_SRC="/etc/wrix/known_hosts_dir/known_hosts"
 if [[ -f "$KNOWN_HOSTS_SRC" ]]; then
   /bin/bash /install-known-hosts.sh "$KNOWN_HOSTS_SRC" / runtime

@@ -66,6 +66,7 @@ sources = {
     'entrypoint.sh': 'lib/sandbox/linux/entrypoint.sh',
     'network-bootstrap.sh': 'lib/sandbox/network-bootstrap.sh',
     'network-ready.sh': 'lib/sandbox/network-ready.sh',
+    'tool-cache.sh': 'lib/sandbox/tool-cache.sh',
     'krun-init.sh': 'lib/sandbox/linux/krun-init.sh',
     'beads-sandbox.sh': 'lib/beads/sandbox.sh',
     'git-ssh-setup.sh': 'lib/util/git-ssh-setup.sh',

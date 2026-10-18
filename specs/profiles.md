@@ -776,11 +776,11 @@ without introducing a reciprocal flake dependency.
 - Evaluated built-in profile defaults declare sandbox-only cache backing instead
   of personal-host cache mounts/prewarms, retain the guest tool paths and
   writable parents, and do not redirect host tool defaults into sandbox data.
-  [check?](verify:profiles.tool-cache-boundary)
+  [check](verify:profiles.tool-cache-boundary)
 - Production run/spawn cache preparation never binds/copies personal-host cache
   data or writes it back, including when managed data is missing; read-only
   preflight does not allocate or populate managed cache data.
-  [test?](../crates/wrix-sandbox/tests/tool_cache_isolation.rs::both_launch_modes_keep_tool_cache_preparation_host_separate)
+  [test](../crates/wrix-sandbox/tests/tool_cache_isolation.rs::both_launch_modes_keep_tool_cache_preparation_host_separate)
 - Live default Podman Rust/Python launches can populate writable sandbox caches
   while personal-host cache sentinels are neither visible nor modified.
   [system?](test-ci:test-profile-tool-cache-isolation-podman)
@@ -798,25 +798,25 @@ without introducing a reciprocal flake dependency.
   policy before shared default, preserving omitted inheritance and both
   directions of explicit override, including re-enabling sharing over a private
   repo default.
-  [test?](../crates/wrix-sandbox/tests/tool_cache_isolation.rs::mode_precedence_follows_launch_repo_shared_default)
+  [test](../crates/wrix-sandbox/tests/tool_cache_isolation.rs::mode_precedence_follows_launch_repo_shared_default)
 - One-off selections do not create/rewrite repository policy or persist as
   future defaults; later launches inherit their own current repository policy
   anew.
-  [test?](../crates/wrix-sandbox/tests/tool_cache_isolation.rs::launch_mode_overrides_do_not_write_repository_policy)
+  [test](../crates/wrix-sandbox/tests/tool_cache_isolation.rs::launch_mode_overrides_do_not_write_repository_policy)
 
 - Shared mode selects this host user's worker pool across repository/clone
   identities, not separate per-repository or personal-host cache backing.
-  [test?](../crates/wrix-sandbox/tests/tool_cache_isolation.rs::shared_mode_uses_host_user_pool_across_repositories)
+  [test](../crates/wrix-sandbox/tests/tool_cache_isolation.rs::shared_mode_uses_host_user_pool_across_repositories)
 - Sharing-off applies to every applicable managed cache in both launch modes,
   using fresh private writable data without shared-pool reads/writes/prewarms or
   retained per-repository cache allocation.
-  [test?](../crates/wrix-sandbox/tests/tool_cache_isolation.rs::private_mode_is_fresh_and_all_or_nothing)
+  [test](../crates/wrix-sandbox/tests/tool_cache_isolation.rs::private_mode_is_fresh_and_all_or_nothing)
 - Mode changes neither promote private cache contents into the shared pool nor
   delete/recall previously shared data.
-  [test?](../crates/wrix-sandbox/tests/tool_cache_isolation.rs::mode_changes_do_not_migrate_or_delete_cache_data)
+  [test](../crates/wrix-sandbox/tests/tool_cache_isolation.rs::mode_changes_do_not_migrate_or_delete_cache_data)
 - Shared backing does not expose per-launch credential/configuration files or
   host/service management state as part of the cache pool.
-  [test?](../crates/wrix-sandbox/tests/tool_cache_isolation.rs::shared_backing_excludes_credentials_and_control_state)
+  [test](../crates/wrix-sandbox/tests/tool_cache_isolation.rs::shared_backing_excludes_credentials_and_control_state)
 - Live Podman workers from different repositories reuse compatible pooled tool
   data while concurrent use preserves correct tool results.
   [system?](test-ci:test-profile-tool-cache-isolation-podman)

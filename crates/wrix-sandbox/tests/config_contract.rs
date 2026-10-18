@@ -49,6 +49,30 @@ fn profile_value(platform: Platform) -> Value {
     })
 }
 
+#[test]
+fn managed_cache_declarations_are_closed_and_platform_independent() {
+    use wrix_sandbox::command::config::ManagedCache;
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("profile.json");
+    for platform in [Platform::Linux, Platform::Darwin] {
+        let mut value = profile_value(platform);
+        value["profile"]["tool_caches"] = json!(["cargo", "sccache", "uv"]);
+        fs::write(&path, value.to_string()).unwrap();
+        assert_eq!(
+            load_profile_config(&path, platform)
+                .unwrap()
+                .profile
+                .tool_caches,
+            [ManagedCache::Cargo, ManagedCache::Sccache, ManagedCache::Uv]
+        );
+        for invalid in [json!(["personal"]), json!([{}]), json!({}), json!(null)] {
+            value["profile"]["tool_caches"] = invalid;
+            fs::write(&path, value.to_string()).unwrap();
+            assert!(load_profile_config(&path, platform).is_err());
+        }
+    }
+}
+
 fn spawn_value() -> Value {
     json!({
         "workspace": "/repo", "env": [], "agent_args": [],

@@ -12,6 +12,10 @@ set -euo pipefail
 export USER="wrix"
 export HOME="/home/wrix"
 
+# shellcheck source=/dev/null
+. /tool-cache.sh
+wrix_link_tool_caches /mnt/wrix/tool-caches "$HOME"
+
 # Safe path expansion: only expand ~ and $HOME/$USER, not arbitrary commands
 expand_path() {
     local p="$1"

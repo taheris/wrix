@@ -263,6 +263,21 @@ daemons on one raw cache directory. Compiler execution belongs to the shared
 service trust/resource boundary; restricted Rust requires private/local mode.
 Tool-sharing controls do not disable Nix/Celler integration.
 
+The launcher mounts only managed Cargo data and uv cache directories beneath
+`/mnt/wrix/tool-caches`, linking the documented guest locations to those live
+mounts on both platforms. Cargo homes remain launch-local: only registry/git,
+`.package-cache`, `.package-cache-mutate` and `.global-cache` are linked. SQLite
+therefore tracks the same data that the native package-cache locks protect;
+configuration, credentials, installed binaries and targets are not pooled. The
+native coordination fixture exercises concurrent registry/Git builds and SQLite
+integrity, plus concurrent uv installs and offline cache reuse. This retains
+upstream Cargo mixed-version/garbage-collection limitations: older Cargo
+versions may not participate in newer tracking or mutation locking. Wrix does
+not add an independent collector or promise mixed-version GC compatibility.
+Native filesystem tests are not evidence of cross-VM VirtioFS lock support; the
+runtime-specific system suites own that proof. Generic Darwin directory staging
+still copies ordinary consumer mounts, not these live managed caches.
+
 Full worker runtimes remain in Podman/optional-krun/Apple boundaries. Shared
 containerd/nix-snapshotter migration, private guest Nix store/database
 persistence, sharing groups and sandbox-origin Nix publication are deferred.

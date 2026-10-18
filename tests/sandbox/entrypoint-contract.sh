@@ -215,6 +215,7 @@ rewrite_entrypoint() {
     -e "s|\. /mcp-manifest\.sh|. $mcp_helper|g" \
     -e "s|\. /beads-sandbox\.sh|. $REPO_ROOT/lib/beads/sandbox.sh|g" \
     -e "s|\. /network-ready\.sh|. $ready_helper|g" \
+    -e "s|\. /tool-cache\.sh|. $REPO_ROOT/lib/sandbox/tool-cache.sh|g" \
     "$source_path" >"$dest_path"
   chmod +x "$dest_path"
 }

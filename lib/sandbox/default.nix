@@ -485,6 +485,7 @@ let
               mode = mount.mode or "ro";
               optional = mount.optional or false;
             }) (finalProfile.mounts or [ ]);
+            tool_caches = finalProfile.toolCaches or [ ];
             writable_dirs = finalProfile.writableDirs or [ ];
             network_allowlist = finalProfile.networkAllowlist or [ ];
           };

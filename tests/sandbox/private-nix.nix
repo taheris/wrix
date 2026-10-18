@@ -33,6 +33,7 @@ let
     "/homeless-shelter"
     "/network-bootstrap.sh"
     "/network-ready.sh"
+    "/tool-cache.sh"
     "/entrypoint.sh"
     "/krun-init.sh"
     "/krun-relay"

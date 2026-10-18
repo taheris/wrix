@@ -1210,6 +1210,11 @@ impl<'a> Plan<'a> {
                 volumes.push(rendered);
             }
         }
+        volumes.extend(tool_cache::prepare(
+            &self.request.profile_config.profile.tool_caches,
+            self.tool_cache_mode,
+            staging,
+        )?);
         volumes.extend(self.spawn_mounts.clone());
         Ok(volumes)
     }
@@ -1224,6 +1229,11 @@ impl<'a> Plan<'a> {
             &self.spawn_mounts,
             &staging.root,
         )?;
+        mounts.mounts.extend(tool_cache::prepare(
+            &self.request.profile_config.profile.tool_caches,
+            self.tool_cache_mode,
+            staging,
+        )?);
         if let Some(spawn_mount) = self.stage_darwin_spawn_config(staging)? {
             mounts.mounts.push(spawn_mount);
         }
@@ -1876,12 +1886,12 @@ impl Staging {
     fn create() -> Result<Self, LaunchError> {
         let root = env::var_os("XDG_CACHE_HOME")
             .map_or_else(|| home_dir().join(".cache"), PathBuf::from)
-            .join("wrix/mounts")
-            .join(std::process::id().to_string());
-        if root.exists() {
-            fs::remove_dir_all(&root)?;
-        }
+            .join("wrix/mounts");
         fs::create_dir_all(&root)?;
+        let root = tempfile::Builder::new()
+            .prefix("launch-")
+            .tempdir_in(root)?
+            .keep();
         Ok(Self { root })
     }
 

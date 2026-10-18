@@ -176,6 +176,7 @@ let
       hostEnv ? { },
       runtimeSecrets ? { },
       mounts ? [ ],
+      toolCaches ? [ ],
       networkAllowlist ? [ ],
       enabledPlugins ? { },
       shellHook ? "",
@@ -187,6 +188,7 @@ let
         enabledPlugins
         shellHook
         writableDirs
+        toolCaches
         ;
       corePackages = basePackages ++ corePackages;
       packages = basePackages ++ corePackages ++ packages;
@@ -378,25 +380,9 @@ let
         SCCACHE_CACHE_SIZE = "50G";
       };
 
-      mounts = [
-        {
-          source = "~/.cargo/registry";
-          dest = "/home/wrix/.cargo/registry";
-          mode = "rw";
-          optional = true;
-        }
-        {
-          source = "~/.cargo/git";
-          dest = "/home/wrix/.cargo/git";
-          mode = "rw";
-          optional = true;
-        }
-        {
-          source = "~/.cache/sccache";
-          dest = "/home/wrix/.cache/sccache";
-          mode = "rw";
-          optional = true;
-        }
+      toolCaches = [
+        "cargo"
+        "sccache"
       ];
 
       networkAllowlist = [
@@ -414,7 +400,7 @@ let
         }
       ];
 
-      # Linux tmpfs parents stay writable when optional cache mounts are absent.
+      # Managed cache links and private Cargo configuration need writable parents.
       writableDirs = [
         "/home/wrix/.cargo"
         "/home/wrix/.cache"
@@ -496,14 +482,8 @@ in
       UV_CACHE_DIR = "/home/wrix/.cache/uv";
     };
 
-    mounts = [
-      {
-        source = "~/.cache/uv";
-        dest = "/home/wrix/.cache/uv";
-        mode = "rw";
-        optional = true;
-      }
-    ];
+    toolCaches = [ "uv" ];
+    writableDirs = [ "/home/wrix/.cache" ];
 
     networkAllowlist = [
       {

@@ -115,7 +115,18 @@ pub struct Profile {
     #[serde(default)]
     pub writable_dirs: Vec<String>,
     #[serde(default)]
+    pub tool_caches: Vec<ManagedCache>,
+    #[serde(default)]
     pub network_allowlist: Vec<NetworkRule>,
+}
+
+/// Built-in sandbox-only cache data, separate from caller-declared mounts.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum ManagedCache {
+    Cargo,
+    Sccache,
+    Uv,
 }
 
 /// One explicitly admitted host and its TCP destination ports.
@@ -557,6 +568,7 @@ impl RawProfileConfig {
             env: raw_profile.env,
             mounts: raw_profile.mounts,
             writable_dirs: raw_profile.writable_dirs,
+            tool_caches: raw_profile.tool_caches,
             network_allowlist: raw_profile.network_allowlist,
         };
         for mount in &profile.mounts {
@@ -741,6 +753,8 @@ struct RawProfile {
     #[serde(default)]
     writable_dirs: Vec<String>,
     #[serde(default)]
+    tool_caches: Vec<ManagedCache>,
+    #[serde(default)]
     network_allowlist: Vec<NetworkRule>,
 }
 
@@ -886,6 +900,7 @@ fn validate_mount_destination(destination: &str) -> Result<(), ConfigError> {
         "/homeless-shelter",
         "/network-bootstrap.sh",
         "/network-ready.sh",
+        "/tool-cache.sh",
         "/entrypoint.sh",
         "/krun-init.sh",
         "/krun-relay",
@@ -1304,6 +1319,7 @@ mod test {
             "/homeless-shelter",
             "/network-bootstrap.sh",
             "/network-ready.sh",
+            "/tool-cache.sh",
             "/entrypoint.sh",
             "/krun-init.sh",
             "/krun-relay",

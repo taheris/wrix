@@ -324,6 +324,7 @@ let
       cp ${./install-known-hosts.sh} install-known-hosts.sh
       chmod +x entrypoint.sh
       cp ${./network-ready.sh} network-ready.sh
+      cp ${./tool-cache.sh} tool-cache.sh
       cp ${../beads/sandbox.sh} beads-sandbox.sh
       cp ${./mcp-manifest.sh} mcp-manifest.sh
       chmod +x mcp-manifest.sh
