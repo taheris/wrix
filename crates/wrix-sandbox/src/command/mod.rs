@@ -43,8 +43,8 @@ impl Command {
     }
 }
 
-pub const RUN_HELP: &str = "Run an interactive sandbox.\n\nUsage: wrix [--profile-config <file>] run [LAUNCH_OPTIONS] [DIR] [--] [AGENT_ARGS ...]\n\nDIR defaults to CWD; without DIR, use -- before agent arguments.\nLauncher options stop at DIR or --; after DIR, one optional -- is consumed.\nRemaining arguments are passed unchanged to the agent, including --help.\nOmitted Git options inherit repository policy, defaulting independently to false.\nTool caches: explicit launch choice > repository tool_caches.shared > shared default.\nPrivate mode does not disable caching or separate Nix/Celler policy.\nRestricted Rust requires private mode; use --no-cache with WRIX_NETWORK=limit.\n\nOptions:\n  --profile-config <file>  Override generated project launch data with <file>.\n  --cache                  Reuse shared worker tool caches for this launch.\n  --no-cache               Use fresh private writable local tool caches for this launch.\n  --git-deploy             Grant the deploy key for this launch; conflicts with --no-git-deploy.\n  --no-git-deploy          Deny the deploy key for this launch; conflicts with --git-deploy.\n  --git-sign               Grant the signing key for this launch; conflicts with --no-git-sign.\n  --no-git-sign            Deny the signing key for this launch; conflicts with --git-sign.\n  -h, --help               Print launcher help before DIR or --.\n";
-pub const SPAWN_HELP: &str = "Spawn a programmatic sandbox.\n\nSpawnConfig.tool_caches.shared is an optional boolean: false uses fresh private writable local tool caches; true reuses shared worker tool caches.\nPrecedence: explicit launch choice > repository tool_caches.shared > shared default.\nOmission inherits; this does not disable caching or separate Nix/Celler policy.\nRestricted Rust requires private mode with WRIX_NETWORK=limit.\n\nUsage: wrix [--profile-config <file>] spawn --spawn-config <file> [--stdio]\n\nOptions:\n  --profile-config <file>  Override generated project launch data with <file>.\n  --spawn-config <file>    Read per-launch settings from <file> (required).\n  --stdio                  Enable the selected agent's JSONL protocol on standard I/O (default: off).\n  -h, --help               Print help.\n";
+pub const RUN_HELP: &str = "Run an interactive sandbox.\n\nUsage: wrix [--profile-config <file>] run [LAUNCH_OPTIONS] [DIR] [--] [AGENT_ARGS ...]\n\nDIR defaults to CWD; without DIR, use -- before agent arguments.\nLauncher options stop at DIR or --; after DIR, one optional -- is consumed.\nRemaining arguments are passed unchanged to the agent, including --help.\nOmitted Git options inherit repository policy, defaulting independently to false.\nTool caches: explicit launch choice > repository tool_caches.shared > shared default.\nPrivate mode does not disable caching or separate Nix/Celler policy.\nRestricted Rust requires private mode; use --no-cache with WRIX_NETWORK=limit.\n\nOptions:\n  --profile-config <file>  Override generated project launch data with <file>.\n  --dry-run                Inspect without preparing or executing a launch.\n  --json                   Render the dry-run report as versioned JSON.\n  --cache                  Reuse shared worker tool caches for this launch.\n  --no-cache               Use fresh private writable local tool caches for this launch.\n  --git-deploy             Grant the deploy key for this launch; conflicts with --no-git-deploy.\n  --no-git-deploy          Deny the deploy key for this launch; conflicts with --git-deploy.\n  --git-sign               Grant the signing key for this launch; conflicts with --no-git-sign.\n  --no-git-sign            Deny the signing key for this launch; conflicts with --git-sign.\n  -h, --help               Print launcher help before DIR or --.\n";
+pub const SPAWN_HELP: &str = "Spawn a programmatic sandbox.\n\nSpawnConfig.tool_caches.shared is an optional boolean: false uses fresh private writable local tool caches; true reuses shared worker tool caches.\nPrecedence: explicit launch choice > repository tool_caches.shared > shared default.\nOmission inherits; this does not disable caching or separate Nix/Celler policy.\nRestricted Rust requires private mode with WRIX_NETWORK=limit.\n\nUsage: wrix [--profile-config <file>] spawn --spawn-config <file> [--stdio]\n\nOptions:\n  --profile-config <file>  Override generated project launch data with <file>.\n  --spawn-config <file>    Read per-launch settings from <file> (required).\n  --dry-run                Inspect without preparing or executing a launch.\n  --json                   Render the dry-run report as versioned JSON.\n  --stdio                  Enable the selected agent's JSONL protocol on standard I/O (default: off).\n  -h, --help               Print help.\n";
 
 pub fn write_run_help(stdout: &mut impl Write) -> io::Result<()> {
     stdout.write_all(RUN_HELP.as_bytes())?;
@@ -63,6 +63,7 @@ pub fn run(
     stdout: &mut impl Write,
     stderr: &mut impl Write,
 ) -> io::Result<ExitCode> {
+    let preview = launch::preview::Options::from_args(command, args);
     match build_request(command, profile_config_path, args) {
         Ok(None) => {
             write_run_help(stdout)?;
@@ -70,11 +71,17 @@ pub fn run(
         }
         Ok(Some(request)) => match launch::execute(&request, stdout, stderr) {
             Ok(code) => Ok(code),
+            Err(_error) if preview.dry_run => {
+                launch::preview::Report::invalid().write(stdout, preview.json)
+            }
             Err(error) => {
                 writeln!(stderr, "wrix {}: {error}", command.as_str())?;
                 Ok(ExitCode::FAILURE)
             }
         },
+        Err(_error) if preview.dry_run => {
+            launch::preview::Report::invalid().write(stdout, preview.json)
+        }
         Err(error) => {
             writeln!(stderr, "wrix {}: {error}", command.as_str())?;
             if matches!(
@@ -124,6 +131,7 @@ fn build_request(
 
 /// A missing run request means launcher help was requested in the option prefix.
 fn parse_run(args: &[String]) -> Result<Option<Run>, CliError> {
+    let mut preview = launch::preview::Options::default();
     let mut workspace = None;
     let mut git_deploy = None;
     let mut git_sign = None;
@@ -131,6 +139,8 @@ fn parse_run(args: &[String]) -> Result<Option<Run>, CliError> {
     let mut index = 0;
     while let Some(arg) = args.get(index) {
         match arg.as_str() {
+            "--dry-run" => preview.dry_run = true,
+            "--json" => preview.json = true,
             "--git-deploy" | "--no-git-deploy" => {
                 let enabled = arg == "--git-deploy";
                 if git_deploy.is_some_and(|value| value != enabled) {
@@ -173,7 +183,9 @@ fn parse_run(args: &[String]) -> Result<Option<Run>, CliError> {
         }
         index += 1;
     }
+    preview.validate()?;
     Ok(Some(Run {
+        preview,
         workspace: workspace.map_or_else(std::env::current_dir, Ok)?,
         agent_args: args[index..].to_vec(),
         git_deploy,
@@ -183,11 +195,20 @@ fn parse_run(args: &[String]) -> Result<Option<Run>, CliError> {
 }
 
 fn parse_spawn(args: &[String]) -> Result<Spawn, CliError> {
+    let mut preview = launch::preview::Options::default();
     let mut spawn_config_path = None;
     let mut stdio = false;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
+            "--dry-run" => {
+                preview.dry_run = true;
+                index += 1;
+            }
+            "--json" => {
+                preview.json = true;
+                index += 1;
+            }
             "--spawn-config" => {
                 let value = args
                     .get(index + 1)
@@ -207,9 +228,11 @@ fn parse_spawn(args: &[String]) -> Result<Spawn, CliError> {
             }
         }
     }
+    preview.validate()?;
     let config_path = spawn_config_path.ok_or(CliError::MissingSpawnConfigFlag)?;
     let config = load_spawn_config(&config_path, Platform::CURRENT)?;
     Ok(Spawn {
+        preview,
         config_path,
         config,
         stdio,
@@ -217,7 +240,9 @@ fn parse_spawn(args: &[String]) -> Result<Spawn, CliError> {
 }
 
 #[derive(Debug, displaydoc::Display, thiserror::Error)]
-enum CliError {
+pub(super) enum CliError {
+    /// --json requires --dry-run
+    JsonRequiresPreview,
     /// wrix requires --profile-config <Nix store ProfileConfig JSON> or generated project launch data from sandbox.devShell
     MissingProfileConfig,
     /// --git-deploy cannot be combined with --no-git-deploy

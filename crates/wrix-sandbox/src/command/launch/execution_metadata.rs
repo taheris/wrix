@@ -275,6 +275,7 @@ mod test {
     fn concurrent_same_timestamp_records_remain_distinct() {
         let workspace = tempfile::tempdir().unwrap();
         let kind = Kind::Run(Run {
+            preview: super::super::preview::Options::default(),
             workspace: workspace.path().to_owned(),
             agent_args: Vec::new(),
             git_deploy: None,

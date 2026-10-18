@@ -145,25 +145,39 @@ fn inspection_and_launch_share_project_configuration_resolution() -> TestResult 
             if explicit {
                 command.arg("--profile-config").arg(&fixture.profile);
             }
-            fixture.launch(&mut command, mode);
-            command.env("WRIX_DRY_RUN", "1");
+            command.arg(mode).args(["--dry-run", "--json"]);
+            if mode == "spawn" {
+                command.arg("--spawn-config").arg(&fixture.spawn);
+            } else {
+                command.arg(fixture.root.path());
+            }
             let preview = command.output()?;
             assert!(
                 preview.status.success(),
                 "{}",
                 String::from_utf8_lossy(&preview.stderr)
             );
-            let summary = String::from_utf8(preview.stdout)?;
-            assert!(
-                summary.contains("PROFILE_NAME=selected-project"),
-                "{summary}"
-            );
-            assert!(
-                summary.contains(&format!("PROFILE_CONFIG={}", fixture.profile.display())),
-                "{summary}"
+            let summary: Value = serde_json::from_slice(&preview.stdout)?;
+            assert_eq!(summary["plan"]["profile"], "selected-project");
+            assert_eq!(
+                summary["plan"]["profile_config"],
+                fixture.profile.display().to_string()
             );
             assert!(!fixture.root.path().join("argv").exists());
-            command.env_remove("WRIX_DRY_RUN");
+            let mut command = fixture.command();
+            fixture.runtime(&mut command)?;
+            command.env(
+                PROJECT_PROFILE_CONFIG,
+                if explicit {
+                    fixture.root.path().join("missing.json")
+                } else {
+                    fixture.profile.clone()
+                },
+            );
+            if explicit {
+                command.arg("--profile-config").arg(&fixture.profile);
+            }
+            fixture.launch(&mut command, mode);
             let launch = command.output()?;
             assert!(
                 launch.status.success(),

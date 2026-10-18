@@ -1,6 +1,7 @@
 mod execution_metadata;
 mod linux_terminal;
 mod pi_auth;
+pub(super) mod preview;
 mod tool_cache;
 
 use pi_auth::Storage as PiAuth;
@@ -32,7 +33,7 @@ use crate::image::{
 
 use super::config::{
     AgentKind, EnvName, GitGrants, MountMode, NetworkMode, Platform, ProfileConfig, ProfileMount,
-    RuntimeSecretPolicy, Security, SpawnConfig, SpawnMount, is_known_credential_env,
+    RuntimeSecretPolicy, Security, SpawnConfig, SpawnMount,
 };
 
 pub struct Request {
@@ -41,12 +42,22 @@ pub struct Request {
     pub profile_config: ProfileConfig,
 }
 
+impl Request {
+    const fn preview(&self) -> preview::Options {
+        match &self.kind {
+            Kind::Run(run) => run.preview,
+            Kind::Spawn(spawn) => spawn.preview,
+        }
+    }
+}
+
 pub enum Kind {
     Run(Run),
     Spawn(Spawn),
 }
 
 pub struct Run {
+    pub preview: preview::Options,
     pub workspace: PathBuf,
     pub agent_args: Vec<String>,
     pub git_deploy: Option<bool>,
@@ -55,6 +66,7 @@ pub struct Run {
 }
 
 pub struct Spawn {
+    pub preview: preview::Options,
     pub config_path: PathBuf,
     pub config: SpawnConfig,
     pub stdio: bool,
@@ -208,7 +220,7 @@ pub fn execute(
     stderr: &mut impl Write,
 ) -> Result<ExitCode, LaunchError> {
     let network_mode = NetworkMode::from_env(request.profile_config.network.default_mode)?;
-    let dry_run = env_flag("WRIX_DRY_RUN");
+    let preview = request.preview();
     let workspace = match &request.kind {
         Kind::Run(run) => run.workspace.as_path(),
         Kind::Spawn(spawn) => Path::new(&spawn.config.workspace),
@@ -220,18 +232,21 @@ pub fn execute(
         .transpose()
         .map_err(|source| LaunchError::RepositoryPolicy { source })?
         .unwrap_or_default();
-    let tool_cache_mode = tool_cache::resolve(request, &policy, network_mode)?;
-    let credential_sources =
-        CredentialSources::resolve(request, repository_root.as_deref(), &policy)?;
+    let tool_cache_mode = tool_cache::resolve(request, &policy);
+    let conflict = tool_cache::restricted_conflict(request, network_mode, tool_cache_mode);
+    if conflict && !preview.dry_run {
+        return Err(LaunchError::RestrictedRustSharedCaches);
+    }
+    let credential_sources = if preview.dry_run {
+        None
+    } else {
+        CredentialSources::resolve(request, repository_root.as_deref(), &policy)?
+    };
     let plan = Plan::new(request, network_mode, credential_sources, tool_cache_mode)?;
-    if dry_run {
-        let services = if env_flag("WRIX_DRY_RUN_SERVICES") {
-            ServicesState::load(request)?
-        } else {
-            ServicesState::default()
-        };
-        plan.write_dry_run(stdout, &services)?;
-        return Ok(ExitCode::SUCCESS);
+    if preview.dry_run {
+        return preview::Report::resolved(&plan, &policy, repository_root.as_deref(), conflict)?
+            .write(stdout, preview.json)
+            .map_err(LaunchError::from);
     }
     let journal = execution_metadata::Journal::create(
         &plan.workspace,
@@ -329,7 +344,6 @@ struct ServicesState {
 }
 
 struct ProjectCache {
-    url: String,
     host: Ipv4Addr,
     port: NonZeroU16,
     nix_config: String,
@@ -903,24 +917,38 @@ impl<'a> Plan<'a> {
                     .collect(),
             ),
         };
-        let runtime_secret_env = resolve_runtime_secret_env(&profile.security, &spawn_env)?;
-        let runtime_passthrough_env = if matches!(&request.kind, Kind::Run(_)) {
-            resolve_runtime_passthrough_env()?
-        } else {
+        let runtime_secret_env = if request.preview().dry_run {
             Vec::new()
-        };
-        let host_podman_socket = if Platform::CURRENT == Platform::Linux {
-            host_podman_socket_from_env()?
         } else {
-            None
+            resolve_runtime_secret_env(&profile.security, &spawn_env)?
         };
+        let runtime_passthrough_env =
+            if !request.preview().dry_run && matches!(&request.kind, Kind::Run(_)) {
+                resolve_runtime_passthrough_env()?
+            } else {
+                Vec::new()
+            };
+        let host_podman_socket =
+            if !request.preview().dry_run && Platform::CURRENT == Platform::Linux {
+                host_podman_socket_from_env()?
+            } else {
+                None
+            };
 
-        let host_tmux_target = tmux_focus_target();
+        let host_tmux_target = if request.preview().dry_run {
+            None
+        } else {
+            tmux_focus_target()
+        };
         let default_target = host_tmux_target.as_ref().and_then(|pane| {
             let socket = tmux_socket_from_env()?;
             linux_terminal::focus_key(pane, &socket)
         });
-        let focus_target = resolve_focus_target(&spawn_env, default_target.as_ref())?;
+        let focus_target = if request.preview().dry_run {
+            None
+        } else {
+            resolve_focus_target(&spawn_env, default_target.as_ref())?
+        };
         let darwin_origin = focus_target
             .as_ref()
             .and_then(|_| capture_darwin_launch(host_tmux_target.as_ref()));
@@ -945,135 +973,6 @@ impl<'a> Plan<'a> {
             focus_target,
             host_tmux_target,
             darwin_origin,
-        })
-    }
-
-    fn write_dry_run(
-        &self,
-        stdout: &mut impl Write,
-        services: &ServicesState,
-    ) -> Result<(), LaunchError> {
-        Staging::with(|staging| {
-            let credentials = self.credentials(staging)?;
-            let pi_auth = self.pi_auth()?;
-
-            writeln!(stdout, "SUBCOMMAND={}", self.subcommand())?;
-            writeln!(stdout, "STDIO={}", u8::from(self.stdio))?;
-            writeln!(
-                stdout,
-                "PROFILE_CONFIG={}",
-                self.request.profile_config_path.display()
-            )?;
-            writeln!(
-                stdout,
-                "PROFILE_AGENT={}",
-                self.request.profile_config.agent.kind.as_str()
-            )?;
-            writeln!(
-                stdout,
-                "PROFILE_NAME={}",
-                self.request.profile_config.profile.name
-            )?;
-            writeln!(stdout, "WORKSPACE={}", self.workspace.display())?;
-            writeln!(stdout, "TOOL_CACHE_MODE={}", self.tool_cache_mode.as_str())?;
-            let tool_cache_override = match &self.request.kind {
-                Kind::Run(run) => run.tool_caches.shared,
-                Kind::Spawn(spawn) => spawn.config.tool_caches.shared,
-            };
-            if let Some(shared) = tool_cache_override {
-                writeln!(stdout, "TOOL_CACHE_SHARED_OVERRIDE={shared}")?;
-            }
-            let overrides = match &self.request.kind {
-                Kind::Run(run) => GitGrants {
-                    deploy: run.git_deploy,
-                    sign: run.git_sign,
-                },
-                Kind::Spawn(spawn) => spawn.config.git,
-            };
-            if let Some(deploy) = overrides.deploy {
-                writeln!(stdout, "GIT_DEPLOY_OVERRIDE={deploy}")?;
-            }
-            if let Some(sign) = overrides.sign {
-                writeln!(stdout, "GIT_SIGN_OVERRIDE={sign}")?;
-            }
-            writeln!(
-                stdout,
-                "IMAGE_OVERRIDE_REF={}",
-                self.override_ref_for_dry_run()
-            )?;
-            writeln!(
-                stdout,
-                "IMAGE_OVERRIDE_SOURCE={}",
-                self.override_source_for_dry_run()
-            )?;
-            writeln!(
-                stdout,
-                "IMAGE_OVERRIDE_SOURCE_KIND={}",
-                self.override_source_kind_for_dry_run()
-            )?;
-            if Platform::CURRENT == Platform::Linux {
-                writeln!(stdout, "PODMAN_NETWORK={}", linux_podman_network())?;
-            }
-            services.write_dry_run(stdout)?;
-            if let Some(credentials) = &credentials {
-                writeln!(stdout, "MOUNT=-v {}", credentials.mount().podman_arg())?;
-                for (key, value) in credential_env_pairs(credentials) {
-                    writeln!(stdout, "ENV={key}={value}")?;
-                }
-            }
-            let (key, value) = self.effective_sign_env_pair();
-            writeln!(stdout, "ENV={key}={value}")?;
-            for (key, value) in self.launcher_identity_env_pairs() {
-                writeln!(stdout, "ENV={key}={value}")?;
-            }
-            for (key, value) in &self.runtime_passthrough_env {
-                writeln!(stdout, "ENV={key}={value}")?;
-            }
-            for (key, value) in &self.runtime_secret_env {
-                writeln!(stdout, "ENV={key}={}", self.dry_run_env_value(key, value))?;
-            }
-            if let Some(path) = self.spawn_config_container_path() {
-                writeln!(stdout, "ENV=WRIX_SPAWN_CONFIG={path}")?;
-            }
-            if let Some(auth) = &pi_auth {
-                let path = pi_auth::CONTAINER_FILE;
-                writeln!(stdout, "ENV=WRIX_PI_AUTH_JSON={path}")?;
-                if Platform::CURRENT == Platform::Linux {
-                    writeln!(stdout, "MOUNT=-v {}", auth.mount().podman_arg())?;
-                }
-            }
-            if Platform::CURRENT == Platform::Linux {
-                for mount in &self.request.profile_config.profile.mounts {
-                    if let Some(rendered) = render_profile_mount(mount, staging)? {
-                        writeln!(stdout, "MOUNT=-v {}", rendered.podman_arg())?;
-                    }
-                }
-            }
-            if let Some(socket) = &self.host_podman_socket {
-                socket.write_dry_run(stdout, &self.workspace, None)?;
-            }
-            if let Kind::Spawn(spawn) = &self.request.kind {
-                writeln!(stdout, "SPAWN_CONFIG={}", spawn.config_path.display())?;
-                if Platform::CURRENT == Platform::Linux
-                    && let Some(mount) = self.linux_spawn_config_mount()
-                {
-                    writeln!(stdout, "MOUNT=-v {}", mount.podman_arg())?;
-                }
-            }
-            for (key, value) in &self.spawn_env {
-                writeln!(stdout, "ENV={key}={}", self.dry_run_env_value(key, value))?;
-            }
-            for arg in &self.agent_args {
-                writeln!(stdout, "CMD={arg}")?;
-            }
-            for mount in &self.spawn_mounts {
-                writeln!(stdout, "MOUNT=-v {}", mount.podman_arg())?;
-            }
-            if Platform::CURRENT == Platform::Darwin {
-                let mounts = self.darwin_mounts(staging, pi_auth.as_ref())?;
-                mounts.write_dry_run(stdout)?;
-            }
-            Ok(())
         })
     }
 
@@ -1540,22 +1439,6 @@ impl<'a> Plan<'a> {
         )
     }
 
-    fn dry_run_env_value<'b>(&self, name: &str, value: &'b str) -> &'b str {
-        if is_known_credential_env(name)
-            || self
-                .request
-                .profile_config
-                .security
-                .runtime_secrets
-                .keys()
-                .any(|secret| secret.as_str() == name)
-        {
-            "[REDACTED]"
-        } else {
-            value
-        }
-    }
-
     fn launcher_identity_env_pairs(&self) -> Vec<(String, String)> {
         vec![
             (
@@ -1583,35 +1466,6 @@ impl<'a> Plan<'a> {
 
     const fn spawn(&self) -> bool {
         matches!(self.request.kind, Kind::Spawn(_))
-    }
-
-    fn override_ref_for_dry_run(&self) -> &str {
-        match &self.request.kind {
-            Kind::Spawn(spawn) => spawn.config.image_ref.as_ref().map_or("", ImageRef::as_str),
-            Kind::Run(_) => "",
-        }
-    }
-
-    fn override_source_for_dry_run(&self) -> std::borrow::Cow<'_, str> {
-        match &self.request.kind {
-            Kind::Spawn(spawn) => spawn
-                .config
-                .image_source
-                .as_ref()
-                .map_or_else(|| "".into(), |source| source.path().to_string_lossy()),
-            Kind::Run(_) => "".into(),
-        }
-    }
-
-    fn override_source_kind_for_dry_run(&self) -> &str {
-        match &self.request.kind {
-            Kind::Spawn(spawn) => spawn
-                .config
-                .image_source
-                .as_ref()
-                .map_or("", |source| source.kind().as_str()),
-            Kind::Run(_) => "",
-        }
     }
 
     fn cpus_for_darwin(&self) -> u32 {
@@ -1644,19 +1498,6 @@ impl HostPodmanSocket {
             pairs.push((String::from("GC_HOST_BEADS"), beads.display().to_string()));
         }
         pairs
-    }
-
-    fn write_dry_run(
-        &self,
-        stdout: &mut impl Write,
-        workspace: &Path,
-        staged_beads: Option<&Path>,
-    ) -> Result<(), LaunchError> {
-        writeln!(stdout, "MOUNT=-v {}", self.mount().podman_arg())?;
-        for (key, value) in Self::env_pairs(workspace, staged_beads) {
-            writeln!(stdout, "ENV={key}={value}")?;
-        }
-        Ok(())
     }
 }
 
@@ -1865,19 +1706,6 @@ impl DarwinMounts {
         }
         Ok(())
     }
-
-    fn write_dry_run(&self, stdout: &mut impl Write) -> Result<(), LaunchError> {
-        if let Some(value) = self.dir_env() {
-            writeln!(stdout, "DIR_MOUNTS={value}")?;
-        }
-        if let Some(value) = self.file_env() {
-            writeln!(stdout, "FILE_MOUNTS={value}")?;
-        }
-        for mount in &self.mounts {
-            writeln!(stdout, "MOUNT=-v {}", mount.podman_arg())?;
-        }
-        Ok(())
-    }
 }
 
 impl ServicesState {
@@ -1927,7 +1755,6 @@ impl ServicesState {
             public_key.as_str()
         );
         self.project_cache = Some(ProjectCache {
-            url,
             host: sandbox_host,
             port: endpoint.port,
             nix_config,
@@ -1950,30 +1777,6 @@ impl ServicesState {
                 });
             }
             self.beads_tcp = Some(endpoint);
-        }
-        Ok(())
-    }
-
-    fn write_dry_run(&self, stdout: &mut impl Write) -> Result<(), LaunchError> {
-        if let Some(cache) = &self.project_cache {
-            writeln!(stdout, "PROJECT_CACHE_URL={}", cache.url)?;
-            writeln!(stdout, "ENV=WRIX_PROJECT_CACHE_HOST={}", cache.host)?;
-            writeln!(stdout, "ENV=WRIX_PROJECT_CACHE_PORT={}", cache.port)?;
-            writeln!(stdout, "ENV=NIX_CONFIG={}", cache.nix_config)?;
-        }
-        if let Some(beads) = &self.beads_socket {
-            writeln!(
-                stdout,
-                "ENV=BEADS_DOLT_SERVER_SOCKET={}",
-                beads.container_socket
-            )?;
-            if let Some(source) = &beads.mount_source {
-                writeln!(stdout, "MOUNT=-v {}:/run/wrix/dolt:rw", source.display())?;
-            }
-        }
-        if let Some(beads) = &self.beads_tcp {
-            writeln!(stdout, "ENV=BEADS_DOLT_SERVER_PORT={}", beads.port)?;
-            writeln!(stdout, "ENV=BEADS_DOLT_SERVER_HOST={}", beads.host)?;
         }
         Ok(())
     }
@@ -2260,11 +2063,6 @@ fn run_service_output(workspace: &Path, args: &[&str]) -> Result<Output, LaunchE
 }
 
 fn service_command() -> Result<PathBuf, LaunchError> {
-    if env_flag("WRIX_DRY_RUN")
-        && let Some(path) = env::var_os("WRIX_DRY_RUN_SERVICE_BIN")
-    {
-        return Ok(PathBuf::from(path));
-    }
     env::current_exe().map_err(LaunchError::from)
 }
 
