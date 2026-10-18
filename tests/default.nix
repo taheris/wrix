@@ -494,6 +494,7 @@ let
           builder-keys-structure
           wrix-rust-clippy
           wrix-rust-nextest
+          profile-config-parser-agreement
           image-builds
           ${if ciChecks ? private-nix-artifacts then "private-nix-artifacts" else ""}
           linux-pasta-port-forwarding-disabled
