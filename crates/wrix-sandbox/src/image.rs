@@ -982,7 +982,7 @@ fn container_image_in_use(
         .map_err(|source| Error::DescriptorJson { source })?;
     let target = target.as_str();
     let target = target.strip_prefix("docker.io/library/").unwrap_or(target);
-    let id = id.map(|value| value.as_str().trim_start_matches("sha256:"));
+    let id = id.map(content_digest_id).transpose()?.flatten();
     let containers = value.as_array().ok_or(Error::InvalidMetadata)?;
     let mut in_use = false;
     for container in containers {
@@ -996,10 +996,14 @@ fn container_image_in_use(
             });
         let descriptor = container
             .pointer("/configuration/image/descriptor/digest")
-            .and_then(Value::as_str)
-            .map(|digest| digest.trim_start_matches("sha256:"));
-        ImageId::parse(descriptor.ok_or(Error::InvalidMetadata)?)?;
-        in_use |= reference == Some(target) || id.is_some_and(|id| descriptor == Some(id));
+            .and_then(Value::as_str);
+        let descriptor = Digest::parse(descriptor.ok_or(Error::InvalidMetadata)?)?;
+        if reference == Some(target) {
+            in_use = true;
+        } else {
+            let id = id.as_ref().ok_or(Error::InvalidMetadata)?;
+            in_use |= &descriptor == id;
+        }
     }
     Ok(in_use)
 }
@@ -1034,7 +1038,10 @@ fn container_content_digest(value: &Value) -> Result<Option<Digest>, Error> {
     let Some(id) = value.pointer("/0/id").and_then(Value::as_str) else {
         return Ok(None);
     };
-    let id = ImageId::parse(id)?;
+    content_digest_id(&ImageId::parse(id)?)
+}
+
+fn content_digest_id(id: &ImageId) -> Result<Option<Digest>, Error> {
     let value = id.as_str();
     if value.starts_with("sha256:") {
         Ok(Some(Digest::parse(value)?))
@@ -1434,12 +1441,22 @@ mod test {
     }
 
     #[test]
+    fn apple_opaque_ids_cannot_prove_an_image_unused() {
+        let containers = serde_json::to_vec(&json!([{"configuration": {
+            "image": {"descriptor": {"digest": format!("sha256:{}", "a".repeat(64))}}
+        }}]))
+        .unwrap();
+        let id = ImageId::parse("opaque-runtime-id").unwrap();
+        assert!(container_image_in_use(&containers, &Target::Id(id.clone()), Some(&id)).is_err());
+    }
+
+    #[test]
     fn apple_container_list_preserves_images_used_by_existing_containers() {
         let output = serde_json::to_vec(&json!([{
             "configuration": {
                 "image": {
                     "descriptor": {
-                        "digest": "sha256:index-digest"
+                        "digest": format!("sha256:{}", "c".repeat(64))
                     },
                     "reference": "docker.io/library/wrix-service:abc123"
                 }
@@ -1454,7 +1471,7 @@ mod test {
                     ImageRef::parse(&format!("untagged@sha256:{}", "a".repeat(64)))
                         .expect("valid reference")
                 ),
-                Some(&ImageId::parse("index-digest").expect("valid ID"))
+                Some(&ImageId::parse(&"c".repeat(64)).expect("valid ID"))
             )
             .expect("parse container list")
         );
@@ -1472,7 +1489,7 @@ mod test {
             !container_image_in_use(
                 &output,
                 &Target::Reference(ImageRef::parse("wrix-service:stale").expect("valid reference")),
-                Some(&ImageId::parse("stale-index").expect("valid ID"))
+                Some(&ImageId::parse(&"d".repeat(64)).expect("valid ID"))
             )
             .expect("parse container list")
         );
