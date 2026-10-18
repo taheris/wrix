@@ -1,3 +1,9 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+: <<'RUBRIC'
+
 # Security, cache and proxy trust review
 
 These are documentation rubrics, not evidence of working runtime isolation,
@@ -12,8 +18,7 @@ replace them.
 ## Shared Service Boundary
 
 ```bash
-set -euo pipefail
-
+RUBRIC
 shared-service-boundary() {
   judge_files "specs/security.md" "specs/cache.md" "specs/services.md" \
     "specs/profiles.md" "specs/proxy.md" "docs/architecture.md"
@@ -25,13 +30,13 @@ shared-service-boundary() {
 5. Full agent/Cargo runtimes retain existing worker boundaries. No shared parent Nix daemon/store, physical-host store/daemon mount, containerd/nix-snapshotter migration, full worker-runtime migration or new compiler-only isolation is implied.
 6. The shared-service discussion preserves existing evidence limits: default-off, operator-enabled component diagnostics are separate and non-authoritative, not automatically indexed or aggregated as audit content; components own their diagnostic contracts and operators own destination/access/retention/deletion. Execution, conversation and focus identities remain distinct; incomplete completion is unknown, transcripts/codemode are non-exhaustive evidence, and missing evidence does not prove no action. No new collector, credential broker, automatic recovery or adversarial-agent detection is promised."
 }
+: <<'RUBRIC'
 ```
 
 ## Cache Sharing Authority
 
 ```bash
-set -euo pipefail
-
+RUBRIC
 cache-sharing-authority() {
   judge_files "specs/security.md" "specs/cache.md" "specs/profiles.md" \
     "specs/services.md" "specs/proxy.md" "docs/architecture.md"
@@ -44,13 +49,13 @@ cache-sharing-authority() {
 6. Sharing off is coarse, all-applicable-cache, fresh private writable storage for that launch with local compilation, no shared pool reads/writes/prewarm or host fallback. It cannot recall prior shared bytes, sanitize arbitrary workspace/explicit mounts, or provide selective-source privacy or private-code tracking into compiled artifacts. Private tool mode is not protection against compromised service-side code. Tool sharing does not broaden Celler views, enable worker Nix uploads, share raw Cargo targets or persist guest Nix stores/databases.
 7. Repository tool-sharing policy is an editable default, unlike host-controlled Celler audience authority, not an immutable host privacy ceiling. Explicit invocation selection wins in both directions without policy writes or another environment policy channel. Workspace writers can change future inherited defaults. The --no-cache tool selection does not disable Nix/Celler integration."
 }
+: <<'RUBRIC'
 ```
 
 ## Proxy Enforcement Limits
 
 ```bash
-set -euo pipefail
-
+RUBRIC
 proxy-enforcement-limits() {
   judge_files "specs/security.md" "specs/proxy.md" "specs/profiles.md" \
     "specs/sandbox.md" "docs/architecture.md"
@@ -60,4 +65,7 @@ proxy-enforcement-limits() {
 3. CONNECT is opaque transport without TLS termination, substituted certificates, CA injection or payload inspection. Requested authority admission is not enforcement of encrypted SNI/HTTP application identity, URL paths, repository identity or content. Shared-IP virtual hosting and exfiltration through permitted services remain possible; allowlisting is not exfiltration-proof, even with authentication and firewall isolation. No stronger claim elsewhere in the reviewed documentation negates these limits.
 4. Proxy connection-owned grant loss/revocation is separate from cache native bearer expiry and from agent supervision/audit completion. It does not prove the agent stopped or repair an incomplete execution record. No TLS inspector, provider credential broker, diagnostic collector, runtime migration or expanded authoritative audit surface is introduced to claim these guarantees."
 }
+: <<'RUBRIC'
 ```
+
+RUBRIC
