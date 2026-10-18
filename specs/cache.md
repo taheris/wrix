@@ -1410,7 +1410,7 @@ valid unchanged key through the Celler publication/signing path.
   accepted cohosted compiler execution boundary, including effects on Celler
   signing state and host-cache integrity while private issuer files stay
   unmounted.
-  [judge?](../tests/judges/security-proxy-trust.md#shared-service-boundary)
+  [judge](../tests/judges/security-proxy-trust.md#shared-service-boundary)
 
 - Publication selects the authorized Celler namespace and server signing,
   without granting clients private keys or using a flat-file destination.

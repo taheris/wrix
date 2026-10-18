@@ -606,7 +606,7 @@ section is a reference index only.
   a universal security improvement. It distinguishes service versus worker
   resource budgets, restricted-Rust local compilation and the trusted-service
   assumption; private tool mode is not protection from privileged service code.
-  [judge?](../tests/judges/security-proxy-trust.md#shared-service-boundary)
+  [judge](../tests/judges/security-proxy-trust.md#shared-service-boundary)
 - Cache trust documentation distinguishes the common approved-public audience
   from canonical private contents, keeps authority outside mutable repository
   policy/agent requests, and states native one-day sandbox/seven-day host bearer
@@ -620,11 +620,11 @@ section is a reference index only.
   caller mounts or selective-source privacy. It treats repository tool-sharing
   policy as an editable default, with explicit invocation choice taking
   precedence in both directions without policy writes.
-  [judge?](../tests/judges/security-proxy-trust.md#cache-sharing-authority)
+  [judge](../tests/judges/security-proxy-trust.md#cache-sharing-authority)
 - The allowlist rubric accepts credential/credentialless leakage risks without
   claiming encrypted identity/content enforcement or prevention of exfiltration
   through approved services.
-  [judge?](../tests/judges/security-proxy-trust.md#proxy-enforcement-limits)
+  [judge](../tests/judges/security-proxy-trust.md#proxy-enforcement-limits)
 
 ## Requirements
 
