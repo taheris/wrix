@@ -27,7 +27,7 @@ let
   profile = import ./profile { inherit sandbox; };
 
   rustCli = import ./services/rust.nix {
-    inherit pkgs;
+    inherit pkgs serviceImage;
     rustProfile = sandbox.profiles.rust;
     prekDevShellHook =
       (devshell.mkDevShell {

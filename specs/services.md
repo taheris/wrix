@@ -1039,7 +1039,7 @@ tenant or component compromise/fault isolation.
   binding, not project launch data, cwd, executable/store-path hashes, version
   strings, recorded selection or ambient image defaults; equivalent bindings
   reuse the same compatible target despite different package paths.
-  [test?](../crates/wrix-service/tests/generation_handoff.rs::update_target_uses_explicit_package_image_binding)
+  [test](../crates/wrix-service/tests/generation_handoff.rs::update_target_uses_explicit_package_image_binding)
 - Actual Nix-packaged host Wrix supplies its service-image binding independently
   of both projects' generated launch configurations and installation directory;
   production update argv does not adopt either project's image overrides or

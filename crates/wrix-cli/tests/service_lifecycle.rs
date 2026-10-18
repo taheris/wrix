@@ -1,4 +1,6 @@
 mod common;
+#[path = "common/service_binding.rs"]
+mod service_binding;
 
 use std::{
     fs,
@@ -16,6 +18,9 @@ const APPLE_RUNTIME: &str = r#"#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >>"${WRIX_TEST_RUNTIME_LOG:?}"
 case "$*" in
+  'image list --format json') printf '[{"configuration":{"name":"wrix-service:test"},"id":"sha256:%s"}]\n' "${WRIX_TEST_DIGEST:?}"; exit 0 ;;
+  'image inspect '*) printf '[{"id":"sha256:%s","digest":"sha256:%s"}]\n' "${WRIX_TEST_DIGEST:?}" "$WRIX_TEST_DIGEST"; exit 0 ;;
+  'image tag '*) exit 0 ;;
   'list --all --format json') ;;
   "inspect ${WRIX_TEST_SERVICE_NAME:?}") ;;
   "rm -f ${WRIX_TEST_SERVICE_NAME:?}")
@@ -79,6 +84,8 @@ impl Fixture {
         initialize_repository(&workspace)?;
         fs::write(&runtime, APPLE_RUNTIME)?;
         set_mode(&runtime, 0o755)?;
+        service_binding::create(root.path(), &root.path().join("bin"), "docker-archive")?;
+        fs::copy(&runtime, root.path().join("bin/container"))?;
         let mut fixture = Self {
             root,
             workspace,
@@ -141,6 +148,11 @@ impl Fixture {
         let mut command =
             wrix_command_with_path(&self.workspace, &[&self.root.path().join("bin")])?;
         command
+            .env(
+                "WRIX_SERVICE_PACKAGE_BINDING",
+                self.root.path().join("binding.json"),
+            )
+            .env("WRIX_TEST_DIGEST", "a".repeat(64))
             .env("HOME", self.root.path().join("home"))
             .env("XDG_STATE_HOME", self.root.path().join("state"))
             .env("XDG_CACHE_HOME", self.root.path().join("cache"))

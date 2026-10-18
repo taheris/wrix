@@ -2,11 +2,12 @@
   pkgs,
   rustProfile,
   prekDevShellHook ? null,
+  serviceImage ? null,
 }:
 
 let
   inherit (builtins) concatStringsSep;
-  inherit (pkgs.lib) makeBinPath removePrefix;
+  inherit (pkgs.lib) makeBinPath removePrefix optionals;
 
   workspace = rustProfile.buildPackage {
     src = ../..;
@@ -52,21 +53,40 @@ let
   prekHooksBundle = import ../prek/bundle.nix { inherit pkgs; };
   prekRunner = import ../prek/runner.nix { inherit pkgs; };
 
-  wrixPackage = mkWrappedBinaryPackage "wrix" [
-    "--set"
-    "WRIX_PREK_HOOKS"
-    "${prekHooksBundle}"
-    "--set"
-    "WRIX_PREK_RUNNER"
-    "${prekRunner}/bin/wrix-prek"
-    "--prefix"
-    "PATH"
-    ":"
-    "${makeBinPath [
-      pkgs.coreutils
-      pkgs.dolt
-    ]}"
-  ];
+  serviceBinding = import ./binding.nix {
+    inherit pkgs;
+    image = serviceImage;
+  };
+
+  wrixPackage = mkWrappedBinaryPackage "wrix" (
+    [
+      "--set"
+      "WRIX_PREK_HOOKS"
+      "${prekHooksBundle}"
+      "--set"
+      "WRIX_PREK_RUNNER"
+      "${prekRunner}/bin/wrix-prek"
+      "--prefix"
+      "PATH"
+      ":"
+      "${makeBinPath [
+        pkgs.coreutils
+        pkgs.dolt
+      ]}"
+    ]
+    ++ optionals (serviceImage != null) [
+      "--set"
+      "WRIX_SERVICE_PACKAGE_BINDING"
+      "${serviceBinding}"
+      "--prefix"
+      "PATH"
+      ":"
+      "${makeBinPath [
+        pkgs.nix
+        pkgs.skopeo
+      ]}"
+    ]
+  );
 
   fixtures = import ../../tests/prek/native-fixtures.nix {
     inherit pkgs;
@@ -137,6 +157,7 @@ in
   testFixtures = fixtures.bundle;
   package = workspace.bin;
   wrix = wrixPackage;
+  binding = serviceBinding;
   focusNotification = mkBinaryPackage "wrix-focus-notification";
   cacheHook = mkBinaryPackage "wrix-cache-hook";
   cachePublish = mkBinaryPackage "wrix-cache-publish";

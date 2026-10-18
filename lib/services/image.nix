@@ -128,6 +128,7 @@ in
 rawImage
 // {
   digest = digestFile;
+  digestDerivation = if asTarball then digestFile else ociLayout;
   inherit labels;
   ref = "${refPrefix}${imageName}:${imageTag}";
   source = imageSource;

@@ -1,4 +1,6 @@
 mod common;
+#[path = "common/service_binding.rs"]
+mod service_binding;
 
 use std::{fs, path::PathBuf, process::Command};
 
@@ -26,6 +28,8 @@ impl Fixture {
             fs::write(&path, include_str!("fixtures/service-runtime.sh"))?;
             set_mode(&path, 0o755)?;
         }
+        service_binding::create(root.path(), &bin, "nix-descriptor")?;
+        fs::write(root.path().join("image"), "installed")?;
         Ok(Self {
             root,
             workspace,
@@ -36,6 +40,10 @@ impl Fixture {
     fn command(&self, runtime: &str) -> TestResult<Command> {
         let mut command = wrix_command_with_path(&self.workspace, &[&self.bin])?;
         command
+            .env(
+                "WRIX_SERVICE_PACKAGE_BINDING",
+                self.root.path().join("binding.json"),
+            )
             .env("HOME", self.root.path().join("home"))
             .env("XDG_STATE_HOME", self.root.path().join("state"))
             .env("XDG_CACHE_HOME", self.root.path().join("cache"))
@@ -83,6 +91,48 @@ impl Fixture {
         assert!(output.status.success(), "{}", output.stderr);
         Ok(serde_json::from_str(&output.stdout)?)
     }
+}
+
+#[test]
+fn service_start_rejects_unbound_ambient_image_substitutes() -> TestResult {
+    let fixture = Fixture::new()?;
+    let output = run_command(
+        fixture
+            .command("podman")?
+            .args(["service", "start"])
+            .env("WRIX_SERVICE_ALLOW_TEMP_CACHE", "1")
+            .env_remove("WRIX_SERVICE_PACKAGE_BINDING")
+            .env("WRIX_SERVICE_IMAGE", "project:substitute"),
+    )?;
+    assert!(!output.status.success());
+    assert!(
+        output.stderr.contains("no service-image binding"),
+        "{}",
+        output.stderr
+    );
+    assert!(!fixture.root.path().join("calls").exists());
+    assert!(!fixture.root.path().join("run.argv").exists());
+    Ok(())
+}
+
+#[test]
+fn service_start_rejects_conflicting_ambient_image_before_runtime_access() -> TestResult {
+    let fixture = Fixture::new()?;
+    let output = run_command(
+        fixture
+            .command("podman")?
+            .args(["service", "start"])
+            .env("WRIX_SERVICE_ALLOW_TEMP_CACHE", "1")
+            .env("WRIX_SERVICE_IMAGE", "project:substitute"),
+    )?;
+    assert!(!output.status.success());
+    assert!(
+        output.stderr.contains("conflicts with"),
+        "{}",
+        output.stderr
+    );
+    assert!(!fixture.root.path().join("calls").exists());
+    Ok(())
 }
 
 #[test]
@@ -281,7 +331,8 @@ fn service_start_uses_shared_image_digest_preflight_without_pruning() -> TestRes
             let digest = format!("sha256:{}", "a".repeat(64));
             if installed {
                 fs::write(fixture.root.path().join("image"), "installed image")?;
-            } else if runtime == "podman" {
+            }
+            if runtime == "podman" {
                 fs::create_dir(&layout)?;
                 fs::write(
                     &source,
@@ -293,18 +344,30 @@ fn service_start_uses_shared_image_digest_preflight_without_pruning() -> TestRes
             } else {
                 fixture.write_archive(&source)?;
             }
+            let digest_path = fixture.root.path().join("digest");
+            fs::write(&digest_path, &digest)?;
+            service_binding::write(
+                fixture.root.path(),
+                &fixture.bin,
+                kind,
+                &source,
+                &digest_path,
+            )?;
+            if !installed {
+                fs::remove_file(fixture.root.path().join("image"))?;
+            }
             let output = run_command(
                 fixture
                     .command(runtime)?
                     .args(["service", "start"])
                     .env("WRIX_SERVICE_ALLOW_TEMP_CACHE", "1")
-                    .env("WRIX_SERVICE_IMAGE", "wrix-service:test")
-                    .env("WRIX_SERVICE_IMAGE_SOURCE", &source)
-                    .env("WRIX_SERVICE_IMAGE_SOURCE_KIND", kind)
-                    .env("WRIX_SERVICE_IMAGE_DIGEST", &digest),
+                    .env(
+                        "WRIX_SERVICE_PACKAGE_BINDING",
+                        fixture.root.path().join("binding.json"),
+                    ),
             )?;
             assert!(output.status.success(), "{}", output.stderr);
-            assert_eq!(source.exists(), !installed);
+            assert!(source.exists());
             let calls = String::from_utf8(fs::read(fixture.root.path().join("calls"))?)?;
             let args = calls.split('\0').collect::<Vec<_>>();
             assert_eq!(args.contains(&"copy"), !installed);
@@ -401,6 +464,7 @@ fn image_copy_fixture_conforms_to_raw_inspection_and_archive_output() -> TestRes
 fn service_runtime_fixture_conforms_to_missing_running_and_image_contracts() -> TestResult {
     for runtime in ["podman", "container"] {
         let fixture = Fixture::new()?;
+        fs::remove_file(fixture.root.path().join("image"))?;
         let environment = fixture.command(runtime)?;
         let invoke = |args: &[&str]| -> TestResult<std::process::Output> {
             Ok(Command::new(fixture.bin.join(runtime))

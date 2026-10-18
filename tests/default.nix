@@ -252,6 +252,7 @@ let
     // piMcpTests.checks
     // {
       builder-vmnet-route = builderRouteTest;
+      host-service-package-binding = import ./services/package-binding.nix { inherit pkgs wrix; };
       rust-source-fixtures = import ./services/rust-source.nix {
         inherit pkgs;
         inherit (wrix) rustPackage;

@@ -1,4 +1,5 @@
 mod apple;
+pub mod binding;
 mod dolt;
 mod managed;
 mod supervisor;
@@ -27,8 +28,7 @@ use wrix_core::{
     path::{ContainerName, Workspace, WorkspaceHash},
 };
 use wrix_sandbox::image::{
-    self as runtime_image, CommandStore, Digest, ImageRef, InstallRequest, Runtime as ImageRuntime,
-    Source, SourceKind,
+    self as runtime_image, CommandStore, ImageRef, InstallRequest, Runtime as ImageRuntime,
 };
 
 const SCHEMA_VERSION: u8 = 1;
@@ -50,6 +50,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, Display, ThisError)]
 pub enum Error {
+    /// host package service-image binding failed: {0}
+    Binding(#[from] binding::Error),
     /// service lifecycle I/O failed
     Io { source: io::Error },
     /// managed Beads configuration failed: {source}
@@ -617,6 +619,9 @@ pub fn start(cache_mode: CacheMode) -> Result<Status> {
         managed::configure(plan.workspace().canonical_path())?;
     }
     let runtime = Runtime::from_env()?;
+    if plan.has_services() {
+        runtime.binding.as_ref().ok_or(binding::Error::Missing)?;
+    }
     if plan.has_services() && runtime.reconcile_legacy_containers(&plan)? {
         plan = Plan::for_current_dir(cache_mode)?;
     }
@@ -921,12 +926,6 @@ enum RuntimeKind {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct ImageSource {
-    source: Source,
-    digest: Option<Digest>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
 struct ContainerInfo {
     name: String,
     kind: Option<String>,
@@ -938,8 +937,7 @@ struct ContainerInfo {
 struct Runtime {
     binary: String,
     kind: RuntimeKind,
-    image: ImageRef,
-    image_source: Option<ImageSource>,
+    binding: Option<binding::Candidate>,
 }
 
 impl RuntimeKind {
@@ -953,59 +951,6 @@ impl RuntimeKind {
         } else {
             Self::Podman
         }
-    }
-}
-
-fn parse_image_source_kind(input: &str) -> Result<SourceKind> {
-    match input {
-        "nix-descriptor" => Ok(SourceKind::NixDescriptor),
-        "docker-archive" => Ok(SourceKind::DockerArchive),
-        other => Err(Error::UnknownImageSourceKind {
-            value: other.to_owned(),
-        }),
-    }
-}
-
-impl ImageSource {
-    fn from_env(path: PathBuf) -> Result<Self> {
-        let kind = match env::var("WRIX_SERVICE_IMAGE_SOURCE_KIND") {
-            Ok(value) => parse_image_source_kind(&value)?,
-            Err(env::VarError::NotPresent) => {
-                return Err(Error::MissingImageSourceKind);
-            }
-            Err(env::VarError::NotUnicode(_)) => {
-                return Err(Error::InvalidUnicodeEnvironment {
-                    name: "WRIX_SERVICE_IMAGE_SOURCE_KIND",
-                });
-            }
-        };
-        let digest = match env::var("WRIX_SERVICE_IMAGE_DIGEST") {
-            Ok(value) if value.is_empty() => None,
-            Ok(value) if value.starts_with("sha256:") => {
-                Some(Digest::parse(&value).map_err(|_source| Error::InvalidImageDigest { value })?)
-            }
-            Ok(value) => {
-                let path = Path::new(&value);
-                if !path.is_file() {
-                    return Err(Error::MissingImageDigestPath { path: value });
-                }
-                let digest = fs::read_to_string(path)?.trim().to_owned();
-                Some(
-                    Digest::parse(&digest)
-                        .map_err(|_source| Error::InvalidImageDigest { value: digest })?,
-                )
-            }
-            Err(env::VarError::NotPresent) => None,
-            Err(env::VarError::NotUnicode(_)) => {
-                return Err(Error::InvalidUnicodeEnvironment {
-                    name: "WRIX_SERVICE_IMAGE_DIGEST",
-                });
-            }
-        };
-        Ok(Self {
-            source: Source::parse(path, kind).map_err(|source| Error::ImageSource { source })?,
-            digest,
-        })
     }
 }
 
@@ -1046,21 +991,13 @@ impl ContainerInfo {
 impl Runtime {
     fn from_env() -> Result<Self> {
         let binary = env::var("WRIX_CONTAINER_RUNTIME").unwrap_or_else(|_| default_runtime());
-        let image_source = env::var_os("WRIX_SERVICE_IMAGE_SOURCE")
-            .map(PathBuf::from)
-            .map(ImageSource::from_env)
+        let binding = env::var_os("WRIX_SERVICE_PACKAGE_BINDING")
+            .map(|_| binding::Candidate::from_env())
             .transpose()?;
         Ok(Self {
             kind: RuntimeKind::for_binary(&binary),
             binary,
-            image: ImageRef::parse(
-                &env::var("WRIX_SERVICE_IMAGE")
-                    .unwrap_or_else(|_| String::from("localhost/wrix-service:latest")),
-            )
-            .map_err(|source| Error::Image {
-                source: source.into(),
-            })?,
-            image_source,
+            binding,
         })
     }
 
@@ -1105,7 +1042,7 @@ impl Runtime {
         }
         self.reconcile_legacy_containers(plan)?;
         self.ensure_plan_ports_available(plan)?;
-        self.ensure_image()?;
+        let image = self.ensure_image(plan)?;
         let mut command = Command::new(&self.binary);
         command
             .arg("run")
@@ -1193,7 +1130,7 @@ impl Runtime {
             }
         }
         command
-            .arg(self.image.as_str())
+            .arg(image.as_str())
             .arg("sh")
             .arg("-c")
             .arg(container_command(plan))
@@ -1507,31 +1444,40 @@ impl Runtime {
         }
     }
 
-    fn ensure_image(&self) -> Result<()> {
-        let Some(source) = &self.image_source else {
-            return Ok(());
-        };
+    fn ensure_image(&self, plan: &Plan) -> Result<&ImageRef> {
+        let candidate = self.binding.as_ref().ok_or(binding::Error::Missing)?;
+        let root = plan
+            .paths()
+            .state_base()
+            .and_then(Path::parent)
+            .ok_or(binding::Error::Metadata("missing host state root"))?;
+        let roots = root.join("service-image-roots");
+        let digest = candidate.realize(&roots)?;
         let runtime = match self.kind {
             RuntimeKind::Podman => ImageRuntime::Podman,
             RuntimeKind::Container => ImageRuntime::Container,
         };
-        let source_path = source.source.path().display().to_string();
         let mut store = CommandStore;
         runtime_image::install(
             &mut store,
-            &InstallRequest::new(runtime, &self.image, &source.source, source.digest.as_ref())?,
+            &InstallRequest::new(
+                runtime,
+                candidate.image(),
+                candidate.source(),
+                Some(&digest),
+            )?,
         )?;
-        if self.image_exists()? {
-            Ok(())
+        if self.image_exists(candidate.image())? {
+            Ok(candidate.image())
         } else {
             Err(Error::InstalledImageUnavailable {
-                path: source_path,
-                image: self.image.as_str().to_owned(),
+                path: candidate.source().path().display().to_string(),
+                image: candidate.image().as_str().to_owned(),
             })
         }
     }
 
-    fn image_exists(&self) -> Result<bool> {
+    fn image_exists(&self, image: &ImageRef) -> Result<bool> {
         let mut command = Command::new(&self.binary);
         command.arg("image");
         match self.kind {
@@ -1543,7 +1489,7 @@ impl Runtime {
             }
         }
         let status = command
-            .arg(self.image.as_str())
+            .arg(image.as_str())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -1984,10 +1930,9 @@ fn push_unicode_escape(output: &mut String, value: char) {
 mod test {
     use super::{
         DoltTransport, Plan, RuntimeKind, bind_port_from_runtime_error,
-        is_missing_container_remove_error, parse_image_source_kind, parse_published_ports,
+        is_missing_container_remove_error, parse_published_ports,
     };
     use wrix_core::path::Workspace;
-    use wrix_sandbox::image::SourceKind;
 
     #[test]
     fn service_plan_retains_the_shared_yaml_branch() {
@@ -2087,19 +2032,6 @@ mod test {
         assert!(is_missing_container_remove_error(
             "Error: no such object: \"admiring_albattani\""
         ));
-    }
-
-    #[test]
-    fn service_image_source_kind_parser_accepts_contract_values() {
-        assert_eq!(
-            parse_image_source_kind("nix-descriptor").unwrap(),
-            SourceKind::NixDescriptor
-        );
-        assert_eq!(
-            parse_image_source_kind("docker-archive").unwrap(),
-            SourceKind::DockerArchive
-        );
-        assert!(parse_image_source_kind("tarball").is_err());
     }
 
     #[test]
