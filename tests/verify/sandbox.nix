@@ -61,6 +61,14 @@ in
 
   "sandbox.filesystem-isolation" = live (sandboxScriptAll "filesystem-isolation");
 
+  "sandbox.mount-controls-podman" = linuxLive (sandboxScript "filesystem-isolation" "podman");
+
+  "sandbox.mount-controls-krun" = requiring linux [ "container-runtime" "kvm" ] (
+    sandboxScript "filesystem-isolation" "krun"
+  );
+
+  "sandbox.mount-controls-apple" = darwinLive (sandboxScript "filesystem-isolation" "apple");
+
   "sandbox.linux-container-starts" = linuxLive (containerStarts "test_linux_container_starts");
 
   "sandbox.linux-microvm-missing-kvm" = requiring linux [ ] (
