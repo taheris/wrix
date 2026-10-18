@@ -560,7 +560,7 @@ without introducing a reciprocal flake dependency.
   [judge](../tests/judges/profiles.sh#test_base_profile_functional)
 - Base profile exposes `python3` on both image and host package surfaces for
   stdlib-only ad hoc scripting, while `uv`, `ruff`, `ty`, `UV_CACHE_DIR`, and
-  the uv cache mount remain Python-profile-only.
+  managed uv backing remain Python-profile-only.
   [check](verify:profiles.base-python-boundary)
 - Rust profile can compile and run a Cargo project with the toolchain and host
   package surface it exposes [check](verify:profiles.rust-compile-run)

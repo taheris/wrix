@@ -152,6 +152,44 @@ let
         ) "profiles, sandboxes, and devshells must disable Beads metrics"
       );
 
+      "profiles.base-python-boundary" = opaque (
+        let
+          inherit (wlib.profiles) base rust python;
+          count =
+            name: packages:
+            builtins.length (builtins.filter (package: hasInfix name (package.pname or package.name)) packages);
+          pythonTools = [
+            "uv"
+            "ruff"
+            "ty"
+          ];
+          surfaces = [
+            "packages"
+            "hostPackages"
+          ];
+        in
+        ensure (
+          all (
+            surface:
+            count "python3" base.${surface} > 0
+            && count "python3" python.${surface} == count "python3" base.${surface}
+          ) (surfaces ++ [ "corePackages" ])
+          &&
+            all (profile: all (surface: all (name: count name profile.${surface} == 0) pythonTools) surfaces)
+              [
+                base
+                rust
+              ]
+          && all (surface: all (name: count name python.${surface} > 0) pythonTools) surfaces
+          && !(hasAttr "UV_CACHE_DIR" base.env)
+          && !(hasAttr "UV_CACHE_DIR" rust.env)
+          && python.env.UV_CACHE_DIR == "/home/wrix/.cache/uv"
+          && !(builtins.elem "uv" base.toolCaches)
+          && !(builtins.elem "uv" rust.toolCaches)
+          && python.toolCaches == [ "uv" ]
+        ) "base must expose Python without Python-profile tools or managed uv backing"
+      );
+
       "profiles.tool-cache-boundary" = opaque (
         let
           inherit (wlib.profiles) base rust python;

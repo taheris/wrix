@@ -13,7 +13,7 @@
 #
 #   test_base_python_boundary
 #     Base exposes python3 on image and host surfaces, while uv/ruff/ty,
-#     UV_CACHE_DIR, and the uv cache mount remain scoped to the Python profile.
+#     UV_CACHE_DIR, and managed uv backing remain scoped to the Python profile.
 #
 #   test_extra_not_in_core
 #     deriveProfile appends extension packages to packages without changing
@@ -217,88 +217,7 @@ test_core_membership() {
 
 # ============================================================================
 test_base_python_boundary() {
-  local result
-  result=$(eval_profile_json '
-    let
-      base = wlib.profiles.base;
-      rust = wlib.profiles.rust;
-      python = wlib.profiles.python;
-      uvMounts = prof: builtins.filter (m: (m.dest or "") == "/home/wrix/.cache/uv") (prof.mounts or [ ]);
-      hasUvCacheEnv = prof: prof.env ? UV_CACHE_DIR;
-    in {
-      baseImagePython = countPackage "python3" base.packages;
-      baseCorePython = countPackage "python3" base.corePackages;
-      baseHostPython = countPackage "python3" base.hostPackages;
-      pythonImagePython = countPackage "python3" python.packages;
-      pythonCorePython = countPackage "python3" python.corePackages;
-      pythonHostPython = countPackage "python3" python.hostPackages;
-      baseImageUv = hasPackage "uv" base.packages;
-      baseHostUv = hasPackage "uv" base.hostPackages;
-      baseImageRuff = hasPackage "ruff" base.packages;
-      baseHostRuff = hasPackage "ruff" base.hostPackages;
-      baseImageTy = hasPackage "ty" base.packages;
-      baseHostTy = hasPackage "ty" base.hostPackages;
-      rustImageUv = hasPackage "uv" rust.packages;
-      rustHostUv = hasPackage "uv" rust.hostPackages;
-      rustImageRuff = hasPackage "ruff" rust.packages;
-      rustHostRuff = hasPackage "ruff" rust.hostPackages;
-      rustImageTy = hasPackage "ty" rust.packages;
-      rustHostTy = hasPackage "ty" rust.hostPackages;
-      pythonImageUv = hasPackage "uv" python.packages;
-      pythonHostUv = hasPackage "uv" python.hostPackages;
-      pythonImageRuff = hasPackage "ruff" python.packages;
-      pythonHostRuff = hasPackage "ruff" python.hostPackages;
-      pythonImageTy = hasPackage "ty" python.packages;
-      pythonHostTy = hasPackage "ty" python.hostPackages;
-      baseEnvUvCache = hasUvCacheEnv base;
-      rustEnvUvCache = hasUvCacheEnv rust;
-      pythonEnvUvCache = python.env.UV_CACHE_DIR or "";
-      baseUvMountCount = builtins.length (uvMounts base);
-      rustUvMountCount = builtins.length (uvMounts rust);
-      pythonUvMountCount = builtins.length (uvMounts python);
-      pythonUvMountWritable =
-        builtins.length (uvMounts python) == 1
-        && builtins.all (m: (m.mode or "") == "rw" && (m.optional or false)) (uvMounts python);
-    }
-  ')
-
-  local base_image_python base_core_python base_host_python
-  local python_image_python python_core_python python_host_python
-  base_image_python=$(json_field "$result" baseImagePython)
-  base_core_python=$(json_field "$result" baseCorePython)
-  base_host_python=$(json_field "$result" baseHostPython)
-  python_image_python=$(json_field "$result" pythonImagePython)
-  python_core_python=$(json_field "$result" pythonCorePython)
-  python_host_python=$(json_field "$result" pythonHostPython)
-
-  [[ "$base_image_python" -gt 0 ]] || fail "base packages should expose python3"
-  [[ "$base_core_python" -gt 0 ]] || fail "base corePackages should expose python3"
-  [[ "$base_host_python" -gt 0 ]] || fail "base hostPackages should expose python3"
-  [[ "$python_image_python" -eq "$base_image_python" ]] || fail "python profile packages should inherit python3 without adding a duplicate"
-  [[ "$python_core_python" -eq "$base_core_python" ]] || fail "python profile corePackages should inherit python3 without adding a duplicate"
-  [[ "$python_host_python" -eq "$base_host_python" ]] || fail "python profile hostPackages should inherit python3 without adding a duplicate"
-
-  jq -e '
-    (.baseImageUv | not) and (.baseHostUv | not) and
-    (.baseImageRuff | not) and (.baseHostRuff | not) and
-    (.baseImageTy | not) and (.baseHostTy | not) and
-    (.rustImageUv | not) and (.rustHostUv | not) and
-    (.rustImageRuff | not) and (.rustHostRuff | not) and
-    (.rustImageTy | not) and (.rustHostTy | not)
-  ' <<<"$result" >/dev/null || fail "uv, ruff, and ty should be scoped to the Python profile"
-  jq -e '
-    .pythonImageUv and .pythonHostUv and
-    .pythonImageRuff and .pythonHostRuff and
-    .pythonImageTy and .pythonHostTy
-  ' <<<"$result" >/dev/null || fail "python profile should expose uv, ruff, and ty on image and host surfaces"
-
-  [[ "$(json_field "$result" baseEnvUvCache)" == "false" ]] || fail "base env should not set UV_CACHE_DIR"
-  [[ "$(json_field "$result" rustEnvUvCache)" == "false" ]] || fail "rust env should not set UV_CACHE_DIR"
-  [[ "$(json_field "$result" pythonEnvUvCache)" == "/home/wrix/.cache/uv" ]] || fail "python env should set UV_CACHE_DIR to the uv cache path"
-  [[ "$(json_field "$result" baseUvMountCount)" -eq 0 ]] || fail "base should not mount the uv cache"
-  [[ "$(json_field "$result" rustUvMountCount)" -eq 0 ]] || fail "rust should not mount the uv cache"
-  [[ "$(json_field "$result" pythonUvMountCount)" -eq 1 ]] || fail "python should mount the uv cache exactly once"
-  [[ "$(json_field "$result" pythonUvMountWritable)" == "true" ]] || fail "python uv cache mount should be writable and optional"
+  nix run "$REPO_ROOT#verify" -- profiles.base-python-boundary
 }
 
 # ============================================================================

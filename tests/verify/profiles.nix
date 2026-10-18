@@ -83,7 +83,7 @@ in
   "devshell.rust-host-env" = mkDevShell "test_rust_host_env_uses_host_packages";
   "devshell.shellhook-order" = mkDevShell "test_shellhook_order";
 
-  "profiles.base-python-boundary" = corePackages "test_base_python_boundary";
+  "profiles.base-python-boundary" = nixEval "profiles.base-python-boundary";
   "profiles.beads-metrics-disabled" = nixEval "profiles.beads-metrics-disabled";
   "profiles.tool-cache-boundary" = nixEval "profiles.tool-cache-boundary";
   "profiles.core-membership" = corePackages "test_core_membership";
