@@ -47,6 +47,12 @@ interfaces so Apple's port forwarding can reach it. Password authentication is
 disabled, and the SSH key is reachable only by the host user who started the
 builder.
 
+Network selection follows
+[Darwin Shared Network](sandbox.md#darwin-shared-network). Routine
+startup/connection uses the owned network and reports conflicts without
+privileged route repair. Network preparation cannot stop a serving deployment or
+silently change builder/service coexistence policy.
+
 ### Image-source contract
 
 The `wrix-builder` bootstrap image follows the support-image metadata and label
@@ -56,14 +62,14 @@ spec owns the lifecycle and persistent-store seeding.
 
 ## CLI Surface
 
-| Command                  | Description                                 |
-| ------------------------ | ------------------------------------------- |
-| `wrix-builder start`     | Start builder container                     |
-| `wrix-builder stop`      | Stop and remove container                   |
-| `wrix-builder status`    | Show builder state                          |
-| `wrix-builder ssh [cmd]` | Connect or run remote command               |
-| `wrix-builder setup`     | Configure routes and SSH known_hosts (sudo) |
-| `wrix-builder config`    | Print nix-darwin configuration snippet      |
+| Command                  | Description                                        |
+| ------------------------ | -------------------------------------------------- |
+| `wrix-builder start`     | Start builder container                            |
+| `wrix-builder stop`      | Stop and remove container                          |
+| `wrix-builder status`    | Show builder state                                 |
+| `wrix-builder ssh [cmd]` | Connect or run remote command                      |
+| `wrix-builder setup`     | Configure SSH identity/known_hosts (one-time sudo) |
+| `wrix-builder config`    | Print nix-darwin configuration snippet             |
 
 ## Storage Layout
 
@@ -89,9 +95,10 @@ data so the user can remove it after validating the new volume.
    format into a chrooted store on that volume
 2. The import is accepted only after `nix-store --verify --check-contents`
    succeeds; the builder then mounts the volume at `/nix`
-3. `start` repairs a conflicting VPN route before waiting for authenticated SSH,
-   while `wrix-builder setup` installs the client identity under `/etc/nix` and
-   adds the SSH host key to root's `known_hosts` (sudo required)
+3. `start` validates/reuses the owned network before authenticated SSH, without
+   routine sudo or route mutation; `wrix-builder setup` installs the identity
+   under `/etc/nix` and adds the SSH host key to root's `known_hosts` (sudo
+   required)
 4. User adds
    `builders = ssh-ng://builder@localhost:2222 <native-linux-system> /etc/nix/wrix_builder_ed25519 4 1 big-parallel,benchmark`
    to `~/.config/nix/nix.conf` or uses the pure nix-darwin module printed by
@@ -99,12 +106,13 @@ data so the user can remove it after validating the new volume.
 
 ## Success Criteria
 
-- The `wrix-builder` integration suite passes on macOS 26+ (`start` repairs
-  routes before waiting for nix-daemon and authenticated SSH, the imported store
-  passes full content verification, status, remote `nixpkgs#hello` build using
-  the generated native-system configuration, store persistence across
-  `stop`/`start`, pure `config` snippet evaluation); skips with exit 77 on
-  non-Darwin or older macOS [system](verify:linux-builder.integration)
+- The `wrix-builder` integration suite passes on macOS 26+ (owned-network
+  startup completes authenticated SSH without routine privileged route repair,
+  the imported store passes full content verification, status, remote
+  `nixpkgs#hello` build using the generated native-system configuration, store
+  persistence across `stop`/`start`, pure `config` snippet evaluation); skips
+  with exit 77 on non-Darwin or older macOS
+  [system?](verify:linux-builder.integration)
 - The host publishes SSH on `127.0.0.1:2222` only, while sshd has
   `PasswordAuthentication no` and listens on guest `0.0.0.0:22` so Apple port
   forwarding can reach it [check](test-ci:test-linux-builder-sshd-hardening)

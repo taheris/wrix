@@ -62,14 +62,19 @@ shared sccache daemon also intentionally executes eligible worker compiler jobs
 here, including procedural macros. These jobs participate in that trust boundary
 rather than receiving compiler-only isolation: they can affect service-visible
 Dolt/proxy/Celler state and signing authority without a worker sandbox escape.
-This can undermine host-cache integrity even though direct worker Nix uploads
-remain disabled. Removing personal-host cache sharing is not a claim of strictly
+This can undermine sandbox cache integrity even though direct worker Nix uploads
+remain disabled. Host Nix does not consume this shared cache or trust its keys;
+service cache signing therefore grants no Wrix-managed host substitution
+authority. Removing personal-host cache sharing is not a claim of strictly
 stronger isolation in every dimension. Host publishing/management credential
-files, issuer private keys and authoritative manifests remain outside its
-mounts. Authorized requests cross the service boundary, so a service compromise
-may observe their scoped runtime credentials; unmounted files do not imply
-runtime credential isolation. General host filesystem access and the host Nix
-daemon remain excluded.
+files, controller-held issuer private keys and authoritative manifests remain
+outside its mounts. The bounded host control service owns lifecycle, fixed-role
+routing and host authority under
+[Host Control](services.md#host-control-service), not agent supervision,
+provider credentials or general host execution. Authorized requests cross the
+service boundary, so a service compromise may observe their scoped runtime
+credentials; unmounted files do not imply runtime credential isolation. General
+host filesystem access and the host Nix daemon remain excluded.
 
 Service, cache and proxy client credentials authorize only their declared scope.
 They are runtime delivery, not provider credentials or permission to manage the
@@ -87,20 +92,23 @@ broaden cache access. Physical deduplication and knowledge of a private hash are
 not read permissions; approved common reads still import into the client's own
 private store. Cache grants are native bearer capabilities under
 [Native Pull Credentials](cache.md#native-pull-credentials): one day for
-launcher-renewed sandbox tokens and seven days for host-private tokens refreshed
-on activation/`direnv reload`. The host lifetime has a longer residual exposure
-if stolen or after authorization withdrawal. Current policy constrains new
-issuance/renewal, not already-valid tokens; immediate revocation and recall of
-imported data are not promised. Native cache expiry does not revoke or delete
-artifacts already installed in a client's store.
+launcher-renewed sandbox tokens. Host pull tokens and host-activation pull
+refresh are excluded; host publication uses separate scoped authority. Current
+policy constrains new issuance/renewal, not already-valid tokens; immediate
+revocation and recall of imported data are not promised. Native cache expiry
+does not revoke or delete artifacts already installed in a client's store.
 
-Host cache trust does not extend to direct sandbox uploads. A valid server
-signature on an input-addressed output authenticates accepted bytes, not correct
-execution of the claimed derivation. Sharing a repository does not authorize
-workers to supply host-trusted artifacts or cached build-time check results.
-[Signing and Repair](cache.md#signing-and-repair) keeps any future
-sandbox-upload views/keys separate from Wrix host trust; current workers remain
-pull-only.
+Host Nix neither consumes the shared service cache nor trusts any of its signing
+keys. Signatures authenticate accepted bytes, not correct derivation execution;
+keeping signing beside delegated compiler code can poison sandbox outputs but
+cannot authorize Wrix-managed host substitution. Host publication is one-way
+under
+[Host Publication-only Integration](cache.md#host-publication-only-integration).
+Independent host upstream trust/local-store reuse remain intact. Existing
+operator-managed trust requires explicit remediation, not silent machine-wide
+rewrites or claims that imported artifacts have been recalled. Runtime escapes,
+host-client parser bugs and executing agent-modified workspace files remain
+separate host risks.
 
 [Tool Cache Data Boundary](profiles.md#tool-cache-data-boundary) also separates
 built-in sandbox Cargo registry/git, sccache and uv data from personal host
@@ -602,24 +610,25 @@ section is a reference index only.
   within that boundary, and separates ordinary traffic/pull delivery from
   signing/publishing/issuer/host management. It explicitly treats delegated
   compiler/procedural-macro code as service-trusted execution that can affect
-  service signing/data and host-cache integrity, not compiler-only isolation or
-  a universal security improvement. It distinguishes service versus worker
-  resource budgets, restricted-Rust local compilation and the trusted-service
-  assumption; private tool mode is not protection from privileged service code.
+  service signing/data and sandbox-cache integrity while excluding host
+  shared-cache consumption, not compiler-only isolation or a universal security
+  improvement. It distinguishes service versus worker resource budgets,
+  restricted-Rust local compilation and the trusted-service assumption; private
+  tool mode is not protection from privileged service code.
   [judge](../tests/judges/security-proxy-trust.md#shared-service-boundary)
 - Cache trust documentation distinguishes the common approved-public audience
   from canonical private contents, keeps authority outside mutable repository
-  policy/agent requests, and states native one-day sandbox/seven-day host bearer
-  residual exposure after authorization withdrawal, without group-service
-  claims. It also distinguishes signed acceptance from correct build execution
-  and keeps direct sandbox-upload views/keys outside host trust, including
-  within one repository. Built-in tool caches likewise exclude personal-host
-  bind/prewarm/write-back channels while disclosing enabled-mode
-  cross-repository peer-data/artifact trust, the all-cache private opt-out and
-  its no-recall/non-sanitization limits. It does not claim safety for arbitrary
-  caller mounts or selective-source privacy. It treats repository tool-sharing
-  policy as an editable default, with explicit invocation choice taking
-  precedence in both directions without policy writes.
+  policy/agent requests, and states native one-day sandbox bearer residual
+  exposure after authorization withdrawal, without group-service claims. It also
+  distinguishes signed acceptance from correct build execution and keeps every
+  shared-service view/key outside host trust, including within one repository,
+  with one-way host publication and honest legacy-trust remediation. Built-in
+  tool caches likewise exclude personal-host bind/prewarm/write-back channels
+  while disclosing enabled-mode cross-repository peer-data/artifact trust, the
+  all-cache private opt-out and its no-recall/non-sanitization limits. It does
+  not claim safety for arbitrary caller mounts or selective-source privacy. It
+  treats repository tool-sharing policy as an editable default, with explicit
+  invocation choice taking precedence in both directions without policy writes.
   [judge](../tests/judges/security-proxy-trust.md#cache-sharing-authority)
 - The allowlist rubric accepts credential/credentialless leakage risks without
   claiming encrypted identity/content enforcement or prevention of exfiltration

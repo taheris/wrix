@@ -178,8 +178,14 @@ for the full launcher and manifest contracts.
 ## Host Services and Build Caching
 
 [Services](../specs/services.md#architecture) owns one deployment per host user,
-with Dolt, Celler, the egress proxy and one active shared sccache daemon.
-Separate container generations may overlap during
+with Dolt, Celler, the egress proxy and one active shared sccache daemon. A
+small [host controller](../specs/services.md#host-control-service) owns stable
+Rama role routing, namespace policy/issuance, deployment ownership and
+post-client retirement outside replaceable generations. It is not an agent
+supervisor, general command runner or host-store service; management is
+authenticated local control, never a guest data endpoint. Shared role endpoints
+use native scoped authorization rather than one TCP port per workspace. Separate
+container generations may overlap during
 [generation handoff](../specs/services.md#generation-handoff); backend roles
 retain single ownership while they transfer independently. Canonical workspace
 namespaces preserve scoped database, file-remote and cache API access; Loom
@@ -215,8 +221,10 @@ continues automatically after the update CLI exits, without another Wrix
 invocation or GC; uncertain eligibility or cleanup failure cannot waive safety
 guards or be reported as completed retirement. A stopped last selected gateway
 remains selected for restart. Native routing/volume behavior still requires
-Podman and Apple proof; a stable forwarder may be needed and its own replacement
-is not implicitly transparent.
+Podman/krun and Apple proof. The controller supplies stable forwarding; its own
+replacement requires explicit host-wide maintenance, not a promise of
+transparent replacement. Package installation and ordinary start cannot upgrade
+it implicitly.
 
 [Celler/compiler backend handoff](../specs/services.md#cache-and-compiler-backend-handoff)
 drains admitted native work before clean single-owner release/readiness. It
@@ -237,12 +245,16 @@ all-workspaces data tree. Migration and synchronization retain one authoritative
 database and context-correct Git administration.
 
 [Celler](../specs/cache.md#cache-visibility) supplies authenticated, signed
-native HTTP substitution from approved-public common and canonical-private
-views. Physical archive deduplication is not read authority. Clients import into
-their own Nix stores; Celler is neither a host-store export nor a shared
-installed worker store. Host publishing/issuer files stay outside service
-mounts, while cache-signing state is deliberately delegated to Celler inside the
-service.
+native HTTP substitution to sandboxes from approved-public common and
+canonical-private views. Host cache flow is one-way publication: host Nix does
+not consume this shared cache or trust its signing keys. Independently trusted
+host upstreams/local store remain available. This prevents service-held signing
+authority from becoming Wrix-managed host software trust, not runtime escapes,
+host-client bugs or execution of agent-modified workspace content. Physical
+archive deduplication is not read authority. Clients import into their own Nix
+stores; Celler is neither a host-store export nor a shared installed worker
+store. Host publishing/issuer files stay outside service mounts, while
+cache-signing state is deliberately delegated to Celler inside the service.
 
 The [canonical host pipeline](../specs/cache.md#canonical-host-build-pipeline)
 coordinates actually selected Wrix-managed Nix realization. Actual devshell
@@ -373,8 +385,11 @@ through permitted services.
 
 **Delegated compiler capability**: Eligible shared compiler/procedural-macro
 code executes beside Dolt, Celler and the proxy. It can affect service-visible
-private data, signing authority and host-cache integrity without escaping its
-worker. Ordinary API audience checks and private tool mode do not isolate that
+private data, signing authority and sandbox-cache integrity without escaping its
+worker. Host Nix does not consume the shared cache or trust those signing keys;
+this excludes cache-based promotion into host software trust, not runtime
+escapes, host-client vulnerabilities or running agent-modified workspace
+content. Ordinary API audience checks and private tool mode do not isolate that
 service state from code already executing there. Host-private issuer/control
 files remain unmounted; runtime authorization used by the service can still be
 observed after compromise.

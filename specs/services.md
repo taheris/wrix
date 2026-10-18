@@ -22,9 +22,11 @@ service-deployment identity per host user and the operations behind
 container ownership is independent of repository paths. Workspace namespaces
 remain keyed by canonical repository identity, with Loom bead/integration clones
 using the outer repository identity and non-repository paths using their
-canonical path. Namespace ports, state and locks remain distinct. Repository
-cache trust remains private except for the common dependency view explicitly
-authorized by [Cache Visibility](cache.md#cache-visibility).
+canonical path. Namespace authorization, state and locks remain distinct;
+transport listeners belong to deployment roles rather than individual
+workspaces. Repository cache trust remains private except for the common
+dependency view explicitly authorized by
+[Cache Visibility](cache.md#cache-visibility).
 
 Acceptance: [Host Service Acceptance](#host-service-acceptance) and
 [Compiler Service Acceptance](#compiler-service-acceptance),
@@ -54,6 +56,86 @@ The deployment owns four service families:
 - **Shared compiler** — one actual sccache daemon for eligible shared Rust
   launches under [Shared Compiler Service](#shared-compiler-service), not a
   generic HTTP blob-cache backend or full worker-runtime migration.
+
+### Host Control Service
+
+Acceptance: [Host Control Acceptance](#host-control-acceptance).
+
+One small host-user Wrix controller outside replaceable service containers owns
+deployment selection, workspace registration, host-controlled authorization,
+credential issuance, stable role routing and eventual generation retirement. It
+runs without root or machine-wide multi-user authority. CLI/shell clients
+request typed operations, not independent detached forwarders or cleanup
+helpers. Private issuer/management credentials and authoritative
+ownership/policy records stay host-side. The authenticated local control
+interface admits no arbitrary commands, paths, mounts or forwarding
+destinations; neither its socket nor its credentials reach guests. Container
+reports and workspace pointers cannot grant host authority or alone establish
+backend ownership release.
+
+Rama supplies bounded fixed-role transport forwarding, not host-side SQL
+parsing, protocol sniffing or a general destination proxy. Egress HTTP/CONNECT
+policy remains in the replaceable gateway under `proxy.md`; Celler retains
+native cache authorization. Existing connections pin their admitted route while
+new connections follow selection. Native backend work/drain accounting is
+separate from transport connection counts.
+
+The controller does not supervise agents, broker provider/Git credentials,
+execute general Nix/Cargo commands, serve the host store, or replace native
+cache storage/GC. Waiting launchers retain execution observation and sandbox
+credential renewal. Host publishers retain selected-graph discovery, verified
+public/private classification and NAR streaming.
+
+### Controller Lifecycle and Recovery
+
+Acceptance: [Host Control Acceptance](#host-control-acceptance).
+
+Platform-supported Linux/Darwin user supervision gives one controller
+caller-independent lifetime, including explicitly temporary Nix provision.
+Concurrent start is serialized; explicit host stop prevents supervisor-driven
+resurrection. Information, preflight and GC never bootstrap or repair it. Active
+controller/image/runtime closures remain Nix-GC-reachable, without required root
+installation or a particular profile path.
+
+Clients admit the versioned private control interface and required capabilities
+before effects. Package installation does not replace an active controller.
+Compatible backend updates preserve it. Incompatible running-controller
+replacement fails with explicit maintenance guidance: `wrix service stop --host`
+then `wrix service update`. Updating that stopped existing deployment selects
+the invoked package's controller and bound service image; ordinary start resumes
+recorded controller/backend versions, not the caller's newer package. Controller
+replacement/restart is not transparently stream-preserving.
+
+Durable state records role versions, generation identities and ownership
+transition phases, not live proxy grants. After failure, uncertain ownership or
+readiness keeps affected admission closed until observed runtime/backend state
+is reconciled. Never open a second owner, infer completed native work from a
+lost socket, revive saved grants, replay SQL/compiler work or fabricate agent
+completion. Recovery promises safe ownership and truthful partial status, not
+uninterrupted service or arbitrary power-loss durability.
+
+### Shared Role Endpoints
+
+Acceptance: [Host Control Acceptance](#host-control-acceptance) and
+[Host Service Acceptance](#host-service-acceptance).
+
+Use one bounded deployment-level endpoint set for SQL, cache reads, egress and
+eligible compiler access, with separate host-only management/publication routes.
+New workspace registration provisions scoped credentials/database/cache
+membership, not workspace TCP ports, serving-mount changes or new containers.
+Linux may retain narrow namespace Unix-socket aliases. Each generation's role
+listeners are established at creation through supported runtime mechanisms; the
+controller changes fixed authorized destinations, not live runtime publication.
+
+Host publication remains loopback-only. Backend-specific guest routes must be
+proven reachable without LAN/wildcard fallback, host firewall mutation, assumed
+cross-VM Unix sockets or treating host loopback as directly guest-reachable.
+Shared SQL requires native scoped database/file-remote authorization and denial
+of filesystem/network deputy operations; Rama cannot manufacture SQL tenancy. If
+safe tenancy or guest routing is infeasible, return for a concrete design
+decision, not broader mounts or per-workspace deployments. Source investigation,
+native Rust tests and interface implementation proceed without Mac access;
+actual Podman/krun/Apple proof gates integration, not all foundational work.
 
 ### Shared Compiler Service
 
@@ -113,13 +195,13 @@ Workspace-private state roots remain platform-native:
 | Linux    | `${XDG_STATE_HOME:-$HOME/.local/state}/wrix/workspaces/<workspace-hash>/` |
 | Darwin   | `$HOME/Library/Application Support/wrix/workspaces/<workspace-hash>/`     |
 
-`<state-root>/services.json` records namespace endpoint metadata, port leases
-and its metadata schema version. Host-managed deployment state also records
-selected generation/version, serving/draining roles and ownership transitions;
-it is not an agent-controlled selection or a durable store of live traffic
-grants. Stopping a generation retains its selection and version. `cache.md` owns
-host-private namespace publication/pending/status state, public-key metadata and
-the separately managed Celler signing/archive data.
+`<state-root>/services.json` records namespace references to shared role
+endpoints and its metadata schema version. Host-managed deployment state also
+records selected generation/version, serving/draining roles and ownership
+transitions; it is not an agent-controlled selection or a durable store of live
+traffic grants. Stopping a generation retains its selection and version.
+`cache.md` owns host-private namespace publication/pending/status state,
+public-key metadata and the separately managed Celler signing/archive data.
 
 Service-visible workspace data roots are:
 
@@ -346,10 +428,10 @@ that remain live.
 
 Stable routing and data handoff must be demonstrated with actual Podman and
 Apple paths, including their TCP/Unix, authentication, mount and shutdown
-behavior. A narrow stable forwarder or proven native runtime steering may meet
-the contract; neither DNS changes nor an untested volume/network assumption is
-sufficient. No broader host mounts, worker runtime-control socket or full worker
-runtime migration is authorized to make this work.
+behavior. The host controller owns stable Rama routing; neither DNS changes nor
+an untested volume/network assumption is sufficient. No broader host mounts,
+worker runtime-control socket or full worker runtime migration is authorized to
+make this work.
 
 ### Cache and Compiler Backend Handoff
 
@@ -501,7 +583,7 @@ authority boundaries. [CLI Retention Commands](cli.md#cache-retention-commands)
 owns grammar.
 
 Service implementation is Rust-first: `wrix-service` owns deployment/generation
-lifecycle, workspace registration, endpoint metadata, port leasing and
+lifecycle, workspace registration, shared role endpoint metadata and
 Dolt/proxy/cache hosting integration. Cache library/helpers and their immutable
 Nix entry points belong to `cache.md`.
 
@@ -697,14 +779,17 @@ destination. `cache.md` owns HTTP admission, runtime credentials, signing and
 publication, including the
 [Native Pull Credential Lifecycle](cache.md#native-pull-credentials).
 
-The service publishes a host-loopback port
-(`127.0.0.1:<cache-port> -> workspace cache listener`), persists the selected
-endpoint in `services.json`, and launchers inject the resolved sandbox-visible
-URL without relying on container DNS. Preferred host ports are deterministic
-from the workspace hash: cache HTTP uses `21000–22999`, and Darwin/fallback Dolt
-TCP uses `23000–24999`. If a preferred port is busy, wrix probes within the
-matching range, persists the chosen port, and reuses it while available. Startup
-fails if required host ports cannot be bound to loopback only.
+The controller publishes one shared host-loopback cache-read endpoint with
+native authenticated private/common view URLs and exact per-launch grants. Host
+publishers use separately authorized routes, not host Nix substitution, under
+[Host Publication-only Integration](cache.md#host-publication-only-integration).
+
+Preferred ports belong to deployment roles within cache HTTP `21000–22999` and
+fallback Dolt TCP `23000–24999`, not to workspace hashes. Busy-port fallback is
+actually bound, persisted and reused while available; metadata alone is not
+publication. Exhaustion or inability to bind loopback-only fails. Launchers
+inject proven sandbox-visible routes without container DNS. Namespace
+registration reserves no additional TCP port.
 
 Unexpected exit of an active proxy, Dolt, Celler or shared sccache daemon fails
 its affected generation container rather than hiding an unavailable component.
@@ -716,6 +801,51 @@ affect other workspaces; generation separation is not a promise of independent
 tenant or component compromise/fault isolation.
 
 ## Success Criteria
+
+### Host Control Acceptance
+
+- One host-user controller serializes deployment and namespace ownership through
+  authenticated typed local operations, excluding guest control, arbitrary
+  execution, paths, mounts and forwarding destinations.
+  [test?](../crates/wrix-service/tests/host_control.rs::control_operations_are_typed_authenticated_and_host_only)
+- Issuer/management state remains outside service mounts/data routes; container
+  observations cannot authorize host paths or prove backend ownership release.
+  [test?](../crates/wrix-service/tests/host_control.rs::private_authority_is_not_delegated_to_service_observations)
+- Rama fixed-role routes pin established connections while selection changes new
+  connections, without SQL parsing, protocol sniffing or general proxying.
+  [test?](../crates/wrix-service/tests/host_control.rs::fixed_role_routes_preserve_connections_without_general_proxying)
+- Native controller lifecycle adapters serialize start, preserve explicit-stop
+  intent, pin active package closures and reject unsupported supervision without
+  an unsupervised fallback.
+  [test?](../crates/wrix-service/tests/host_control.rs::supervision_preserves_stop_intent_and_active_closures)
+- Linux/Darwin user supervision preserves caller-independent singleton lifetime;
+  explicit host stop prevents resurrection and temporary Nix provision retains
+  the active controller closure.
+  [system?](test-ci:test-services-host-control-lifecycle)
+- Private control compatibility is admitted before effects, and installing a new
+  host package cannot replace a running controller.
+  [test?](../crates/wrix-service/tests/host_control.rs::client_compatibility_does_not_authorize_replacement)
+- Compatible backend updates retain the controller; controller replacement
+  requires explicit host stop/update and ordinary start resumes recorded
+  versions without transparent-router-replacement claims.
+  [test?](../crates/wrix-service/tests/host_control.rs::controller_replacement_requires_explicit_maintenance)
+- Restart reconciles transition records and observed owners before admission or
+  retirement, without concurrent backend opens, grant revival, replay or
+  fabricated execution completion.
+  [test?](../crates/wrix-service/tests/host_control.rs::restart_preserves_uncertainty_and_single_backend_ownership)
+- Namespace registration uses shared role listeners without dynamic runtime port
+  publication, serving mount changes or container replacement.
+  [test?](../crates/wrix-service/tests/host_control.rs::namespace_registration_uses_existing_role_listeners)
+- Native shared SQL authorization denies peer database/file-remote access and
+  unrestricted filesystem/network operations, including after namespace stop.
+  [system?](test-ci:test-services-shared-sql-tenancy)
+- Real Podman/krun guests reach fixed-role routes with loopback-only host
+  publication, known-live wrong-route controls and honest capability reporting.
+  [system?](test-ci:test-services-host-control-podman)
+- Real Apple guests complete authenticated SQL/cache requests through fixed-role
+  routes with unchanged serving mounts and no cross-VM Unix assumptions,
+  wildcard publication or routine privileged route repair.
+  [system?](test-ci:test-services-host-control-apple)
 
 ### Compiler Service Acceptance
 
@@ -771,8 +901,9 @@ tenant or component compromise/fault isolation.
   physical-host publication loopback-only.
   [test?](../crates/wrix-service/tests/generation_handoff.rs::apple_endpoint_is_stable_guest_reachable_and_host_loopback_only)
 
-- Workspace identity produces stable namespaces, port leases, workspace
-  control/data roots and locks without a container identity per checkout
+- Workspace identity produces stable namespaces, shared role endpoint
+  references, workspace control/data roots and locks without a container
+  identity per checkout
   [test?](../crates/wrix-service/tests/host_service.rs::workspace_namespaces_are_stable_and_distinct)
 
 - `mkDevShell` starts the service container by default for the project cache,
@@ -832,14 +963,14 @@ tenant or component compromise/fault isolation.
   service work or revive grants across generations.
   [test?](../crates/wrix-service/tests/generation_handoff.rs::supervision_distinguishes_planned_transitions_from_container_failure)
 
-- Cache HTTP and fallback Dolt TCP host ports use their deterministic workspace
-  ranges; busy-port fallback is persisted/reused while available, and inability
-  to bind loopback-only causes startup failure.
-  [test?](../crates/wrix-service/tests/host_service.rs::workspace_port_leases_are_scoped_persisted_and_loopback_only)
+- Cache HTTP and fallback Dolt TCP use deployment-role ranges; busy fallback is
+  bound, persisted and reachable without workspace TCP leases, and inability to
+  bind loopback-only fails.
+  [test?](../crates/wrix-service/tests/host_service.rs::role_port_leases_are_shared_reachable_and_loopback_only)
 
 - Two independent workspaces share one host-user deployment without replacing
   its serving generations when a new workspace registers; their workspace
-  control roots/endpoints remain distinct.
+  authorization/control roots remain distinct while role listeners are shared.
   [test?](../crates/wrix-cli/tests/host_service.rs::new_workspace_registers_without_container_replacement)
 - Linux and Darwin managed Dolt/Celler data is narrowly mounted, including
   delegated cache-signing state, while host publishing/issuer/control roots,
@@ -1157,7 +1288,7 @@ Acceptance: [Host Service Acceptance](#host-service-acceptance),
 ### Functional
 
 1. **Host and workspace identity** — one deployment belongs to the host user;
-   namespaces follow [Architecture](#architecture) without data/access/port/lock
+   namespaces follow [Architecture](#architecture) without data/access/lock
    collisions.
 2. **Service operations** — lifecycle and Dolt operations follow
    [Service Operations](#service-operations); explicit collection scope follows

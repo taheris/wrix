@@ -58,8 +58,11 @@ nix profile add 'github:taheris/wrix#wrix'
 
 Explicit temporary provision of the host package through Nix is also supported;
 no particular profile directory or installation-path heuristic is required.
-Installing/updating that package does not activate a service update. The invoked
-host package supplies the service-image binding owned by
+Installing/updating that package does not activate a service update or replace
+the running host controller. Required private control-interface compatibility is
+admitted before effects; controller lifetime/maintenance follows
+[Host Control](services.md#controller-lifecycle-and-recovery). The invoked host
+package supplies the service-image binding owned by
 [Generation Handoff](services.md#generation-handoff).
 
 Projects supply launch data, not another Wrix executable. The recommended
@@ -260,9 +263,16 @@ clean shutdown may close proven-idle Celler/sccache transports after admitted
 work completes, so their native clients may need to reconnect at unchanged
 endpoints. This is not permission to interrupt active work or idle SQL sessions.
 
+Compatible backend updates retain the host controller. If controller replacement
+is required, running replacement fails with explicit host-wide maintenance
+guidance: `wrix service stop --host`, then `wrix service update`. The latter
+updates the existing stopped deployment's controller and all backend roles from
+the invoked package; no new public daemon/update flag is required. Controller
+replacement can interrupt connections and is not transparent blue/green routing.
+
 Ordinary start and actual/cached direnv activation reuse/resume the selected
-version and can report update needs; they do not invoke this action or activate
-Green implicitly. Bare service information remains passive.
+controller/backend versions and can report update needs; they do not invoke this
+action or activate Green implicitly. Bare service information remains passive.
 
 ### Image Commands
 
@@ -1046,6 +1056,12 @@ authorization. Verification diagnoses stale/missing helpers and hooks with
   [test?](../crates/wrix-cli/tests/host_service.rs::gc_exit_status_reflects_failed_or_incomplete_work)
 
 ### Service Update Acceptance
+
+- Controller incompatibility fails before activation with explicit host
+  stop/update guidance; compatible backend updates retain it and a
+  stopped-deployment update adopts the invoked package without promising
+  transparent router replacement.
+  [test?](../crates/wrix-cli/tests/host_service.rs::controller_update_requires_explicit_host_maintenance)
 
 - Actual `service update` argv dispatches host-user-wide managed update without
   a repository, current-workspace restriction or extra management authority.

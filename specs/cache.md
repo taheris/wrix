@@ -1,7 +1,7 @@
 # Project Nix Cache
 
 Celler-backed binary-cache transport, scoped visibility, signing, publication
-and retention for host Nix and sandbox substitution.
+and retention for host publication and sandbox substitution.
 
 ## Problem Statement
 
@@ -84,66 +84,52 @@ group-target publication or worker upload is part of this contract.
 
 Acceptance: [Pull Credential Acceptance](#pull-credential-acceptance).
 
-Use Celler's native signed bearer-token authorization for runtime host/sandbox
-pull access. Sandbox tokens have a one-day (24-hour) nominal lifetime; host pull
-tokens have a seven-day (168-hour) nominal lifetime. Both use exact named cache
-grants and pull permission only; no wildcard, publication, configuration,
-retention, deletion or management grant. All views, including common, remain
-authenticated. Celler receives JWT verification authority while the host retains
-the private issuer key, separately from Celler's Nix cache-signing keys.
+Use Celler native signed bearer tokens for sandbox pull access with one-day
+(24-hour) nominal lifetime and exact named-view pull grants. All views,
+including common, remain authenticated. The host controller retains the private
+issuer key; Celler receives JWT verification authority separately from Nix
+signing keys. There are no host pull tokens or host-activation pull-credential
+refresh.
 
-Issuance and renewal use current host-controlled workspace authorization, not
-agent/repository requests or permissions copied blindly from an old token.
-Withdrawal of authorization prevents subsequent grants/renewals for that view;
-previously issued tokens remain usable until native expiry validation rejects
-them, including reads of newly published contents during the remaining lifetime.
-Token expiry follows Celler's native clock/verification semantics, not a promise
-of rejection at an exact wall-clock second.
+Issuance/renewal rechecks current host-controlled authorization, not repository
+requests or stale grants. Withdrawal prevents subsequent issuance for that view,
+but already-valid tokens remain usable until native expiry, including reads of
+new contents. Bearers are reusable by any client that can reach the endpoint;
+repository labels and Basic Auth usernames do not bind them. No per-request host
+policy lookup, denylist, active-download cancellation or recall of imported data
+is promised. JWT verification-key rotation differs from Nix signing-key
+rotation.
 
-There is no Wrix per-request authorization-policy lookup, token denylist or
-policy-change-triggered cancellation of admitted downloads. Native authorization
-checks and existing request bounds still apply. A bearer can use a valid token
-from any client that can reach the endpoint; neither repository labels nor Basic
-Auth usernames bind its use. Already imported data cannot be recalled. Changing
-the shared JWT verification key invalidates other clients too and is distinct
-from rotating Nix cache-signing keys.
+Waiting launchers schedule renewal under
+[Launcher-Owned Renewal](#launcher-owned-renewal). The controller issues on
+authorized requests; persistent controller lifetime does not create detached
+background renewal.
 
-Renewal remains host-controlled; Celler's validation alone does not refresh
-native Nix credentials. Hosts use
-[Host Pull Credential Refresh](#host-pull-credential-refresh); sandbox sessions
-use [Launcher-Owned Renewal](#launcher-owned-renewal). This does not introduce a
-new daemon, public CLI, credential-lifetime setting or privileged
-management-token lifetime.
+### Host Publication-only Integration
 
-### Host Pull Credential Refresh
+Acceptance:
+[Host Consumption Exclusion Acceptance](#host-consumption-exclusion-acceptance).
 
-Acceptance: [Host Credential Acceptance](#host-credential-acceptance).
+Cache flow is one-way: admitted trusted host outputs are published to Celler;
+sandboxes consume them into their own stores. Wrix-managed host Nix contexts do
+not add this shared cache as a substituter, trust its signing keys, issue host
+pull tokens or pull through an alias/alternate URL. Host builds retain their
+independently trusted upstreams and ordinary local-store reuse.
 
-Cache-enabled host-context activation, including devshell entry and activation
-triggered by `direnv reload`, refreshes host pull credentials from current host
-policy with a new seven-day nominal lifetime. This runtime work still occurs
-when the Nix environment/derivation is unchanged or cached; re-exporting a stale
-token from a cached environment is not refresh. Wrix-managed host Nix build
-setup uses the same refresh path when establishing cache access without a
-devshell; read-only information/discovery does not become a credential-issuing
-build step.
+Host publishers use scoped upload/management authority and verified local
+metadata/NAR bytes. Backend responses are untrusted protocol input, not
+authority to import artifacts, execute code, classify public data or approve
+build/check evidence. Read-only inspection and opt-out do not issue credentials
+or delete private state. Host publication/hook setup is separate from sandbox
+pull authentication.
 
-Keep the host token in host-private workspace-scoped state and atomically update
-the native Nix credentials file. Environment/configuration may reference its
-path, not contain the secret. Unrelated workspaces' credentials are not
-clobbered, and this integration does not mount the host token or its containing
-private state into sandboxes or the service. A sandbox launch issues its own
-one-day token, not a copy of the host's seven-day credential. Refresh failure is
-surfaced rather than claiming successful refresh or exposing a partial
-credentials file.
-
-There is no host background renewer or interception of every native Nix command.
-An unreloaded host context can outlive its token and lose cache access after
-native expiry; re-entry/reload refreshes it. Previously issued host tokens
-remain valid under native expiry rules even after refresh or authorization
-withdrawal, so the host credential's residual access window is longer than a
-sandbox token's. Cache opt-out does not mint/refresh tokens or remove an
-existing credential.
+Generated configuration excludes all service-held cache signing keys from host
+trust, not just worker-upload keys. Known effective inherited shared-cache
+substitution/trust blocks enabled host integration with explicit removal
+guidance; do not mask it with a fresh generated configuration. Operator-managed
+Nix settings are not silently rewritten. Removing trust does not recall or
+attest previously imported outputs; automatic store deletion or machine-wide Nix
+rewrites are not authorized.
 
 ### Launcher-Owned Renewal
 
@@ -229,8 +215,8 @@ roots and retention remain scoped to their authorized views under
 [Cache Visibility](#cache-visibility); shared serving creates no implicit union
 of private views or trust.
 
-- **Host reads** use the resolved authorized HTTP cache views, matching public
-  keys and scoped pull authorization as extra Nix substituters.
+- **Host reads** use independently trusted upstreams/local store, never this
+  shared service cache or its signing keys.
 - **Host writes** upload only explicitly selected eligible paths to Celler using
   host-controlled namespace publishing credentials and record actual publication
   outcomes. Celler signs responses under that cache's key.
@@ -254,8 +240,8 @@ grant cache membership. Deduplication never bypasses possession/authorization
 checks.
 
 Container DNS is not required: Wrix publishes loopback-only host endpoints and
-injects resolved sandbox-visible endpoints. Host Nix and real sandbox Nix must
-successfully authenticate to the production service in integration acceptance.
+injects resolved sandbox-visible endpoints. Host publishers and real sandbox Nix
+must successfully authenticate through their distinct production interfaces.
 Operational readiness authenticates the selected namespace; a mock upload or
 reachable TCP port alone is insufficient.
 
@@ -275,16 +261,15 @@ is not a shared installed guest store or an automatic host `/nix/store` view.
 
 Acceptance: [Freshness Acceptance](#freshness-acceptance).
 
-With cache integration enabled, Wrix-generated host devshell/canonical-build and
-sandbox Nix client contexts use `narinfo-cache-negative-ttl = 0`. This native
-Nix setting applies to every substituter in that configured context, not only
-local Celler. Wrix does not change machine-wide Nix configuration, directly edit
-client metadata-cache databases or disable positive metadata caching to obtain
-freshness. Cache opt-out does not add or change this setting solely for Wrix
-cache use.
+With cache integration enabled, Wrix-generated sandbox Nix client contexts use
+`narinfo-cache-negative-ttl = 0`. This native Nix setting applies to every
+substituter in that configured context, not only local Celler. Wrix does not
+change machine-wide Nix configuration, directly edit client metadata-cache
+databases or disable positive metadata caching to obtain freshness. Cache
+opt-out does not add or change this setting solely for Wrix cache use.
 
 After successful usable signed publication, the next ordinary Nix command in an
-already-running, correctly configured host/agent context can discover and
+already-running, correctly configured sandbox context can discover and
 substitute a previously missing path through its reachable authorized cache. The
 caller does not restart the agent, flush metadata, change the endpoint or supply
 a manual refresh flag. Native authentication/signature requirements and normal
@@ -565,56 +550,34 @@ without creating cache state.
 ### Host Nix integration and publish hook
 
 Acceptance: [Cache Acceptance](#cache-acceptance) and
-[Host Credential Acceptance](#host-credential-acceptance).
+[Host Consumption Exclusion Acceptance](#host-consumption-exclusion-acceptance).
 
-By default, `mkDevShell` configures host Nix to pull from the project cache and
-to publish successful project-scoped builds back to it. This requires a trusted
-Nix daemon setup because `post-build-hook` and trusted substituter/key settings
-are privileged Nix options. Host setup is one-time per machine/user/group (for
-example adding the user or a wrix group to Nix `trusted-users` and restarting
-the daemon), not per repository. If host Nix ignores the required substituter,
-trusted public key, `builders-use-substitutes`, post-build hook or required
-[client freshness setting](#client-publication-freshness), devshell entry fails
-loud with remediation; `nixCache = false` is the explicit opt-out.
+Enabled devshells and canonical host builds publish eligible selected outputs
+without shared-cache substitution, shared signing-key trust, host pull tokens or
+a host-only negative-TTL override. Independently trusted upstream settings
+remain intact.
 
-The hook is a project-specific immutable wrapper in the Nix store. It bakes in
-the workspace hash, workspace owner uid/gid, state root, manifest path,
-immutable publisher-helper path, and a complete resolved non-secret
-cache-settings snapshot in the same immutable store output. When the Nix daemon
-invokes it as root (Linux and normal multi-user Darwin), the wrapper performs
-only static validation and portable privilege drop to the workspace owner, then
-execs the user-owned publisher helper. The wrapper and publisher never evaluate
-Nix roots as root, source shell code, execute repo files, or read authoritative
-publish data from the workspace. The user-owned publisher reads the immutable
-settings snapshot after privilege drop; it does not resolve repository policy or
-depend on the Nix daemon inheriting direnv's cache variables. Policy or override
-changes require devshell re-entry to install a matching hook snapshot. Namespace
-endpoint and publishing credentials are resolved from host-private runtime state
-after privilege drop; no credential value is baked into the wrapper.
+The immutable post-build hook still requires supported trusted host-Nix setup.
+Ignored required publication settings fail loudly with remediation; removing
+host substitution neither makes privileged hooks unprivileged nor gives guests
+Nix trusted-user authority. Cache opt-out remains explicit.
 
-The workspace state retains GC roots for the installed wrapper and its hook,
-publisher, and interpreter store outputs so garbage collection cannot remove the
-configured post-build hook while the workspace is active.
+The Nix-store wrapper contains only validated non-secret workspace identity,
+owner uid/gid, immutable publisher path, manifest location and resolved policy.
+Root invocation performs static validation and portable privilege drop before
+the user-owned publisher resolves runtime publication credentials. Never
+evaluate roots as root, source repository code, bake secrets into outputs or
+consult workspace files for authoritative scope. Re-entry installs a matching
+immutable policy snapshot.
 
-Automatic hook publication is scoped by the host-private registry in
-`<state-root>/publish-roots.json`. `DRV_PATH` must identify a member of an
-admitted canonical build graph or a configured supplementary publish root for
-this workspace. A hook event alone cannot enroll an unrelated derivation merely
-because it ran under a project devshell. The pipeline registers selected scope
-and reconciles completion without requiring an explicit publish/warm refresh;
-substitution-only completion follows the same rules.
-
-Standalone publish/warm refresh their configured-root component without erasing
-canonical registrations.
-[Host activation](#host-activation-and-pre-push-publication) reconciles the
-already-realized selected environment, not all configured roots. A
-supplementary-manifest reminder may still appear unless
-`WRIX_NIX_CACHE_REMINDER=0`, but neither activation nor managed builds depend on
-manual manifest refresh.
-
-Nix supports one `post-build-hook` per invocation. If a non-wrix hook is already
-configured, wrix fails loud by default rather than replacing or chaining
-arbitrary root-run hooks.
+Retain actual Nix GC roots for the configured wrapper/helper/interpreter.
+Host-private `publish-roots.json` admits selected canonical graphs and
+configured supplementary roots; hook events cannot enroll unrelated builds.
+Canonical completion reconciles substitution-only builds. Standalone
+publish/warm refresh only their component, preserving in-flight registrations.
+First and real cached activation reconcile already-realized selected outputs
+without a manual manifest refresh or broad root scan. A non-Wrix post-build hook
+is rejected rather than silently replaced/chained.
 
 ### Cache commands, locking, and retention
 
@@ -810,13 +773,13 @@ future worker-upload feature must preserve separate view/key trust from host
 publication; independent trusted host builds of the same inputs remain eligible
 normally.
 
-These are normal publication/admission and host-configuration rules, not a
-security boundary against the cohosted shared compiler. Operator-accepted worker
-compiler/procedural-macro execution can affect Celler signing/backend state and
-hence host-trusted cache contents without a direct worker-upload feature or
-worker sandbox escape. Host-private unmounted issuer/publishing files remain
-outside the service; they do not isolate Celler's delegated keys from its
-cohosted execution boundary.
+Cohosted compiler/procedural-macro execution can affect Celler signing/backend
+state without worker uploads or a sandbox escape. This can corrupt sandbox
+substitution and service-visible data; signatures are not build correctness.
+Excluding host consumption prevents Wrix-managed promotion of that authority
+into host software trust. Runtime escapes, host-client vulnerabilities and later
+execution of agent-modified workspace files remain separate risks. Unmounted
+issuer/publishing files do not isolate service-held signing keys.
 
 Acceptance uses disposable caches/keys and input-addressed derivation outputs,
 not content-addressed paths that Nix can legitimately trust without a signature.
@@ -836,8 +799,8 @@ valid unchanged key through the Celler publication/signing path.
 - Host publication reuses Celler's pure-Rust store client for metadata queries
   and NAR streaming; Nix CLI root discovery and flake evaluation remain allowed.
   [test?](../crates/wrix-cache/tests/celler_backend.rs::publisher_reuses_rust_store_client)
-- Host Nix performs authenticated HTTP substitution from the selected Celler
-  view under its configured public key, rather than a file substituter.
+- Host integration publishes through authenticated Celler HTTP without adding
+  shared-cache substituters, signing-key trust or pull credentials to host Nix.
   [system?](verify:cache.celler-host-integration)
 - Live clients using ordinary cache API credentials can read authorized
   metadata/archives but cannot read unauthorized peer views or mutate,
@@ -897,17 +860,13 @@ valid unchanged key through the Celler publication/signing path.
 
 ### Pull Credential Acceptance
 
-- Host cache configuration and publication admission do not grant trust to
-  sandbox-upload views/keys based on repository identity, agent metadata or
-  server signing alone.
-  [test?](../crates/wrix-cache/tests/celler_auth.rs::host_trust_excludes_sandbox_upload_views_and_keys)
+- Host-generated Nix configuration excludes every shared-service cache view and
+  signing key, independent of repository identity or server signatures.
+  [test?](../crates/wrix-cache/tests/celler_auth.rs::host_trust_excludes_all_shared_service_views_and_keys)
 
 - Sandbox pull tokens have a one-day nominal lifetime from issuance, rather than
   adopting an unbounded or silently extended validity period.
   [test?](../crates/wrix-cache/tests/celler_auth.rs::sandbox_pull_tokens_have_one_day_lifetime)
-- Host pull tokens have a seven-day nominal lifetime from issuance, not the
-  sandbox's one-day lifetime or an unbounded validity period.
-  [test?](../crates/wrix-cache/tests/celler_auth.rs::host_pull_tokens_have_seven_day_lifetime)
 - Issued credentials grant only exact named views and pull access; views remain
   authenticated and JWT issuer private authority stays host-side, distinct from
   backend Nix signing state.
@@ -928,30 +887,28 @@ valid unchanged key through the Celler publication/signing path.
   verification rotation from Nix signing-key rotation.
   [judge?](../tests/judges/cache-auth-lifecycle.md#native-expiry)
 
-### Host Credential Acceptance
+### Host Consumption Exclusion Acceptance
 
-- Host activation refreshes a seven-day credential from current policy rather
-  than reusing stale grants or an old expiry from a cached environment.
-  [test?](../crates/wrix-cache/tests/celler_auth.rs::host_activation_refreshes_credentials_from_current_policy)
-- Host credentials use private workspace-scoped state and atomic native-file
-  replacement without secret values in exported configuration, peer-workspace
-  clobbering or delivery of the host token/private state into guests.
-  [test?](../crates/wrix-cache/tests/celler_auth.rs::host_credentials_are_private_atomic_and_workspace_scoped)
-- Wrix-managed host build setup can refresh credentials without a devshell,
-  while read-only discovery and cache opt-out do not mint/refresh them; no
-  background renewer or arbitrary native Nix interception is required.
-  [test?](../crates/wrix-cache/tests/celler_auth.rs::host_refresh_is_scoped_to_activation_and_managed_builds)
-- Failed refresh reports failure without exposing a partial credentials file or
-  falsely claiming refreshed validity; opt-out preserves existing credentials.
-  [test?](../crates/wrix-cache/tests/celler_auth.rs::host_refresh_failures_and_opt_out_preserve_safe_state)
-- Real cache-enabled devshell activation via `direnv reload` refreshes host
-  credentials even with an unchanged/cached Nix environment or an expired prior
-  token, and native Nix can authenticate afterward without a renewal daemon or
-  token in exported values.
-  [system?](test-ci:test-cache-host-credential-refresh)
-- Launching a sandbox from a host cache-enabled context issues its own one-day
-  credential instead of copying the host's seven-day token.
-  [test?](../crates/wrix-sandbox/tests/cache_credentials.rs::sandbox_launch_does_not_reuse_host_pull_token)
+- Enabled host activation and managed builds publish without injecting shared
+  substituters, shared key trust, pull tokens or host freshness settings.
+  [test?](../crates/wrix-cache/tests/host_publication_only.rs::host_configuration_is_publication_only)
+- First and actual cached direnv activation admit publication without minting
+  host pull credentials or clobbering unrelated native credentials.
+  [system?](test-ci:test-cache-host-publication-only)
+- Known effective inherited shared-cache substituters/keys block enabled host
+  integration with actionable guidance, without rewriting operator settings,
+  deleting imported outputs or claiming their recall.
+  [test?](../crates/wrix-cache/tests/host_publication_only.rs::inherited_shared_cache_trust_requires_explicit_remediation)
+- Publication responses cannot authorize host substitution, public
+  classification, code execution or build/check success.
+  [test?](../crates/wrix-cache/tests/host_publication_only.rs::backend_responses_do_not_grant_host_trust)
+- A disposable signed malicious shared-cache output substitutes for its sandbox
+  positive control but not through production host configuration; independent
+  upstream and local-store reuse remain functional.
+  [system?](test-ci:test-cache-host-consumption-exclusion)
+- Sandbox launch issues its own one-day credential independently of host
+  publication, without host pull-token inheritance.
+  [test?](../crates/wrix-sandbox/tests/cache_credentials.rs::sandbox_pull_issuance_is_independent_of_host_publication)
 
 ### Launcher Renewal Acceptance
 
@@ -1008,10 +965,10 @@ valid unchanged key through the Celler publication/signing path.
   the same verified routing without automatic warming or discovery outside the
   admitted selected/explicit scope.
   [test?](../crates/wrix-cache/tests/celler_population.rs::publication_entrypoints_share_verified_routing)
-- A signed upstream fixture's matching eligible host output substitutes from
-  Celler common for a second repository's fresh isolated native Nix client with
-  require-sigs enabled and no upstream/local shortcut; private/mismatched output
-  remains unavailable through common.
+- A signed upstream fixture's matching eligible host output substitutes for a
+  sandbox client from Celler common for a second repository's fresh isolated
+  native Nix client with require-sigs enabled and no upstream/local shortcut;
+  private/mismatched output remains unavailable through common.
   [system?](test-ci:test-cache-celler-public-population)
 - Concurrent host publication of the same verified public object remains usable
   without corrupting peer views or broadening their permissions.
@@ -1098,32 +1055,24 @@ valid unchanged key through the Celler publication/signing path.
 
 ### Freshness Acceptance
 
-- Enabled Wrix host devshell/canonical-build configuration supplies an effective
-  zero negative-cache TTL without disabling native signature requirements.
-  [test?](../crates/wrix-cache/tests/celler_freshness.rs::host_contexts_use_zero_negative_ttl)
-- Freshness configuration stays within Wrix client contexts: it does not rewrite
-  machine-wide configuration or client cache databases, and cache opt-out does
-  not add/reset the setting solely for Wrix integration.
+- Enabled sandbox run/spawn Nix configuration supplies an effective zero
+  negative-cache TTL without disabling signatures or modifying host contexts.
+  [test?](../crates/wrix-cache/tests/celler_freshness.rs::sandbox_contexts_use_zero_negative_ttl)
+- Freshness stays context-scoped without machine-wide configuration/client
+  database edits; opt-out does not add/reset it solely for Wrix integration.
   [test?](../crates/wrix-cache/tests/celler_freshness.rs::freshness_configuration_is_context_scoped_and_respects_opt_out)
-- A real host client that previously missed an input-addressed output
-  substitutes it on its next ordinary command after production signed
-  publication, without manual refresh, cache deletion, endpoint changes or a
-  local/upstream shortcut.
-  [system?](test-ci:test-cache-publication-freshness-host)
-- An already-running sandbox launched through either run or spawn satisfies the
-  same signed miss/publication/next-command sequence without restarting the
-  agent/container or manually altering client state.
+- Existing run/spawn sandboxes substitute a previously missed signed
+  input-addressed output on the next ordinary command after host publication,
+  without restart, manual refresh, local/upstream shortcuts or changed
+  endpoints. [system?](test-ci:test-cache-publication-freshness-sandbox)
+- Sandbox zero negative TTL preserves positive metadata-cache hits.
   [system?](test-ci:test-cache-publication-freshness-sandbox)
-- Zero negative TTL preserves positive metadata-cache hits rather than forcing
-  refresh of every successful lookup.
-  [system?](test-ci:test-cache-publication-freshness-host)
-- Already-valid local store paths remain usable without forced deletion or
-  reimport as a freshness mechanism.
-  [system?](test-ci:test-cache-publication-freshness-host)
-- Repeated-miss measurements record upstream request counts and elapsed time
-  against ordinary negative caching, separately from positive/local hits,
-  without assuming zero overhead or claiming a measured speedup in advance.
-  [system?](test-ci:test-cache-publication-freshness-host)
+- Valid sandbox store paths remain reusable without forced deletion/reimport.
+  [system?](test-ci:test-cache-publication-freshness-sandbox)
+- Sandbox repeated-miss measurements record upstream request counts/time against
+  ordinary negative caching separately from positive/local hits, without
+  promising zero overhead or an advance speedup.
+  [system?](test-ci:test-cache-publication-freshness-sandbox)
 
 ### Retention Acceptance
 
@@ -1256,10 +1205,9 @@ valid unchanged key through the Celler publication/signing path.
   outside worktrees; opt-out creates no state solely for cache use.
   [test?](../crates/wrix-cli/tests/service_cache.rs::celler_layout_separates_managed_cache_data_from_host_authority)
 
-- Host devshell Nix uses scoped authenticated HTTP, trusts the selected public
-  key, enables `builders-use-substitutes`, installs the immutable post-build
-  hook, and fails loudly when the daemon ignores required integration settings.
-  [system?](verify:cache.celler-host-integration)
+- Host devshell Nix installs the immutable publication hook without shared-cache
+  substitution/key trust and fails loudly when required publication settings are
+  ignored. [system?](verify:cache.celler-host-integration)
 
 - Workspace state retains GC roots for the installed post-build wrapper and its
   hook, publisher and interpreter store outputs while the workspace is active.
@@ -1406,9 +1354,9 @@ valid unchanged key through the Celler publication/signing path.
 
 ### Signing Acceptance
 
-- Documentation distinguishes direct-upload/host-trust configuration from the
-  accepted cohosted compiler execution boundary, including effects on Celler
-  signing state and host-cache integrity while private issuer files stay
+- Documentation distinguishes one-way host publication from sandbox substitution
+  and the accepted cohosted compiler boundary, including effects on Celler
+  signing/sandbox integrity while private controller issuer files stay
   unmounted.
   [judge](../tests/judges/security-proxy-trust.md#shared-service-boundary)
 
@@ -1416,8 +1364,9 @@ valid unchanged key through the Celler publication/signing path.
   without granting clients private keys or using a flat-file destination.
   [test?](../crates/wrix-cache/tests/celler_backend.rs::publication_uses_namespace_server_signing)
 - A newly published input-addressed output substitutes through the production
-  Celler read endpoint into a fresh isolated store under its project public key
-  and `require-sigs=true`, with no fallback or already-local-path shortcut.
+  Celler read endpoint into a fresh isolated sandbox-client store under its
+  project public key and `require-sigs=true`, with no fallback or
+  already-local-path shortcut.
   [system?](test-ci:test-cache-signed-http-substitution)
 - An unsigned input-addressed negative control is reachable through working
   HTTP/NAR serving but is rejected by that same signature-checking client
@@ -1440,8 +1389,8 @@ Acceptance: [Celler Backend Acceptance](#celler-backend-acceptance),
 
 1. **Cache policy** — built-ins, repository policy, explicit environment and
    invocation overrides follow [Cache Policy](#cache-policy).
-2. **Host pull/push** — authenticated Celler HTTP, trusted Nix integration and
-   scoped automatic publishing follow
+2. **Host publication** — scoped authenticated Celler upload, trusted hook setup
+   and scoped automatic publishing follow
    [Host Nix Integration](#host-nix-integration-and-publish-hook).
 3. **Sandbox pull** — read-only HTTP and public-key injection follow
    [Cache Transport](#cache-transport); hosting/endpoints belong to
@@ -1460,11 +1409,10 @@ Acceptance: [Celler Backend Acceptance](#celler-backend-acceptance),
    [Publication Scope](#publication-scope-and-in-flight-protection) and
    independent view overrides under [Retention Control](#retention-control).
 7. **View authorization** — common dependencies and canonical private
-   repositories follow [Cache Visibility](#cache-visibility); one-day
-   sandbox/seven-day host bearer grants and expiry-based revocation follow
-   [Native Pull Credentials](#native-pull-credentials). Host activation
-   refreshes credentials under
-   [Host Pull Credential Refresh](#host-pull-credential-refresh).
+   repositories follow [Cache Visibility](#cache-visibility); one-day sandbox
+   bearer grants and expiry-based revocation follow
+   [Native Pull Credentials](#native-pull-credentials). Host activation follows
+   [Host Publication-only Integration](#host-publication-only-integration).
 8. **Publication freshness** — next-command discovery of newly published paths
    and context-scoped zero negative TTL follow
    [Client Publication Freshness](#client-publication-freshness).
@@ -1508,6 +1456,8 @@ Acceptance: [Celler Backend Acceptance](#celler-backend-acceptance),
   and automatic group-target publication. Group-management commands are
   deferred; canonical private views plus approved common dependencies bound this
   scope.
+- Host shared-cache substitution/key trust, host pull-token refresh and
+  automatic alteration of operator trust or previously imported outputs.
 - Immediate token revocation, custom per-request policy lookups/denylists and
   active-download cancellation; use
   [Native Pull Credentials](#native-pull-credentials).

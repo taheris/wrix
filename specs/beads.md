@@ -92,11 +92,15 @@ outside the selected namespace. Remote mutation and Git sync coordinate through
 a workspace-scoped lock, never a host-wide serialization lock.
 
 The shellHook exports the namespace-bound endpoint and scoped SQL authorization
-from `services.md`: Unix socket on Linux when available, TCP on Darwin. Sandbox
-staging remains limited to public beads config/metadata; it does not import
-JSONL or expose another workspace's managed data. Missing registered state or
-endpoints fail loudly rather than creating an unrelated empty database,
-embedding Dolt, or importing backups.
+from `services.md`: Unix socket on Linux when available, shared-role TCP on
+Darwin. Scoped SQL credentials and database/file-remote selection enforce the
+namespace; a distinct workspace TCP port is not required. Controller routing and
+authenticated native SQL/file isolation follow
+[Shared Role Endpoints](services.md#shared-role-endpoints). Sandbox staging
+remains limited to public beads config/metadata; it does not import JSONL or
+expose another workspace's managed data. Missing registered state or endpoints
+fail loudly rather than creating an unrelated empty database, embedding Dolt, or
+importing backups.
 
 Host-managed migration preserves existing issue contents, Dolt history and
 remotes, configured sync branch, branch commits and uncommitted remote contents.

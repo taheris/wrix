@@ -428,20 +428,19 @@ does not accept either override. Composition order is:
 Before Wrix-managed activation effects, the lifecycle admits the provided host
 CLI under [Project Launch Handoff](#project-launch-handoff). It then runs
 workspace services, project-cache integration, and hook-path selection before
-the profile and consumer hooks. The cache policy belongs to `cache.md`.
-Cache-enabled activation, including `direnv reload`, runs
-[Host Pull Credential Refresh](cache.md#host-pull-credential-refresh): refresh
-the host-private seven-day token even when the Nix environment is
-unchanged/cached, not by exporting a secret or starting a background renewer.
-Cache opt-out leaves existing credentials unchanged without issuing/refreshing
-them. Enabled runtime activation also invokes
+the profile and consumer hooks. The cache policy belongs to `cache.md`. Host
+activation publishes selected realized outputs without consuming the shared
+cache or trusting its signing keys under
+[Host Publication-only Integration](cache.md#host-publication-only-integration).
+No host pull-token issuance/refresh or background renewer is introduced. Enabled
+runtime activation also invokes
 [Host Entry Publication](cache.md#host-activation-and-pre-push-publication) for
 the selected already-realized environment, including first and cached direnv
 activation. Cache opt-out suppresses this publication; no eager project warm is
 introduced.
 
 Acceptance: [Success Criteria](#success-criteria),
-[Host Cache Credential Acceptance](#host-cache-credential-acceptance),
+[Host Publication-only Acceptance](#host-publication-only-acceptance),
 [Host Cache Publication Acceptance](#host-cache-publication-acceptance) and
 [Project Handoff Acceptance](#project-handoff-acceptance).
 
@@ -856,15 +855,15 @@ without introducing a reciprocal flake dependency.
   separate worker VMs; copied prewarms or merely sharing directory names do not
   pass. [system?](test-ci:test-profile-sccache-service-apple)
 
-### Host Cache Credential Acceptance
+### Host Publication-only Acceptance
 
-- Both profile-only and sandbox-bound devshells trigger runtime host credential
-  refresh on entry/`direnv reload`, including unchanged/cached Nix environments,
-  before consumer hooks without embedding token values in generated/exported
-  data. [system?](test-ci:test-cache-host-credential-refresh)
-- Cache-disabled devshell activation does not issue/refresh host credentials,
-  delete an existing credential or create a background token-renewal worker.
-  [system?](test-ci:test-cache-host-credential-refresh)
+- Both devshell constructors, including real cached direnv activation, preserve
+  host publication without shared-cache substitution/key trust or host
+  pull-token issuance; inherited unsafe trust requires explicit remediation.
+  [system?](test-ci:test-cache-host-publication-only)
+- Cache opt-out performs no cache-only provisioning/publication or credential
+  deletion and does not create a token-renewal worker.
+  [system?](test-ci:test-cache-host-publication-only)
 
 ### Host Cache Publication Acceptance
 

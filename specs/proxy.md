@@ -44,12 +44,15 @@ enforcement assumes that infrastructure remains trusted.
 Acceptance: [Proxy Acceptance](#proxy-acceptance) and
 [Grant Ownership Acceptance](#grant-ownership-acceptance).
 
-The Rust proxy embeds Rama as its HTTP forwarding and opaque CONNECT engine.
-Wrix owns launch authentication, immutable host/port policy, the shared
-protected address baseline and connection-owned grant lifecycle. Rama supplies
-protocol handling and transport primitives, not an independent source of policy
-or a second management interface. The general Rama CLI, demo routes and
-client-selected upstream proxy routing are not exposed.
+The replaceable Rust gateway embeds Rama as its HTTP forwarding and opaque
+CONNECT engine. The host controller separately uses Rama for fixed-role byte
+routing under [Host Control](services.md#host-control-service), not a second
+general destination proxy or guest-accessible management plane. Wrix owns launch
+authentication, immutable host/port policy, the shared protected address
+baseline and connection-owned grant lifecycle. Rama supplies protocol handling
+and transport primitives, not an independent source of policy or a second
+management interface. The general Rama CLI, demo routes and client-selected
+upstream proxy routing are not exposed.
 
 Both HTTP and CONNECT use Wrix-authorized destination selection and checked
 numeric-address dialing. Authentication and policy admission apply to every
@@ -96,10 +99,12 @@ Shared-IP virtual hosting and permitted-service exfiltration remain limitations.
 Acceptance: [Grant Ownership Acceptance](#grant-ownership-acceptance).
 
 Each launcher owns one authoritative authenticated host-only control connection
-for its launch. Registration binds the immutable policy and traffic credential
-to that live ownership; traffic requests use separate data connections. Neither
-the agent nor runtime subprocesses inherit the control connection or its
-management authority.
+for its launch. The host controller coordinates registration/handoff without
+persisting live grants or taking over launcher lifetime; gateway owner loss
+retains the revocation contract below. Registration binds the immutable policy
+and traffic credential to that live ownership; traffic requests use separate
+data connections. Neither the agent nor runtime subprocesses inherit the control
+connection or its management authority.
 
 When the proxy observes loss of the authoritative control connection, including
 orderly close, EOF or transport failure, it revokes that grant, rejects new
@@ -175,9 +180,10 @@ Acceptance: [Proxy Acceptance](#proxy-acceptance).
 agent work. The launcher supplies runtime-only proxy routing/authentication to
 supported agent and developer tools. Git SSH uses a CONNECT-compatible tunnel
 while preserving the existing deploy-key and pinned-host-key rules; it receives
-no unfiltered direct-internet exception. Exact workspace cache/Dolt endpoints
-remain direct Wrix exceptions, not permission to reach arbitrary local services.
-Restricted Rust must use effective private tool caches under
+no unfiltered direct-internet exception. Exact shared-role cache/Dolt endpoints
+with workspace-scoped authorization remain direct Wrix exceptions, not
+permission to reach arbitrary local services. Restricted Rust must use effective
+private tool caches under
 [Shared Compiler Selection](profiles.md#shared-rust-compiler-service); otherwise
 launch fails before preparation rather than delegating code outside the worker
 firewall. No restricted launch receives a shared compiler route, grant or

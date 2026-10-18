@@ -433,12 +433,18 @@ policy input.
 
 Before launching the agent container, both subcommands ensure the shared
 host-user service and selected workspace namespace when Beads/cache are enabled,
-or the proxy when restricted networking requires it. `services.md` owns
-lifecycle and scoped endpoints; `cache.md` owns cache transport/trust and
+or the proxy when restricted networking requires it. `services.md` owns the host
+controller, lifecycle and shared-role endpoints with scoped native
+authorization; `cache.md` owns one-way host publication, sandbox cache
+transport/trust and
 [client publication freshness](cache.md#client-publication-freshness). This spec
 owns their launch-time injection for both modes, including the cache-enabled Nix
 client context. `proxy.md` owns launch traffic grants. Both subcommands use the
-same container construction path.
+same container construction path. The launcher admits host-controller
+compatibility before preparation and never supplies its control socket, issuer
+authority or runtime-management access to the guest. New namespaces use existing
+role listeners; neither native integration gaps nor a shared endpoint justify
+weaker firewall exceptions or dynamic serving-mount changes.
 
 | Subcommand                                           | Stdio                         | Configuration source                                 | Use case                                           |
 | ---------------------------------------------------- | ----------------------------- | ---------------------------------------------------- | -------------------------------------------------- |
@@ -822,6 +828,24 @@ rootfs symlink. [check](nix build
 .#checks.x86_64-linux.known-hosts-runtime-store-purity) [check](nix build
 .#checks.x86_64-linux.known-hosts-runtime-file-symlink)
 
+### Darwin Shared Network
+
+Acceptance: [Network Posture Acceptance](#network-posture-acceptance).
+
+Apple service generations, client sandboxes and the Linux builder use one
+explicit Wrix-owned network rather than assuming Apple's default subnet, bridge
+or gateway. Creation/reuse and subnet validation are concurrent-safe, check
+host/VPN and existing-network conflicts, and fail actionably rather than
+silently mutating host routes. Routine start/connect does not invoke privileged
+route repair or a wildcard publication fallback. Workspace stop preserves the
+shared network and peer generations.
+
+Network ownership does not authorize changing builder/service coexistence
+policy, killing a serving deployment to realize an image, or starting extra VMs.
+An incompatible existing environment is reported, not silently repaired through
+disruptive runtime transitions. Real native route/SQL handshake evidence is
+separate from network metadata and remains required.
+
 ## Success Criteria
 
 - `mkSandbox` accepts the documented parameter set (`profile`, `cpus`,
@@ -877,6 +901,15 @@ rootfs symlink. [check](nix build
   [system](verify:sandbox.nix-store-verify-clean)
 
 ### Network Posture Acceptance
+
+- Darwin network planning shares an explicit Wrix network across generations,
+  clients and builder, validates subnet/VPN conflicts without default-network
+  assumptions, and preserves peer ownership without privileged route repair.
+  [test?](../crates/wrix-sandbox/tests/apple_network.rs::owned_network_is_shared_conflict_checked_and_unprivileged)
+- Real Apple shared-network clients complete authenticated SQL/cache and builder
+  SSH requests without routine sudo/route repair, preserve peer network state
+  and report actual conflict/coexistence limitations.
+  [system?](test-ci:test-apple-owned-network)
 
 - The launcher accepts exactly `WRIX_NETWORK=open` and `WRIX_NETWORK=limit`
   [test](command::launch::test::network_mode_parse_accepts_only_open_and_limit)
