@@ -738,6 +738,71 @@ async fn publisher_reuses_rust_store_client() {
     assert_eq!(received.as_ref(), bytes);
 }
 
+#[tokio::test]
+#[ignore = "requires packaged Celler, Linux user/mount namespaces, Nix and OpenSSL"]
+async fn managed_layout_preserves_signing_and_archives_across_native_backend_replacement() {
+    if !native::in_isolated_store(
+        "managed_layout_preserves_signing_and_archives_across_native_backend_replacement",
+    ) {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let layout = wrix_cache::backend::layout::Layout::resolve(
+        wrix_cache::backend::layout::Platform::Linux,
+        root.path(),
+        None,
+        None,
+    )
+    .unwrap();
+    let path = native::add_file("persistent native Celler archive", "persistent-celler");
+    let server = native::Server::start_in_layout(&layout);
+    let client = server.client("private");
+    let key = client.register(RETENTION).await.unwrap();
+    assert_eq!(
+        client
+            .publish_selected(std::slice::from_ref(&path))
+            .await
+            .unwrap(),
+        1
+    );
+    let resource = format!("private/{}.narinfo", native::hash(&path));
+    let before = server.get(&resource).await.text().await.unwrap();
+    assert!(before.contains("Sig: "));
+    let url = before
+        .lines()
+        .find_map(|line| line.strip_prefix("URL: "))
+        .unwrap();
+    let archive = server
+        .get(&format!("private/{url}"))
+        .await
+        .bytes()
+        .await
+        .unwrap();
+    drop(client);
+    drop(server);
+    let replacement = native::Server::start_in_layout(&layout);
+    assert_eq!(
+        replacement
+            .client("private")
+            .register(RETENTION)
+            .await
+            .unwrap(),
+        key
+    );
+    let response = replacement.get(&resource).await;
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.text().await.unwrap(), before);
+    let response = replacement.get(&format!("private/{url}")).await;
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.bytes().await.unwrap(), archive);
+    assert!(layout.metadata().join("metadata.db").is_file());
+    for mount in layout.mounts() {
+        assert!(!mount.source.join("celler-publisher.json").exists());
+        assert!(!mount.source.join("publish-roots.json").exists());
+        assert!(!mount.source.join("jwt.key").exists());
+    }
+}
+
 async fn invoke_native_hook(
     control: &std::path::Path,
     selected: &std::path::Path,

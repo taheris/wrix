@@ -3262,7 +3262,7 @@ dependencies = [
  "base64 0.22.1",
  "displaydoc",
  "humantime",
- "rustix",
+ "libc",
  "serde",
  "serde_json",
  "serde_yaml_ng",

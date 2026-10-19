@@ -1,9 +1,8 @@
 use std::{
     collections::{BTreeSet, HashSet},
     env,
-    fs::{self, DirBuilder, File, OpenOptions},
+    fs::{self, File, OpenOptions},
     io::{self, ErrorKind},
-    os::unix::fs::DirBuilderExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
@@ -46,6 +45,8 @@ pub enum Error {
     ProcessFailed { program: String, stderr: String },
     /// timed out waiting for project cache lock {path}
     LockTimeout { path: String },
+    /// {0}
+    ControlDirectory(#[from] wrix_core::private_directory::Error),
     /// {0}
     Config(#[from] crate::config::ReadError),
     /// HOME is required to resolve wrix cache state roots
@@ -926,10 +927,7 @@ impl Paths {
     }
 
     fn ensure_control(&self) -> Result<()> {
-        DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(&self.state_root)?;
+        wrix_core::private_directory::prepare_with_parents(&self.state_root)?;
         fs::create_dir_all(self.pending_dir())?;
         write_if_missing(&self.cache_lock_path(), "")?;
         write_json_if_missing(&self.cache_status_path(), &cache_status(false))

@@ -42,18 +42,34 @@ pub struct Server {
     pub token: String,
     child: Child,
     root: TempDir,
+    database: PathBuf,
 }
 
 impl Server {
     pub fn start() -> Self {
         let root = tempfile::tempdir().unwrap();
+        let database = root.path().join("metadata.db");
+        let archives = root.path().join("archives");
+        fs::create_dir(&archives).unwrap();
+        Self::spawn(root, database, &archives)
+    }
+
+    pub fn start_in_layout(layout: &wrix_cache::backend::layout::Layout) -> Self {
+        layout.prepare().unwrap();
+        Self::spawn(
+            tempfile::tempdir().unwrap(),
+            layout.metadata().join("metadata.db"),
+            layout.archives(),
+        )
+    }
+
+    fn spawn(root: TempDir, database: PathBuf, archives: &Path) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         drop(listener);
         let endpoint = format!("http://{address}/");
         let path = root.path();
         fs::write(path.join("jwt.key"), SECRET).unwrap();
-        fs::create_dir(path.join("archives")).unwrap();
         let config = format!(
             "listen = {address:?}\nallowed-hosts = [{address:?}]\napi-endpoint = {endpoint:?}\nsoft-delete-caches = false\nrequire-proof-of-possession = true\n\
             [database]\nurl = {database:?}\n\
@@ -63,8 +79,8 @@ impl Server {
             [garbage-collection]\ninterval = \"0s\"\n\
             [jwt]\nhs256-secret-key-file = {key:?}\n",
             address = address.to_string(),
-            database = format!("sqlite://{}?mode=rwc", path.join("metadata.db").display()),
-            storage = path.join("archives").display().to_string(),
+            database = format!("sqlite://{}?mode=rwc", database.display()),
+            storage = archives.display().to_string(),
             key = path.join("jwt.key").display().to_string(),
         );
         fs::write(path.join("server.toml"), config).unwrap();
@@ -74,6 +90,7 @@ impl Server {
         let child = Command::new(executable)
             .arg("--config")
             .arg(path.join("server.toml"))
+            .env("NIX_REMOTE", "unix:///no-host-store-daemon")
             .stdin(Stdio::null())
             .stdout(log.try_clone().unwrap())
             .stderr(log)
@@ -84,6 +101,7 @@ impl Server {
             token: token(true),
             child,
             root,
+            database,
         };
         let deadline = Instant::now() + Duration::from_secs(15);
         while TcpStream::connect(address).is_err() {
@@ -123,7 +141,7 @@ impl Server {
     pub fn corrupt_key(&self, namespace: &str) {
         let status = Command::new("python3")
             .args(["-c", "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute('update cache set keypair=? where name=?', ('invalid-key',sys.argv[2])); c.commit()"])
-            .arg(self.root.path().join("metadata.db"))
+            .arg(&self.database)
             .arg(namespace)
             .status().unwrap();
         assert!(status.success());

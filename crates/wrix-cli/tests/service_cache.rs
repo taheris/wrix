@@ -329,6 +329,139 @@ fn cache_layout_uses_exact_platform_roots_and_opt_out_creates_no_cache() -> Test
 }
 
 #[test]
+fn enabled_service_prepares_only_private_shared_celler_data_and_opt_out_does_not() -> TestResult {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    for cache in [false, true] {
+        let fixture = Fixture::new()?;
+        let home = fixture.root.path().join("home");
+        let layout = wrix_cache::backend::layout::Layout::resolve(
+            if cfg!(target_os = "macos") {
+                wrix_cache::backend::layout::Platform::Darwin
+            } else {
+                wrix_cache::backend::layout::Platform::Linux
+            },
+            &home,
+            Some(&fixture.root.path().join("state")),
+            Some(&fixture.root.path().join("cache")),
+        )?;
+        fixture.endpoints(cache)?;
+        assert!(!layout.metadata().exists());
+        assert!(!layout.archives().exists());
+        let mut command = fixture.command("podman")?;
+        command
+            .args(["service", "start"])
+            .env("WRIX_SERVICE_ALLOW_TEMP_CACHE", "1");
+        if !cache {
+            command.arg("--no-cache");
+        }
+        let output = run_command(&mut command)?;
+        assert!(output.status.success(), "{}", output.stderr);
+        let metadata = fixture.endpoints(cache)?;
+        let state = PathBuf::from(metadata["state_root"].as_str().unwrap());
+        assert_eq!(fs::metadata(&state)?.permissions().mode() & 0o777, 0o700);
+        for mount in layout.mounts() {
+            assert_eq!(mount.source.is_dir(), cache);
+            assert!(!mount.source.starts_with(&fixture.workspace));
+            assert!(!mount.source.starts_with(&state));
+            if cache {
+                assert_eq!(
+                    fs::metadata(mount.source)?.permissions().mode() & 0o777,
+                    0o700
+                );
+                assert!(!mount.source.join("celler-publisher.json").exists());
+                assert!(!mount.source.join("publish-roots.json").exists());
+                assert!(!mount.source.join("cache.secret").exists());
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn service_reentry_tightens_legacy_control_without_losing_runtime_authority() -> TestResult {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let fixture = Fixture::new()?;
+    let metadata = fixture.endpoints(false)?;
+    let state = PathBuf::from(metadata["state_root"].as_str().unwrap());
+    fs::create_dir_all(&state)?;
+    set_mode(&state, 0o755)?;
+    let binding = json!({
+        "schema_version": 1,
+        "workspace_hash": metadata["workspace_hash"],
+        "endpoint": "http://127.0.0.1:8080/",
+        "namespace": "private",
+        "token": "disposable-runtime-authority-fixture",
+        "retention_seconds": 2_592_000
+    });
+    let bytes = serde_json::to_vec(&binding)?;
+    let path = state.join("celler-publisher.json");
+    fs::write(&path, &bytes)?;
+    set_mode(&path, 0o600)?;
+    fs::write(state.join("publish-roots.json"), "preserved manifest")?;
+    let output = run_command(
+        fixture
+            .command("podman")?
+            .args(["service", "start", "--no-cache"]),
+    )?;
+    assert!(output.status.success(), "{}", output.stderr);
+    assert_eq!(fs::metadata(&state)?.permissions().mode() & 0o777, 0o700);
+    assert_eq!(fs::read(&path)?, bytes);
+    assert_eq!(
+        fs::read_to_string(state.join("publish-roots.json"))?,
+        "preserved manifest"
+    );
+    let workspace =
+        wrix_core::path::WorkspaceHash::parse(metadata["workspace_hash"].as_str().unwrap())?;
+    wrix_cache::backend::publication::Publisher::load(&state, &workspace)?;
+    assert!(
+        !output
+            .stdout
+            .contains("disposable-runtime-authority-fixture")
+    );
+    assert!(
+        !output
+            .stderr
+            .contains("disposable-runtime-authority-fixture")
+    );
+    Ok(())
+}
+
+#[test]
+fn service_rejects_symlinked_control_before_lock_or_runtime_access() -> TestResult {
+    use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+    let fixture = Fixture::new()?;
+    let metadata = fixture.endpoints(false)?;
+    let state = PathBuf::from(metadata["state_root"].as_str().unwrap());
+    fs::create_dir_all(state.parent().unwrap())?;
+    let unrelated = fixture.root.path().join("unrelated");
+    fs::create_dir(&unrelated)?;
+    set_mode(&unrelated, 0o755)?;
+    fs::write(unrelated.join("preserved"), "unrelated data")?;
+    symlink(&unrelated, &state)?;
+    let output = run_command(
+        fixture
+            .command("podman")?
+            .args(["service", "start", "--no-cache"]),
+    )?;
+    assert!(!output.status.success());
+    assert!(!unrelated.join("service.lock").exists());
+    assert!(!unrelated.join("services.json").exists());
+    assert_eq!(
+        fs::metadata(&unrelated)?.permissions().mode() & 0o777,
+        0o755
+    );
+    assert_eq!(
+        fs::read_to_string(unrelated.join("preserved"))?,
+        "unrelated data"
+    );
+    assert!(!fixture.root.path().join("calls").exists());
+    Ok(())
+}
+
+#[test]
 fn service_startup_does_not_collect_dirty_cache_contents() -> TestResult {
     for elapsed in [3600, 172_800] {
         let fixture = Fixture::new()?;

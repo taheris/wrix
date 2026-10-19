@@ -62,6 +62,10 @@ pub enum Error {
     Cache {
         source: wrix_cache::publisher::Error,
     },
+    /// {0}
+    ControlDirectory(#[from] wrix_core::private_directory::Error),
+    /// {0}
+    CellerLayout(#[from] wrix_cache::backend::layout::Error),
     /// runtime image operation failed: {source}
     Image { source: runtime_image::Error },
     /// environment variable {name} must be valid Unicode
@@ -360,26 +364,9 @@ impl Plan {
     }
 
     pub fn ensure_layout(&self) -> Result<()> {
-        self.validate_registration()?;
-        let _lock = self.paths.lock_registration()?;
-        self.ensure_layout_locked()
-    }
-
-    fn validate_registration(&self) -> Result<()> {
-        PortLease::read(&self.paths.services_path(), self.workspace.hash())?;
-        let peer_ports = peer_port_leases(&self.paths, self.workspace.hash())?;
-        for port in self.selected_host_ports() {
-            if peer_ports.contains(&port) {
-                return Err(Error::PortLeaseConflict { port });
-            }
-        }
-        Ok(())
-    }
-
-    fn ensure_layout_locked(&self) -> Result<()> {
-        self.validate_registration()?;
-        fs::create_dir_all(self.paths.state_root())?;
+        wrix_core::private_directory::prepare_with_parents(self.paths.state_root())?;
         if self.cache_enabled() {
+            wrix_cache::backend::layout::Layout::current()?.prepare()?;
             fs::create_dir_all(self.paths.cache_root())?;
             if !wrix_state::namespace::is_host_root(self.paths.state_root())? {
                 fs::create_dir_all(self.paths.gcroots_dir())?;
@@ -702,14 +689,14 @@ fn locked_plan(cache_mode: CacheMode) -> Result<(Plan, fs::File)> {
     let settings = wrix_cache::config::Settings::for_workspace(&workspace)?;
     let paths = Paths::for_workspace(workspace.hash())?;
     let branch = read_sync_branch(workspace.canonical_path())?;
-    Plan::from_parsed(
-        workspace.clone(),
-        cache_mode,
-        paths.clone(),
-        branch.clone(),
-        settings.clone(),
-    )?;
-    let lock = paths.lock_registration()?;
+    wrix_core::private_directory::prepare_with_parents(paths.state_root())?;
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(paths.state_root().join("service.lock"))?;
+    lock.lock_exclusive()?;
     Ok((
         Plan::from_parsed(workspace, cache_mode, paths, branch, &settings)?,
         lock,

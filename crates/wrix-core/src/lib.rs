@@ -6,5 +6,6 @@ pub mod git;
 pub mod host_path;
 pub mod nix_store;
 pub mod path;
+pub mod private_directory;
 pub mod repository_policy;
 pub mod tool_cache;

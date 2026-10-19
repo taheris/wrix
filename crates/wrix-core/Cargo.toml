@@ -9,6 +9,7 @@ rustix = { workspace = true }
 base64 = { workspace = true }
 displaydoc = { workspace = true }
 humantime = { workspace = true }
+libc = { workspace = true }
 serde = { workspace = true }
 serde_yaml_ng = { workspace = true }
 sha2 = { workspace = true }
