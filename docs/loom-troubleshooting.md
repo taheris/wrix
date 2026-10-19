@@ -1,4 +1,25 @@
-# Loom workspace safety failures
+# Loom launch troubleshooting
+
+## Spawn configuration rejected before startup
+
+`invalid SpawnConfig schema` before any tool calls means Wrix rejected launch
+input, not that an agent or image failed. Older Loom producers serialize session
+fields such as `initial_prompt`, `repin`, and `scratch_dir` at the JSON root.
+Wrix accepts those opaque fields only inside `extensions.loom`; workspace, env,
+agent arguments, image overrides and mounts remain at the root.
+
+The packaged Loom moves session fields into that namespace and its Direct runner
+reads the same payload. Rebuild/update the project's Loom package and re-enter
+the development shell (or reload direnv) so the host dispatch uses the corrected
+producer. Rebuild consumer-supplied Direct runner images too when applicable. Do
+not remove Wrix's unknown-field checks or hand-edit a live private spawn file;
+those files can contain credentials. Host Wrix installation advice alone does
+not repair an incompatible producer.
+
+A subsequent safety-history error is independent: follow the host checks below
+without resetting retained evidence.
+
+## Workspace safety failures
 
 `worker isolation or host safety-history association failed` is a Loom host
 safety check, not a Wrix image or service failure. A following filesystem

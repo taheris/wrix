@@ -1,0 +1,25 @@
+{
+  "agent_args": [
+    "--print"
+  ],
+  "env": [
+    [
+      "WRIX_AGENT",
+      "pi"
+    ]
+  ],
+  "extensions": {
+    "loom": {
+      "initial_prompt": "hello",
+      "model_id": "test-model",
+      "repin": {
+        "orientation": "ori",
+        "partial_bodies": [],
+        "pinned_context": "pc"
+      },
+      "scratch_dir": "/workspace/.loom/scratch/test"
+    }
+  },
+  "image_ref": "localhost/wrix-test:tag",
+  "workspace": "/workspace"
+}

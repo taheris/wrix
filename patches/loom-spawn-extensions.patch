@@ -1,0 +1,205 @@
+--- a/crates/loom-agent/src/claude/backend.rs
++++ b/crates/loom-agent/src/claude/backend.rs
+@@ -381,7 +381,7 @@
+         // Round-trip the spawn-config file to confirm it carries the input
+         // unchanged — the wrapper consumes this exact JSON.
+         let bytes = std::fs::read(spawn_config_path).expect("read");
+-        let decoded: SpawnConfig = serde_json::from_slice(&bytes).expect("decode");
++        let decoded: SpawnConfig = SpawnConfig::from_wrix_slice(&bytes).expect("decode");
+         assert_eq!(decoded.image_ref, cfg.image_ref);
+         assert_eq!(decoded.image_source, cfg.image_source);
+         assert_eq!(decoded.initial_prompt, cfg.initial_prompt);
+--- a/crates/loom-agent/src/direct/backend.rs
++++ b/crates/loom-agent/src/direct/backend.rs
+@@ -346,7 +346,7 @@
+         assert!(spawn_config_path.exists());
+
+         let bytes = std::fs::read(spawn_config_path).expect("read");
+-        let decoded: SpawnConfig = serde_json::from_slice(&bytes).expect("decode");
++        let decoded = SpawnConfig::from_wrix_slice(&bytes).expect("decode");
+         assert_eq!(decoded.image_ref, cfg.image_ref);
+         assert_eq!(decoded.image_source, cfg.image_source);
+         assert_eq!(decoded.initial_prompt, cfg.initial_prompt);
+@@ -374,7 +374,7 @@
+         let spawn_config = prepare_runtime(&cfg).expect("prepare_runtime");
+
+         let bytes = std::fs::read(spawn_config.path()).expect("read");
+-        let decoded: SpawnConfig = serde_json::from_slice(&bytes).expect("decode");
++        let decoded = SpawnConfig::from_wrix_slice(&bytes).expect("decode");
+         assert_eq!(decoded.observers, cfg.observers);
+     }
+
+@@ -396,7 +396,7 @@
+
+         assert_eq!(spawn_config.path(), scratch_dir.join("spawn-config.json"));
+         let bytes = std::fs::read(spawn_config.path()).expect("read");
+-        let decoded: SpawnConfig = serde_json::from_slice(&bytes).expect("decode");
++        let decoded = SpawnConfig::from_wrix_slice(&bytes).expect("decode");
+         assert_eq!(
+             decoded.scratch_dir,
+             PathBuf::from("/workspace/.loom/scratch/lm-direct"),
+@@ -496,7 +496,7 @@
+             "direct\n",
+         );
+         let decoded: SpawnConfig =
+-            serde_json::from_slice(&fs::read(&config_log).expect("read copied spawn config"))
++            SpawnConfig::from_wrix_slice(&fs::read(&config_log).expect("read copied spawn config"))
+                 .expect("decode copied spawn config");
+         assert!(
+             decoded
+--- a/crates/loom-agent/src/pi/backend.rs
++++ b/crates/loom-agent/src/pi/backend.rs
+@@ -898,7 +898,7 @@
+         cfg.scratch_dir = scratch.path().to_path_buf();
+         let file = runtime::Config::write(&cfg.scratch_dir, &cfg).expect("write");
+         let bytes = std::fs::read(file.path()).expect("read");
+-        let decoded: SpawnConfig = serde_json::from_slice(&bytes).expect("decode");
++        let decoded: SpawnConfig = SpawnConfig::from_wrix_slice(&bytes).expect("decode");
+         assert_eq!(decoded.image_ref, cfg.image_ref);
+         assert_eq!(decoded.image_source, cfg.image_source);
+         assert_eq!(decoded.initial_prompt, cfg.initial_prompt);
+--- a/crates/loom-agent/tests/private_runtime.rs
++++ b/crates/loom-agent/tests/private_runtime.rs
+@@ -95,7 +95,10 @@
+         } else {
+             scratch.path().to_path_buf()
+         };
+-        assert_eq!(json["scratch_dir"], expected_scratch.to_str().unwrap());
++        assert_eq!(
++            json["extensions"]["loom"]["scratch_dir"],
++            expected_scratch.to_str().unwrap()
++        );
+         assert_eq!(json["workspace"], workspace.path().to_str().unwrap());
+         let mut session = session.prompt("test").await.unwrap();
+         loop {
+--- a/crates/loom-direct-runner/src/main.rs
++++ b/crates/loom-direct-runner/src/main.rs
+@@ -57,7 +57,8 @@
+         })?;
+
+     let bytes = std::fs::read(&path).map_err(RunnerError::Io)?;
+-    let config: SpawnConfig = serde_json::from_slice(&bytes).map_err(RunnerError::EncodeJson)?;
++    let config: SpawnConfig =
++        SpawnConfig::from_wrix_slice(&bytes).map_err(RunnerError::EncodeJson)?;
+     info!(
+         spawn_config = %path.display(),
+         workspace = %config.workspace.display(),
+--- a/crates/loom-driver/src/agent/backend.rs
++++ b/crates/loom-driver/src/agent/backend.rs
+@@ -213,6 +213,59 @@
+     }
+ }
+
++impl SpawnConfig {
++    /// Encode Wrix launch inputs separately from opaque Loom session state.
++    ///
++    /// # Errors
++    /// Returns serialization errors without including credential values.
++    pub fn to_wrix_value(&self) -> Result<serde_json::Value, serde_json::Error> {
++        let mut payload = serde_json::to_value(self)?;
++        let mut launch = serde_json::Map::new();
++        for key in [
++            "image_ref",
++            "image_source",
++            "image_source_kind",
++            "workspace",
++            "env",
++            "agent_args",
++            "mounts",
++        ] {
++            if let Some(value) = payload.get_mut(key) {
++                launch.insert(key.to_owned(), value.take());
++            }
++            if let Some(object) = payload.as_object_mut() {
++                object.remove(key);
++            }
++        }
++        launch.insert(
++            "extensions".to_owned(),
++            serde_json::json!({"loom": payload}),
++        );
++        Ok(serde_json::Value::Object(launch))
++    }
++
++    /// Decode the namespaced session state from the immutable Wrix launch file.
++    ///
++    /// # Errors
++    /// Returns JSON or session-schema errors for incompatible launch files.
++    pub fn from_wrix_slice(bytes: &[u8]) -> Result<Self, serde_json::Error> {
++        #[derive(Deserialize)]
++        struct Launch {
++            #[serde(flatten)]
++            inputs: serde_json::Map<String, serde_json::Value>,
++            extensions: Extensions,
++        }
++        #[derive(Deserialize)]
++        struct Extensions {
++            loom: serde_json::Map<String, serde_json::Value>,
++        }
++        let launch: Launch = serde_json::from_slice(bytes)?;
++        let mut payload = launch.extensions.loom;
++        payload.extend(launch.inputs);
++        serde_json::from_value(serde_json::Value::Object(payload))
++    }
++}
++
+ fn path_is_empty(path: &Path) -> bool {
+     path.as_os_str().is_empty()
+ }
+@@ -448,6 +501,45 @@
+         }
+     }
+
++    #[test]
++    fn wrix_launch_namespaces_session_fields_and_round_trips_runner_state() {
++        let mut cfg = sample_config(None);
++        cfg.model_id = Some("test-model".into());
++        cfg.shutdown_grace = Some(Duration::from_secs(5));
++        let value = cfg.to_wrix_value().unwrap();
++        assert_eq!(
++            value
++                .as_object()
++                .unwrap()
++                .keys()
++                .map(String::as_str)
++                .collect::<Vec<_>>(),
++            [
++                "agent_args",
++                "env",
++                "extensions",
++                "image_ref",
++                "image_source",
++                "image_source_kind",
++                "workspace"
++            ]
++        );
++        assert_eq!(value["extensions"]["loom"]["initial_prompt"], "hello");
++        assert!(value["extensions"]["loom"].get("env").is_none());
++        let decoded = SpawnConfig::from_wrix_slice(&serde_json::to_vec(&value).unwrap()).unwrap();
++        assert_eq!(
++            serde_json::to_value(decoded).unwrap(),
++            serde_json::to_value(cfg).unwrap()
++        );
++    }
++
++    #[test]
++    fn wrix_runner_requires_namespaced_session_payload() {
++        let cfg = sample_config(None);
++        assert!(SpawnConfig::from_wrix_slice(&serde_json::to_vec(&cfg).unwrap()).is_err());
++        assert!(SpawnConfig::from_wrix_slice(br#"{"extensions":{"loom":null}}"#).is_err());
++    }
++
+     /// An absent model preserves the wire shape expected by older launchers.
+     #[test]
+     fn spawn_config_with_model_none_omits_model_key() {
+--- a/crates/loom-driver/src/scratch/runtime.rs
++++ b/crates/loom-driver/src/scratch/runtime.rs
+@@ -26,7 +26,7 @@
+     /// Returns serialization or filesystem errors without including credential values.
+     pub fn write(scratch_dir: &Path, config: &SpawnConfig) -> Result<Self, ProtocolError> {
+         crate::workspace::validate_spawn(config).map_err(std::io::Error::other)?;
+-        let json = serde_json::to_vec(config)?;
++        let json = serde_json::to_vec(&config.to_wrix_value()?)?;
+         let directory = Directory::open(scratch_dir)?;
+         directory.require_private()?;
+         let mut file = directory.create_file(Path::new(FILE_NAME), Mode::RUSR | Mode::WUSR)?;
