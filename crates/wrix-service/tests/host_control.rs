@@ -1009,6 +1009,10 @@ async fn controller_host_restart_keeps_policy_but_not_route_readiness() -> TestR
         let directory = tempfile::tempdir()?;
         let root = directory.path().canonicalize()?.join("controller");
         let controller = Controller::bind(&root)?;
+        let selected = controller.bootstrap_selection(
+            wrix_sandbox::image::ImageRef::parse("service:blue")?,
+            wrix_sandbox::image::Digest::parse(&format!("sha256:{}", "a".repeat(64)))?,
+        )?;
         let host =
             wrix_service::control::serving::Host::bind(controller, NonZeroUsize::MIN).await?;
         let peers = Peers::start(b'P').await?;
@@ -1034,6 +1038,14 @@ async fn controller_host_restart_keeps_policy_but_not_route_readiness() -> TestR
         task.await??;
 
         let controller = Controller::bind(&root)?;
+        assert_eq!(controller.recorded_selection()?, Some(selected.clone()));
+        assert_eq!(
+            controller.bootstrap_selection(
+                wrix_sandbox::image::ImageRef::parse("service:green")?,
+                wrix_sandbox::image::Digest::parse(&format!("sha256:{}", "b".repeat(64)))?,
+            )?,
+            selected
+        );
         let host =
             wrix_service::control::serving::Host::bind(controller, NonZeroUsize::MIN).await?;
         assert_eq!(host.address(Role::Sql)?, address);

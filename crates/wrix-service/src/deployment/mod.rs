@@ -1,5 +1,7 @@
 //! Host-selected deployment identity and paths, independent of checkout and generation lifetimes.
 
+pub mod selection;
+
 use std::{
     fmt,
     num::NonZeroU64,

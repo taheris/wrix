@@ -1,5 +1,6 @@
 //! Versioned private host authority; never mount this socket or its directory into guests.
 
+mod assignment;
 mod deployment;
 mod endpoint;
 mod registration;
@@ -52,6 +53,8 @@ pub enum Error {
     InvalidEndpoints,
     /// persisted host deployment identity has an unsupported version
     InvalidDeployment,
+    /// persisted generation assignments are inconsistent with this deployment
+    InvalidSelection,
     /// this controller has already issued its deployment role listeners
     EndpointsAlreadyBound,
     /// private control registry lock is poisoned
@@ -236,6 +239,7 @@ pub struct Controller {
     registrations: registration::Store,
     endpoints: endpoint::Store,
     deployment: crate::deployment::Id,
+    assignments: assignment::Store,
 }
 
 impl Controller {
@@ -278,7 +282,9 @@ impl Controller {
         let registrations = registration::Store::open(root)?;
         let namespaces = registrations.load()?;
         let endpoints = endpoint::Store::open(root)?;
-        let deployment = match deployment::load(root)? {
+        let recorded_deployment = deployment::load(root)?;
+        let assignments = assignment::Store::open(root, recorded_deployment.as_ref())?;
+        let deployment = match recorded_deployment {
             Some(id) => id,
             None => deployment::create(root)?,
         };
@@ -294,6 +300,7 @@ impl Controller {
             registrations,
             endpoints,
             deployment,
+            assignments,
         })
     }
 
@@ -308,6 +315,23 @@ impl Controller {
     /// Stable host identity survives controller restarts and namespace retirement.
     pub const fn deployment_id(&self) -> &crate::deployment::Id {
         &self.deployment
+    }
+
+    /// Inspect recorded intent only; no native readiness or ownership release is inferred.
+    pub fn recorded_selection(
+        &self,
+    ) -> Result<Option<crate::deployment::selection::Record>, Error> {
+        self.assignments.inspect()
+    }
+
+    /// Persist initial role assignments before runtime creation; ordinary callers resume existing intent.
+    /// This host-only operation neither admits traffic nor authorizes replacing backend owners.
+    pub fn bootstrap_selection(
+        &self,
+        image: wrix_sandbox::image::ImageRef,
+        digest: wrix_sandbox::image::Digest,
+    ) -> Result<crate::deployment::selection::Record, Error> {
+        self.assignments.bootstrap(&self.deployment, image, digest)
     }
 
     /// Allocate the deployment's complete loopback listener set once, independent of namespaces.
