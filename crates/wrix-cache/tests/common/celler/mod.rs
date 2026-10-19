@@ -28,6 +28,9 @@ pub fn in_isolated_store(test: &str) -> bool {
         .arg(script)
         .arg(std::env::current_exe().unwrap())
         .args(["--ignored", "--exact", test, "--nocapture"])
+        .env("WRIX_UPSTREAM_SUBSTITUTERS", "")
+        .env("WRIX_NIX_BIN", "/no-cli-metadata-or-transport")
+        .env("WRIX_NIX_STORE_BIN", "/no-cli-metadata-or-transport")
         .status()
         .unwrap();
     assert!(status.success(), "isolated native fixture failed: {status}");
@@ -141,6 +144,10 @@ impl Drop for Server {
         self.child.kill().unwrap();
         self.child.wait().unwrap();
     }
+}
+
+pub fn pull_token() -> String {
+    token(false)
 }
 
 fn token(management: bool) -> String {

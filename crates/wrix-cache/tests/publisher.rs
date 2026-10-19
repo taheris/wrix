@@ -554,8 +554,8 @@ fn warm_subsets_preserve_full_publish_manifest_and_check_retention() -> TestResu
 }
 
 #[test]
-fn automatic_publish_records_failure_as_warning() -> TestResult {
-    let fixture = Fixture::new("automatic-query-failure")?;
+fn automatic_publish_reports_missing_native_authority_without_flat_fallback() -> TestResult {
+    let fixture = Fixture::new("automatic-authority-failure")?;
     fixture.write_roots(&[RootSpec::new(
         "packages.demo",
         ".#demo",
@@ -563,7 +563,7 @@ fn automatic_publish_records_failure_as_warning() -> TestResult {
         &[PROJECT_OUT],
     )])?;
 
-    let report = fixture.run_auto(PROJECT_DRV, PROJECT_OUT, &[("WRIX_FAKE_QUERY_FAIL", "1")])?;
+    let report = fixture.run_auto(PROJECT_DRV, PROJECT_OUT, &[])?;
 
     assert!(report.contains("warning: automatic project cache publish failed:"));
     let status: serde_json::Value =
@@ -574,31 +574,52 @@ fn automatic_publish_records_failure_as_warning() -> TestResult {
         status["last_error"]
             .as_str()
             .unwrap()
-            .contains("nix-store --query --requisites")
+            .contains("host-private Celler publication authority")
     );
+    assert_eq!(fixture.pending_count()?, 1);
+    assert!(!fixture.key_counter.exists());
+    assert!(!fixture.cache_root.exists());
+    assert!(!fixture.state_root.join("keys/cache.secret").exists());
+    assert!(!fixture.nix_log.exists());
     Ok(())
 }
 
 #[test]
 fn automatic_publication_failure_preserves_candidates_for_explicit_retry() -> TestResult {
-    for failure in ["WRIX_FAKE_QUERY_FAIL", "WRIX_FAKE_UPLOAD_FAIL"] {
-        let fixture = Fixture::new("automatic-retry")?;
-        fixture.write_roots(&[RootSpec::new(
-            "packages.demo",
-            ".#demo",
-            PROJECT_DRV,
-            &[PROJECT_OUT],
-        )])?;
+    let fixture = Fixture::new("automatic-retry")?;
+    fixture.write_roots(&[RootSpec::new(
+        "packages.demo",
+        ".#demo",
+        PROJECT_DRV,
+        &[PROJECT_OUT],
+    )])?;
 
-        let warning = fixture.run_auto(PROJECT_DRV, PROJECT_OUT, &[(failure, "1")])?;
+    let warning = fixture.run_auto(PROJECT_DRV, PROJECT_OUT, &[])?;
 
-        assert!(warning.contains("warning: automatic project cache publish failed:"));
-        assert_eq!(fixture.pending_count()?, 1);
-        let report = fixture.run("publish")?;
-        assert!(report.contains("drained pending:"));
-        assert_eq!(fixture.pending_count()?, 0);
-        assert!(fixture.copy_log_line()?.contains(PROJECT_OUT));
-    }
+    assert!(warning.contains("warning: automatic project cache publish failed:"));
+    assert_eq!(fixture.pending_count()?, 1);
+    let report = fixture.run("publish")?;
+    assert!(report.contains("drained pending:"));
+    assert_eq!(fixture.pending_count()?, 0);
+    assert!(fixture.copy_log_line()?.contains(PROJECT_OUT));
+    Ok(())
+}
+
+#[test]
+fn unadmitted_hook_does_not_create_cache_control_or_archive_state() -> TestResult {
+    let fixture = Fixture::new("unadmitted-hook")?;
+    fixture.write_roots(&[RootSpec::new(
+        "packages.demo",
+        ".#demo",
+        PROJECT_DRV,
+        &[PROJECT_OUT],
+    )])?;
+    let report = fixture.run_auto("/nix/store/unrelated.drv", ARBITRARY_OUT, &[])?;
+    assert!(report.contains("skipped non-project derivation"));
+    assert!(!fixture.state_root.exists());
+    assert!(!fixture.cache_root.exists());
+    assert!(!fixture.nix_log.exists());
+    assert!(!fixture.key_counter.exists());
     Ok(())
 }
 

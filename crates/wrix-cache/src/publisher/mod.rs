@@ -1,8 +1,9 @@
 use std::{
     collections::{BTreeSet, HashSet},
     env,
-    fs::{self, File, OpenOptions},
+    fs::{self, DirBuilder, File, OpenOptions},
     io::{self, ErrorKind},
+    os::unix::fs::DirBuilderExt,
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
     thread,
@@ -51,6 +52,8 @@ pub enum Error {
     HomeMissing,
     /// {0}
     Publication(#[from] crate::backend::publication::Error),
+    /// {0}
+    Backend(#[from] crate::backend::Error),
     /// Celler view was rotated, but local key/status recording failed; no rollback occurred: {source}
     RotationRecording { source: Box<Error> },
 }
@@ -227,16 +230,6 @@ pub fn run_hook_record(record: HookRecord<'_>, settings: Settings) -> Result<Rep
         cache_root: cache_root.to_path_buf(),
         settings,
     };
-    if paths
-        .scope
-        .as_ref()
-        .is_some_and(|context| context.key() != workspace_hash)
-    {
-        return Err(wrix_state::store::Error::Conflict.into());
-    }
-    if paths.scope.is_some() && manifest != paths.publish_roots_path() {
-        return Err(wrix_state::store::Error::Conflict.into());
-    }
     let roots = read_manifest_roots(manifest)?;
     let matching = roots
         .into_iter()
@@ -250,7 +243,8 @@ pub fn run_hook_record(record: HookRecord<'_>, settings: Settings) -> Result<Rep
             lines: vec![format!("skipped non-project derivation {drv_path}")],
         });
     };
-    run_automatic_publish(&paths, &root)
+    paths.ensure_control()?;
+    run_automatic_publish(&paths, workspace_hash, &root)
 }
 
 fn run(workspace: &Workspace, paths: &Paths, mode: Mode) -> Result<Report> {
@@ -296,7 +290,7 @@ fn run(workspace: &Workspace, paths: &Paths, mode: Mode) -> Result<Report> {
     }
 }
 
-fn run_automatic_publish(paths: &Paths, root: &Root) -> Result<Report> {
+fn run_automatic_publish(paths: &Paths, workspace: &WorkspaceHash, root: &Root) -> Result<Report> {
     let mut lines = Vec::new();
     let timeout = Duration::from_millis(paths.settings.lock_timeout_ms);
     let Some(lock) = OperationLock::acquire(paths, Some(timeout), &mut lines)? else {
@@ -306,7 +300,7 @@ fn run_automatic_publish(paths: &Paths, root: &Root) -> Result<Report> {
         ));
         return Ok(Report { lines });
     };
-    let result = publish_roots(paths, std::slice::from_ref(root), Vec::new(), None);
+    let result = publish_hook_root(paths, workspace, root);
     let release = lock.release();
     match (result, release) {
         (Ok(mut report), Ok(())) => lines.append(&mut report.lines),
@@ -319,6 +313,23 @@ fn run_automatic_publish(paths: &Paths, root: &Root) -> Result<Report> {
         }
     }
     Ok(Report { lines })
+}
+
+fn publish_hook_root(paths: &Paths, workspace: &WorkspaceHash, root: &Root) -> Result<Report> {
+    let publisher = crate::backend::publication::Publisher::load(&paths.state_root, workspace)?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let closure = runtime.block_on(crate::backend::realized_closure(&root.out_paths))?;
+    let filtered = subtract_upstream(paths, closure.into_iter().collect())?;
+    let selected = filtered.iter().map(PathBuf::from).collect::<Vec<_>>();
+    let count = runtime.block_on(publisher.publish_selected(&selected))?;
+    write_cache_status(paths, true, Some("ok"), None, None)?;
+    Ok(Report {
+        lines: vec![format!(
+            "published {count} project cache paths through Celler"
+        )],
+    })
 }
 
 fn with_explicit_lock<T>(paths: &Paths, operation: impl FnOnce() -> Result<T>) -> Result<T> {
@@ -1253,6 +1264,16 @@ impl Paths {
             cache_root,
             settings,
         })
+    }
+
+    fn ensure_control(&self) -> Result<()> {
+        DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&self.state_root)?;
+        fs::create_dir_all(self.pending_dir())?;
+        write_if_missing(&self.cache_lock_path(), "")?;
+        write_json_if_missing(&self.cache_status_path(), &cache_status(false))
     }
 
     fn ensure(&self) -> Result<()> {

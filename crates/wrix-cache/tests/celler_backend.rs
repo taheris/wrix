@@ -738,6 +738,174 @@ async fn publisher_reuses_rust_store_client() {
     assert_eq!(received.as_ref(), bytes);
 }
 
+async fn invoke_native_hook(
+    control: &std::path::Path,
+    selected: &std::path::Path,
+) -> wrix_cache::publisher::Report {
+    let control = control.to_path_buf();
+    let selected = selected.to_str().unwrap().to_owned();
+    tokio::task::spawn_blocking(move || {
+        let workspace = wrix_core::path::Workspace::from_path(&control).unwrap();
+        wrix_cache::publisher::run_hook_record(
+            wrix_cache::publisher::HookRecord {
+                workspace_hash: workspace.hash(),
+                state_root: &control,
+                cache_root: &control.join("legacy-cache"),
+                manifest: &control.join("publish-roots.json"),
+                drv_path: "selected.drv",
+                out_paths: &selected,
+            },
+            wrix_cache::config::Settings::default(),
+        )
+    })
+    .await
+    .unwrap()
+    .unwrap()
+}
+
+#[tokio::test]
+#[ignore = "requires packaged Celler, Linux user/mount namespaces, Nix and OpenSSL"]
+async fn native_hook_upload_failure_records_pending_without_flat_fallback() {
+    if !native::in_isolated_store(
+        "native_hook_upload_failure_records_pending_without_flat_fallback",
+    ) {
+        return;
+    }
+    let path = native::add_file("denied native upload", "denied-hook-output");
+    let server = native::Server::start();
+    let client = server.client("private");
+    let key = client.register(RETENTION).await.unwrap();
+    let control = tempfile::tempdir().unwrap();
+    let workspace = wrix_core::path::Workspace::from_path(control.path()).unwrap();
+    let pull_token = native::pull_token();
+    write_binding(
+        control.path(),
+        workspace.hash(),
+        &server.endpoint,
+        &pull_token,
+    );
+    std::fs::write(
+        control.path().join("publish-roots.json"),
+        json!({"roots": [{
+            "name": "packages.demo", "installable": ".#demo", "drv_path": "selected.drv",
+            "out_paths": [path]
+        }]})
+        .to_string(),
+    )
+    .unwrap();
+    let report = invoke_native_hook(control.path(), &path).await;
+    assert!(
+        report
+            .lines()
+            .iter()
+            .any(|line| line.contains("automatic project cache publish failed"))
+    );
+    let pending = std::fs::read_dir(control.path().join("pending"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let record: Value = serde_json::from_slice(&std::fs::read(&pending).unwrap()).unwrap();
+    assert_eq!(record["drv_path"], "selected.drv");
+    assert_eq!(record["out_paths"], json!([path]));
+    let status: Value =
+        serde_json::from_slice(&std::fs::read(control.path().join("cache-status.json")).unwrap())
+            .unwrap();
+    assert_eq!(status["last_publish"], "warning");
+    assert!(
+        status["last_error"]
+            .as_str()
+            .unwrap()
+            .contains("Celler returned HTTP")
+    );
+    assert!(!status.to_string().contains(&pull_token));
+    assert!(!control.path().join("legacy-cache").exists());
+    assert!(!control.path().join("keys").exists());
+    assert_eq!(client.public_key().await.unwrap(), key);
+    assert_eq!(
+        server
+            .get(&format!("private/{}.narinfo", native::hash(&path)))
+            .await
+            .status(),
+        404
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires packaged Celler, Linux user/mount namespaces, Nix and OpenSSL"]
+async fn admitted_hook_streams_native_closure_without_flat_state() {
+    if !native::in_isolated_store("admitted_hook_streams_native_closure_without_flat_state") {
+        return;
+    }
+    let dependency = native::add_file("selected dependency", "hook-dependency");
+    let unrelated = native::add_file("not selected", "hook-unrelated");
+    let output = std::process::Command::new("nix")
+        .args(["--store", "daemon", "eval", "--raw", "--impure", "--expr"])
+        .arg(format!(
+            "builtins.toFile \"hook-selected\" (builtins.storePath {:?})",
+            dependency.to_str().unwrap()
+        ))
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{:?}", output.stderr);
+    let selected = String::from_utf8(output.stdout).unwrap();
+    let selected = std::path::PathBuf::from(selected.trim());
+    let server = native::Server::start();
+    let client = server.client("private");
+    let key = client.register(RETENTION).await.unwrap();
+    let control = tempfile::tempdir().unwrap();
+    let workspace = wrix_core::path::Workspace::from_path(control.path()).unwrap();
+    write_binding(
+        control.path(),
+        workspace.hash(),
+        &server.endpoint,
+        &server.token,
+    );
+    let manifest = control.path().join("publish-roots.json");
+    std::fs::write(
+        &manifest,
+        json!({"roots": [{
+            "name": "packages.demo", "installable": ".#demo", "drv_path": "selected.drv",
+            "out_paths": [selected]
+        }]})
+        .to_string(),
+    )
+    .unwrap();
+    let report = invoke_native_hook(control.path(), &selected).await;
+    assert_eq!(
+        report.lines(),
+        ["published 2 project cache paths through Celler"]
+    );
+    assert!(!control.path().join("legacy-cache").exists());
+    assert!(!control.path().join("keys").exists());
+    assert!(!control.path().join("gcroots").exists());
+    assert_eq!(
+        std::fs::read_dir(control.path().join("pending"))
+            .unwrap()
+            .count(),
+        0
+    );
+    for path in [&selected, &dependency] {
+        let response = server
+            .get(&format!("private/{}.narinfo", native::hash(path)))
+            .await;
+        assert_eq!(response.status(), 200);
+        assert!(response.text().await.unwrap().contains(&format!(
+            "Sig: {}:",
+            key.as_str().split_once(':').unwrap().0
+        )));
+    }
+    assert_eq!(
+        server
+            .get(&format!("private/{}.narinfo", native::hash(&unrelated)))
+            .await
+            .status(),
+        404
+    );
+    assert_eq!(client.public_key().await.unwrap(), key);
+}
+
 #[tokio::test]
 #[ignore = "requires packaged Celler, Linux user/mount namespaces, Nix and OpenSSL"]
 async fn publication_uses_namespace_server_signing() {

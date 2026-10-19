@@ -286,6 +286,30 @@ impl Client {
     }
 }
 
+/// Returns only realized runtime references of the selected outputs; unknown store errors propagate.
+pub async fn realized_closure(paths: &[String]) -> Result<Vec<String>> {
+    if paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    let store = Box::pin(NixStore::connect()).await?;
+    let mut realized = Vec::new();
+    for path in paths {
+        let parsed = store.parse_store_path(path)?;
+        if store.get_full_path(&parsed) != *path {
+            return Err(Error::Protocol);
+        }
+        if store.query_path_info(&parsed).await?.is_some() {
+            realized.push(parsed);
+        }
+    }
+    Ok(store
+        .compute_fs_closure_multi(realized, false)
+        .await?
+        .into_iter()
+        .map(|path| store.get_full_path(path).to_string_lossy().into_owned())
+        .collect())
+}
+
 fn parse_public_key(config: &CacheConfig) -> Result<CachePublicKey> {
     let key = config.public_key.as_deref().ok_or(Error::PublicKey)?;
     CachePublicKey::parse(key).map_err(|_| Error::PublicKey)
