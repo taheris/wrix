@@ -153,7 +153,6 @@
           celler = wrix.rustPackage.celler;
           wrix-cache-hook = wrix.rustPackage.cacheHook;
           wrix-cache-publish = wrix.rustPackage.cachePublish;
-          wrix-cache-serve = wrix.rustPackage.cacheServe;
           wrix-service-image = wrix.serviceImage;
           wrix-notify-host = import ../../lib/notify/client.nix {
             inherit pkgs;

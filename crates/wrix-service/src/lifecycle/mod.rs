@@ -23,7 +23,6 @@ use serde::{Deserialize, Deserializer, de};
 use thiserror::Error as ThisError;
 use wrix_core::{
     beads_config::{ReadError, read_sync_branch},
-    cache_key,
     git::Branch,
     path::{ContainerName, Workspace, WorkspaceHash},
 };
@@ -37,6 +36,8 @@ const CACHE_PORT_WIDTH: u16 = 2_000;
 const DOLT_PORT_START: u16 = 23_000;
 const DOLT_PORT_WIDTH: u16 = 2_000;
 const CACHE_ENABLED_LABEL: &str = "wrix.cache.enabled";
+const CACHE_BACKEND_LABEL: &str = "wrix.cache.backend";
+const CACHE_BACKEND_VERSION: &str = "celler-v1";
 const SUPERVISION_LABEL: &str = "wrix.service.supervision";
 const SUPERVISION_VERSION: &str = "1";
 const DOLT_TRANSPORT_LABEL: &str = "wrix.dolt.transport";
@@ -66,6 +67,8 @@ pub enum Error {
     ControlDirectory(#[from] wrix_core::private_directory::Error),
     /// {0}
     CellerLayout(#[from] wrix_cache::backend::layout::Error),
+    /// {0}
+    CellerRuntime(#[from] wrix_cache::backend::layout::runtime::Error),
     /// runtime image operation failed: {source}
     Image { source: runtime_image::Error },
     /// environment variable {name} must be valid Unicode
@@ -366,26 +369,18 @@ impl Plan {
     pub fn ensure_layout(&self) -> Result<()> {
         wrix_core::private_directory::prepare_with_parents(self.paths.state_root())?;
         if self.cache_enabled() {
-            wrix_cache::backend::layout::Layout::current()?.prepare()?;
-            fs::create_dir_all(self.paths.cache_root())?;
-            if !wrix_state::namespace::is_host_root(self.paths.state_root())? {
-                fs::create_dir_all(self.paths.gcroots_dir())?;
-                fs::create_dir_all(self.paths.pending_dir())?;
-            }
+            let layout = wrix_cache::backend::layout::Layout::current()?;
+            layout.prepare()?;
+            wrix_cache::backend::layout::runtime::install(layout.metadata())?;
+            fs::create_dir_all(self.paths.gcroots_dir())?;
             fs::create_dir_all(self.paths.keys_dir())?;
-            fs::create_dir_all(self.paths.cache_root().join("nar"))?;
-            fs::create_dir_all(self.paths.cache_root().join("log"))?;
+            fs::create_dir_all(self.paths.pending_dir())?;
             write_if_missing(&self.paths.cache_lock_path(), "")?;
             write_if_missing(
                 &self.paths.cache_status_path(),
                 default_cache_status().as_bytes(),
             )?;
-            self.ensure_cache_keys()?;
             write_if_missing(&self.paths.publish_roots_path(), b"{\n  \"roots\": []\n}\n")?;
-            write_if_missing(
-                &self.paths.cache_root().join("nix-cache-info"),
-                nix_cache_info().as_bytes(),
-            )?;
         }
         if self.dolt.is_some() {
             fs::create_dir_all(self.workspace.canonical_path().join(".wrix"))?;
@@ -452,18 +447,6 @@ impl Plan {
             dolt_unix,
             dolt_tcp
         )
-    }
-
-    fn ensure_cache_keys(&self) -> Result<()> {
-        let key_name = format!("wrix-cache-{}", self.workspace.hash());
-        let nix_store = env::var("WRIX_NIX_STORE").unwrap_or_else(|_| String::from("nix-store"));
-        cache_key::ensure_keypair(
-            &key_name,
-            &self.paths.cache_secret_path(),
-            &self.paths.cache_public_path(),
-            &nix_store,
-        )?;
-        Ok(())
     }
 }
 
@@ -613,10 +596,6 @@ impl Paths {
 
     pub fn pending_dir(&self) -> PathBuf {
         self.state_root.join("pending")
-    }
-
-    pub fn cache_secret_path(&self) -> PathBuf {
-        self.keys_dir().join("cache.secret")
     }
 
     pub fn cache_public_path(&self) -> PathBuf {
@@ -1171,10 +1150,16 @@ impl Runtime {
             ));
         if let Some(port) = plan.cache_port() {
             command
-                .arg("-p")
-                .arg(format!("127.0.0.1:{port}:8080"))
-                .arg("-v")
-                .arg(format!("{}:/cache:ro", plan.paths().cache_root().display()));
+                .arg("--label")
+                .arg(format!("{CACHE_BACKEND_LABEL}={CACHE_BACKEND_VERSION}"));
+            command.arg("-p").arg(format!("127.0.0.1:{port}:8080"));
+            for mount in wrix_cache::backend::layout::Layout::current()?.mounts() {
+                command.arg("-v").arg(format!(
+                    "{}:{}:rw",
+                    mount.source.display(),
+                    mount.destination
+                ));
+            }
         }
         if let Some(dolt) = plan.dolt() {
             if dolt.transport() == DoltTransport::Tcp {
@@ -1241,6 +1226,14 @@ impl Runtime {
     }
 
     fn running_container_satisfies_plan(&self, name: &ContainerName, plan: &Plan) -> Result<bool> {
+        if plan.cache_enabled()
+            && self
+                .inspect_label(name.as_str(), CACHE_BACKEND_LABEL)?
+                .as_deref()
+                != Some(CACHE_BACKEND_VERSION)
+        {
+            return Ok(false);
+        }
         if plan.cache_enabled()
             && self
                 .inspect_label(name.as_str(), CACHE_ENABLED_LABEL)?
@@ -1837,11 +1830,12 @@ fn is_loopback_port_available(port: u16) -> bool {
 
 fn container_command(plan: &Plan) -> String {
     match (plan.cache_enabled(), plan.dolt()) {
-        (true, Some(dolt)) => {
-            supervisor::command("exec wrix-cache-serve /cache", &dolt_server_command(dolt))
-        }
+        (true, Some(dolt)) => supervisor::command(
+            wrix_cache::backend::layout::runtime::COMMAND,
+            &dolt_server_command(dolt),
+        ),
         (false, Some(dolt)) => dolt_server_command(dolt),
-        (true, None) => String::from("exec wrix-cache-serve /cache"),
+        (true, None) => String::from(wrix_cache::backend::layout::runtime::COMMAND),
         (false, None) => String::from("sleep infinity"),
     }
 }
@@ -2007,8 +2001,12 @@ fn default_cache_status() -> String {
     )
 }
 
-fn nix_cache_info() -> String {
-    String::from("StoreDir: /nix/store\nWantMassQuery: 1\nPriority: 40\n")
+fn home_dir() -> Result<PathBuf> {
+    env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| Error::Operation {
+            message: String::from("HOME is required to resolve wrix service state roots"),
+        })
 }
 
 fn write_if_missing(path: &Path, content: impl AsRef<[u8]>) -> Result<()> {

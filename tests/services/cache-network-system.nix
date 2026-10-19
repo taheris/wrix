@@ -9,7 +9,7 @@ let
 
   serviceImage = import ../../lib/services/image.nix {
     inherit pkgs;
-    inherit (wrix.rustPackage) cacheServe celler;
+    inherit (wrix.rustPackage) celler;
   };
   profileConfigBase = pkgs.writeText "wrix-cache-network-system-profile-base.json" (
     builtins.toJSON {

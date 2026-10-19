@@ -207,5 +207,4 @@ in
   };
   cacheHook = mkBinaryPackage "wrix-cache-hook";
   cachePublish = mkBinaryPackage "wrix-cache-publish";
-  cacheServe = mkBinaryPackage "wrix-cache-serve";
 }

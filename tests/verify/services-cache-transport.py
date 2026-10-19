@@ -92,14 +92,14 @@ def main():
     require_contains(
         "service container run path",
         service_run,
-        'format!("{}:/cache:ro", plan.paths().cache_root().display())',
+        'wrix_cache::backend::layout::Layout::current()?.mounts()',
     )
     require_contains(
         "service container command",
         container_command,
-        "wrix-cache-serve /cache",
+        "wrix_cache::backend::layout::runtime::COMMAND",
     )
-    require_contains("service image contents", image_contents, "cacheServe")
+    require_contains("service image contents", image_contents, "celler")
 
     checked_regions = {
         "project-cache launcher path": cache_load,

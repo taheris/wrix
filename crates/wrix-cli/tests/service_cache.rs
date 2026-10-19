@@ -139,6 +139,29 @@ fn retired_cache_prune_fails_without_state_or_runtime_access() -> TestResult {
 }
 
 #[test]
+fn cache_start_requires_verification_authority_without_static_fallback() -> TestResult {
+    let fixture = Fixture::new()?;
+    let output = run_command(
+        fixture
+            .command("podman")?
+            .args(["service", "start"])
+            .env("WRIX_SERVICE_ALLOW_TEMP_CACHE", "1"),
+    )?;
+    assert!(!output.status.success());
+    assert!(
+        output.stderr.contains("public verification key"),
+        "{}",
+        output.stderr
+    );
+    assert!(!fixture.root.path().join("run.argv").exists());
+    let metadata = fixture.endpoints(true)?;
+    let state = PathBuf::from(metadata["state_root"].as_str().unwrap());
+    assert!(!state.join("keys/cache.secret").exists());
+    assert!(!PathBuf::from(metadata["cache_root"].as_str().unwrap()).exists());
+    Ok(())
+}
+
+#[test]
 fn service_start_rejects_unbound_ambient_image_substitutes() -> TestResult {
     let fixture = Fixture::new()?;
     let output = run_command(
@@ -260,9 +283,12 @@ fn repository_cache_opt_out_suppresses_startup_and_environment_can_override_it()
 }
 
 #[test]
-fn cache_layout_uses_exact_platform_roots_and_opt_out_creates_no_cache() -> TestResult {
+fn celler_layout_separates_managed_cache_data_from_host_authority() -> TestResult {
     for cache in [false, true] {
         let fixture = Fixture::new()?;
+        if cache {
+            service_binding::provision_celler_verifier(fixture.root.path())?;
+        }
         let mut command = fixture.command("podman")?;
         command
             .args(["service", "start"])
@@ -294,32 +320,42 @@ fn cache_layout_uses_exact_platform_roots_and_opt_out_creates_no_cache() -> Test
         assert_eq!(metadata["cache_root"].as_str(), cache_root.to_str());
         assert!(!state_root.starts_with(&fixture.workspace));
         assert!(!cache_root.starts_with(&fixture.workspace));
-        let observer = std::path::Path::new("/etc/wrix/image-agent").exists();
-        assert_eq!(state_root.join("services.json").is_file(), observer);
-        for file in ["cache-status.json", "publish-roots.json"] {
-            assert_eq!(state_root.join(file).is_file(), cache && observer, "{file}");
-        }
-        for file in ["cache.lock", "keys/cache.secret", "keys/cache.pub"] {
+        assert!(state_root.join("services.json").is_file());
+        for file in ["cache.lock", "cache-status.json", "publish-roots.json"] {
             assert_eq!(state_root.join(file).is_file(), cache, "{file}");
         }
         for dir in ["gcroots", "pending"] {
             assert_eq!(state_root.join(dir).is_dir(), cache && observer, "{dir}");
         }
-        assert_eq!(cache_root.join("nix-cache-info").is_file(), cache);
-        assert_eq!(cache_root.join("nar").is_dir(), cache);
-        assert_eq!(cache_root.join("log").is_dir(), cache);
+        assert!(!cache_root.exists());
+        assert!(!state_root.join("keys/cache.secret").exists());
+        assert!(!state_root.join("keys/cache.pub").exists());
         if cache {
-            let key = fs::read_to_string(state_root.join("keys/cache.pub"))?;
-            wrix_core::cache_key::CachePublicKey::parse(key.trim())?;
-            let persisted: Value = serde_json::from_slice(&common::read_namespace_document(
-                &state_root.join("services.json"),
-            )?)?;
+            let persisted: Value =
+                serde_json::from_slice(&fs::read(state_root.join("services.json"))?)?;
             assert_eq!(persisted, metadata);
             let args = fs::read(fixture.root.path().join("run.argv"))?;
-            let mount = format!("{}:/cache:ro", cache_root.display());
+            let layout = wrix_cache::backend::layout::Layout::resolve(
+                if cfg!(target_os = "macos") {
+                    wrix_cache::backend::layout::Platform::Darwin
+                } else {
+                    wrix_cache::backend::layout::Platform::Linux
+                },
+                &home,
+                Some(&state_base),
+                Some(&cache_base),
+            )?;
+            for mount in layout.mounts() {
+                let value = format!("{}:{}:rw", mount.source.display(), mount.destination);
+                assert!(
+                    args.split(|byte| *byte == 0)
+                        .any(|arg| arg == value.as_bytes())
+                );
+            }
             assert!(
-                args.split(|byte| *byte == 0)
-                    .any(|arg| arg == mount.as_bytes())
+                !args
+                    .split(|byte| *byte == 0)
+                    .any(|arg| arg.ends_with(b":/cache:ro"))
             );
         } else {
             assert!(!fixture.root.path().join("run.argv").exists());
@@ -348,6 +384,9 @@ fn enabled_service_prepares_only_private_shared_celler_data_and_opt_out_does_not
         fixture.endpoints(cache)?;
         assert!(!layout.metadata().exists());
         assert!(!layout.archives().exists());
+        if cache {
+            service_binding::provision_celler_verifier(fixture.root.path())?;
+        }
         let mut command = fixture.command("podman")?;
         command
             .args(["service", "start"])
@@ -465,6 +504,7 @@ fn service_rejects_symlinked_control_before_lock_or_runtime_access() -> TestResu
 fn service_startup_does_not_collect_dirty_cache_contents() -> TestResult {
     for elapsed in [3600, 172_800] {
         let fixture = Fixture::new()?;
+        service_binding::provision_celler_verifier(fixture.root.path())?;
         let mut command = fixture.command("podman")?;
         command
             .args(["service", "start"])
@@ -475,6 +515,7 @@ fn service_startup_does_not_collect_dirty_cache_contents() -> TestResult {
         let state_root = PathBuf::from(metadata["state_root"].as_str().unwrap());
         let cache_root = PathBuf::from(metadata["cache_root"].as_str().unwrap());
         let stale = cache_root.join("nar/orphan.nar");
+        fs::create_dir_all(stale.parent().unwrap())?;
         fs::write(&stale, "orphan")?;
         let last_prune = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
@@ -507,6 +548,7 @@ fn service_start_uses_shared_image_digest_preflight_without_pruning() -> TestRes
     ] {
         for installed in [false, true] {
             let fixture = Fixture::new()?;
+            service_binding::provision_celler_verifier(fixture.root.path())?;
             let source = fixture.root.path().join("source");
             let layout = fixture.root.path().join("layout");
             let digest = format!("sha256:{}", "a".repeat(64));

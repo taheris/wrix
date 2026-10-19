@@ -120,23 +120,23 @@ JSON
 }
 
 test_rust_helper_binaries() {
-  local hook_package publish_package serve_package
+  local hook_package publish_package celler_package
   hook_package="$(build_package wrix-cache-hook)" || return 1
   publish_package="$(build_package wrix-cache-publish)" || return 1
-  serve_package="$(build_package wrix-cache-serve)" || return 1
+  celler_package="$(build_package celler)" || return 1
 
   assert_executable "$hook_package/bin/wrix-cache-hook"
   assert_executable "$publish_package/bin/wrix-cache-publish"
-  assert_executable "$serve_package/bin/wrix-cache-serve"
+  assert_executable "$celler_package/bin/cellerd"
 
-  local hook_help publish_help serve_help
+  local hook_help publish_help celler_help
   hook_help="$("$hook_package"/bin/wrix-cache-hook --help)"
   publish_help="$("$publish_package"/bin/wrix-cache-publish --help)"
-  serve_help="$("$serve_package"/bin/wrix-cache-serve --help)"
+  celler_help="$("$celler_package"/bin/cellerd --help)"
 
   assert_contains "hook helper help" "$hook_help" "Usage: wrix-cache-hook"
   assert_contains "publish helper help" "$publish_help" "Usage: wrix-cache-publish"
-  assert_contains "serve helper help" "$serve_help" "Usage: wrix-cache-serve"
+  assert_contains "backend help" "$celler_help" "Usage: cellerd"
 }
 
 ALL_TESTS=(

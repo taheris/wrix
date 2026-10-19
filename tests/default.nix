@@ -275,6 +275,7 @@ let
     // (import ./sandbox/pi-settings.nix { inherit pkgs wrix; })
     // piMcpTests.checks
     // {
+      cache-celler-packaging = import ./services/celler-packaging.nix { inherit pkgs wrix; };
       builder-vmnet-route = builderRouteTest;
       rust-source-fixtures = import ./services/rust-source.nix {
         inherit pkgs;

@@ -23,17 +23,17 @@ FIXTURE = {
     LIFECYCLE: '''
     fn ensure_running() {
         format!("127.0.0.1:{port}:8080");
-        format!("{}:/cache:ro", plan.paths().cache_root().display());
+        wrix_cache::backend::layout::Layout::current()?.mounts();
     }
     fn status() {}
 fn container_command() {
-    "wrix-cache-serve /cache"
+    "wrix_cache::backend::layout::runtime::COMMAND"
 }
 fn expected_dolt_transport_label() {}
 ''',
     IMAGE: '''
   contents = [
-    cacheServe
+    celler
   ];
 ''',
 }
@@ -85,10 +85,10 @@ class CacheTransportVerifierTests(unittest.TestCase):
             (
                 LIFECYCLE,
                 "service container run path",
-                'format!("{}:/cache:ro", plan.paths().cache_root().display())',
+                'wrix_cache::backend::layout::Layout::current()?.mounts()',
             ),
-            (LIFECYCLE, "service container command", "wrix-cache-serve /cache"),
-            (IMAGE, "service image contents", "cacheServe"),
+            (LIFECYCLE, "service container command", "wrix_cache::backend::layout::runtime::COMMAND"),
+            (IMAGE, "service image contents", "celler"),
         ]
         for path, label, needle in required:
             with self.subTest(region=label, missing=needle):

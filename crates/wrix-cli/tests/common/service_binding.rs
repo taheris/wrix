@@ -7,6 +7,25 @@ use serde_json::json;
 
 use super::{TestResult, set_mode};
 
+pub fn provision_celler_verifier(root: &Path) -> TestResult {
+    let layout = wrix_cache::backend::layout::Layout::resolve(
+        if cfg!(target_os = "macos") {
+            wrix_cache::backend::layout::Platform::Darwin
+        } else {
+            wrix_cache::backend::layout::Platform::Linux
+        },
+        &root.join("home"),
+        Some(&root.join("state")),
+        Some(&root.join("cache")),
+    )?;
+    layout.prepare()?;
+    fs::write(
+        layout.metadata().join("jwt.pub"),
+        include_str!("../fixtures/celler-verifier.pem"),
+    )?;
+    Ok(())
+}
+
 pub fn create(root: &Path, bin: &Path, kind: &str) -> TestResult<PathBuf> {
     fs::create_dir_all(bin)?;
     let source = root.join("bound-source");

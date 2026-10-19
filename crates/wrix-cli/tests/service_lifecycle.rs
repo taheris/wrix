@@ -142,6 +142,7 @@ impl Fixture {
                     "wrix.workspace": fixture.metadata["workspace_path"],
                     "wrix.workspace.hash": fixture.metadata["workspace_hash"],
                     "wrix.cache.enabled": "true",
+                    "wrix.cache.backend": "celler-v1",
                     "wrix.service.supervision": "1",
                     "wrix.dolt.transport": "tcp",
                     "wrix.dolt.auth": "tcp-root-v1"
@@ -161,6 +162,7 @@ impl Fixture {
             fixture.root.path().join("replacement.json"),
             serde_json::to_vec_pretty(&fixture.snapshot)?,
         )?;
+        service_binding::provision_celler_verifier(fixture.root.path())?;
         let state_root = fixture.state_root()?;
         fs::DirBuilder::new()
             .recursive(true)
@@ -882,7 +884,27 @@ fn cache_endpoint_generates_only_an_exact_tcp_network_exception() -> TestResult 
 }
 
 #[test]
-fn apple_cache_service_preserves_loopback_publication_and_read_only_mount() -> TestResult {
+fn cache_start_replaces_a_legacy_static_backend_without_replacing_local_key_metadata() -> TestResult
+{
+    let mut fixture = Fixture::new()?;
+    fixture.disable_dolt()?;
+    fixture.snapshot[0]["configuration"]["labels"]
+        .as_object_mut()
+        .unwrap()
+        .remove("wrix.cache.backend");
+    fixture.write_snapshot()?;
+    let key = fs::read(fixture.state_root()?.join("keys/cache.pub"))?;
+    let output = fixture.run("start")?;
+    assert!(output.status.success(), "{}", output.stderr);
+    let args = fs::read_to_string(fixture.root.path().join("run.argv"))?;
+    assert!(args.contains(wrix_cache::backend::layout::runtime::COMMAND));
+    assert!(args.contains("wrix.cache.backend=celler-v1"));
+    assert_eq!(fs::read(fixture.state_root()?.join("keys/cache.pub"))?, key);
+    Ok(())
+}
+
+#[test]
+fn apple_cache_service_preserves_loopback_publication_and_narrow_managed_mounts() -> TestResult {
     let mut fixture = Fixture::new()?;
     fixture.disable_dolt()?;
     fixture.snapshot[0]["configuration"]["labels"]["wrix.cache.enabled"] = json!("false");
@@ -901,11 +923,24 @@ fn apple_cache_service_preserves_loopback_publication_and_read_only_mount() -> T
         publications,
         [format!("127.0.0.1:{}:8080", fixture.port("cache_http")?)]
     );
-    assert!(args.lines().any(|arg| arg
-        == format!(
-            "{}:/cache:ro",
-            fixture.metadata["cache_root"].as_str().unwrap()
-        )));
+    let layout = wrix_cache::backend::layout::Layout::resolve(
+        if cfg!(target_os = "macos") {
+            wrix_cache::backend::layout::Platform::Darwin
+        } else {
+            wrix_cache::backend::layout::Platform::Linux
+        },
+        &fixture.root.path().join("home"),
+        Some(&fixture.root.path().join("state")),
+        Some(&fixture.root.path().join("cache")),
+    )?;
+    for mount in layout.mounts() {
+        assert!(
+            args.lines()
+                .any(|arg| arg == format!("{}:{}:rw", mount.source.display(), mount.destination))
+        );
+    }
+    assert!(!args.contains(":/cache:ro"));
+    assert!(args.contains(wrix_cache::backend::layout::runtime::COMMAND));
     assert!(!args.contains("/var/lib/wrix/beads/dolt"));
     Ok(())
 }

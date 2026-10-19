@@ -120,6 +120,106 @@ impl Server {
         server
     }
 
+    pub fn start_verification_only(layout: &wrix_cache::backend::layout::Layout) -> Self {
+        assert_eq!(
+            std::env::var("WRIX_TEST_RUNTIME_NAMESPACE").as_deref(),
+            Ok("1")
+        );
+        layout.prepare().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let private_key = root.path().join("issuer.pem");
+        let generated = Command::new("openssl")
+            .args([
+                "genpkey",
+                "-algorithm",
+                "RSA",
+                "-pkeyopt",
+                "rsa_keygen_bits:2048",
+                "-out",
+            ])
+            .arg(&private_key)
+            .output()
+            .unwrap();
+        assert!(generated.status.success(), "{:?}", generated.stderr);
+        let public = Command::new("openssl")
+            .arg("pkey")
+            .arg("-in")
+            .arg(&private_key)
+            .args(["-pubout", "-out"])
+            .arg(layout.metadata().join("jwt.pub"))
+            .output()
+            .unwrap();
+        assert!(public.status.success(), "{:?}", public.stderr);
+        wrix_cache::backend::layout::runtime::install(layout.metadata()).unwrap();
+        for mount in layout.mounts() {
+            assert!(
+                Command::new("mount")
+                    .arg("--bind")
+                    .arg(mount.source)
+                    .arg(mount.destination)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"RS256","typ":"JWT"}"#);
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let claims = json!({
+            "sub":"native-runtime-fixture", "exp":now + 3600,
+            "https://jwt.attic.rs/v1":{"caches":{
+                "private":{"r":1,"w":1,"cc":1,"cr":1,"cq":1,"cd":1}
+            }}
+        });
+        let message = format!("{header}.{}", URL_SAFE_NO_PAD.encode(claims.to_string()));
+        let mut signer = Command::new("openssl")
+            .args(["dgst", "-sha256", "-sign"])
+            .arg(&private_key)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        signer
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(message.as_bytes())
+            .unwrap();
+        let signature = signer.wait_with_output().unwrap();
+        assert!(signature.status.success());
+        let token = format!("{message}.{}", URL_SAFE_NO_PAD.encode(signature.stdout));
+        let executable = std::env::var_os("WRIX_TEST_CELLERD").unwrap();
+        let log = File::create(root.path().join("server.log")).unwrap();
+        let child = Command::new(executable)
+            .args(["--config", "/var/lib/wrix/celler/server.toml"])
+            .env("NIX_REMOTE", "unix:///no-host-store-daemon")
+            .stdin(Stdio::null())
+            .stdout(log.try_clone().unwrap())
+            .stderr(log)
+            .spawn()
+            .unwrap();
+        let mut server = Self {
+            endpoint: String::from("http://127.0.0.1:8080/"),
+            token,
+            child,
+            root,
+            database: layout.metadata().join("metadata.db"),
+        };
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while TcpStream::connect("127.0.0.1:8080").is_err() {
+            assert!(
+                server.child.try_wait().unwrap().is_none(),
+                "{}",
+                fs::read_to_string(server.root.path().join("server.log")).unwrap()
+            );
+            assert!(Instant::now() < deadline, "Celler startup timeout");
+            thread::sleep(Duration::from_millis(20));
+        }
+        server
+    }
+
     pub fn client(&self, namespace: &str) -> Client {
         Client::new(
             &self.endpoint,

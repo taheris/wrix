@@ -12,6 +12,12 @@ let
   hostNix = serviceScriptWithWrix "host-nix-config";
 in
 {
+  "cache.celler-packaging".script = ''
+    local root
+    root="$(repo_root)"
+    nix build --no-link --no-warn-dirty "$root#checks.${pkgs.stdenv.hostPlatform.system}.cache-celler-packaging"
+  '';
+
   "services.cache-devshell-overrides".script = ''
     local root
     root="$(repo_root)"

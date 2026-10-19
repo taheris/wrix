@@ -12,7 +12,6 @@ reqwest = { workspace = true }
 tokio = { workspace = true }
 displaydoc = { workspace = true }
 fs2 = { workspace = true }
-httparse = { workspace = true }
 libc = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -24,8 +23,8 @@ wrix-core = { workspace = true }
 wrix-state = { workspace = true }
 
 [dev-dependencies]
+toml = { workspace = true }
 base64 = { workspace = true }
-socket2 = { workspace = true }
 
 [[bin]]
 name = "wrix-cache-hook"
@@ -34,10 +33,6 @@ path = "src/bin/wrix-cache-hook.rs"
 [[bin]]
 name = "wrix-cache-publish"
 path = "src/bin/wrix-cache-publish.rs"
-
-[[bin]]
-name = "wrix-cache-serve"
-path = "src/bin/wrix-cache-serve.rs"
 
 [lints]
 workspace = true

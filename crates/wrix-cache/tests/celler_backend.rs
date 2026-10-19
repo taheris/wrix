@@ -693,6 +693,72 @@ fn runtime_authority_rejects_scope_drift_and_invalid_native_policy() {
 }
 
 #[tokio::test]
+#[ignore = "requires packaged Celler, Linux user/mount/network namespaces, Nix, ip and OpenSSL"]
+async fn integration_does_not_require_shared_worker_runtime() {
+    const TEST: &str = "integration_does_not_require_shared_worker_runtime";
+    if !native::in_isolated_store(TEST) {
+        return;
+    }
+    if std::env::var_os("WRIX_TEST_RUNTIME_NAMESPACE").is_none() {
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/cache/runtime-layout.sh");
+        let status = std::process::Command::new("unshare")
+            .args(["-n", "bash"])
+            .arg(script)
+            .arg(std::env::current_exe().unwrap())
+            .args(["--ignored", "--exact", TEST, "--nocapture"])
+            .status()
+            .unwrap();
+        assert!(status.success(), "runtime layout fixture failed: {status}");
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let layout = wrix_cache::backend::layout::Layout::resolve(
+        wrix_cache::backend::layout::Platform::Linux,
+        root.path(),
+        None,
+        None,
+    )
+    .unwrap();
+    let selected = native::add_file("runtime without host store access", "runtime-selected");
+    let server = native::Server::start_verification_only(&layout);
+    let client = server.client("private");
+    let key = client.register(RETENTION).await.unwrap();
+    assert_eq!(
+        client
+            .publish_selected(std::slice::from_ref(&selected))
+            .await
+            .unwrap(),
+        1
+    );
+    let response = server
+        .get(&format!("private/{}.narinfo", native::hash(&selected)))
+        .await;
+    assert_eq!(response.status(), 200);
+    assert!(response.text().await.unwrap().contains(&format!(
+        "Sig: {}:",
+        key.as_str().split_once(':').unwrap().0
+    )));
+    assert!(server.client("peer").register(RETENTION).await.is_err());
+    let denied = reqwest::Client::new()
+        .get(format!("{}private/nix-cache-info", server.endpoint))
+        .bearer_auth(native::pull_token())
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        !denied.status().is_success(),
+        "HS256 credentials must not work on verification-only RS256 backend"
+    );
+    for mount in layout.mounts() {
+        assert!(!mount.source.join("issuer.pem").exists());
+        assert!(!mount.source.join("celler-publisher.json").exists());
+        assert!(!mount.source.join("publish-roots.json").exists());
+    }
+    assert!(!root.path().join(".local/state/wrix/workspaces").exists());
+}
+
+#[tokio::test]
 #[ignore = "requires packaged Celler, Linux user/mount namespaces, Nix and OpenSSL"]
 async fn publisher_reuses_rust_store_client() {
     if !native::in_isolated_store("publisher_reuses_rust_store_client") {

@@ -1,7 +1,6 @@
 {
   pkgs,
   hostPkgs ? pkgs,
-  cacheServe,
   celler,
   asTarball ? false,
 }:
@@ -30,7 +29,6 @@ let
     dockerTools.usrBinEnv
     coreutils
     dolt
-    cacheServe
     celler
   ];
   imageConfig = {

@@ -26,7 +26,6 @@ fn post_build_hook_scopes_publish_to_manifest_roots() -> TestResult {
     let cache_root = fixture.path().join("cache");
     let workspace = fixture.path().join("workspace");
     fs::create_dir_all(&state_root)?;
-    fs::create_dir_all(&cache_root)?;
     fs::create_dir_all(&workspace)?;
 
     let manifest = fixture.path().join("publish-roots.json");
@@ -94,6 +93,10 @@ fn post_build_hook_scopes_publish_to_manifest_roots() -> TestResult {
     assert!(record.contains(&format!("--drv-path {PROJECT_DRV}")));
     assert!(record.contains("--out-paths /nix/store/project-out"));
     assert!(!matched_marker.exists());
+    assert!(
+        !cache_root.exists(),
+        "legacy hook coordinates must not require flat storage"
+    );
 
     Ok(())
 }

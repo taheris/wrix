@@ -174,7 +174,7 @@ let
   serviceImage = import ../services/image.nix {
     pkgs = linuxPkgs;
     hostPkgs = pkgs;
-    inherit (imageRustCli) cacheServe celler;
+    inherit (imageRustCli) celler;
     asTarball = isDarwin;
   };
 

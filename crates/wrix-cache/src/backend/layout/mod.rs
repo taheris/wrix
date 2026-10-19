@@ -1,5 +1,7 @@
 //! Host-user Celler data, separate from workspace publication authority.
 
+pub mod runtime;
+
 use std::{
     env,
     path::{Component, Path, PathBuf},
