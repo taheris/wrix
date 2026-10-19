@@ -200,11 +200,12 @@ in
   wrix = wrixPackage;
   binding = serviceBinding;
   inherit controllerBinding controllerPackage;
-  focusNotification = mkBinaryPackage "wrix-focus-notification" [ ];
-  cacheHook = mkBinaryPackage "wrix-cache-hook" [ ];
-  cachePublish = mkBinaryPackage "wrix-cache-publish" [
-    pkgs.git
-    pkgs.nix
-  ];
-  cacheServe = mkBinaryPackage "wrix-cache-serve" [ ];
+  focusNotification = mkBinaryPackage "wrix-focus-notification";
+  celler = import ./celler.nix {
+    inherit pkgs;
+    inherit (rustProfile) craneLib;
+  };
+  cacheHook = mkBinaryPackage "wrix-cache-hook";
+  cachePublish = mkBinaryPackage "wrix-cache-publish";
+  cacheServe = mkBinaryPackage "wrix-cache-serve";
 }

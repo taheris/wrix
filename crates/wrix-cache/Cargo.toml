@@ -5,7 +5,11 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-rustix = { workspace = true }
+attic = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+reqwest = { workspace = true }
+tokio = { workspace = true }
 displaydoc = { workspace = true }
 fs2 = { workspace = true }
 httparse = { workspace = true }

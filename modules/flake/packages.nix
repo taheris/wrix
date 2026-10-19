@@ -150,6 +150,7 @@
         )
         // {
           wrix = wrix.rustPackage.wrix;
+          celler = wrix.rustPackage.celler;
           wrix-cache-hook = wrix.rustPackage.cacheHook;
           wrix-cache-publish = wrix.rustPackage.cachePublish;
           wrix-cache-serve = wrix.rustPackage.cacheServe;
