@@ -30,7 +30,7 @@ const TRANSPORT_TRAMPOLINE: &str = concat!(
     "case \"$common_dir\" in /*) ;; *) ",
     "root=$(git rev-parse --show-toplevel) || exit 255; ",
     "common_dir=\"$root/$common_dir\" ;; esac; ",
-    "exec \"$common_dir/wrix/git-ssh\" \"$@\"' wrix-git-ssh",
+    "exec bash \"$common_dir/wrix/git-ssh\" \"$@\"' wrix-git-ssh",
 );
 const PREK_HOOKS_ENV: &str = "WRIX_PREK_HOOKS";
 const PREK_HOOK_NAMES: [&str; 5] = [
@@ -2082,7 +2082,8 @@ fn resolved_deploy_key(key_name: &KeyName) -> Result<PathBuf, Error> {
 }
 
 fn probe_helper_config(root: &Path, helper_path: &Path) -> Result<String, Error> {
-    let output = ProcessCommand::new(helper_path)
+    let output = ProcessCommand::new("bash")
+        .arg(helper_path)
         .arg("-G")
         .arg("github.com")
         .current_dir(root)
@@ -2476,6 +2477,93 @@ mod test {
         ForcePolicy, HookPolicy, KeyName, OnlineFailure, RemoteKeyId, RemoteName, SigningPolicy,
         VerificationPolicy, Workflow, classify_online_failure, parse_flags, parse_github_remote,
     };
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn helper_probe_uses_bash_with_spaces_and_an_unavailable_shebang() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("repo with spaces");
+        std::fs::create_dir(&root).unwrap();
+        let helper = root.join("git ssh helper");
+        std::fs::write(
+            &helper,
+            "#!/nonexistent/wrix-test-interpreter\nset -euo pipefail\nprintf '<%s>\\n' \"$PWD\" \"$@\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let output = super::probe_helper_config(&root, &helper).unwrap();
+        assert_eq!(
+            output,
+            format!("<{}>\n<-G>\n<github.com>\n", root.display())
+        );
+    }
+
+    #[test]
+    fn helper_probe_preserves_failure_diagnostics() {
+        let temporary = tempfile::tempdir().unwrap();
+        let helper = temporary.path().join("failing helper");
+        std::fs::write(
+            &helper,
+            "#!/nonexistent/wrix-test-interpreter\nprintf 'probe failed' >&2\nexit 37\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let error = super::probe_helper_config(temporary.path(), &helper).unwrap_err();
+        assert!(matches!(error, super::Error::HelperVerify { detail } if detail == "probe failed"));
+    }
+
+    #[test]
+    fn git_trampoline_uses_bash_and_preserves_helper_arguments_and_failure() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("repo with spaces and 'quotes'");
+        std::fs::create_dir(&root).unwrap();
+        assert!(
+            std::process::Command::new("git")
+                .args(["init", "--quiet"])
+                .arg(&root)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let state = root.join(".git/wrix");
+        std::fs::create_dir(&state).unwrap();
+        std::fs::write(
+            state.join("git-ssh"),
+            "#!/nonexistent/wrix-test-interpreter\nset -euo pipefail\nprintf '<%s>\\n' \"$PWD\" \"$@\" >&2\nexit 37\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(
+            state.join("git-ssh"),
+            std::fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
+        let output = std::process::Command::new("git")
+            .current_dir(&root)
+            .env_remove("GIT_SSH_COMMAND")
+            .args([
+                "-c",
+                &format!("core.sshCommand={}", super::TRANSPORT_TRAMPOLINE),
+            ])
+            .args([
+                "-c",
+                "ssh.variant=ssh",
+                "ls-remote",
+                "ssh://git@github.com/owner/repo with spaces",
+            ])
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(
+            stderr.contains(&format!("<{}>\n", root.display())),
+            "{stderr}"
+        );
+        assert!(
+            stderr.contains("<git@github.com>\n<git-upload-pack '/owner/repo with spaces'>\n"),
+            "{stderr}"
+        );
+        assert!(!stderr.contains("nonexistent"), "{stderr}");
+    }
 
     #[test]
     fn flags_parse_documented_init_options() {
