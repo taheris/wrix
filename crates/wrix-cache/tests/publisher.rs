@@ -580,6 +580,75 @@ fn automatic_publish_records_failure_as_warning() -> TestResult {
 }
 
 #[test]
+fn automatic_publication_failure_preserves_candidates_for_explicit_retry() -> TestResult {
+    for failure in ["WRIX_FAKE_QUERY_FAIL", "WRIX_FAKE_UPLOAD_FAIL"] {
+        let fixture = Fixture::new("automatic-retry")?;
+        fixture.write_roots(&[RootSpec::new(
+            "packages.demo",
+            ".#demo",
+            PROJECT_DRV,
+            &[PROJECT_OUT],
+        )])?;
+
+        let warning = fixture.run_auto(PROJECT_DRV, PROJECT_OUT, &[(failure, "1")])?;
+
+        assert!(warning.contains("warning: automatic project cache publish failed:"));
+        assert_eq!(fixture.pending_count()?, 1);
+        let report = fixture.run("publish")?;
+        assert!(report.contains("drained pending:"));
+        assert_eq!(fixture.pending_count()?, 0);
+        assert!(fixture.copy_log_line()?.contains(PROJECT_OUT));
+    }
+    Ok(())
+}
+
+#[test]
+fn failed_publication_keeps_matching_pending_until_successful_retry() -> TestResult {
+    for (variable, failure) in [
+        ("WRIX_FAKE_UPSTREAM_RESPONSE", "malformed"),
+        ("WRIX_FAKE_UPLOAD_FAIL", "1"),
+    ] {
+        let fixture = Fixture::new("pending-failure")?;
+        fixture.write_roots(&[RootSpec::new(
+            "packages.demo",
+            ".#demo",
+            PROJECT_DRV,
+            &[PROJECT_OUT],
+        )])?;
+        fixture.write_pending("matching", PROJECT_DRV, &[PENDING_OUT])?;
+        fixture.write_pending("foreign", "/nix/store/foreign.drv", &[ARBITRARY_OUT])?;
+        let pending_file = fixture.state_root.join("pending/matching.json");
+        let before = fs::read(&pending_file)?;
+
+        fixture.run_failure("publish", &[(variable, failure)])?;
+
+        assert_eq!(fixture.pending_count()?, 2);
+        assert_eq!(fs::read(&pending_file)?, before);
+        let report = fixture.run("publish")?;
+        assert!(report.contains("drained pending:"));
+        assert_eq!(fixture.pending_count()?, 1);
+        assert!(fixture.state_root.join("pending/foreign.json").exists());
+        assert!(!pending_file.exists());
+    }
+    Ok(())
+}
+
+#[test]
+fn upload_failure_fixture_fails_without_creating_artifacts() -> TestResult {
+    let fixture = Fixture::new("upload-failure-fixture")?;
+    let output = Command::new(&fixture.nix_bin)
+        .arg("copy")
+        .env("WRIX_FAKE_NIX_LOG", &fixture.nix_log)
+        .env("WRIX_FAKE_CACHE_ROOT", &fixture.cache_root)
+        .env("WRIX_FAKE_UPLOAD_FAIL", "1")
+        .output()?;
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("upload unavailable"));
+    assert!(!fixture.cache_root.exists());
+    Ok(())
+}
+
+#[test]
 fn automatic_publish_does_not_reconcile_other_root_markers() -> TestResult {
     let fixture = Fixture::new("automatic-retention")?;
     fixture.write_roots(&[
@@ -1076,6 +1145,7 @@ impl Fixture {
             .env("WRIX_FAKE_EXTRA_CLOSURE_FILE", &self.extra_closure_file)
             .env("WRIX_FAKE_CACHE_ROOT", &self.cache_root)
             .env("WRIX_FAKE_QUERY_FAIL", "0")
+            .env("WRIX_FAKE_UPLOAD_FAIL", "0")
             .env("WRIX_FAKE_UPSTREAM_RESPONSE", "normal")
             .env("WRIX_FAKE_UPSTREAM_MATCH", "upstream")
             .env("WRIX_UPSTREAM_SUBSTITUTERS", "https://cache.example");
@@ -1165,6 +1235,10 @@ case "$1" in
     exit 0
     ;;
   copy)
+    if [[ "${WRIX_FAKE_UPLOAD_FAIL:-0}" == "1" ]]; then
+      printf 'upload unavailable\n' >&2
+      exit 1
+    fi
     cache_root="$WRIX_FAKE_CACHE_ROOT"
     mkdir -p "$cache_root/nar"
     printf 'nar payload\n' >"$cache_root/nar/project-root.nar"

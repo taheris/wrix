@@ -250,8 +250,7 @@ pub fn run_hook_record(record: HookRecord<'_>, settings: Settings) -> Result<Rep
             lines: vec![format!("skipped non-project derivation {drv_path}")],
         });
     };
-    paths.ensure()?;
-    run_automatic_publish(&paths, root)
+    run_automatic_publish(&paths, &root)
 }
 
 fn run(workspace: &Workspace, paths: &Paths, mode: Mode) -> Result<Report> {
@@ -297,7 +296,7 @@ fn run(workspace: &Workspace, paths: &Paths, mode: Mode) -> Result<Report> {
     }
 }
 
-fn run_automatic_publish(paths: &Paths, root: Root) -> Result<Report> {
+fn run_automatic_publish(paths: &Paths, root: &Root) -> Result<Report> {
     let mut lines = Vec::new();
     let timeout = Duration::from_millis(paths.settings.lock_timeout_ms);
     let Some(lock) = OperationLock::acquire(paths, Some(timeout), &mut lines)? else {
@@ -307,11 +306,12 @@ fn run_automatic_publish(paths: &Paths, root: Root) -> Result<Report> {
         ));
         return Ok(Report { lines });
     };
-    let result = publish_roots(paths, &[root], &[], None);
+    let result = publish_roots(paths, std::slice::from_ref(root), Vec::new(), None);
     let release = lock.release();
     match (result, release) {
         (Ok(mut report), Ok(())) => lines.append(&mut report.lines),
         (Err(error), _) | (_, Err(error)) => {
+            record_pending(paths, &root.drv_path, &root.out_paths)?;
             write_cache_status(paths, true, Some("warning"), None, Some(&error.to_string()))?;
             lines.push(format!(
                 "warning: automatic project cache publish failed: {error}"
@@ -679,21 +679,20 @@ fn publish_roots(
         publishable.extend(closure);
         lines.push(format!("published root: {}", root.installable));
     }
+    let mut completed_pending = Vec::new();
     for record in pending {
         if root_drvs.contains(record.drv_path.as_str()) {
             for path in closure_paths(&record.out_paths)? {
                 publishable.insert(path);
             }
-            lines.push(format!("drained pending: {}", record.path.display()));
+            completed_pending.push(record.path);
         }
     }
     let filtered = subtract_upstream(paths, publishable)?;
     copy_to_cache(paths, &filtered)?;
-    paths.authorize()?;
-    for record in pending {
-        if root_drvs.contains(record.drv_path.as_str()) {
-            remove_pending(&record.path)?;
-        }
+    for path in completed_pending {
+        fs::remove_file(&path)?;
+        lines.push(format!("drained pending: {}", path.display()));
     }
     write_cache_status(paths, true, Some("ok"), None, None)?;
     if let Some(configured) = configured {
