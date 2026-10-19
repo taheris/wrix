@@ -554,7 +554,14 @@ let
             set -euo pipefail
             ${launcherRuntimePathSetup}
             ${serviceImageEnvSetup}
-            exec ${launcher}/bin/wrix --profile-config ${profileConfig} "$@"
+            case "''${1:-}" in
+              run|spawn)
+                exec ${launcher}/bin/wrix --profile-config ${profileConfig} "$@"
+                ;;
+              *)
+                exec ${launcher}/bin/wrix "$@"
+                ;;
+            esac
             WRIX_WRAPPER
             cat > "$out/bin/wrix-run" <<'WRIX_RUN_WRAPPER'
             #!${pkgs.runtimeShell}
@@ -562,8 +569,11 @@ let
             ${launcherRuntimePathSetup}
             ${serviceImageEnvSetup}
             case "''${1:-}" in
-              run|spawn|service|beads)
+              run|spawn)
                 exec ${launcher}/bin/wrix --profile-config ${profileConfig} "$@"
+                ;;
+              service|beads|init|notify|help)
+                exec ${launcher}/bin/wrix "$@"
                 ;;
               *)
                 exec ${launcher}/bin/wrix --profile-config ${profileConfig} run "$@"

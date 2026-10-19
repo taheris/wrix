@@ -48,6 +48,9 @@ keep it current when specs land or retire.
 | [services](../specs/services.md)             | `crates/wrix-service/`                                                               | wx-fvr1x | Host-user control, shared service roles and draining updates             |
 | [tmux](../specs/tmux.md)                     | [`lib/sandbox/profiles.nix`](../lib/sandbox/profiles.nix)                            | wx-4f3g  | Native tmux CLI debugging and caller-owned session lifecycle             |
 
+[Loom workspace safety troubleshooting](loom-troubleshooting.md) covers missing
+host associations and retained-history paths without resetting safety evidence.
+
 [Darwin attention setup and validation](darwin-attention.md) covers the
 optional, consumer-provided OmniWM CLI integration and desktop shortcuts.
 
