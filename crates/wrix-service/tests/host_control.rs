@@ -726,3 +726,186 @@ async fn private_control_client_never_provisions_authority() {
     assert!(Client::open(&root).is_err());
     assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
 }
+
+#[tokio::test]
+async fn concurrent_control_registrations_preserve_peer_policies_on_disk() -> TestResult {
+    timeout(BUDGET, async {
+        use std::os::unix::fs::MetadataExt;
+
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().canonicalize()?.join("controller");
+        let controller = Controller::bind(&root)?;
+        let socket = std::fs::metadata(root.join("control.sock"))?.ino();
+        let key = std::fs::read(root.join("management.key"))?;
+        let mut requests = JoinSet::new();
+        let mut expected = std::collections::BTreeMap::new();
+        for index in 0..32 {
+            let namespace = Namespace::try_from(format!("{index:064x}"))?;
+            let policy = Policy {
+                compiler: if index % 2 == 0 {
+                    Access::Allowed
+                } else {
+                    Access::Denied
+                },
+                ..POLICY
+            };
+            expected.insert(namespace.clone(), policy);
+            let client = Client::open(&root)?;
+            requests.spawn(async move {
+                client
+                    .request(Operation::Register { namespace, policy })
+                    .await
+            });
+        }
+        let serving = async {
+            for _ in 0..32 {
+                controller.serve_one().await?;
+            }
+            Ok::<(), TestError>(())
+        };
+        let receiving = async {
+            while let Some(result) = requests.join_next().await {
+                assert_eq!(result??, Reply::Applied);
+            }
+            Ok::<(), TestError>(())
+        };
+        let (served, received) = tokio::join!(serving, receiving);
+        served?;
+        received?;
+        assert_eq!(std::fs::metadata(root.join("control.sock"))?.ino(), socket);
+        assert_eq!(std::fs::read(root.join("management.key"))?, key);
+        drop(controller);
+        std::fs::remove_file(root.join("control.sock"))?;
+        let controller = Controller::bind(&root)?;
+        let client = Client::open(&root)?;
+        assert_eq!(
+            control_request(&controller, &client, Operation::Inspect {}).await?,
+            Reply::Snapshot {
+                version: 1,
+                namespaces: expected
+            }
+        );
+        Ok::<(), TestError>(())
+    })
+    .await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn registration_commit_failure_does_not_grant_or_erase_peer_policy() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().canonicalize()?.join("controller");
+    let controller = Controller::bind(&root)?;
+    let client = Client::open(&root)?;
+    let peer = namespace('a')?;
+    assert_eq!(
+        control_request(
+            &controller,
+            &client,
+            Operation::Register {
+                namespace: peer.clone(),
+                policy: POLICY
+            }
+        )
+        .await?,
+        Reply::Applied
+    );
+    let before = std::fs::read(root.join("namespaces.json"))?;
+    std::fs::rename(root.join("namespaces.json"), root.join("saved.json"))?;
+    std::fs::create_dir(root.join("namespaces.json"))?;
+    let denied = namespace('b')?;
+    let (served, reply) = tokio::join!(
+        controller.serve_one(),
+        client.request(Operation::Register {
+            namespace: denied.clone(),
+            policy: POLICY
+        })
+    );
+    assert!(served.is_err());
+    assert!(reply.is_err());
+    assert!(controller.authorize(&peer, Permission::Sql).is_ok());
+    assert!(matches!(
+        controller.authorize(&denied, Permission::Sql),
+        Err(wrix_service::control::Error::UnknownNamespace)
+    ));
+    assert_eq!(std::fs::read(root.join("saved.json"))?, before);
+    assert_eq!(std::fs::read_dir(&root)?.count(), 5);
+    Ok(())
+}
+
+#[tokio::test]
+async fn malformed_persisted_registration_fails_before_socket_or_credential_creation() -> TestResult
+{
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().canonicalize()?.join("controller");
+    std::fs::create_dir(&root)?;
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))?;
+    let entry = serde_json::json!({"namespace": namespace('a')?, "policy": POLICY});
+    for bytes in [
+        b"{".to_vec(),
+        serde_json::to_vec(&serde_json::json!({"version": 1, "entries": [entry.clone(), entry]}))?,
+        serde_json::to_vec(&serde_json::json!({"version": 999, "entries": []}))?,
+        serde_json::to_vec(
+            &serde_json::json!({"version": 1, "entries": [{"namespace": "../peer", "policy": POLICY}]}),
+        )?,
+    ] {
+        std::fs::write(root.join("namespaces.json"), &bytes)?;
+        std::fs::set_permissions(
+            root.join("namespaces.json"),
+            std::fs::Permissions::from_mode(0o600),
+        )?;
+        assert!(Controller::bind(&root).is_err());
+        assert_eq!(std::fs::read(root.join("namespaces.json"))?, bytes);
+        assert!(!root.join("control.sock").exists());
+        assert!(!root.join("management.key").exists());
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn namespace_retirement_is_durable_without_changing_peer_authority() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().canonicalize()?.join("controller");
+    let controller = Controller::bind(&root)?;
+    let client = Client::open(&root)?;
+    for digit in ['a', 'b'] {
+        assert_eq!(
+            control_request(
+                &controller,
+                &client,
+                Operation::Register {
+                    namespace: namespace(digit)?,
+                    policy: POLICY
+                }
+            )
+            .await?,
+            Reply::Applied
+        );
+    }
+    assert_eq!(
+        control_request(
+            &controller,
+            &client,
+            Operation::Retire {
+                namespace: namespace('a')?
+            }
+        )
+        .await?,
+        Reply::Applied
+    );
+    drop(controller);
+    std::fs::remove_file(root.join("control.sock"))?;
+    let controller = Controller::bind(&root)?;
+    assert!(matches!(
+        controller.authorize(&namespace('a')?, Permission::Sql),
+        Err(wrix_service::control::Error::UnknownNamespace)
+    ));
+    assert!(
+        controller
+            .authorize(&namespace('b')?, Permission::Sql)
+            .is_ok()
+    );
+    Ok(())
+}

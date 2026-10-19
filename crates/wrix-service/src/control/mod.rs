@@ -1,5 +1,6 @@
 //! Versioned private host authority; never mount this socket or its directory into guests.
 
+mod registration;
 pub mod supervision;
 
 use std::{
@@ -44,6 +45,8 @@ pub enum Error {
     FrameLimit,
     /// private control registry lock is poisoned
     LockPoisoned,
+    /// persisted namespace registration has an unsupported version, duplicate identity or excess entries
+    InvalidRegistration,
     /// workspace namespace is not registered
     UnknownNamespace,
     /// workspace policy denies the requested permission
@@ -219,6 +222,7 @@ pub struct Controller {
     credential: Credential,
     uid: u32,
     namespaces: Mutex<BTreeMap<Namespace, Policy>>,
+    registrations: registration::Store,
 }
 
 impl Controller {
@@ -258,6 +262,8 @@ impl Controller {
             return Err(Error::PrivateRoot);
         }
         ownership.try_lock_exclusive()?;
+        let registrations = registration::Store::open(root)?;
+        let namespaces = registrations.load()?;
         let credential = Credential::load(root)?;
         let listener = UnixListener::bind(root.join("control.sock"))?;
         fs::set_permissions(root.join("control.sock"), fs::Permissions::from_mode(0o600))?;
@@ -266,7 +272,8 @@ impl Controller {
             _ownership: ownership,
             credential,
             uid: metadata.uid(),
-            namespaces: Mutex::new(BTreeMap::new()),
+            namespaces: Mutex::new(namespaces),
+            registrations,
         })
     }
 
@@ -329,13 +336,21 @@ impl Controller {
                     Some(_) => Reply::Conflict,
                     None if namespaces.len() == MAX_NAMESPACES => Reply::Capacity,
                     None => {
-                        namespaces.insert(namespace, policy);
+                        let mut updated = namespaces.clone();
+                        updated.insert(namespace, policy);
+                        self.registrations.commit(&updated)?;
+                        *namespaces = updated;
                         Reply::Applied
                     }
                 }
             }
             Operation::Retire { namespace } => {
-                namespaces.remove(&namespace);
+                if namespaces.contains_key(&namespace) {
+                    let mut updated = namespaces.clone();
+                    updated.remove(&namespace);
+                    self.registrations.commit(&updated)?;
+                    *namespaces = updated;
+                }
                 Reply::Applied
             }
         })
@@ -448,8 +463,9 @@ mod test {
     #[tokio::test]
     async fn namespace_capacity_is_bounded_without_losing_existing_policy() {
         let directory = tempfile::tempdir().unwrap();
-        let controller =
-            Controller::bind(&directory.path().canonicalize().unwrap().join("controller")).unwrap();
+        let root = directory.path().canonicalize().unwrap().join("controller");
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
         let policy = Policy {
             dolt: Access::Allowed,
             private_cache_read: Access::Denied,
@@ -457,15 +473,21 @@ mod test {
             egress: Access::Denied,
             compiler: Access::Denied,
         };
-        for index in 0..MAX_NAMESPACES {
-            let namespace = Namespace::try_from(format!("{index:064x}")).unwrap();
-            assert_eq!(
-                controller
-                    .apply(Operation::Register { namespace, policy })
-                    .unwrap(),
-                Reply::Applied
-            );
-        }
+        let entries: Vec<_> = (0..MAX_NAMESPACES)
+            .map(
+                |index| serde_json::json!({"namespace": format!("{index:064x}"), "policy": policy}),
+            )
+            .collect();
+        let path = root.join("namespaces.json");
+        fs::write(
+            &path,
+            serde_json::to_vec(&serde_json::json!({"version": VERSION, "entries": entries}))
+                .unwrap(),
+        )
+        .unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        let before = fs::read(&path).unwrap();
+        let controller = Controller::bind(&root).unwrap();
         let namespace = Namespace::try_from(format!("{MAX_NAMESPACES:064x}")).unwrap();
         assert_eq!(
             controller
@@ -482,6 +504,7 @@ mod test {
         );
         let snapshot = controller.apply(Operation::Inspect {}).unwrap();
         assert!(serde_json::to_vec(&snapshot).unwrap().len() <= MAX_FRAME);
+        assert_eq!(fs::read(&path).unwrap(), before);
     }
 
     #[cfg(target_os = "linux")]
