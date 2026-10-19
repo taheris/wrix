@@ -3212,6 +3212,7 @@ name = "wrix-cache"
 version = "0.1.0"
 dependencies = [
  "attic",
+ "base64 0.22.1",
  "bytes",
  "displaydoc",
  "fs2",

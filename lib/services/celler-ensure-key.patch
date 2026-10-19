@@ -1,0 +1,38 @@
+diff --git a/attic/src/api/v1/cache_config.rs b/attic/src/api/v1/cache_config.rs
+--- a/attic/src/api/v1/cache_config.rs
++++ b/attic/src/api/v1/cache_config.rs
+@@ -104,0 +105,3 @@ pub enum KeypairConfig {
++
++    /// Preserve a valid keypair, generating one only when invalid.
++    GenerateIfInvalid,
+diff --git a/server/src/api/v1/cache_config.rs b/server/src/api/v1/cache_config.rs
+--- a/server/src/api/v1/cache_config.rs
++++ b/server/src/api/v1/cache_config.rs
+@@ -82,2 +82,15 @@ pub(crate) async fn configure_cache(
+-            KeypairConfig::Generate => NixKeypair::generate(cache_name.as_str())?,
+-            KeypairConfig::Keypair(k) => k,
++            KeypairConfig::Generate => Some(NixKeypair::generate(cache_name.as_str())?),
++            KeypairConfig::Keypair(k) => Some(k),
++            KeypairConfig::GenerateIfInvalid => {
++                if cache.keypair().is_err() {
++                    let keypair = NixKeypair::generate(cache_name.as_str())?;
++                    Cache::update_many()
++                        .col_expr(cache::Column::Keypair, Expr::value(keypair.export_keypair()))
++                        .filter(cache::Column::Id.eq(cache.id))
++                        .filter(cache::Column::Keypair.eq(cache.keypair.clone()))
++                        .exec(database)
++                        .await
++                        .map_err(ServerError::database_error)?;
++                }
++                None
++            }
+@@ -85 +98,3 @@ pub(crate) async fn configure_cache(
+-        update.keypair = Set(keypair.export_keypair());
++        if let Some(keypair) = keypair {
++            update.keypair = Set(keypair.export_keypair());
++        }
+@@ -201 +216,3 @@ pub(crate) async fn create_cache(
+-        KeypairConfig::Generate => NixKeypair::generate(cache_name.as_str())?,
++        KeypairConfig::Generate | KeypairConfig::GenerateIfInvalid => {
++            NixKeypair::generate(cache_name.as_str())?
++        }

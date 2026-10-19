@@ -1,0 +1,197 @@
+use std::{
+    fs::{self, File},
+    io::Write,
+    net::{TcpListener, TcpStream},
+    path::{Path, PathBuf},
+    process::{Child, Command, Stdio},
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
+
+use attic::cache::CacheName;
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use serde_json::json;
+use tempfile::TempDir;
+use wrix_cache::backend::Client;
+
+const SECRET: &str = "disposable-celler-test-credential-32-bytes";
+
+pub fn in_isolated_store(test: &str) -> bool {
+    if let Some(root) = std::env::var_os("WRIX_TEST_STORE_ROOT") {
+        let marker = fs::read_to_string("/nix/var/nix/wrix-test-isolated-store").unwrap();
+        assert_eq!(Path::new(&root), Path::new(&marker));
+        return true;
+    }
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/cache/isolated-store.sh");
+    let status = Command::new("unshare")
+        .args(["-Urm", "bash"])
+        .arg(script)
+        .arg(std::env::current_exe().unwrap())
+        .args(["--ignored", "--exact", test, "--nocapture"])
+        .status()
+        .unwrap();
+    assert!(status.success(), "isolated native fixture failed: {status}");
+    false
+}
+
+pub struct Server {
+    pub endpoint: String,
+    pub token: String,
+    child: Child,
+    root: TempDir,
+}
+
+impl Server {
+    pub fn start() -> Self {
+        let root = tempfile::tempdir().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let endpoint = format!("http://{address}/");
+        let path = root.path();
+        fs::write(path.join("jwt.key"), SECRET).unwrap();
+        fs::create_dir(path.join("archives")).unwrap();
+        let config = format!(
+            "listen = {address:?}\nallowed-hosts = [{address:?}]\napi-endpoint = {endpoint:?}\nsoft-delete-caches = false\nrequire-proof-of-possession = true\n\
+            [database]\nurl = {database:?}\n\
+            [storage]\ntype = \"local\"\npath = {storage:?}\n\
+            [chunking]\nnar-size-threshold = 0\nmin-size = 16384\navg-size = 65536\nmax-size = 262144\n\
+            [compression]\ntype = \"none\"\n\
+            [garbage-collection]\ninterval = \"0s\"\n\
+            [jwt]\nhs256-secret-key-file = {key:?}\n",
+            address = address.to_string(),
+            database = format!("sqlite://{}?mode=rwc", path.join("metadata.db").display()),
+            storage = path.join("archives").display().to_string(),
+            key = path.join("jwt.key").display().to_string(),
+        );
+        fs::write(path.join("server.toml"), config).unwrap();
+        let executable = std::env::var_os("WRIX_TEST_CELLERD")
+            .expect("set WRIX_TEST_CELLERD to the pinned packaged cellerd");
+        let log = File::create(path.join("server.log")).unwrap();
+        let child = Command::new(executable)
+            .arg("--config")
+            .arg(path.join("server.toml"))
+            .stdin(Stdio::null())
+            .stdout(log.try_clone().unwrap())
+            .stderr(log)
+            .spawn()
+            .unwrap();
+        let mut server = Self {
+            endpoint,
+            token: token(true),
+            child,
+            root,
+        };
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while TcpStream::connect(address).is_err() {
+            assert!(
+                server.child.try_wait().unwrap().is_none(),
+                "Celler exited: {}",
+                fs::read_to_string(server.root.path().join("server.log")).unwrap()
+            );
+            assert!(
+                Instant::now() < deadline,
+                "Celler startup timeout: {}",
+                fs::read_to_string(server.root.path().join("server.log")).unwrap()
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+        server
+    }
+
+    pub fn client(&self, namespace: &str) -> Client {
+        Client::new(
+            &self.endpoint,
+            CacheName::new(namespace.to_owned()).unwrap(),
+            &self.token,
+        )
+        .unwrap()
+    }
+
+    pub fn pull_client(&self) -> Client {
+        Client::new(
+            &self.endpoint,
+            CacheName::new(String::from("private")).unwrap(),
+            &token(false),
+        )
+        .unwrap()
+    }
+
+    pub fn corrupt_key(&self, namespace: &str) {
+        let status = Command::new("python3")
+            .args(["-c", "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute('update cache set keypair=? where name=?', ('invalid-key',sys.argv[2])); c.commit()"])
+            .arg(self.root.path().join("metadata.db"))
+            .arg(namespace)
+            .status().unwrap();
+        assert!(status.success());
+    }
+
+    pub async fn get(&self, resource: &str) -> reqwest::Response {
+        reqwest::Client::new()
+            .get(format!("{}{resource}", self.endpoint))
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .unwrap()
+    }
+}
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        self.child.kill().unwrap();
+        self.child.wait().unwrap();
+    }
+}
+
+fn token(management: bool) -> String {
+    let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"HS256","typ":"JWT"}"#);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let grants = if management {
+        json!({
+            "private":{"r":1,"w":1,"cc":1,"cr":1,"cq":1,"cd":1},
+            "peer":{"r":1,"w":1,"cc":1,"cr":1,"cq":1,"cd":1}
+        })
+    } else {
+        json!({"private":{"r":1}})
+    };
+    let claims = json!({
+        "sub":"native-fixture", "exp":now + 3600,
+        "https://jwt.attic.rs/v1":{"caches":grants}
+    });
+    let message = format!("{header}.{}", URL_SAFE_NO_PAD.encode(claims.to_string()));
+    let mut child = Command::new("openssl")
+        .args(["dgst", "-sha256", "-hmac", SECRET, "-binary"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(message.as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    format!("{message}.{}", URL_SAFE_NO_PAD.encode(output.stdout))
+}
+
+pub fn add_file(contents: &str, name: &str) -> PathBuf {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join(name);
+    fs::write(&path, contents).unwrap();
+    let output = Command::new("nix-store")
+        .args(["--store", "daemon", "--add"])
+        .arg(path)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{:?}", output.stderr);
+    PathBuf::from(String::from_utf8(output.stdout).unwrap().trim())
+}
+
+pub fn hash(path: &Path) -> &str {
+    &path.file_name().unwrap().to_str().unwrap()[..32]
+}

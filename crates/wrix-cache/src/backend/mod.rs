@@ -1,6 +1,6 @@
 //! Scoped host publication through Celler; no sandbox or host substitution authority.
 
-use std::{path::PathBuf, time::Duration};
+use std::{collections::HashSet, path::PathBuf, time::Duration};
 
 use attic::{
     api::v1::{
@@ -39,6 +39,8 @@ pub enum Error {
     Retention,
     /// NAR size exceeds the native upload range
     NarSize,
+    /// Celler changed a valid signing key during registration
+    KeyChanged,
 }
 
 /// One host-authorized namespace and its runtime HTTP authority.
@@ -126,11 +128,19 @@ impl Client {
     /// Preserves a valid existing key and confirms authenticated finite retention.
     pub async fn register(&self, retention: Duration) -> Result<CachePublicKey> {
         let seconds = retention_seconds(retention)?;
-        if let Some(config) = self.configuration().await? {
-            parse_public_key(&config)?;
-        } else {
-            self.create().await?;
-        }
+        let prior_key = match self.configuration().await {
+            Ok(Some(config)) => Some(match parse_public_key(&config) {
+                Ok(key) => key,
+                Err(Error::PublicKey) => self.repair_key().await?,
+                Err(error) => return Err(error),
+            }),
+            Ok(None) => {
+                self.create().await?;
+                None
+            }
+            Err(Error::Status(StatusCode::INTERNAL_SERVER_ERROR)) => Some(self.repair_key().await?),
+            Err(error) => return Err(error),
+        };
         let mut config = CacheConfig::blank();
         config.is_public = Some(false);
         config.retention_period = Some(RetentionPeriodConfig::Period(seconds));
@@ -141,7 +151,23 @@ impl Client {
         {
             return Err(Error::Protocol);
         }
-        parse_public_key(&confirmed)
+        let key = parse_public_key(&confirmed)?;
+        if prior_key.is_some_and(|prior| prior != key) {
+            return Err(Error::KeyChanged);
+        }
+        Ok(key)
+    }
+
+    /// Native conditional repair never replaces a valid key, even after an inconclusive GET.
+    async fn repair_key(&self) -> Result<CachePublicKey> {
+        success(
+            self.request(reqwest::Method::PATCH, &self.config_route())?
+                .json(&serde_json::json!({"keypair": "GenerateIfInvalid"}))
+                .send()
+                .await
+                .map_err(|_| Error::Transport)?,
+        )?;
+        self.public_key().await
     }
 
     async fn create(&self) -> Result<()> {
@@ -197,7 +223,11 @@ impl Client {
         }
         let store = Box::pin(NixStore::connect()).await?;
         let mut published = 0;
+        let mut seen = HashSet::new();
         for path in paths {
+            if !seen.insert(path) {
+                continue;
+            }
             let parsed = store.parse_store_path(path)?;
             if store.get_full_path(&parsed) != *path {
                 return Err(Error::Protocol);
