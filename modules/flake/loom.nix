@@ -5,18 +5,36 @@
     { pkgs, linuxPkgs, ... }:
     let
       loomLib = import "${inputs.loom-src}/nix/lib.nix";
-      mkLoom =
+      spawnPatches = [ ../../patches/loom-spawn-extensions.patch ];
+      loomWorkspace =
         pkgs:
-        (loomLib.mkLoom {
+        loomLib.mkLoom {
           inherit pkgs;
           inherit (inputs) crane fenix;
           src = inputs.loom-src;
-        }).bin.overrideAttrs
-          (old: {
-            postInstall = (old.postInstall or "") + ''
-              find "$out/bin" -type f ! -name loom ! -name loom-walk -delete
-            '';
-          });
+        };
+      mkLoom =
+        pkgs:
+        (loomWorkspace pkgs).bin.overrideAttrs (old: {
+          patches = (old.patches or [ ]) ++ spawnPatches;
+          postInstall = (old.postInstall or "") + ''
+            find "$out/bin" -type f ! -name loom ! -name loom-walk -delete
+          '';
+        });
+      spawnContract =
+        let
+          workspace = loomWorkspace pkgs;
+        in
+        workspace.craneLib.cargoNextest {
+          src = workspace.stagedSrc;
+          inherit (workspace) cargoArtifacts;
+          patches = spawnPatches;
+          nativeBuildInputs = [ pkgs.git ];
+          preCheck = ''
+            export TMPDIR=/tmp
+          '';
+          cargoNextestExtraArgs = "-p loom-driver -E 'test(wrix_launch_) | test(wrix_runner_)'";
+        };
       loomCli = mkLoom pkgs;
       linuxLoomCli = mkLoom linuxPkgs;
     in
@@ -25,5 +43,6 @@
         inherit loomCli linuxLoomCli;
       };
       packages.loom = loomCli;
+      checks.loom-spawn-contract = spawnContract;
     };
 }

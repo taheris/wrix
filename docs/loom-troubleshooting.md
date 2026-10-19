@@ -8,13 +8,16 @@ fields such as `initial_prompt`, `repin`, and `scratch_dir` at the JSON root.
 Wrix accepts those opaque fields only inside `extensions.loom`; workspace, env,
 agent arguments, image overrides and mounts remain at the root.
 
-The packaged Loom moves session fields into that namespace and its Direct runner
-reads the same payload. Rebuild/update the project's Loom package and re-enter
-the development shell (or reload direnv) so the host dispatch uses the corrected
-producer. Rebuild consumer-supplied Direct runner images too when applicable. Do
-not remove Wrix's unknown-field checks or hand-edit a live private spawn file;
-those files can contain credentials. Host Wrix installation advice alone does
-not repair an incompatible producer.
+The packaged Loom applies `patches/loom-spawn-extensions.patch` to move session
+fields into that namespace; its Direct runner reads the same payload. Keep this
+patch until the pinned upstream producer and runner implement that boundary.
+`checks.loom-spawn-contract` exercises the patched private-file writer and
+runner round-trip against the closed launch-key contract. Rebuild/update the
+project's Loom package and re-enter the development shell (or reload direnv) so
+the host dispatch uses the corrected producer. Rebuild consumer-supplied Direct
+runner images too when applicable. Do not remove Wrix's unknown-field checks or
+hand-edit a live private spawn file; those files can contain credentials. Host
+Wrix installation advice alone does not repair an incompatible producer.
 
 A subsequent safety-history error is independent: follow the host checks below
 without resetting retained evidence.
