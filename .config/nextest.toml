@@ -1,11 +1,11 @@
 experimental = ["setup-scripts"]
 
-[scripts.setup.isolated-host-roots]
-command = ["bash", "tests/prepare-isolated-host-roots.sh"]
+[test-groups.deployment-role-ports]
+max-threads = 1
 
-[[profile.default.scripts]]
-filter = "all()"
-setup = "isolated-host-roots"
+[[profile.default.overrides]]
+filter = "package(wrix-service) | (package(wrix-cli) & (binary(service_cache) | binary(service_lifecycle)))"
+test-group = "deployment-role-ports"
 
 [scripts.setup.packaging-fixtures]
 command = ["bash", "tests/prepare-native-fixtures.sh"]

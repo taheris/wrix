@@ -570,13 +570,24 @@ impl Paths {
     }
 
     fn for_workspace(hash: &WorkspaceHash) -> Result<Self> {
-        let roots = wrix_core::host_path::Roots::discover()?;
-        let state_root = roots.workspace_state(hash);
-        let cache_root = roots.workspace_cache(hash);
-        Ok(Self {
-            state_root,
-            cache_root,
-        })
+        let home = home_dir()?;
+        let state_base = if cfg!(target_os = "macos") {
+            home.join("Library/Application Support")
+        } else {
+            env::var_os("XDG_STATE_HOME").map_or_else(|| home.join(".local/state"), PathBuf::from)
+        };
+        let cache_base = if cfg!(target_os = "macos") {
+            home.join("Library/Caches")
+        } else {
+            env::var_os("XDG_CACHE_HOME").map_or_else(|| home.join(".cache"), PathBuf::from)
+        };
+        let layout = crate::deployment::Layout::new(&state_base, &cache_base).map_err(|error| {
+            Error::Operation {
+                message: error.to_string(),
+            }
+        })?;
+        let workspace = layout.workspace(crate::control::Namespace::from(hash));
+        Ok(Self::new(workspace.control_root(), workspace.cache_root()))
     }
 
     pub fn state_root(&self) -> &Path {

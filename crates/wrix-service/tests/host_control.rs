@@ -813,6 +813,9 @@ async fn registration_commit_failure_does_not_grant_or_erase_peer_policy() -> Te
     let before = std::fs::read(root.join("namespaces.json"))?;
     std::fs::rename(root.join("namespaces.json"), root.join("saved.json"))?;
     std::fs::create_dir(root.join("namespaces.json"))?;
+    let entries_before = std::fs::read_dir(&root)?
+        .map(|entry| entry.map(|entry| entry.file_name()))
+        .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
     let denied = namespace('b')?;
     let (served, reply) = tokio::join!(
         controller.serve_one(),
@@ -829,7 +832,10 @@ async fn registration_commit_failure_does_not_grant_or_erase_peer_policy() -> Te
         Err(wrix_service::control::Error::UnknownNamespace)
     ));
     assert_eq!(std::fs::read(root.join("saved.json"))?, before);
-    assert_eq!(std::fs::read_dir(&root)?.count(), 5);
+    let entries_after = std::fs::read_dir(&root)?
+        .map(|entry| entry.map(|entry| entry.file_name()))
+        .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
+    assert_eq!(entries_after, entries_before);
     Ok(())
 }
 

@@ -1,5 +1,6 @@
 //! Versioned private host authority; never mount this socket or its directory into guests.
 
+mod deployment;
 mod endpoint;
 mod registration;
 pub mod supervision;
@@ -48,6 +49,8 @@ pub enum Error {
     Route(#[from] crate::route::Error),
     /// persisted deployment role endpoints are invalid
     InvalidEndpoints,
+    /// persisted host deployment identity has an unsupported version
+    InvalidDeployment,
     /// this controller has already issued its deployment role listeners
     EndpointsAlreadyBound,
     /// private control registry lock is poisoned
@@ -231,6 +234,7 @@ pub struct Controller {
     namespaces: Mutex<BTreeMap<Namespace, Policy>>,
     registrations: registration::Store,
     endpoints: endpoint::Store,
+    deployment: crate::deployment::Id,
 }
 
 impl Controller {
@@ -273,6 +277,10 @@ impl Controller {
         let registrations = registration::Store::open(root)?;
         let namespaces = registrations.load()?;
         let endpoints = endpoint::Store::open(root)?;
+        let deployment = match deployment::load(root)? {
+            Some(id) => id,
+            None => deployment::create(root)?,
+        };
         let credential = Credential::load(root)?;
         let listener = UnixListener::bind(root.join("control.sock"))?;
         fs::set_permissions(root.join("control.sock"), fs::Permissions::from_mode(0o600))?;
@@ -284,6 +292,7 @@ impl Controller {
             namespaces: Mutex::new(namespaces),
             registrations,
             endpoints,
+            deployment,
         })
     }
 
@@ -293,6 +302,11 @@ impl Controller {
         let path = address.as_pathname().ok_or(Error::PrivateRoot)?;
         fs::remove_file(path)?;
         Ok(())
+    }
+
+    /// Stable host identity survives controller restarts and namespace retirement.
+    pub const fn deployment_id(&self) -> &crate::deployment::Id {
+        &self.deployment
     }
 
     /// Allocate the deployment's complete loopback listener set once, independent of namespaces.
