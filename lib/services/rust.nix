@@ -63,6 +63,7 @@ let
     paths = [
       pkgs.nix
       pkgs.skopeo
+      pkgs.openssl
     ]
     ++ optionals pkgs.stdenv.hostPlatform.isLinux [
       pkgs.systemd
@@ -104,6 +105,7 @@ let
         pkgs.coreutils
         pkgs.git
         pkgs.dolt
+        pkgs.openssl
       ]}"
     ]
     ++ optionals (serviceImage != null) [
@@ -183,6 +185,7 @@ in
         pkgs.jq
         pkgs.nix
         pkgs.openssh
+        pkgs.openssl
         pkgs.python3
         pkgs.tmux
       ];

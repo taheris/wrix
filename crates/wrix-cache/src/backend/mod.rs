@@ -1,5 +1,6 @@
 //! Scoped host publication through Celler; no sandbox or host substitution authority.
 
+pub mod issuer;
 pub mod layout;
 pub mod publication;
 
