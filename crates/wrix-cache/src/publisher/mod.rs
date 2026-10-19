@@ -49,6 +49,10 @@ pub enum Error {
     Config(#[from] crate::config::ReadError),
     /// HOME is required to resolve wrix cache state roots
     HomeMissing,
+    /// {0}
+    Publication(#[from] crate::backend::publication::Error),
+    /// Celler view was rotated, but local key/status recording failed; no rollback occurred: {source}
+    RotationRecording { source: Box<Error> },
 }
 
 impl From<io::Error> for Error {
@@ -172,7 +176,9 @@ pub fn status_at(state_root: &Path, cache_root: &Path, settings: Settings) -> Re
 }
 
 fn run_at(workspace: &Workspace, paths: &Paths, mode: Mode) -> Result<Report> {
-    paths.ensure()?;
+    if mode != Mode::RotateKey {
+        paths.ensure()?;
+    }
     run(workspace, paths, mode)
 }
 
@@ -287,7 +293,7 @@ fn run(workspace: &Workspace, paths: &Paths, mode: Mode) -> Result<Report> {
                 lines: vec![String::from("pruned project cache")],
             })
         }),
-        Mode::RotateKey => with_explicit_lock(paths, || rotate_key(paths)),
+        Mode::RotateKey => with_explicit_lock(paths, || rotate_key(paths, workspace.hash())),
     }
 }
 
@@ -1198,39 +1204,35 @@ fn status_report(paths: &Paths) -> Result<Report> {
     Ok(Report { lines })
 }
 
-fn rotate_key(paths: &Paths) -> Result<Report> {
-    paths.authorize()?;
-    wipe_cache(paths)?;
-    generate_project_keypair(paths)?;
-    write_cache_status(paths, false, None, Some("key-rotated"), None)?;
+fn rotate_key(paths: &Paths, workspace: &WorkspaceHash) -> Result<Report> {
+    let publisher = crate::backend::publication::Publisher::load(&paths.state_root, workspace)?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let key = runtime.block_on(publisher.rotate())?;
+    record_rotated_key(paths, &key).map_err(|source| Error::RotationRecording {
+        source: Box::new(source),
+    })?;
     Ok(Report {
         lines: vec![String::from(
-            "rotated project cache key and invalidated local cache",
+            "rotated project cache key and invalidated its Celler view; republish to populate it",
         )],
     })
 }
 
-fn wipe_cache(paths: &Paths) -> Result<()> {
-    if paths.cache_root.exists() {
-        fs::remove_dir_all(&paths.cache_root)?;
-    }
-    fs::create_dir_all(paths.cache_root.join("nar"))?;
-    fs::create_dir_all(paths.cache_root.join("log"))?;
-    fs::write(
-        paths.cache_root.join("nix-cache-info"),
-        "StoreDir: /nix/store\nWantMassQuery: 1\nPriority: 40\n",
-    )?;
-    Ok(())
-}
-
-fn generate_project_keypair(paths: &Paths) -> Result<()> {
-    cache_key::generate_keypair(
-        &paths.key_name(),
-        &paths.cache_secret_path(),
-        &paths.cache_public_path(),
-        &nix_store_bin()?,
-    )?;
-    Ok(())
+fn record_rotated_key(paths: &Paths, key: &cache_key::CachePublicKey) -> Result<()> {
+    fs::create_dir_all(paths.keys_dir())?;
+    let temporary = paths
+        .keys_dir()
+        .join(format!("cache.pub.{}", std::process::id()));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)?;
+    std::io::Write::write_all(&mut file, format!("{}\n", key.as_str()).as_bytes())?;
+    file.sync_all()?;
+    fs::rename(temporary, paths.cache_public_path())?;
+    write_cache_status(paths, false, None, Some("key-rotated"), None)
 }
 
 impl Paths {

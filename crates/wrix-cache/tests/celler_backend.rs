@@ -230,9 +230,8 @@ fn http_fixture_uses_native_celler_configuration_schema() {
         if u64::from(seconds) == RETENTION.as_secs()));
 }
 
-#[tokio::test]
-async fn rotation_destroys_and_recreates_only_the_selected_namespace() {
-    let server = Server::start(vec![
+fn rotation_exchanges() -> Vec<Exchange> {
+    vec![
         Exchange {
             method: "DELETE",
             status: 200,
@@ -255,7 +254,12 @@ async fn rotation_destroys_and_recreates_only_the_selected_namespace() {
         },
         retention_patch(),
         get(config(PUBLIC_KEY)),
-    ]);
+    ]
+}
+
+#[tokio::test]
+async fn rotation_destroys_and_recreates_only_the_selected_namespace() {
+    let server = Server::start(rotation_exchanges());
     assert_eq!(
         server.client().rotate(RETENTION).await.unwrap().as_str(),
         PUBLIC_KEY
@@ -357,6 +361,166 @@ async fn registration_rejects_unexpected_valid_key_changes() {
         Err(Error::KeyChanged)
     ));
     server.finish();
+}
+
+fn write_binding(
+    root: &std::path::Path,
+    workspace: &wrix_core::path::WorkspaceHash,
+    endpoint: &str,
+    token: &str,
+) {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let file = root.join("celler-publisher.json");
+    std::fs::write(
+        &file,
+        serde_json::to_vec(&json!({
+            "schema_version":1,
+            "workspace_hash":workspace.as_str(),
+            "endpoint":endpoint,
+            "namespace":"private",
+            "token":token,
+            "retention_seconds":RETENTION.as_secs(),
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o600)).unwrap();
+}
+
+#[tokio::test]
+async fn runtime_authority_loads_only_the_bound_private_view() {
+    use wrix_cache::backend::publication::Publisher;
+    let root = tempfile::tempdir().unwrap();
+    let workspace = wrix_core::path::Workspace::from_path(root.path()).unwrap();
+    let server = Server::start(vec![
+        get(config(PUBLIC_KEY)),
+        retention_patch(),
+        get(config(PUBLIC_KEY)),
+    ]);
+    write_binding(
+        root.path(),
+        workspace.hash(),
+        &server.endpoint,
+        "fixture-publisher",
+    );
+    let publisher = Publisher::load(root.path(), workspace.hash()).unwrap();
+    assert_eq!(publisher.register().await.unwrap().as_str(), PUBLIC_KEY);
+    server.finish();
+}
+
+#[test]
+fn runtime_authority_rejects_unsafe_files_without_exposing_credentials() {
+    use std::os::unix::fs::{PermissionsExt as _, symlink};
+    use wrix_cache::backend::publication::{Error as BindingError, Publisher};
+    let root = tempfile::tempdir().unwrap();
+    let workspace = wrix_core::path::Workspace::from_path(root.path()).unwrap();
+    let path = root.path().join("celler-publisher.json");
+    let secret = "disposable-private-runtime-token";
+    write_binding(root.path(), workspace.hash(), "http://127.0.0.1/", secret);
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(matches!(
+        Publisher::load(root.path(), workspace.hash()),
+        Err(BindingError::Permissions)
+    ));
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(matches!(
+        Publisher::load(root.path(), workspace.hash()),
+        Err(BindingError::Permissions)
+    ));
+    std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let other = root.path().join("other.json");
+    std::fs::rename(&path, &other).unwrap();
+    symlink(&other, &path).unwrap();
+    assert!(matches!(
+        Publisher::load(root.path(), workspace.hash()),
+        Err(BindingError::Io(_))
+    ));
+    std::fs::remove_file(&path).unwrap();
+    std::fs::hard_link(&other, &path).unwrap();
+    assert!(matches!(
+        Publisher::load(root.path(), workspace.hash()),
+        Err(BindingError::Permissions)
+    ));
+    std::fs::remove_file(other).unwrap();
+    for body in [
+        format!("{{\"token\":\"{secret}\"}}"),
+        "x".repeat(16 * 1024 + 1),
+    ] {
+        std::fs::write(&path, body).unwrap();
+        let Err(error) = Publisher::load(root.path(), workspace.hash()) else {
+            panic!("unsafe binding accepted");
+        };
+        assert!(matches!(error, BindingError::Binding));
+        assert!(!format!("{error:?}; {error}").contains(secret));
+    }
+}
+
+#[test]
+fn production_rotation_reports_backend_success_and_local_recording_failure() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = wrix_core::path::Workspace::from_path(root.path()).unwrap();
+    let server = Server::start(rotation_exchanges());
+    write_binding(
+        root.path(),
+        workspace.hash(),
+        &server.endpoint,
+        "fixture-publisher",
+    );
+    std::fs::write(root.path().join("keys"), "cannot be a directory").unwrap();
+    let error = wrix_cache::publisher::run_workspace_at(
+        &workspace,
+        root.path(),
+        &root.path().join("unused-archive-root"),
+        wrix_cache::publisher::Mode::RotateKey,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        wrix_cache::publisher::Error::RotationRecording { .. }
+    ));
+    assert!(error.to_string().contains("Celler view was rotated"));
+    assert!(!root.path().join("cache-status.json").exists());
+    server.finish();
+}
+
+#[test]
+fn runtime_authority_rejects_scope_drift_and_invalid_native_policy() {
+    use wrix_cache::backend::publication::{Error as BindingError, Publisher};
+    let root = tempfile::tempdir().unwrap();
+    let peer = tempfile::tempdir().unwrap();
+    let workspace = wrix_core::path::Workspace::from_path(root.path()).unwrap();
+    let peer = wrix_core::path::Workspace::from_path(peer.path()).unwrap();
+    write_binding(
+        root.path(),
+        workspace.hash(),
+        "http://127.0.0.1/",
+        "fixture-publisher",
+    );
+    assert!(matches!(
+        Publisher::load(root.path(), peer.hash()),
+        Err(BindingError::Workspace)
+    ));
+    let path = root.path().join("celler-publisher.json");
+    let binding: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    for (field, value) in [
+        ("schema_version", json!(2)),
+        ("retention_seconds", json!(0)),
+        ("retention_seconds", json!(u64::MAX)),
+        ("workspace_hash", json!("invalid")),
+        ("endpoint", json!("file:///tmp/cache")),
+        ("namespace", json!("../peer")),
+        ("public", json!(true)),
+    ] {
+        let mut invalid = binding.clone();
+        invalid[field] = value;
+        std::fs::write(&path, serde_json::to_vec(&invalid).unwrap()).unwrap();
+        assert!(
+            Publisher::load(root.path(), workspace.hash()).is_err(),
+            "accepted {field}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -571,7 +735,42 @@ async fn rotation_invalidates_only_the_selected_view() {
     peer.publish_selected(std::slice::from_ref(&path))
         .await
         .unwrap();
-    let replacement = client.rotate(RETENTION).await.unwrap();
+    let control = tempfile::tempdir().unwrap();
+    let workspace = wrix_core::path::Workspace::from_path(control.path()).unwrap();
+    write_binding(
+        control.path(),
+        workspace.hash(),
+        &server.endpoint,
+        &server.token,
+    );
+    let control_path = control.path().to_path_buf();
+    let legacy = control.path().join("legacy-cache");
+    std::fs::create_dir(&legacy).unwrap();
+    std::fs::write(legacy.join("keep"), "not a native Celler archive").unwrap();
+    let report = tokio::task::spawn_blocking(move || {
+        wrix_cache::publisher::run_workspace_at(
+            &workspace,
+            &control_path,
+            &legacy,
+            wrix_cache::publisher::Mode::RotateKey,
+        )
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(report.lines().iter().any(|line| line.contains("republish")));
+    let replacement = client.public_key().await.unwrap();
+    assert_eq!(
+        std::fs::read_to_string(control.path().join("keys/cache.pub"))
+            .unwrap()
+            .trim(),
+        replacement.as_str()
+    );
+    assert!(!control.path().join("keys/cache.secret").exists());
+    assert_eq!(
+        std::fs::read_to_string(control.path().join("legacy-cache/keep")).unwrap(),
+        "not a native Celler archive"
+    );
     assert_ne!(replacement, key);
     assert_eq!(client.public_key().await.unwrap(), replacement);
     assert_eq!(peer.public_key().await.unwrap(), peer_key);

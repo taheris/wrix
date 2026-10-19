@@ -2,6 +2,7 @@
   pkgs,
   hostPkgs ? pkgs,
   cacheServe,
+  celler,
   asTarball ? false,
 }:
 
@@ -30,6 +31,7 @@ let
     coreutils
     dolt
     cacheServe
+    celler
   ];
   imageConfig = {
     Env = [

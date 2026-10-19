@@ -598,7 +598,7 @@ fn automatic_publish_does_not_reconcile_other_root_markers() -> TestResult {
 }
 
 #[test]
-fn rotate_key_invalidates_cache_and_replaces_trust_root() -> TestResult {
+fn rotate_key_without_native_authority_preserves_existing_files() -> TestResult {
     let fixture = Fixture::new("rotate-key")?;
     fs::create_dir_all(fixture.state_root.join("keys"))?;
     fs::create_dir_all(fixture.cache_root.join("nar"))?;
@@ -608,17 +608,21 @@ fn rotate_key_invalidates_cache_and_replaces_trust_root() -> TestResult {
     fs::write(fixture.cache_root.join("nar/old.nar"), "old\n")?;
 
     let old_public = fs::read_to_string(fixture.state_root.join("keys/cache.pub"))?;
-    let report = fixture.run("rotate")?;
-    let new_public = fs::read_to_string(fixture.state_root.join("keys/cache.pub"))?;
-
-    assert!(report.contains("rotated project cache key"));
-    assert_ne!(new_public, old_public);
-    assert!(!fixture.cache_root.join("old.narinfo").exists());
-    assert!(!fixture.cache_root.join("nar/old.nar").exists());
-    assert!(fixture.cache_root.join("nix-cache-info").is_file());
-    assert!(fixture.cache_root.join("nar").is_dir());
-    let status = fs::read_to_string(fixture.state_root.join("cache-status.json"))?;
-    assert!(status.contains("key-rotated"));
+    fixture.run_failure("rotate", &[])?;
+    assert_eq!(
+        fs::read_to_string(fixture.state_root.join("keys/cache.pub"))?,
+        old_public
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.cache_root.join("old.narinfo"))?,
+        "old\n"
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.cache_root.join("nar/old.nar"))?,
+        "old\n"
+    );
+    assert!(!fixture.key_counter.exists());
+    assert!(!fixture.state_root.join("cache-status.json").exists());
 
     Ok(())
 }

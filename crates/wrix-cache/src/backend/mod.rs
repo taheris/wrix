@@ -1,5 +1,7 @@
 //! Scoped host publication through Celler; no sandbox or host substitution authority.
 
+pub mod publication;
+
 use std::{collections::HashSet, path::PathBuf, time::Duration};
 
 use attic::{
