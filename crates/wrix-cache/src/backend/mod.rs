@@ -43,6 +43,8 @@ pub enum Error {
     NarSize,
     /// Celler changed a valid signing key during registration
     KeyChanged,
+    /// Celler invalidated the selected view, but replacement key/policy confirmation failed; republish only after recovery: {source}
+    RotationInvalidated { source: Box<Error> },
 }
 
 /// One host-authorized namespace and its runtime HTTP authority.
@@ -215,7 +217,11 @@ impl Client {
                 .await
                 .map_err(|_| Error::Transport)?,
         )?;
-        self.register(retention).await
+        self.register(retention)
+            .await
+            .map_err(|source| Error::RotationInvalidated {
+                source: Box::new(source),
+            })
     }
 
     /// Uploads precisely the admitted realized paths, without following references.
