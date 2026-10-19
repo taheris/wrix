@@ -16,6 +16,9 @@ use wrix_core::{cache_key::CachePublicKey, path::WorkspaceHash};
 
 use super::Client;
 
+#[cfg(test)]
+mod test;
+
 const MAX_BINDING_BYTES: u64 = 16 * 1024;
 
 fn private_directory(root: &Path) -> Result<fs::Metadata> {
@@ -54,6 +57,8 @@ pub enum Error {
     Permissions,
     /// invalid host-private Celler publication binding
     Binding,
+    /// {0}
+    Issuer(#[from] super::issuer::Error),
     /// Celler publication binding belongs to a different workspace
     Workspace,
     /// {0}
@@ -69,14 +74,46 @@ struct Binding {
     workspace_hash: String,
     endpoint: String,
     namespace: CacheName,
-    token: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    issuer_root: Option<PathBuf>,
     retention_seconds: u64,
 }
 
 /// Resolved host authority; it deliberately has no serialization or diagnostic representation.
 pub struct Publisher {
-    client: Client,
+    authority: Credential,
     retention: Duration,
+}
+
+enum Credential {
+    Token(Client),
+    Issuer {
+        root: PathBuf,
+        endpoint: String,
+        namespace: CacheName,
+    },
+}
+
+impl Credential {
+    fn client(&self) -> Result<std::borrow::Cow<'_, Client>> {
+        match self {
+            Self::Token(client) => Ok(std::borrow::Cow::Borrowed(client)),
+            Self::Issuer {
+                root,
+                endpoint,
+                namespace,
+            } => {
+                let token = super::issuer::Authority::open(root)?.publication_token(namespace)?;
+                Ok(std::borrow::Cow::Owned(Client::new(
+                    endpoint,
+                    namespace.clone(),
+                    &token,
+                )?))
+            }
+        }
+    }
 }
 
 impl Publisher {
@@ -98,10 +135,42 @@ impl Publisher {
             workspace_hash: workspace.as_str().to_owned(),
             endpoint: endpoint.to_owned(),
             namespace,
-            token: token.to_owned(),
+            token: Some(token.to_owned()),
+            issuer_root: None,
             retention_seconds: retention.as_secs(),
         };
-        let bytes = serde_json::to_vec(&binding).map_err(|_| Error::Binding)?;
+        Self::install_binding(state_root, &binding)
+    }
+
+    /// Installs host-only issuance coordinates, not an expiring credential snapshot.
+    /// Each operation reopens the issuer and issues exact-view authority at the current clock time.
+    pub fn install_issuer(
+        state_root: &Path,
+        workspace: &WorkspaceHash,
+        endpoint: &str,
+        namespace: CacheName,
+        issuer_root: &Path,
+        retention: Duration,
+    ) -> Result<()> {
+        super::retention_seconds(retention)?;
+        let token = super::issuer::Authority::open(issuer_root)?.publication_token(&namespace)?;
+        Client::new(endpoint, namespace.clone(), &token)?;
+        Self::install_binding(
+            state_root,
+            &Binding {
+                schema_version: 2,
+                workspace_hash: workspace.as_str().to_owned(),
+                endpoint: endpoint.to_owned(),
+                namespace,
+                token: None,
+                issuer_root: Some(issuer_root.to_owned()),
+                retention_seconds: retention.as_secs(),
+            },
+        )
+    }
+
+    fn install_binding(state_root: &Path, binding: &Binding) -> Result<()> {
+        let bytes = serde_json::to_vec(binding).map_err(|_| Error::Binding)?;
         if bytes.len() as u64 > MAX_BINDING_BYTES {
             return Err(Error::Binding);
         }
@@ -144,9 +213,6 @@ impl Publisher {
             return Err(Error::Binding);
         }
         let binding: Binding = serde_json::from_slice(&bytes).map_err(|_| Error::Binding)?;
-        if binding.schema_version != 1 {
-            return Err(Error::Binding);
-        }
         let bound_workspace =
             WorkspaceHash::parse(&binding.workspace_hash).map_err(|_| Error::Binding)?;
         if bound_workspace != *workspace {
@@ -154,24 +220,40 @@ impl Publisher {
         }
         let retention = Duration::from_secs(binding.retention_seconds);
         super::retention_seconds(retention)?;
+        let authority = match (binding.schema_version, binding.token, binding.issuer_root) {
+            (1, Some(token), None) => {
+                Credential::Token(Client::new(&binding.endpoint, binding.namespace, &token)?)
+            }
+            (2, None, Some(root)) => {
+                let token =
+                    super::issuer::Authority::open(&root)?.publication_token(&binding.namespace)?;
+                Client::new(&binding.endpoint, binding.namespace.clone(), &token)?;
+                Credential::Issuer {
+                    root,
+                    endpoint: binding.endpoint,
+                    namespace: binding.namespace,
+                }
+            }
+            _ => return Err(Error::Binding),
+        };
         Ok(Self {
-            client: Client::new(&binding.endpoint, binding.namespace, &binding.token)?,
+            authority,
             retention,
         })
     }
 
     /// Missing paths remain missing; native store and backend failures propagate unchanged.
     pub async fn publish_selected(&self, paths: &[PathBuf]) -> Result<usize> {
-        Ok(self.client.publish_selected(paths).await?)
+        Ok(self.authority.client()?.publish_selected(paths).await?)
     }
 
     /// Callers serialize registration with the selected namespace's publication lock.
     pub async fn register(&self) -> Result<CachePublicKey> {
-        Ok(self.client.register(self.retention).await?)
+        Ok(self.authority.client()?.register(self.retention).await?)
     }
 
     /// Callers serialize rotation with the selected namespace's publication lock.
     pub async fn rotate(&self) -> Result<CachePublicKey> {
-        Ok(self.client.rotate(self.retention).await?)
+        Ok(self.authority.client()?.rotate(self.retention).await?)
     }
 }

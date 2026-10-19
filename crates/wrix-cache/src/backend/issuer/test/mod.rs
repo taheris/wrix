@@ -11,6 +11,32 @@ fn directories() -> (tempfile::TempDir, PathBuf, PathBuf) {
 }
 
 #[test]
+fn opening_missing_issuer_never_provisions_or_repairs_it() {
+    let (_temporary, root, metadata) = directories();
+    assert!(matches!(Authority::open(&root), Err(Error::Io(_))));
+    assert!(!root.exists());
+    assert_eq!(fs::read_dir(&metadata).unwrap().count(), 0);
+    wrix_core::private_directory::prepare(&root).unwrap();
+    assert!(Authority::open(&root).is_err());
+    assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
+}
+
+#[test]
+fn opening_authority_preserves_key_and_rejects_unsafe_root() {
+    let (temporary, root, metadata) = directories();
+    Authority::provision(&root, &metadata).unwrap();
+    let private = fs::read(root.join(PRIVATE_NAME)).unwrap();
+    Authority::open(&root).unwrap();
+    assert_eq!(fs::read(root.join(PRIVATE_NAME)).unwrap(), private);
+    let link = temporary.path().join("link");
+    symlink(&root, &link).unwrap();
+    assert!(matches!(Authority::open(&link), Err(Error::Permissions)));
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(matches!(Authority::open(&root), Err(Error::Permissions)));
+    assert_eq!(fs::read(root.join(PRIVATE_NAME)).unwrap(), private);
+}
+
+#[test]
 fn provisioning_preserves_issuer_and_delegates_only_its_public_key() {
     let (_temporary, root, metadata) = directories();
     Authority::provision(&root, &metadata).unwrap();

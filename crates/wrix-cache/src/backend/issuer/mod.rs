@@ -43,6 +43,21 @@ pub struct Authority {
 }
 
 impl Authority {
+    /// Opens existing private authority without generating keys or touching delegated service state.
+    pub fn open(root: &Path) -> Result<Self, Error> {
+        if !root.is_absolute() {
+            return Err(Error::Layout);
+        }
+        let directory = fs::symlink_metadata(root)?;
+        if !directory.is_dir() || directory.mode() & 0o077 != 0 {
+            return Err(Error::Permissions);
+        }
+        public_key(&root.join(PRIVATE_NAME), root)?;
+        Ok(Self {
+            root: root.to_owned(),
+        })
+    }
+
     /// Preserves existing valid authority and installs only its public verifier in delegated metadata.
     /// Callers supply host-controlled paths, never repository or launch configuration.
     /// The issuer directory must also remain outside every other service mount.

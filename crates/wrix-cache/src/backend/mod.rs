@@ -50,6 +50,7 @@ pub enum Error {
 }
 
 /// One host-authorized namespace and its runtime HTTP authority.
+#[derive(Clone)]
 pub struct Client {
     endpoint: Url,
     namespace: CacheName,

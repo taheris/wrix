@@ -32,6 +32,19 @@ struct Server {
 
 impl Server {
     fn start(exchanges: Vec<Exchange>) -> Self {
+        Self::start_with_authorization(exchanges, |header| {
+            assert!(
+                header
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer fixture-publisher\r\n")
+            );
+        })
+    }
+
+    fn start_with_authorization(
+        exchanges: Vec<Exchange>,
+        check: impl Fn(&str) + Send + 'static,
+    ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let endpoint = format!("http://{}/", listener.local_addr().unwrap());
@@ -63,8 +76,8 @@ impl Server {
                     header.lines().next().unwrap(),
                     format!("{} /_api/v1/cache-config/private HTTP/1.1", exchange.method)
                 );
+                check(&header);
                 let lower = header.to_ascii_lowercase();
-                assert!(lower.contains("authorization: bearer fixture-publisher\r\n"));
                 let length = lower
                     .lines()
                     .find_map(|line| line.strip_prefix("content-length: "))
@@ -693,6 +706,87 @@ fn runtime_authority_rejects_scope_drift_and_invalid_native_policy() {
 }
 
 #[tokio::test]
+async fn issuer_backed_publisher_issues_current_exact_view_credentials_per_operation() {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use wrix_cache::backend::{issuer::Authority, publication::Publisher};
+
+    let root = tempfile::tempdir().unwrap();
+    let issuer = root.path().join("issuer");
+    let metadata = root.path().join("metadata");
+    std::fs::create_dir(&metadata).unwrap();
+    Authority::provision(&issuer, &metadata).unwrap();
+    let (sent, received) = std::sync::mpsc::channel();
+    let server = Server::start_with_authorization(
+        vec![
+            get(config(PUBLIC_KEY)),
+            retention_patch(),
+            get(config(PUBLIC_KEY)),
+            get(config(PUBLIC_KEY)),
+            retention_patch(),
+            get(config(PUBLIC_KEY)),
+        ],
+        move |header| {
+            let token = header
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(": ")?;
+                    name.eq_ignore_ascii_case("authorization").then_some(value)
+                })
+                .unwrap()
+                .strip_prefix("Bearer ")
+                .unwrap();
+            let claims: Value = serde_json::from_slice(
+                &URL_SAFE_NO_PAD
+                    .decode(token.split('.').nth(1).unwrap())
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                claims["https://jwt.attic.rs/v1"]["caches"],
+                json!({
+                    "private": {"r":1,"w":1,"cc":1,"cr":1,"cq":1,"cd":1}
+                })
+            );
+            assert_eq!(
+                claims["exp"].as_u64().unwrap() - claims["iat"].as_u64().unwrap(),
+                3600
+            );
+            sent.send(claims["iat"].as_u64().unwrap()).unwrap();
+        },
+    );
+    let control = root.path().join("control");
+    let workspace = wrix_core::path::Workspace::from_path(root.path()).unwrap();
+    Publisher::install_issuer(
+        &control,
+        workspace.hash(),
+        &server.endpoint,
+        CacheName::new("private".into()).unwrap(),
+        &issuer,
+        RETENTION,
+    )
+    .unwrap();
+    let publisher = Publisher::load(&control, workspace.hash()).unwrap();
+    publisher.register().await.unwrap();
+    let first: Vec<_> = (0..3).map(|_| received.recv().unwrap()).collect();
+    assert!(first.iter().all(|issued| *issued == first[0]));
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    publisher.register().await.unwrap();
+    for _ in 0..3 {
+        let timestamp = received.recv().unwrap();
+        assert!(timestamp >= now);
+        assert!(
+            timestamp > first[0],
+            "publisher reused an earlier credential snapshot"
+        );
+    }
+    server.finish();
+}
+
+#[tokio::test]
 #[ignore = "requires packaged Celler, Linux user/mount/network namespaces, Nix, ip and OpenSSL"]
 async fn integration_does_not_require_shared_worker_runtime() {
     const TEST: &str = "integration_does_not_require_shared_worker_runtime";
@@ -722,15 +816,42 @@ async fn integration_does_not_require_shared_worker_runtime() {
     .unwrap();
     let selected = native::add_file("runtime without host store access", "runtime-selected");
     let server = native::Server::start_verification_only(&layout);
-    let client = server.client("private");
-    let key = client.register(RETENTION).await.unwrap();
+    let control = tempfile::tempdir().unwrap();
+    let workspace = wrix_core::path::Workspace::from_path(control.path()).unwrap();
+    wrix_cache::backend::publication::Publisher::install_issuer(
+        control.path(),
+        workspace.hash(),
+        &server.endpoint,
+        CacheName::new("private".into()).unwrap(),
+        &server.issuer_root(),
+        RETENTION,
+    )
+    .unwrap();
+    let publisher =
+        wrix_cache::backend::publication::Publisher::load(control.path(), workspace.hash())
+            .unwrap();
+    let key = publisher.register().await.unwrap();
+    std::fs::write(
+        control.path().join("publish-roots.json"),
+        json!({"roots": [{
+            "name": "packages.demo", "installable": ".#demo", "drv_path": "selected.drv",
+            "out_paths": [selected]
+        }]})
+        .to_string(),
+    )
+    .unwrap();
+    let report = invoke_native_hook(control.path(), &selected).await;
     assert_eq!(
-        client
-            .publish_selected(std::slice::from_ref(&selected))
-            .await
-            .unwrap(),
-        1
+        report.lines(),
+        ["published 1 project cache paths through Celler"]
     );
+    assert_eq!(publisher.register().await.unwrap(), key);
+    let binding: Value = serde_json::from_slice(
+        &std::fs::read(control.path().join("celler-publisher.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(binding["schema_version"], 2);
+    assert!(binding.get("token").is_none());
     let response = server
         .get(&format!("private/{}.narinfo", native::hash(&selected)))
         .await;

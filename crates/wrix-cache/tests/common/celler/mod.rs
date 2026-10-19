@@ -177,6 +177,10 @@ impl Server {
         server
     }
 
+    pub fn issuer_root(&self) -> PathBuf {
+        self.root.path().join("issuer")
+    }
+
     pub fn client(&self, namespace: &str) -> Client {
         Client::new(
             &self.endpoint,
