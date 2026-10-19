@@ -48,10 +48,18 @@ class PrivateNixInitialization(unittest.TestCase):
                 self.assertFalse((root / "nix/var/nix/daemon-socket").exists())
 
     def test_rejects_live_roots(self):
-        for root in ("/", "/nix", "/nix/var/nix"):
-            result = subprocess.run(["bash", str(INITIALIZER), root], capture_output=True)
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn(b"requires a staged image root", result.stderr)
+        for root in ("/", "/nix", "/nix/var", "/nix/var/nix", "/nix/store"):
+            with self.subTest(root=root):
+                path = pathlib.Path(root)
+                before = path.lstat() if path.exists() or path.is_symlink() else None
+                result = subprocess.run(["bash", str(INITIALIZER), root], capture_output=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(b"requires a staged image root", result.stderr)
+                if before is None:
+                    self.assertFalse(path.exists())
+                    self.assertFalse(path.is_symlink())
+                else:
+                    self.assertEqual(path.lstat().st_ino, before.st_ino)
 
     def test_rejects_staged_aliases_without_touching_the_target(self):
         for target in ("nix", "nix/store", "nix/var/nix/db", "nix/var/nix/gc.lock"):
@@ -72,8 +80,8 @@ class PrivateNixInitialization(unittest.TestCase):
                 result = subprocess.run(["bash", str(INITIALIZER), str(root)], capture_output=True)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(b"rejects staged symlinks", result.stderr)
-                self.assertEqual(content.read_bytes(), b"untouched external state")
                 self.assertEqual(content.stat(), before)
+                self.assertEqual(content.read_bytes(), b"untouched external state")
 
     def test_rejects_unmarked_tree_without_changing_it(self):
         with tempfile.TemporaryDirectory() as temporary:
