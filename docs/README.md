@@ -13,6 +13,10 @@ use `sandbox.devShell { }` for the
 second executable. Pure images/configuration remain available for programmatic
 host `spawn`; configured sandbox runners are not compatibility entry points.
 
+[Claude stdio clients](claude-stdio.md) describes the explicit
+permission-protocol opt-in through `SpawnConfig.agent_args` and its
+compatibility/security limits.
+
 ## Authoring Conventions
 
 - [`docs/spec-conventions.md`](spec-conventions.md) — what a spec is and isn't,

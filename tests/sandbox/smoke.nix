@@ -183,6 +183,21 @@ in
         mkdir "$out"
       '';
 
+  claude-stdio-permission-arguments =
+    runCommandLocal "claude-stdio-permission-arguments"
+      {
+        nativeBuildInputs = [
+          bash
+          jq
+        ];
+      }
+      ''
+        set -euo pipefail
+        REPO_ROOT=${../..} bash ${./entrypoint-contract.sh} test_selected_native_agents_receive_argv_both_entrypoints
+        REPO_ROOT=${../..} bash ${./entrypoint-contract.sh} test_claude_stdio_permission_prompt_opt_in_both_entrypoints
+        touch "$out"
+      '';
+
   entrypoint-declared-runner =
     assert consumerImage.directExecutable == "${consumerAgent}/bin/${consumerAgent.meta.mainProgram}";
     runCommandLocal "smoke-entrypoint-declared-runner"

@@ -1031,6 +1031,44 @@ fn profile_mounts_expand_only_home_and_user_variables() -> TestResult {
 }
 
 #[test]
+fn claude_spawn_forwards_explicit_permission_protocol_arguments() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let workspace = root.path().join("workspace");
+    fs::create_dir(&workspace)?;
+    let profile = root.path().join("profile.json");
+    common::write_profile_config(
+        &profile,
+        &ProfileFixture {
+            agent_kind: String::from("claude"),
+            ..ProfileFixture::default()
+        },
+    )?;
+    let spawn = root.path().join("spawn.json");
+    let arguments = ["--permission-prompt-tool", "stdio", "two words", ""];
+    fs::write(
+        &spawn,
+        serde_json::to_vec(&json!({
+            "workspace": workspace,
+            "env": [],
+            "agent_args": arguments,
+            "mounts": []
+        }))?,
+    )?;
+    let result = run_spawn_launch(root.path(), "permission", &profile, &spawn, Vec::new())?;
+    assert!(result.success, "{}", result.stderr);
+    let argv = fs::read(root.path().join("argv"))?;
+    let argv: Vec<_> = argv
+        .strip_suffix(&[0])
+        .ok_or("missing argv terminator")?
+        .split(|byte| *byte == 0)
+        .map(String::from_utf8_lossy)
+        .collect();
+    assert!(argv.iter().any(|arg| arg == "WRIX_STDIO=1"));
+    assert_eq!(&argv[argv.len() - arguments.len()..], &arguments);
+    Ok(())
+}
+
+#[test]
 fn spawn_waits_for_container_completion() -> TestResult {
     for stdio in [false, true] {
         for exit_code in [0, 37] {

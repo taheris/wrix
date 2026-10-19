@@ -483,6 +483,7 @@ test_entrypoint_declared_runner() {
   test_native_executable_missing_blocks_agent_both_entrypoints || return 1
   test_immutable_agent_variant_guard_both_entrypoints || return 1
   test_selected_native_agents_receive_argv_both_entrypoints || return 1
+  test_claude_stdio_permission_prompt_opt_in_both_entrypoints || return 1
   test_interactive_claude_without_prompt_mount_both_entrypoints || return 1
   test_interactive_claude_mounted_prompt_both_entrypoints || return 1
   test_interactive_claude_invalid_prompt_blocks_agent_both_entrypoints
@@ -522,6 +523,36 @@ EOF
     done
   done
   printf 'PASS: selected Pi/Claude receive argv in interactive and stdio modes on both platforms\n' >&2
+}
+
+test_claude_stdio_permission_prompt_opt_in_both_entrypoints() {
+  require_command jq
+  local platform workspace stdout_path stderr_path status
+  for platform in linux darwin; do
+    workspace="$TEST_TMP/permission-$platform/workspace"
+    stdout_path="$TEST_TMP/permission-$platform.out"
+    stderr_path="$TEST_TMP/permission-$platform.err"
+    mkdir -p "$workspace/bin"
+    write_bash_fixture "$workspace/bin/claude" <<'EOF'
+set -euo pipefail
+IFS= read -r request
+jq -nc --arg request "$request" --args '{request: $request, argv: $ARGS.positional}' -- "$@"
+printf 'permission client diagnostic\n' >&2
+exit 23
+EOF
+    chmod +x "$workspace/bin/claude"
+    status=0
+    printf 'request with spaces\n' | run_entrypoint "$platform" claude "$stdout_path" "$stderr_path" "$workspace" \
+      --permission-prompt-tool stdio 'two words' '' || status=$?
+    [[ "$status" == 23 ]] || return 1
+    jq -e '.request == "request with spaces" and .argv == [
+      "--dangerously-skip-permissions", "--print", "--verbose",
+      "--input-format", "stream-json", "--output-format", "stream-json",
+      "--permission-prompt-tool", "stdio", "two words", ""
+    ]' "$stdout_path" >/dev/null || return 1
+    assert_output_contains "$platform stderr" "$(<"$stderr_path")" 'permission client diagnostic' || return 1
+  done
+  printf 'PASS: Claude permission protocol opt-in preserves argv, stdio and status on both platforms\n' >&2
 }
 
 write_claude_argv_probe() {
@@ -1014,6 +1045,7 @@ ALL_TESTS=(
   test_runtime_fixtures_do_not_need_env_or_path
   test_workspace_bin_path_prepend_both
   test_selected_native_agents_receive_argv_both_entrypoints
+  test_claude_stdio_permission_prompt_opt_in_both_entrypoints
   test_direct_executable_guard_both_entrypoints
   test_direct_metadata_missing_blocks_agent_both_entrypoints
   test_native_executable_missing_blocks_agent_both_entrypoints

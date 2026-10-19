@@ -567,7 +567,14 @@ implicit-port form is accepted.
 - `env` — per-launch `[key, value]` pairs to pass through; pairs matching
   `security.runtime_secrets` are runtime credential sources and never enter Nix
   or image data
-- `agent_args` — argv tail passed to the agent binary
+- `agent_args` — argv tail passed to the agent binary. Claude stream-json
+  clients can explicitly opt in to its permission control protocol with
+  `["--permission-prompt-tool", "stdio"]`; Wrix does not add this flag by
+  default. This leaves the existing `--dangerously-skip-permissions` behavior
+  unchanged, not an approval enforcement boundary. See
+  [Claude stdio clients](../docs/claude-stdio.md) for client/version
+  compatibility.
+  [test](../tests/sandbox/entrypoint-contract.sh#test_claude_stdio_permission_prompt_opt_in_both_entrypoints)
 - `git` — optional object with independently optional boolean `deploy` and
   `sign` overrides; absence inherits repository policy, explicit `false`
   disables the corresponding grant, and explicit `true` enables it
