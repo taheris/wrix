@@ -82,7 +82,7 @@ let
   serviceImage = import ../../lib/services/image.nix {
     pkgs = linuxPkgs;
     hostPkgs = pkgs;
-    inherit (serviceRust) cacheServe;
+    inherit (serviceRust) cacheServe celler;
     asTarball = !isLinux;
   };
   expectedImageSourceKind = if isLinux then "nix-descriptor" else "docker-archive";

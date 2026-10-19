@@ -286,6 +286,24 @@ impl Client {
     }
 }
 
+/// Reports missing selected outputs without converting native store failures into misses.
+pub async fn paths_realized(paths: &[String]) -> Result<bool> {
+    if paths.is_empty() {
+        return Ok(false);
+    }
+    let store = Box::pin(NixStore::connect()).await?;
+    for path in paths {
+        let parsed = store.parse_store_path(path)?;
+        if store.get_full_path(&parsed) != *path {
+            return Err(Error::Protocol);
+        }
+        if store.query_path_info(&parsed).await?.is_none() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 /// Returns only realized runtime references of the selected outputs; unknown store errors propagate.
 pub async fn realized_closure(paths: &[String]) -> Result<Vec<String>> {
     if paths.is_empty() {

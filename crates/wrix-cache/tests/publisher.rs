@@ -1,1359 +1,783 @@
+#![cfg(test)]
+
 use std::{
     env, fs,
     fs::OpenOptions,
     io,
+    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::Command,
 };
 
+use attic::cache::CacheName;
 use fs2::FileExt;
+use serde_json::{Value, json};
 use wrix_cache::{
+    backend::publication::Publisher,
     config::Settings,
     publisher::{self, HookRecord, Mode},
 };
 use wrix_core::path::Workspace;
 
+#[path = "common/celler/mod.rs"]
+#[expect(
+    dead_code,
+    reason = "shared native fixture also exposes corruption and pull-only clients for backend regressions"
+)]
+mod native;
+
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
-const PROJECT_DRV: &str = "/nix/store/project-root.drv";
-const PROJECT_OUT: &str = "/nix/store/project-root-out";
-const PENDING_OUT: &str = "/nix/store/pending-root-out";
-const UPSTREAM_OUT: &str = "/nix/store/upstream-dependency-out";
-const ARBITRARY_OUT: &str = "/nix/store/arbitrary-host-path";
-const CLOSURE_DEPENDENCY: &str = "/nix/store/closure-only-dependency";
-const VALID_PUBLIC_KEY: &str = "wrix-cache:CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC=\n";
+struct Fixture {
+    root: tempfile::TempDir,
+    server: native::Server,
+    workspace: Workspace,
+    state: PathBuf,
+    cache: PathBuf,
+    output: PathBuf,
+    dependency: PathBuf,
+    foreign: PathBuf,
+    roots: PathBuf,
+    nix: PathBuf,
+}
 
-#[test]
-fn publish_realized_roots_drains_pending_and_updates_gc_markers() -> TestResult {
-    let fixture = Fixture::new("publish-realized")?;
-    fixture.write_roots(&[RootSpec::new(
-        "packages.x86_64-linux.demo",
-        ".#packages.x86_64-linux.demo",
-        PROJECT_DRV,
-        &[PROJECT_OUT],
-    )])?;
-    fixture.write_pending("matching", PROJECT_DRV, &[PENDING_OUT])?;
-    fixture.write_extra_closure(&[CLOSURE_DEPENDENCY])?;
-    fixture.write_roots(&[
-        RootSpec::new(
-            "packages.x86_64-linux.demo",
-            ".#packages.x86_64-linux.demo",
-            PROJECT_DRV,
-            &[PROJECT_OUT],
-        ),
-        RootSpec::new(
-            "packages.x86_64-linux.missing",
-            ".#packages.x86_64-linux.missing",
-            "/nix/store/missing-root.drv",
-            &[],
-        ),
-    ])?;
-
-    let report = fixture.run("publish")?;
-
-    assert!(report.contains("published root: .#packages.x86_64-linux.demo"));
-    assert!(report.contains("drained pending:"));
-    assert!(report.contains("unrealized root: .#packages.x86_64-linux.missing"));
-    assert_eq!(fixture.pending_count()?, 0);
-    let marker = fs::read_to_string(
+impl Fixture {
+    async fn new() -> Self {
+        let root = tempfile::tempdir().unwrap();
+        let workspace_path = root.path().join("workspace");
+        fs::create_dir(&workspace_path).unwrap();
+        let workspace = Workspace::from_path(&workspace_path).unwrap();
+        let dependency = native::add_file("dependency", "dependency");
+        let foreign = native::add_file("unrelated", "foreign");
+        let eval = Command::new("nix")
+            .args(["--store", "daemon", "eval", "--raw", "--impure", "--expr"])
+            .arg(format!(
+                "builtins.toFile \"selected\" (builtins.storePath {:?})",
+                dependency.to_str().unwrap()
+            ))
+            .output()
+            .unwrap();
+        assert!(eval.status.success(), "{:?}", eval.stderr);
+        let output = PathBuf::from(String::from_utf8(eval.stdout).unwrap().trim());
+        let state = root.path().join("state");
+        let server = native::Server::start();
+        server
+            .client("private")
+            .register(std::time::Duration::from_hours(720))
+            .await
+            .unwrap();
+        Publisher::install(
+            &state,
+            workspace.hash(),
+            &server.endpoint,
+            CacheName::new(String::from("private")).unwrap(),
+            &server.token,
+            std::time::Duration::from_hours(720),
+        )
+        .unwrap();
+        let nix = root.path().join("nix");
+        fs::write(&nix, NIX_FIXTURE).unwrap();
+        fs::set_permissions(&nix, fs::Permissions::from_mode(0o755)).unwrap();
+        let fixture = Self {
+            cache: root.path().join("unused-flat-cache"),
+            roots: root.path().join("roots.json"),
+            root,
+            server,
+            workspace,
+            state,
+            output,
+            dependency,
+            foreign,
+            nix,
+        };
+        fixture.set_roots(&[fixture.package()]);
         fixture
-            .state_root
-            .join("gcroots/packages.x86_64-linux.demo"),
-    )?;
-    assert!(marker.contains(PROJECT_OUT));
-    assert!(marker.contains(CLOSURE_DEPENDENCY));
-    let manifest = fs::read_to_string(fixture.state_root.join("publish-roots.json"))?;
-    assert!(manifest.contains(fixture.workspace.hash().as_str()));
-    let log = fixture.nix_log()?;
-    assert!(log.contains(PROJECT_OUT));
-    assert!(log.contains(PENDING_OUT));
-    assert!(log.contains("--no-recursive"));
-    assert!(!log.contains("nix build"));
-
-    Ok(())
-}
-
-#[test]
-fn warm_roots_include_checks_only_when_requested() -> TestResult {
-    let roots = [
-        RootSpec::new(
-            "packages.x86_64-linux.pkg",
-            ".#packages.x86_64-linux.pkg",
-            "/nix/store/pkg.drv",
-            &["/nix/store/pkg-out"],
-        ),
-        RootSpec::new(
-            "checks.x86_64-linux.unit",
-            ".#checks.x86_64-linux.unit",
-            "/nix/store/check.drv",
-            &["/nix/store/check-out"],
-        ),
-        RootSpec::new(
-            "devShells.x86_64-linux.default",
-            ".#devShells.x86_64-linux.default",
-            "/nix/store/shell.drv",
-            &["/nix/store/shell-out"],
-        ),
-    ];
-
-    let without_checks = Fixture::new("warm-without-checks")?;
-    without_checks.write_roots(&roots)?;
-    let without_report = without_checks.run_warm(false)?;
-    let log = without_checks.nix_log()?;
-    assert!(log.contains(".#packages.x86_64-linux.pkg"));
-    assert!(log.contains(".#devShells.x86_64-linux.default"));
-    assert!(!log.contains(".#checks.x86_64-linux.unit"));
-    assert!(without_report.contains("published root: .#packages.x86_64-linux.pkg"));
-    assert!(
-        without_checks
-            .state_root
-            .join("gcroots/packages.x86_64-linux.pkg")
-            .is_file()
-    );
-    assert!(
-        without_checks
-            .state_root
-            .join("gcroots/devShells.x86_64-linux.default")
-            .is_file()
-    );
-    assert!(
-        fs::read_to_string(without_checks.state_root.join("cache-status.json"))?
-            .contains("\"dirty\": false")
-    );
-
-    let with_checks = Fixture::new("warm-with-checks")?;
-    with_checks.write_roots(&roots)?;
-    let with_report = with_checks.run_warm(true)?;
-    let log = with_checks.nix_log()?;
-    assert!(log.contains(".#packages.x86_64-linux.pkg"));
-    assert!(log.contains(".#devShells.x86_64-linux.default"));
-    assert!(log.contains(".#checks.x86_64-linux.unit"));
-    assert!(with_report.contains("published root: .#checks.x86_64-linux.unit"));
-    assert!(
-        with_checks
-            .state_root
-            .join("gcroots/checks.x86_64-linux.unit")
-            .is_file()
-    );
-
-    Ok(())
-}
-
-#[test]
-fn publish_filters_to_current_workspace_closure() -> TestResult {
-    let fixture = Fixture::new("publish-filters")?;
-    fixture.write_roots(&[RootSpec::new(
-        "packages.x86_64-linux.demo",
-        ".#packages.x86_64-linux.demo",
-        PROJECT_DRV,
-        &[PROJECT_OUT],
-    )])?;
-    fixture.write_extra_closure(&[UPSTREAM_OUT])?;
-    fixture.write_pending("foreign", "/nix/store/foreign-root.drv", &[ARBITRARY_OUT])?;
-
-    fixture.run("publish")?;
-
-    let copy = fixture.copy_log_line()?;
-    assert!(copy.contains(PROJECT_OUT));
-    assert!(!copy.contains(UPSTREAM_OUT));
-    assert!(!copy.contains(ARBITRARY_OUT));
-    assert_eq!(fixture.pending_count()?, 1);
-
-    Ok(())
-}
-
-#[test]
-fn publish_batches_upstream_queries_and_retains_null_misses() -> TestResult {
-    let fixture = Fixture::new("publish-batched")?;
-    fixture.write_roots(&[RootSpec::new(
-        "packages.x86_64-linux.demo",
-        ".#packages.x86_64-linux.demo",
-        PROJECT_DRV,
-        &[PROJECT_OUT],
-    )])?;
-    let extra = (0..600)
-        .map(|index| format!("/nix/store/dependency-{index}-out"))
-        .collect::<Vec<_>>();
-    let mut closure = extra.iter().map(String::as_str).collect::<Vec<_>>();
-    closure.push(UPSTREAM_OUT);
-    fixture.write_extra_closure(&closure)?;
-
-    fixture.run("publish")?;
-
-    let log = fixture.nix_log()?;
-    let queries = log
-        .lines()
-        .filter(|line| line.starts_with("nix path-info --store"))
-        .collect::<Vec<_>>();
-    assert_eq!(queries.len(), 3);
-    assert!(queries.iter().all(|line| line.contains(" --json ")));
-    let copy = fixture.copy_log_line()?;
-    assert!(copy.contains(PROJECT_OUT));
-    assert!(!copy.contains(UPSTREAM_OUT));
-    assert!(
-        extra
-            .iter()
-            .all(|path| copy.split_whitespace().any(|arg| arg == path))
-    );
-    Ok(())
-}
-
-#[test]
-fn publish_uses_successful_upstream_entries_even_on_partial_query_failure() -> TestResult {
-    let fixture = Fixture::new("publish-partial-upstream")?;
-    fixture.write_roots(&[RootSpec::new(
-        "packages.x86_64-linux.demo",
-        ".#packages.x86_64-linux.demo",
-        PROJECT_DRV,
-        &[PROJECT_OUT],
-    )])?;
-    fixture.write_extra_closure(&[UPSTREAM_OUT])?;
-    fixture.run_with_env("publish", &[("WRIX_FAKE_UPSTREAM_PARTIAL_FAILURE", "1")])?;
-    let copy = fixture.copy_log_line()?;
-    assert!(copy.contains(PROJECT_OUT));
-    assert!(!copy.contains(UPSTREAM_OUT));
-    Ok(())
-}
-
-#[test]
-fn publish_retains_candidates_when_upstream_is_unavailable() -> TestResult {
-    let fixture = Fixture::new("publish-upstream-unavailable")?;
-    fixture.write_roots(&[RootSpec::new(
-        "packages.x86_64-linux.demo",
-        ".#packages.x86_64-linux.demo",
-        PROJECT_DRV,
-        &[PROJECT_OUT],
-    )])?;
-    fixture.write_extra_closure(&[UPSTREAM_OUT])?;
-    fixture.run_with_env("publish", &[("WRIX_FAKE_UPSTREAM_RESPONSE", "unavailable")])?;
-    let copy = fixture.copy_log_line()?;
-    assert!(copy.contains(PROJECT_OUT));
-    assert!(copy.contains(UPSTREAM_OUT));
-    Ok(())
-}
-
-#[test]
-fn publish_rejects_malformed_upstream_json_before_copying() -> TestResult {
-    let fixture = Fixture::new("publish-upstream-malformed")?;
-    fixture.write_roots(&[RootSpec::new(
-        "packages.x86_64-linux.demo",
-        ".#packages.x86_64-linux.demo",
-        PROJECT_DRV,
-        &[PROJECT_OUT],
-    )])?;
-    let error = fixture.run_failure("publish", &[("WRIX_FAKE_UPSTREAM_RESPONSE", "malformed")])?;
-    assert!(error.contains("nix path-info output"));
-    assert!(
-        !fixture
-            .nix_log()?
-            .lines()
-            .any(|line| line.starts_with("nix copy "))
-    );
-    Ok(())
-}
-
-#[test]
-fn publish_fails_when_root_closure_query_fails() -> TestResult {
-    let fixture = Fixture::new("publish-query-failure")?;
-    fixture.write_roots(&[RootSpec::new(
-        "packages.x86_64-linux.demo",
-        ".#packages.x86_64-linux.demo",
-        PROJECT_DRV,
-        &[PROJECT_OUT],
-    )])?;
-
-    let error = fixture.run_failure("publish", &[("WRIX_FAKE_QUERY_FAIL", "1")])?;
-
-    assert!(
-        error.contains("nix-store --query --requisites"),
-        "unexpected error: {error}"
-    );
-    if fixture.nix_log.exists() {
-        assert!(!fixture.nix_log()?.contains("nix copy"));
     }
-    Ok(())
-}
 
-#[test]
-fn publish_uses_flat_signed_cache_with_nonrecursive_copies() -> TestResult {
-    let fixture = Fixture::new("publish-copy-shape")?;
-    fixture.write_roots(&[RootSpec::new(
-        "packages.x86_64-linux.demo",
-        ".#packages.x86_64-linux.demo",
-        PROJECT_DRV,
-        &[PROJECT_OUT],
-    )])?;
-
-    fixture.run("publish")?;
-
-    let copy = fixture.copy_log_line()?;
-    assert!(copy.contains(&format!("--to file://{}", fixture.cache_root.display())));
-    assert!(copy.contains("--no-recursive"));
-    assert!(copy.contains(&format!(
-        "--secret-key-files {}",
-        fixture.state_root.join("keys/cache.secret").display()
-    )));
-    assert!(copy.contains(PROJECT_OUT));
-    let narinfo = fs::read_to_string(fixture.cache_root.join("project-root.narinfo"))?;
-    assert!(narinfo.contains("StorePath: /nix/store/project-root-out"));
-    assert!(narinfo.contains("Sig: wrix-cache:"));
-    assert!(fixture.cache_root.join("nix-cache-info").is_file());
-    assert!(fixture.cache_root.join("nar").is_dir());
-
-    Ok(())
-}
-
-#[test]
-fn lock_timeout_records_pending_and_explicit_publish_drains() -> TestResult {
-    let fixture = Fixture::new("lock-timeout")?;
-    fixture.write_roots(&[RootSpec::new(
-        "packages.x86_64-linux.demo",
-        ".#packages.x86_64-linux.demo",
-        PROJECT_DRV,
-        &[PROJECT_OUT],
-    )])?;
-    fs::create_dir_all(&fixture.state_root)?;
-    let lock_file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(fixture.state_root.join("cache.lock"))?;
-    lock_file.try_lock_exclusive()?;
-
-    let automatic = fixture.run_auto(
-        PROJECT_DRV,
-        PROJECT_OUT,
-        &[(("WRIX_CACHE_LOCK_TIMEOUT_MS"), "100")],
-    )?;
-    assert!(automatic.contains("waiting for project cache lock"));
-    assert!(automatic.contains("recorded pending publish"));
-    assert_eq!(fixture.pending_count()?, 1);
-
-    lock_file.unlock()?;
-    drop(lock_file);
-
-    let explicit = fixture.run("publish")?;
-    assert!(explicit.contains("drained pending:"));
-    assert_eq!(fixture.pending_count()?, 0);
-
-    Ok(())
-}
-
-#[test]
-fn prune_keeps_only_paths_reachable_from_current_markers() -> TestResult {
-    let fixture = Fixture::new("prune-retention")?;
-    fs::create_dir_all(fixture.state_root.join("gcroots"))?;
-    fs::create_dir_all(fixture.cache_root.join("nar"))?;
-    fs::write(
-        fixture.state_root.join("gcroots/packages.demo"),
-        "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-live\n",
-    )?;
-    fs::write(
-        fixture
-            .cache_root
-            .join("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.narinfo"),
-        "StorePath: /nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-live\nURL: nar/live.nar\n",
-    )?;
-    fs::write(fixture.cache_root.join("nar/live.nar"), "live\n")?;
-    fs::write(
-        fixture
-            .cache_root
-            .join("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.narinfo"),
-        "StorePath: /nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-stale\nURL: nar/stale.nar\n",
-    )?;
-    fs::write(fixture.cache_root.join("nar/stale.nar"), "stale\n")?;
-    fs::write(fixture.cache_root.join("nar/orphan.nar"), "orphan\n")?;
-    fs::write(
-        fixture.state_root.join("gcroots/checks.demo"),
-        "/nix/store/cccccccccccccccccccccccccccccccc-dependency\n",
-    )?;
-    fs::write(
-        fixture
-            .cache_root
-            .join("cccccccccccccccccccccccccccccccc.narinfo"),
-        "StorePath: /nix/store/cccccccccccccccccccccccccccccccc-dependency\nURL: nar/dependency.nar\n",
-    )?;
-    fs::write(
-        fixture.cache_root.join("nar/dependency.nar"),
-        "dependency\n",
-    )?;
-    fs::create_dir_all(fixture.cache_root.join("log"))?;
-    fs::write(
-        fixture
-            .cache_root
-            .join("log/cccccccccccccccccccccccccccccccc.drv"),
-        "retained log\n",
-    )?;
-    fs::write(
-        fixture
-            .cache_root
-            .join("log/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.drv"),
-        "stale log\n",
-    )?;
-
-    fixture.run("prune")?;
-
-    assert!(
-        fixture
-            .cache_root
-            .join("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.narinfo")
-            .exists()
-    );
-    assert!(fixture.cache_root.join("nar/live.nar").exists());
-    assert!(
-        !fixture
-            .cache_root
-            .join("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.narinfo")
-            .exists()
-    );
-    assert!(!fixture.cache_root.join("nar/stale.nar").exists());
-    assert!(!fixture.cache_root.join("nar/orphan.nar").exists());
-    assert!(
-        fixture
-            .cache_root
-            .join("cccccccccccccccccccccccccccccccc.narinfo")
-            .exists()
-    );
-    assert!(fixture.cache_root.join("nar/dependency.nar").exists());
-    assert!(
-        fixture
-            .cache_root
-            .join("log/cccccccccccccccccccccccccccccccc.drv")
-            .exists()
-    );
-    assert!(
-        !fixture
-            .cache_root
-            .join("log/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.drv")
-            .exists()
-    );
-    let status = fs::read_to_string(fixture.state_root.join("cache-status.json"))?;
-    assert!(status.contains("\"dirty\": false"));
-
-    Ok(())
-}
-
-#[test]
-fn publishing_reconciles_removed_renamed_excluded_and_empty_root_sets() -> TestResult {
-    for change in ["removed", "renamed", "excluded"] {
-        let fixture = Fixture::new(change)?;
-        fixture.write_roots(&[RootSpec::new(
-            "packages.old",
-            ".#old",
-            PROJECT_DRV,
-            &[PROJECT_OUT],
-        )])?;
-        fixture.run("publish")?;
-        fixture.write_pending("foreign", "/nix/store/foreign.drv", &[ARBITRARY_OUT])?;
-        match change {
-            "removed" => {
-                fixture.write_roots(&[])?;
-                fixture.run("publish")?;
-            }
-            "renamed" => {
-                fixture.write_roots(&[RootSpec::new(
-                    "packages.new",
-                    ".#new",
-                    PROJECT_DRV,
-                    &[PROJECT_OUT],
-                )])?;
-                fixture.run("publish")?;
-                assert!(fixture.state_root.join("gcroots/packages.new").exists());
-            }
-            "excluded" => {
-                fixture.run_with_env("publish", &[("WRIX_CACHE_PUBLISH_EXCLUDE", ".#old")])?;
-            }
-            _ => panic!("unknown fixture change"),
-        }
-        assert!(
-            !fixture.state_root.join("gcroots/packages.old").exists(),
-            "{change}"
-        );
-        assert_eq!(
-            fixture.cache_root.join("project-root.narinfo").exists(),
-            change == "renamed"
-        );
-        assert_eq!(
-            fixture.cache_root.join("nar/project-root.nar").exists(),
-            change == "renamed"
-        );
-        assert_eq!(fixture.pending_count()?, 1);
+    fn package(&self) -> Value {
+        Self::root("packages.demo", &self.output)
     }
-    Ok(())
-}
 
-#[test]
-fn reconciliation_preserves_unrealized_roots_and_shared_payloads() -> TestResult {
-    let fixture = Fixture::new("retention-shared")?;
-    fixture.write_roots(&[
-        RootSpec::new(
-            "packages.live",
-            ".#live",
-            "/nix/store/live.drv",
-            &["/nix/store/aaaa-live"],
-        ),
-        RootSpec::new(
-            "packages.stale",
-            ".#stale",
-            "/nix/store/stale.drv",
-            &["/nix/store/bbbb-stale", "/nix/store/cccc-stale"],
-        ),
-    ])?;
-    fixture.run("publish")?;
-    for (hash, payload) in [("aaaa", "shared"), ("bbbb", "shared"), ("cccc", "stale")] {
+    fn root(name: &str, path: &Path) -> Value {
+        json!({"name":name,"installable":format!(".#{name}"),"drv_path":format!("/nix/store/{name}.drv"),"out_paths":[path]})
+    }
+
+    fn set_roots(&self, roots: &[Value]) {
+        fs::write(&self.roots, json!({"roots":roots}).to_string()).unwrap();
+    }
+
+    fn pending(&self, name: &str, drv: &str, path: &Path) -> PathBuf {
+        fs::create_dir_all(self.state.join("pending")).unwrap();
+        let record = self.state.join(format!("pending/{name}.json"));
         fs::write(
-            fixture.cache_root.join(format!("{hash}.narinfo")),
-            format!("URL: nar/{payload}\n"),
-        )?;
-        fs::write(fixture.cache_root.join(format!("nar/{payload}")), "payload")?;
+            &record,
+            json!({"drv_path":drv,"out_paths":[path]}).to_string(),
+        )
+        .unwrap();
+        record
     }
-    fixture.write_roots(&[RootSpec::new(
-        "packages.live",
-        ".#live",
-        "/nix/store/live.drv",
-        &[],
-    )])?;
-    fixture.run("publish")?;
-    assert!(fixture.state_root.join("gcroots/packages.live").exists());
-    assert!(!fixture.state_root.join("gcroots/packages.stale").exists());
-    assert!(fixture.cache_root.join("aaaa.narinfo").exists());
-    assert!(!fixture.cache_root.join("bbbb.narinfo").exists());
-    assert!(!fixture.cache_root.join("cccc.narinfo").exists());
-    assert!(fixture.cache_root.join("nar/shared").exists());
-    assert!(!fixture.cache_root.join("nar/stale").exists());
-    Ok(())
-}
 
-#[test]
-fn warm_subsets_preserve_full_publish_manifest_and_check_retention() -> TestResult {
-    let fixture = Fixture::new("warm-retention")?;
-    fixture.write_roots(&[
-        RootSpec::new("packages.demo", ".#demo", PROJECT_DRV, &[PROJECT_OUT]),
-        RootSpec::new(
-            "checks.demo",
-            ".#checks.demo",
-            "/nix/store/check.drv",
-            &["/nix/store/aaaa-check"],
-        ),
-    ])?;
-    fixture.run("publish")?;
-    fs::write(fixture.cache_root.join("aaaa.narinfo"), "URL: nar/check\n")?;
-    fs::write(fixture.cache_root.join("nar/check"), "payload")?;
-    fixture.run_warm(false)?;
-    assert!(fixture.state_root.join("gcroots/checks.demo").exists());
-    assert!(fixture.cache_root.join("nar/check").exists());
-    let manifest = fs::read_to_string(fixture.state_root.join("publish-roots.json"))?;
-    assert!(manifest.contains("checks.demo"));
-    fixture.run("prune")?;
-    assert!(fixture.cache_root.join("nar/check").exists());
-    fixture.run_with_env("warm", &[("WRIX_CACHE_PUBLISH_EXCLUDE", ".#demo")])?;
-    assert!(!fixture.state_root.join("gcroots/packages.demo").exists());
-    assert!(fixture.cache_root.join("nar/check").exists());
-    Ok(())
-}
-
-#[test]
-fn automatic_publish_reports_missing_native_authority_without_flat_fallback() -> TestResult {
-    let fixture = Fixture::new("automatic-authority-failure")?;
-    fixture.write_roots(&[RootSpec::new(
-        "packages.demo",
-        ".#demo",
-        PROJECT_DRV,
-        &[PROJECT_OUT],
-    )])?;
-
-    let report = fixture.run_auto(PROJECT_DRV, PROJECT_OUT, &[])?;
-
-    assert!(report.contains("warning: automatic project cache publish failed:"));
-    let status: serde_json::Value =
-        serde_json::from_slice(&fs::read(fixture.state_root.join("cache-status.json"))?)?;
-    assert_eq!(status["dirty"], true);
-    assert_eq!(status["last_publish"], "warning");
-    assert!(
-        status["last_error"]
-            .as_str()
-            .unwrap()
-            .contains("host-private Celler publication authority")
-    );
-    assert_eq!(fixture.pending_count()?, 1);
-    assert!(!fixture.key_counter.exists());
-    assert!(!fixture.cache_root.exists());
-    assert!(!fixture.state_root.join("keys/cache.secret").exists());
-    assert!(!fixture.nix_log.exists());
-    Ok(())
-}
-
-#[test]
-fn automatic_publication_failure_preserves_candidates_for_explicit_retry() -> TestResult {
-    let fixture = Fixture::new("automatic-retry")?;
-    fixture.write_roots(&[RootSpec::new(
-        "packages.demo",
-        ".#demo",
-        PROJECT_DRV,
-        &[PROJECT_OUT],
-    )])?;
-
-    let warning = fixture.run_auto(PROJECT_DRV, PROJECT_OUT, &[])?;
-
-    assert!(warning.contains("warning: automatic project cache publish failed:"));
-    assert_eq!(fixture.pending_count()?, 1);
-    let report = fixture.run("publish")?;
-    assert!(report.contains("drained pending:"));
-    assert_eq!(fixture.pending_count()?, 0);
-    assert!(fixture.copy_log_line()?.contains(PROJECT_OUT));
-    Ok(())
-}
-
-#[test]
-fn unadmitted_hook_does_not_create_cache_control_or_archive_state() -> TestResult {
-    let fixture = Fixture::new("unadmitted-hook")?;
-    fixture.write_roots(&[RootSpec::new(
-        "packages.demo",
-        ".#demo",
-        PROJECT_DRV,
-        &[PROJECT_OUT],
-    )])?;
-    let report = fixture.run_auto("/nix/store/unrelated.drv", ARBITRARY_OUT, &[])?;
-    assert!(report.contains("skipped non-project derivation"));
-    assert!(!fixture.state_root.exists());
-    assert!(!fixture.cache_root.exists());
-    assert!(!fixture.nix_log.exists());
-    assert!(!fixture.key_counter.exists());
-    Ok(())
-}
-
-#[test]
-fn failed_publication_keeps_matching_pending_until_successful_retry() -> TestResult {
-    for (variable, failure) in [
-        ("WRIX_FAKE_UPSTREAM_RESPONSE", "malformed"),
-        ("WRIX_FAKE_UPLOAD_FAIL", "1"),
-    ] {
-        let fixture = Fixture::new("pending-failure")?;
-        fixture.write_roots(&[RootSpec::new(
-            "packages.demo",
-            ".#demo",
-            PROJECT_DRV,
-            &[PROJECT_OUT],
-        )])?;
-        fixture.write_pending("matching", PROJECT_DRV, &[PENDING_OUT])?;
-        fixture.write_pending("foreign", "/nix/store/foreign.drv", &[ARBITRARY_OUT])?;
-        let pending_file = fixture.state_root.join("pending/matching.json");
-        let before = fs::read(&pending_file)?;
-
-        fixture.run_failure("publish", &[(variable, failure)])?;
-
-        assert_eq!(fixture.pending_count()?, 2);
-        assert_eq!(fs::read(&pending_file)?, before);
-        let report = fixture.run("publish")?;
-        assert!(report.contains("drained pending:"));
-        assert_eq!(fixture.pending_count()?, 1);
-        assert!(fixture.state_root.join("pending/foreign.json").exists());
-        assert!(!pending_file.exists());
+    fn command(&self, action: &str) -> Command {
+        let mut command = Command::new(env::current_exe().unwrap());
+        command
+            .args(["--ignored", "--exact", "publisher_child", "--nocapture"])
+            .current_dir(self.workspace.canonical_path())
+            .env("WRIX_CACHE_TEST_ACTION", action)
+            .env("WRIX_CACHE_TEST_STATE", &self.state)
+            .env("WRIX_CACHE_TEST_CACHE", &self.cache)
+            .env("WRIX_CACHE_TEST_OUTPUT", self.root.path().join("report"))
+            .env("WRIX_CACHE_TEST_DRV", "/nix/store/packages.demo.drv")
+            .env("WRIX_CACHE_TEST_OUT", &self.output)
+            .env("WRIX_CACHE_ROOTS_FILE", &self.roots)
+            .env("WRIX_NIX_BIN", &self.nix)
+            .env("WRIX_NIX_STORE_BIN", "/must-not-use-cli-store-metadata")
+            .env("WRIX_TEST_NIX_LOG", self.root.path().join("nix.log"))
+            .env("WRIX_UPSTREAM_SUBSTITUTERS", "https://fixture.invalid")
+            .env("WRIX_TEST_UPSTREAM", "normal")
+            .env("WRIX_TEST_UPSTREAM_HIT", &self.dependency);
+        command
     }
-    Ok(())
-}
 
-#[test]
-fn upload_failure_fixture_fails_without_creating_artifacts() -> TestResult {
-    let fixture = Fixture::new("upload-failure-fixture")?;
-    let output = Command::new(&fixture.nix_bin)
-        .arg("copy")
-        .env("WRIX_FAKE_NIX_LOG", &fixture.nix_log)
-        .env("WRIX_FAKE_CACHE_ROOT", &fixture.cache_root)
-        .env("WRIX_FAKE_UPLOAD_FAIL", "1")
-        .output()?;
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("upload unavailable"));
-    assert!(!fixture.cache_root.exists());
-    Ok(())
-}
-
-#[test]
-fn automatic_publish_does_not_reconcile_other_root_markers() -> TestResult {
-    let fixture = Fixture::new("automatic-retention")?;
-    fixture.write_roots(&[
-        RootSpec::new("packages.demo", ".#demo", PROJECT_DRV, &[PROJECT_OUT]),
-        RootSpec::new(
-            "checks.demo",
-            ".#checks.demo",
-            "/nix/store/check.drv",
-            &["/nix/store/aaaa-check"],
-        ),
-    ])?;
-    fixture.run("publish")?;
-    fixture.run_auto(PROJECT_DRV, PROJECT_OUT, &[])?;
-    assert!(fixture.state_root.join("gcroots/checks.demo").exists());
-    Ok(())
-}
-
-#[test]
-fn rotate_key_without_native_authority_preserves_existing_files() -> TestResult {
-    let fixture = Fixture::new("rotate-key")?;
-    fs::create_dir_all(fixture.state_root.join("keys"))?;
-    fs::create_dir_all(fixture.cache_root.join("nar"))?;
-    fs::write(fixture.state_root.join("keys/cache.secret"), "old-secret\n")?;
-    fs::write(fixture.state_root.join("keys/cache.pub"), VALID_PUBLIC_KEY)?;
-    fs::write(fixture.cache_root.join("old.narinfo"), "old\n")?;
-    fs::write(fixture.cache_root.join("nar/old.nar"), "old\n")?;
-
-    let old_public = fs::read_to_string(fixture.state_root.join("keys/cache.pub"))?;
-    fixture.run_failure("rotate", &[])?;
-    assert_eq!(
-        fs::read_to_string(fixture.state_root.join("keys/cache.pub"))?,
-        old_public
-    );
-    assert_eq!(
-        fs::read_to_string(fixture.cache_root.join("old.narinfo"))?,
-        "old\n"
-    );
-    assert_eq!(
-        fs::read_to_string(fixture.cache_root.join("nar/old.nar"))?,
-        "old\n"
-    );
-    assert!(!fixture.key_counter.exists());
-    assert!(!fixture.state_root.join("cache-status.json").exists());
-
-    Ok(())
-}
-
-#[test]
-fn status_reports_pending_work_and_previous_results_without_mutation() -> TestResult {
-    let fixture = Fixture::new("status-history")?;
-    fixture.write_pending("waiting", PROJECT_DRV, &[PROJECT_OUT])?;
-    let status_path = fixture.state_root.join("cache-status.json");
-    let original = serde_json::to_vec(&serde_json::json!({
-        "dirty": true, "last_publish": "ok", "last_prune": "ok", "last_error": "previous warning"
-    }))?;
-    fs::write(&status_path, &original)?;
-    fs::write(
-        fixture.state_root.join("services.json"),
-        r#"{"cache_http":{"host":"127.0.0.1","port":8080}}"#,
-    )?;
-    let report = fixture.run("status")?;
-    for expected in [
-        "pending records: 1",
-        "dirty: true",
-        "last_publish: ok",
-        "last_prune: ok",
-        "last_error: previous warning",
-        "cache_http",
-    ] {
-        assert!(report.contains(expected), "{report}");
-    }
-    assert_eq!(fixture.pending_count()?, 1);
-    assert_eq!(fs::read(status_path)?, original);
-    Ok(())
-}
-
-#[test]
-fn status_warns_above_soft_size_without_pruning() -> TestResult {
-    let fixture = Fixture::new("status-soft-limit")?;
-    fs::create_dir_all(fixture.cache_root.join("nar"))?;
-    let retained = fixture.cache_root.join("nar/retained.nar");
-    let file = OpenOptions::new()
-        .create(true)
-        .truncate(true)
-        .write(true)
-        .open(&retained)?;
-    file.set_len(50 * 1024 * 1024 * 1024 + 1)?;
-
-    let report = fixture.run("status")?;
-
-    assert!(report.contains("cache size:"));
-    assert!(report.contains("warning: project cache size exceeds 53687091200 byte soft threshold"));
-    assert!(retained.exists());
-
-    Ok(())
-}
-
-#[test]
-#[ignore = "child process helper receives faked command environment"]
-fn publisher_child() -> TestResult {
-    let action = env::var("WRIX_CACHE_TEST_ACTION")?;
-    let workspace_path = PathBuf::from(env::var("WRIX_CACHE_TEST_WORKSPACE")?);
-    let state_root = PathBuf::from(env::var("WRIX_CACHE_TEST_STATE_ROOT")?);
-    let cache_root = PathBuf::from(env::var("WRIX_CACHE_TEST_CACHE_ROOT")?);
-    let output_path = PathBuf::from(env::var("WRIX_CACHE_TEST_OUTPUT")?);
-    let workspace = Workspace::from_path(workspace_path)?;
-    let report = match action.as_str() {
-        "publish" => {
-            publisher::run_workspace_at(&workspace, &state_root, &cache_root, Mode::Publish)?
+    fn run(&self, action: &str, environment: &[(&str, &str)]) -> String {
+        let mut command = self.command(action);
+        for (name, value) in environment {
+            command.env(name, value);
         }
+        let result = command.output().unwrap();
+        assert!(
+            result.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        fs::read_to_string(self.root.path().join("report")).unwrap()
+    }
+
+    fn failure(&self, action: &str, environment: &[(&str, &str)]) -> String {
+        let mut command = self.command(action);
+        for (name, value) in environment {
+            command.env(name, value);
+        }
+        let result = command.output().unwrap();
+        assert!(!result.status.success(), "unexpected success");
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        )
+    }
+
+    async fn present(&self, path: &Path) -> bool {
+        let status = self
+            .server
+            .get(&format!("private/{}.narinfo", native::hash(path)))
+            .await
+            .status();
+        assert!(
+            status == 200 || status == 404,
+            "unexpected response {status}"
+        );
+        status == 200
+    }
+
+    fn log(&self) -> String {
+        fs::read_to_string(self.root.path().join("nix.log")).unwrap()
+    }
+
+    fn policy(&self, policy: &str) {
+        fs::write(self.workspace.canonical_path().join("wrix.toml"), policy).unwrap();
+    }
+}
+
+#[test]
+#[ignore = "child helper receives isolated native store and host authority"]
+fn publisher_child() -> TestResult {
+    let workspace = Workspace::from_path(env::current_dir()?)?;
+    let state = PathBuf::from(env::var_os("WRIX_CACHE_TEST_STATE").unwrap());
+    let cache = PathBuf::from(env::var_os("WRIX_CACHE_TEST_CACHE").unwrap());
+    let report = match env::var("WRIX_CACHE_TEST_ACTION")?.as_str() {
+        "auto" => publisher::run_hook_record(
+            HookRecord {
+                workspace_hash: workspace.hash(),
+                state_root: &state,
+                cache_root: &cache,
+                manifest: Path::new(&env::var_os("WRIX_CACHE_ROOTS_FILE").unwrap()),
+                drv_path: &env::var("WRIX_CACHE_TEST_DRV")?,
+                out_paths: &env::var("WRIX_CACHE_TEST_OUT")?,
+            },
+            Settings::for_workspace(&workspace)?,
+        )?,
+        "status" => publisher::status_at(&state, &cache, Settings::for_workspace(&workspace)?)?,
+        "publish" => publisher::run_workspace_at(&workspace, &state, &cache, Mode::Publish)?,
         "warm" => publisher::run_workspace_at(
             &workspace,
-            &state_root,
-            &cache_root,
+            &state,
+            &cache,
             Mode::Warm {
                 checks: env::var("WRIX_CACHE_TEST_CHECKS").is_ok_and(|value| value == "1"),
             },
         )?,
-        "prune" => publisher::run_workspace_at(&workspace, &state_root, &cache_root, Mode::Prune)?,
-        "rotate" => {
-            publisher::run_workspace_at(&workspace, &state_root, &cache_root, Mode::RotateKey)?
-        }
-        "status" => publisher::status_at(
-            &state_root,
-            &cache_root,
-            Settings::for_workspace(&workspace)?,
-        )?,
-        "auto" => publisher::run_hook_record(
-            HookRecord {
-                workspace_hash: workspace.hash(),
-                state_root: &state_root,
-                cache_root: &cache_root,
-                manifest: Path::new(&env::var("WRIX_CACHE_TEST_ROOTS_FILE")?),
-                drv_path: &env::var("WRIX_CACHE_TEST_DRV_PATH")?,
-                out_paths: &env::var("WRIX_CACHE_TEST_OUT_PATHS")?,
-            },
-            Settings::for_workspace(&workspace)?,
-        )?,
         other => return Err(io::Error::other(format!("unknown action {other}")).into()),
     };
-    fs::write(output_path, format!("{}\n", report.lines().join("\n")))?;
+    fs::write(
+        PathBuf::from(env::var_os("WRIX_CACHE_TEST_OUTPUT").unwrap()),
+        report.lines().join("\n"),
+    )?;
     Ok(())
 }
 
-#[test]
-fn warm_reads_repository_policy_and_checks_flag_overrides_environment() -> TestResult {
-    for (policy_checks, cli_checks) in [(true, false), (false, true)] {
-        let fixture = Fixture::new("warm-policy")?;
-        fixture.write_roots(&[RootSpec::new(
-            "checks.x86_64-linux.unit",
-            ".#checks.x86_64-linux.unit",
-            "/nix/store/check.drv",
-            &["/nix/store/check-out"],
-        )])?;
-        fs::write(
-            fixture.workspace.canonical_path().join("wrix.toml"),
-            format!("cache.warm.checks = {policy_checks}\n"),
-        )?;
-        if cli_checks {
-            fixture.run_with_env(
-                "warm",
-                &[
-                    ("WRIX_CACHE_TEST_CHECKS", "1"),
-                    ("WRIX_CACHE_WARM_CHECKS", "0"),
-                ],
-            )?;
-        } else {
-            fixture.run("warm")?;
-        }
-        assert!(
-            fixture
-                .nix_log()?
-                .contains("nix build --no-link .#checks.x86_64-linux.unit")
-        );
+#[tokio::test]
+#[ignore = "requires packaged Celler and isolated native Nix daemon"]
+async fn publish_realized_roots_drains_pending_without_flat_state() {
+    if !native::in_isolated_store("publish_realized_roots_drains_pending_without_flat_state") {
+        return;
     }
-    Ok(())
-}
-
-#[test]
-fn publish_environment_can_clear_repository_exclusions() -> TestResult {
-    let fixture = Fixture::new("publish-policy")?;
-    fixture.write_roots(&[RootSpec::new(
-        "packages.x86_64-linux.demo",
-        ".#packages.x86_64-linux.demo",
-        PROJECT_DRV,
-        &[PROJECT_OUT],
-    )])?;
-    fs::write(
-        fixture.workspace.canonical_path().join("wrix.toml"),
-        "cache.publish.exclude_roots = ['.#packages.x86_64-linux.demo']",
-    )?;
-    assert!(!fixture.run("publish")?.contains("published root:"));
-    assert!(
-        fixture
-            .run_with_env("publish", &[("WRIX_CACHE_PUBLISH_EXCLUDE", "")])?
-            .contains("published root: .#packages.x86_64-linux.demo")
+    let fixture = Fixture::new().await;
+    let record = fixture.pending("matching", "/nix/store/packages.demo.drv", &fixture.foreign);
+    let key = fixture.server.client("private").public_key().await.unwrap();
+    let report = fixture.run("publish", &[]);
+    assert!(report.contains("drained pending:"));
+    assert!(!record.exists());
+    assert!(fixture.present(&fixture.output).await);
+    assert!(fixture.present(&fixture.foreign).await);
+    assert!(!fixture.present(&fixture.dependency).await);
+    assert_eq!(
+        fixture.server.client("private").public_key().await.unwrap(),
+        key
     );
-    Ok(())
+    assert!(!fixture.cache.exists());
+    assert!(!fixture.state.join("keys/cache.secret").exists());
+    assert!(!fixture.state.join("gcroots").exists());
+    let manifest: Value =
+        serde_json::from_slice(&fs::read(fixture.state.join("publish-roots.json")).unwrap())
+            .unwrap();
+    assert_eq!(manifest["schema_version"], 1);
+    assert_eq!(
+        manifest["workspace_hash"],
+        fixture.workspace.hash().as_str()
+    );
 }
 
-#[test]
-fn repository_pending_ttl_expires_records_without_direnv() -> TestResult {
-    let fixture = Fixture::new("pending-policy")?;
-    fs::write(
-        fixture.workspace.canonical_path().join("wrix.toml"),
-        "cache.pending_ttl = '1s'",
-    )?;
-    fixture.write_pending("expired", PROJECT_DRV, &[PROJECT_OUT])?;
-    let created_at = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)?
-        .as_secs()
-        .saturating_sub(60);
-    fs::write(
-        fixture.state_root.join("pending/expired.json"),
-        serde_json::to_vec(&serde_json::json!({
-            "created_at_epoch": created_at, "drv_path": PROJECT_DRV, "out_paths": [PROJECT_OUT],
-        }))?,
-    )?;
-    assert!(fixture.run("status")?.contains("pending records: 0"));
-    assert_eq!(fixture.pending_count()?, 0);
-    Ok(())
+#[tokio::test]
+#[ignore = "requires packaged Celler and isolated native Nix daemon"]
+async fn publish_filters_to_current_workspace_closure() {
+    if !native::in_isolated_store("publish_filters_to_current_workspace_closure") {
+        return;
+    }
+    let fixture = Fixture::new().await;
+    let foreign = fixture.pending("foreign", "/nix/store/other.drv", &fixture.foreign);
+    fixture.run("publish", &[]);
+    assert!(fixture.present(&fixture.output).await);
+    assert!(!fixture.present(&fixture.foreign).await);
+    assert!(!fixture.present(&fixture.dependency).await);
+    assert!(foreign.exists());
 }
 
-#[test]
-fn status_reads_repository_soft_limit_without_direnv() -> TestResult {
-    let fixture = Fixture::new("status-policy")?;
-    fs::create_dir_all(&fixture.cache_root)?;
-    fs::write(fixture.cache_root.join("existing-payload"), b"cache data")?;
-    fs::write(
-        fixture.workspace.canonical_path().join("wrix.toml"),
-        "cache.warn_size = 0",
-    )?;
+#[tokio::test]
+#[ignore = "requires packaged Celler and isolated native Nix daemon"]
+async fn publish_batches_upstream_queries_and_retains_null_misses() {
+    if !native::in_isolated_store("publish_batches_upstream_queries_and_retains_null_misses") {
+        return;
+    }
+    let fixture = Fixture::new().await;
+    let paths = (0..260)
+        .map(|index| native::add_file(&format!("value {index}"), &format!("candidate-{index}")))
+        .collect::<Vec<_>>();
+    fixture.set_roots(
+        &paths
+            .iter()
+            .enumerate()
+            .map(|(i, path)| Fixture::root(&format!("packages.p{i}"), path))
+            .collect::<Vec<_>>(),
+    );
+    fixture.run("publish", &[]);
+    let log = fixture.log();
+    let queries = log
+        .lines()
+        .filter(|line| line.starts_with("path-info --store"))
+        .collect::<Vec<_>>();
+    assert_eq!(queries.len(), 2);
+    for query in queries {
+        assert!(query.split_whitespace().count() - 4 <= 256);
+    }
+    for path in paths {
+        assert!(fixture.present(&path).await);
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires packaged Celler and isolated native Nix daemon"]
+async fn publish_uses_successful_upstream_entries_even_on_partial_query_failure() {
+    if !native::in_isolated_store(
+        "publish_uses_successful_upstream_entries_even_on_partial_query_failure",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new().await;
+    fixture.run("publish", &[("WRIX_TEST_UPSTREAM", "partial")]);
+    assert!(fixture.present(&fixture.output).await);
+    assert!(!fixture.present(&fixture.dependency).await);
+}
+
+#[tokio::test]
+#[ignore = "requires packaged Celler and isolated native Nix daemon"]
+async fn publish_retains_candidates_when_upstream_is_unavailable() {
+    if !native::in_isolated_store("publish_retains_candidates_when_upstream_is_unavailable") {
+        return;
+    }
+    let fixture = Fixture::new().await;
+    fixture.run("publish", &[("WRIX_TEST_UPSTREAM", "unavailable")]);
+    assert!(fixture.present(&fixture.output).await);
+    assert!(fixture.present(&fixture.dependency).await);
+}
+
+#[tokio::test]
+#[ignore = "requires packaged Celler and isolated native Nix daemon"]
+async fn failed_publication_keeps_matching_pending_until_successful_retry() {
+    if !native::in_isolated_store(
+        "failed_publication_keeps_matching_pending_until_successful_retry",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new().await;
+    let record = fixture.pending("matching", "/nix/store/packages.demo.drv", &fixture.foreign);
+    fixture.failure("publish", &[("WRIX_TEST_UPSTREAM", "malformed")]);
+    assert!(record.exists());
+    assert!(!fixture.present(&fixture.output).await);
+    Publisher::install(
+        &fixture.state,
+        fixture.workspace.hash(),
+        &fixture.server.endpoint,
+        CacheName::new(String::from("private")).unwrap(),
+        &native::pull_token(),
+        std::time::Duration::from_hours(720),
+    )
+    .unwrap();
+    let error = fixture.failure("publish", &[]);
+    assert!(!error.contains(&native::pull_token()));
+    assert!(record.exists());
+    Publisher::install(
+        &fixture.state,
+        fixture.workspace.hash(),
+        &fixture.server.endpoint,
+        CacheName::new(String::from("private")).unwrap(),
+        &fixture.server.token,
+        std::time::Duration::from_hours(720),
+    )
+    .unwrap();
+    fixture.run("publish", &[]);
+    assert!(!record.exists());
+    assert!(fixture.present(&fixture.foreign).await);
+}
+
+#[tokio::test]
+#[ignore = "requires packaged Celler and isolated native Nix daemon"]
+async fn warm_roots_include_checks_only_when_requested() {
+    if !native::in_isolated_store("warm_roots_include_checks_only_when_requested") {
+        return;
+    }
+    let fixture = Fixture::new().await;
+    fixture.set_roots(&[
+        fixture.package(),
+        Fixture::root("checks.unit", &fixture.foreign),
+    ]);
+    fixture.run("warm", &[]);
+    assert!(fixture.present(&fixture.output).await);
+    assert!(!fixture.present(&fixture.foreign).await);
+    assert!(!fixture.log().contains(".#checks.unit"));
+    let manifest = fs::read(fixture.state.join("publish-roots.json")).unwrap();
+    fixture.run("warm", &[("WRIX_CACHE_TEST_CHECKS", "1")]);
+    assert!(fixture.present(&fixture.foreign).await);
+    assert_eq!(
+        fs::read(fixture.state.join("publish-roots.json")).unwrap(),
+        manifest
+    );
+    assert!(!fixture.cache.exists());
+}
+
+#[tokio::test]
+#[ignore = "requires packaged Celler and isolated native Nix daemon"]
+async fn warm_reads_repository_policy_and_checks_flag_overrides_environment() {
+    if !native::in_isolated_store(
+        "warm_reads_repository_policy_and_checks_flag_overrides_environment",
+    ) {
+        return;
+    }
+    for (policy, args) in [
+        ("cache.warm.checks = true", vec![]),
+        (
+            "cache.warm.checks = false",
+            vec![
+                ("WRIX_CACHE_TEST_CHECKS", "1"),
+                ("WRIX_CACHE_WARM_CHECKS", "0"),
+            ],
+        ),
+    ] {
+        let fixture = Fixture::new().await;
+        fixture.set_roots(&[Fixture::root("checks.unit", &fixture.foreign)]);
+        fixture.policy(policy);
+        fixture.run("warm", &args);
+        assert!(fixture.present(&fixture.foreign).await);
+        assert!(fixture.log().contains("build --no-link .#checks.unit"));
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires packaged Celler and isolated native Nix daemon"]
+async fn publish_environment_can_clear_repository_exclusions() {
+    if !native::in_isolated_store("publish_environment_can_clear_repository_exclusions") {
+        return;
+    }
+    let fixture = Fixture::new().await;
+    fixture.policy("cache.publish.exclude_roots = ['.#packages.demo']");
+    fixture.run("publish", &[]);
+    assert!(!fixture.present(&fixture.output).await);
+    fixture.run("publish", &[("WRIX_CACHE_PUBLISH_EXCLUDE", "")]);
+    assert!(fixture.present(&fixture.output).await);
+}
+
+#[tokio::test]
+#[ignore = "requires packaged Celler and isolated native Nix daemon"]
+async fn publication_does_not_prune_previous_entries_when_roots_change() {
+    if !native::in_isolated_store("publication_does_not_prune_previous_entries_when_roots_change") {
+        return;
+    }
+    let fixture = Fixture::new().await;
+    fixture.run("publish", &[]);
+    fixture.set_roots(&[]);
+    fixture.run("publish", &[]);
+    assert!(fixture.present(&fixture.output).await);
+    let manifest: Value =
+        serde_json::from_slice(&fs::read(fixture.state.join("publish-roots.json")).unwrap())
+            .unwrap();
+    assert_eq!(manifest["roots"], json!([]));
+}
+
+#[tokio::test]
+#[ignore = "requires packaged Celler and isolated native Nix daemon"]
+async fn lock_timeout_records_pending_and_explicit_publish_drains() {
+    if !native::in_isolated_store("lock_timeout_records_pending_and_explicit_publish_drains") {
+        return;
+    }
+    let fixture = Fixture::new().await;
+    fs::copy(&fixture.roots, fixture.state.join("publish-roots.json")).unwrap();
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(fixture.state.join("cache.lock"))
+        .unwrap();
+    lock.lock_exclusive().unwrap();
     assert!(
         fixture
-            .run("status")?
+            .run("auto", &[("WRIX_CACHE_LOCK_TIMEOUT_MS", "0")])
+            .contains("recorded pending publish")
+    );
+    assert!(
+        fixture
+            .failure("publish", &[("WRIX_CACHE_EXPLICIT_LOCK_TIMEOUT_MS", "0")])
+            .contains("LockTimeout")
+    );
+    lock.unlock().unwrap();
+    assert_eq!(
+        fs::read_dir(fixture.state.join("pending")).unwrap().count(),
+        1
+    );
+    fixture.run("publish", &[]);
+    assert_eq!(
+        fs::read_dir(fixture.state.join("pending")).unwrap().count(),
+        0
+    );
+    assert!(fixture.present(&fixture.output).await);
+}
+
+#[tokio::test]
+#[ignore = "requires packaged Celler and isolated native Nix daemon"]
+async fn automatic_publication_failure_preserves_candidates_for_explicit_retry() {
+    if !native::in_isolated_store(
+        "automatic_publication_failure_preserves_candidates_for_explicit_retry",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new().await;
+    Publisher::install(
+        &fixture.state,
+        fixture.workspace.hash(),
+        &fixture.server.endpoint,
+        CacheName::new(String::from("private")).unwrap(),
+        &native::pull_token(),
+        std::time::Duration::from_hours(720),
+    )
+    .unwrap();
+    assert!(fixture.run("auto", &[]).contains("warning: automatic"));
+    assert_eq!(
+        fs::read_dir(fixture.state.join("pending")).unwrap().count(),
+        1
+    );
+    assert!(!fixture.present(&fixture.output).await);
+}
+
+#[tokio::test]
+#[ignore = "requires packaged Celler and isolated native Nix daemon"]
+async fn publish_reports_missing_authority_without_flat_fallback() {
+    if !native::in_isolated_store("publish_reports_missing_authority_without_flat_fallback") {
+        return;
+    }
+    let fixture = Fixture::new().await;
+    fs::remove_file(fixture.state.join("celler-publisher.json")).unwrap();
+    fixture.failure("publish", &[]);
+    assert!(!fixture.cache.exists());
+    assert!(!fixture.state.join("keys/cache.secret").exists());
+}
+
+#[tokio::test]
+#[ignore = "requires packaged Celler and isolated native Nix daemon"]
+async fn unadmitted_hook_does_not_create_cache_control_or_archive_state() {
+    if !native::in_isolated_store("unadmitted_hook_does_not_create_cache_control_or_archive_state")
+    {
+        return;
+    }
+    let fixture = Fixture::new().await;
+    fs::remove_dir_all(&fixture.state).unwrap();
+    assert!(
+        fixture
+            .run("auto", &[("WRIX_CACHE_TEST_DRV", "/nix/store/foreign.drv")])
+            .contains("skipped non-project")
+    );
+    assert!(!fixture.state.exists());
+    assert!(!fixture.cache.exists());
+}
+
+#[tokio::test]
+#[ignore = "requires packaged Celler and isolated native Nix daemon"]
+async fn repository_pending_ttl_expires_records_without_direnv() {
+    if !native::in_isolated_store("repository_pending_ttl_expires_records_without_direnv") {
+        return;
+    }
+    let fixture = Fixture::new().await;
+    fixture.policy("cache.pending_ttl = '1s'");
+    let record = fixture.pending("expired", "/nix/store/packages.demo.drv", &fixture.output);
+    fs::write(&record, json!({"created_at_epoch":1,"drv_path":"/nix/store/packages.demo.drv","out_paths":[fixture.output]}).to_string()).unwrap();
+    assert!(fixture.run("status", &[]).contains("pending records: 0"));
+    assert!(!record.exists());
+}
+
+#[tokio::test]
+#[ignore = "requires packaged Celler and isolated native Nix daemon"]
+async fn status_reports_pending_work_and_previous_results_without_mutation() {
+    if !native::in_isolated_store(
+        "status_reports_pending_work_and_previous_results_without_mutation",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new().await;
+    fixture.run("publish", &[]);
+    fixture.pending("pending", "/nix/store/packages.demo.drv", &fixture.output);
+    let status = fs::read(fixture.state.join("cache-status.json")).unwrap();
+    let report = fixture.run("status", &[]);
+    assert!(report.contains("pending records: 1"));
+    assert!(report.contains("last_publish: ok"));
+    assert_eq!(
+        fs::read(fixture.state.join("cache-status.json")).unwrap(),
+        status
+    );
+    assert!(!fixture.cache.exists());
+    assert!(!fixture.state.join("keys/cache.secret").exists());
+}
+
+#[tokio::test]
+#[ignore = "requires packaged Celler and isolated native Nix daemon"]
+async fn status_reads_repository_soft_limit_without_direnv() {
+    if !native::in_isolated_store("status_reads_repository_soft_limit_without_direnv") {
+        return;
+    }
+    let fixture = Fixture::new().await;
+    fixture.policy("cache.warn_size = 0");
+    fs::create_dir(&fixture.cache).unwrap();
+    fs::write(fixture.cache.join("unrelated-retained-data"), "data").unwrap();
+    assert!(
+        fixture
+            .run("status", &[])
             .contains("warning: project cache size exceeds 0")
     );
-    Ok(())
+    assert!(fixture.cache.join("unrelated-retained-data").exists());
+}
+
+#[tokio::test]
+#[ignore = "requires packaged Celler and isolated native Nix daemon"]
+async fn daemon_publisher_uses_snapshot_without_ambient_config_or_repository_reads() {
+    if !native::in_isolated_store(
+        "daemon_publisher_uses_snapshot_without_ambient_config_or_repository_reads",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new().await;
+    fixture.run("publish", &[]);
+    fixture.policy("cache.lock_timeout = 0");
+    let settings = Settings::for_workspace(&fixture.workspace).unwrap();
+    let snapshot = fixture.root.path().join("policy.json");
+    fs::write(&snapshot, serde_json::to_vec(&settings).unwrap()).unwrap();
+    fixture.policy("[wrix]\ninvalid = true");
+    fs::create_dir(&fixture.cache).unwrap();
+    let lock = OpenOptions::new()
+        .write(true)
+        .open(fixture.state.join("cache.lock"))
+        .unwrap();
+    lock.lock_exclusive().unwrap();
+    let uid = Command::new("id").arg("-u").output().unwrap();
+    let gid = Command::new("id").arg("-g").output().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_wrix-cache-hook"))
+        .current_dir(fixture.workspace.canonical_path())
+        .args(["--workspace-hash", fixture.workspace.hash().as_str()])
+        .args(["--owner-uid", String::from_utf8(uid.stdout).unwrap().trim()])
+        .args(["--owner-gid", String::from_utf8(gid.stdout).unwrap().trim()])
+        .arg("--state-root")
+        .arg(&fixture.state)
+        .arg("--cache-root")
+        .arg(&fixture.cache)
+        .arg("--manifest")
+        .arg(fixture.state.join("publish-roots.json"))
+        .args([
+            "--publisher-helper",
+            env!("CARGO_BIN_EXE_wrix-cache-publish"),
+        ])
+        .arg("--config")
+        .arg(snapshot)
+        .env("DRV_PATH", "/nix/store/packages.demo.drv")
+        .env("OUT_PATHS", &fixture.output)
+        .env("WRIX_CACHE_LOCK_TIMEOUT_MS", "invalid")
+        .output()
+        .unwrap();
+    lock.unlock().unwrap();
+    assert!(output.status.success(), "{:?}", output.stderr);
+    assert!(String::from_utf8_lossy(&output.stdout).contains("recorded pending publish"));
+    assert_eq!(
+        fs::read_dir(fixture.state.join("pending")).unwrap().count(),
+        1
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires packaged Celler and isolated native Nix daemon"]
+async fn failed_warm_build_does_not_upload_or_drain_pending() {
+    if !native::in_isolated_store("failed_warm_build_does_not_upload_or_drain_pending") {
+        return;
+    }
+    let fixture = Fixture::new().await;
+    let record = fixture.pending("matching", "/nix/store/packages.demo.drv", &fixture.output);
+    fixture.failure("warm", &[("WRIX_TEST_BUILD_FAIL", "1")]);
+    assert!(record.exists());
+    assert!(!fixture.present(&fixture.output).await);
+}
+
+#[tokio::test]
+#[ignore = "requires packaged Celler and isolated native Nix daemon"]
+async fn native_store_queries_distinguish_realized_paths_and_invalid_input() {
+    if !native::in_isolated_store(
+        "native_store_queries_distinguish_realized_paths_and_invalid_input",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new().await;
+    assert!(
+        wrix_cache::backend::paths_realized(&[fixture.output.display().to_string()])
+            .await
+            .unwrap()
+    );
+    assert!(!wrix_cache::backend::paths_realized(&[]).await.unwrap());
+    assert!(
+        wrix_cache::backend::paths_realized(&[String::from("not-a-store-path")])
+            .await
+            .is_err()
+    );
 }
 
 #[test]
-fn daemon_publisher_uses_snapshot_without_ambient_config_or_repository_reads() -> TestResult {
-    let fixture = Fixture::new("hook-snapshot")?;
-    fixture.write_roots(&[RootSpec::new(
-        "packages.demo",
-        ".#demo",
-        PROJECT_DRV,
-        &[PROJECT_OUT],
-    )])?;
-    fixture.run("publish")?;
-    fs::write(
-        fixture.workspace.canonical_path().join("wrix.toml"),
-        "cache.lock_timeout = 0",
-    )?;
-    let settings = Settings::for_workspace(&fixture.workspace)?;
-    let snapshot = fixture.root.path().join("cache-config.json");
-    fs::write(&snapshot, serde_json::to_vec(&settings)?)?;
-    fs::write(
-        fixture.workspace.canonical_path().join("wrix.toml"),
-        "[wrix]\ninvalid = true",
-    )?;
-    let lock = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(fixture.state_root.join("cache.lock"))?;
-    lock.try_lock_exclusive()?;
-    let env_source = fixture.child_command("auto", &fixture.root.path().join("unused"))?;
-    let mut hook = Command::new(env!("CARGO_BIN_EXE_wrix-cache-hook"));
-    for (name, value) in env_source.get_envs() {
-        if let Some(value) = value {
-            hook.env(name, value);
-        }
-    }
-    let uid = Command::new("id").arg("-u").output()?;
-    let gid = Command::new("id").arg("-g").output()?;
-    assert!(uid.status.success() && gid.status.success());
-    let output = hook
-        .current_dir(fixture.workspace.canonical_path())
-        .arg("--workspace-hash")
-        .arg(fixture.workspace.hash().as_str())
-        .arg("--owner-uid")
-        .arg(String::from_utf8(uid.stdout)?.trim())
-        .arg("--owner-gid")
-        .arg(String::from_utf8(gid.stdout)?.trim())
-        .arg("--state-root")
-        .arg(&fixture.state_root)
-        .arg("--cache-root")
-        .arg(&fixture.cache_root)
-        .arg("--manifest")
-        .arg(fixture.state_root.join("publish-roots.json"))
-        .arg("--publisher-helper")
-        .arg(env!("CARGO_BIN_EXE_wrix-cache-publish"))
-        .arg("--config")
-        .arg(&snapshot)
-        .env("DRV_PATH", PROJECT_DRV)
-        .env("OUT_PATHS", PROJECT_OUT)
-        .env("WRIX_CACHE_LOCK_TIMEOUT_MS", "invalid-ambient-value")
-        .output()?;
-    lock.unlock()?;
+fn status_warns_above_soft_size_without_pruning() {
+    let root = tempfile::tempdir().unwrap();
+    let state = root.path().join("state");
+    let cache = root.path().join("cache");
+    fs::create_dir(&cache).unwrap();
+    let archive = std::fs::File::create(cache.join("retained-data")).unwrap();
+    archive.set_len(50 * 1024 * 1024 * 1024 + 1).unwrap();
+    let report = publisher::status_at(&state, &cache, Settings::default()).unwrap();
     assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(String::from_utf8_lossy(&output.stdout).contains("recorded pending publish"));
-    assert_eq!(fixture.pending_count()?, 1);
-    Ok(())
-}
-
-struct RootSpec<'a> {
-    name: &'a str,
-    installable: &'a str,
-    drv_path: &'a str,
-    out_paths: Vec<&'a str>,
-}
-
-impl<'a> RootSpec<'a> {
-    fn new(name: &'a str, installable: &'a str, drv_path: &'a str, out_paths: &[&'a str]) -> Self {
-        Self {
-            name,
-            installable,
-            drv_path,
-            out_paths: out_paths.to_vec(),
-        }
-    }
-}
-
-struct Fixture {
-    root: tempfile::TempDir,
-    workspace: Workspace,
-    state_root: PathBuf,
-    cache_root: PathBuf,
-    roots_file: PathBuf,
-    extra_closure_file: PathBuf,
-    nix_bin: PathBuf,
-    nix_store_bin: PathBuf,
-    nix_log: PathBuf,
-    nix_store_log: PathBuf,
-    key_counter: PathBuf,
-}
-
-impl Fixture {
-    fn new(name: &str) -> TestResult<Self> {
-        let root = tempfile::Builder::new().prefix(name).tempdir()?;
-        let workspace_path = root.path().join("workspace");
-        fs::create_dir_all(&workspace_path)?;
-        let workspace = Workspace::from_path(&workspace_path)?;
-        let state_root = root.path().join("state");
-        let cache_root = root.path().join("cache");
-        let roots_file = root.path().join("roots.json");
-        let extra_closure_file = root.path().join("extra-closure");
-        let bin_dir = root.path().join("bin");
-        fs::create_dir_all(&bin_dir)?;
-        let nix_bin = bin_dir.join("nix");
-        let nix_store_bin = bin_dir.join("nix-store");
-        let nix_log = root.path().join("nix.log");
-        let nix_store_log = root.path().join("nix-store.log");
-        let key_counter = root.path().join("key-counter");
-        write_fake_nix(&nix_bin)?;
-        write_fake_nix_store(&nix_store_bin)?;
-        Ok(Self {
-            root,
-            workspace,
-            state_root,
-            cache_root,
-            roots_file,
-            extra_closure_file,
-            nix_bin,
-            nix_store_bin,
-            nix_log,
-            nix_store_log,
-            key_counter,
-        })
-    }
-
-    fn write_roots(&self, roots: &[RootSpec<'_>]) -> io::Result<()> {
-        let mut content = String::from("{\n  \"roots\": [\n");
-        for (index, root) in roots.iter().enumerate() {
-            let comma = if index + 1 == roots.len() { "" } else { "," };
-            let out_paths = root
-                .out_paths
-                .iter()
-                .map(|path| format!("\"{path}\""))
-                .collect::<Vec<_>>()
-                .join(", ");
-            content.push_str("    { \"name\": \"");
-            content.push_str(root.name);
-            content.push_str("\", \"installable\": \"");
-            content.push_str(root.installable);
-            content.push_str("\", \"drv_path\": \"");
-            content.push_str(root.drv_path);
-            content.push_str("\", \"out_paths\": [");
-            content.push_str(&out_paths);
-            content.push_str("] }");
-            content.push_str(comma);
-            content.push('\n');
-        }
-        content.push_str("  ]\n}\n");
-        fs::write(&self.roots_file, content)
-    }
-
-    fn write_pending(&self, name: &str, drv_path: &str, out_paths: &[&str]) -> io::Result<()> {
-        let pending_dir = self.state_root.join("pending");
-        fs::create_dir_all(&pending_dir)?;
-        fs::write(
-            pending_dir.join(format!("{name}.json")),
-            format!(
-                "{{\n  \"drv_path\": \"{drv_path}\",\n  \"out_paths\": [{}]\n}}\n",
-                out_paths
-                    .iter()
-                    .map(|path| format!("\"{path}\""))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-        )
-    }
-
-    fn write_extra_closure(&self, paths: &[&str]) -> io::Result<()> {
-        fs::write(&self.extra_closure_file, format!("{}\n", paths.join("\n")))
-    }
-
-    fn run(&self, action: &str) -> TestResult<String> {
-        self.run_with_env(action, &[])
-    }
-
-    fn run_warm(&self, checks: bool) -> TestResult<String> {
-        if checks {
-            self.run_with_env("warm", &[("WRIX_CACHE_TEST_CHECKS", "1")])
-        } else {
-            self.run_with_env("warm", &[])
-        }
-    }
-
-    fn run_auto(
-        &self,
-        drv_path: &str,
-        out_paths: &str,
-        extra_env: &[(&str, &str)],
-    ) -> TestResult<String> {
-        let output = self.root.path().join("auto.out");
-        let mut command = self.child_command("auto", &output)?;
-        command
-            .env("WRIX_CACHE_TEST_DRV_PATH", drv_path)
-            .env("WRIX_CACHE_TEST_OUT_PATHS", out_paths)
-            .env("WRIX_CACHE_TEST_ROOTS_FILE", &self.roots_file);
-        for (key, value) in extra_env {
-            command.env(key, value);
-        }
-        Self::finish_child(command, &output)
-    }
-
-    fn run_with_env(&self, action: &str, extra_env: &[(&str, &str)]) -> TestResult<String> {
-        let output = self.root.path().join(format!("{action}.out"));
-        let mut command = self.child_command(action, &output)?;
-        for (key, value) in extra_env {
-            command.env(key, value);
-        }
-        Self::finish_child(command, &output)
-    }
-
-    fn run_failure(&self, action: &str, extra_env: &[(&str, &str)]) -> TestResult<String> {
-        let output = self.root.path().join(format!("{action}-failure.out"));
-        let mut command = self.child_command(action, &output)?;
-        for (key, value) in extra_env {
-            command.env(key, value);
-        }
-        let child = command.output()?;
-        if child.status.success() {
-            return Err(io::Error::other("publisher child unexpectedly succeeded").into());
-        }
-        Ok(format!(
-            "{}{}",
-            String::from_utf8_lossy(&child.stdout),
-            String::from_utf8_lossy(&child.stderr)
-        ))
-    }
-
-    fn child_command(&self, action: &str, output: &Path) -> TestResult<Command> {
-        let mut command = Command::new(env::current_exe()?);
-        command
-            .arg("publisher_child")
-            .arg("--exact")
-            .arg("--ignored")
-            .env("WRIX_CACHE_TEST_ACTION", action)
-            .env("WRIX_CACHE_TEST_WORKSPACE", self.workspace.canonical_path())
-            .env("WRIX_CACHE_TEST_STATE_ROOT", &self.state_root)
-            .env("WRIX_CACHE_TEST_CACHE_ROOT", &self.cache_root)
-            .env("WRIX_CACHE_TEST_OUTPUT", output)
-            .env("WRIX_NIX_BIN", &self.nix_bin)
-            .env("WRIX_NIX_STORE_BIN", &self.nix_store_bin)
-            .env("WRIX_FAKE_NIX_LOG", &self.nix_log)
-            .env("WRIX_FAKE_NIX_STORE_LOG", &self.nix_store_log)
-            .env("WRIX_FAKE_KEY_COUNTER", &self.key_counter)
-            .env("WRIX_FAKE_EXTRA_CLOSURE_FILE", &self.extra_closure_file)
-            .env("WRIX_FAKE_CACHE_ROOT", &self.cache_root)
-            .env("WRIX_FAKE_QUERY_FAIL", "0")
-            .env("WRIX_FAKE_UPLOAD_FAIL", "0")
-            .env("WRIX_FAKE_UPSTREAM_RESPONSE", "normal")
-            .env("WRIX_FAKE_UPSTREAM_MATCH", "upstream")
-            .env("WRIX_UPSTREAM_SUBSTITUTERS", "https://cache.example");
-        if self.roots_file.exists() {
-            command.env("WRIX_CACHE_ROOTS_FILE", &self.roots_file);
-        }
-        Ok(command)
-    }
-
-    fn finish_child(mut command: Command, output: &Path) -> TestResult<String> {
-        let child = command.output()?;
-        if !child.status.success() {
-            return Err(io::Error::other(format!(
-                "publisher child failed\nstdout:\n{}\nstderr:\n{}",
-                String::from_utf8_lossy(&child.stdout),
-                String::from_utf8_lossy(&child.stderr)
-            ))
-            .into());
-        }
-        Ok(fs::read_to_string(output)?)
-    }
-
-    fn pending_count(&self) -> io::Result<usize> {
-        let pending_dir = self.state_root.join("pending");
-        if !pending_dir.exists() {
-            return Ok(0);
-        }
-        Ok(fs::read_dir(pending_dir)?
-            .filter_map(Result::ok)
-            .filter(|entry| {
-                entry.path().extension().and_then(|value| value.to_str()) == Some("json")
-            })
-            .count())
-    }
-
-    fn nix_log(&self) -> io::Result<String> {
-        fs::read_to_string(&self.nix_log)
-    }
-
-    fn copy_log_line(&self) -> TestResult<String> {
-        self.nix_log()?
+        report
             .lines()
-            .find(|line| line.starts_with("nix copy "))
-            .map(str::to_owned)
-            .ok_or_else(|| io::Error::other("missing nix copy log line").into())
-    }
+            .iter()
+            .any(|line| line.starts_with("warning: project cache size exceeds"))
+    );
+    assert_eq!(
+        archive.metadata().unwrap().len(),
+        50 * 1024 * 1024 * 1024 + 1
+    );
+    assert!(!state.join("keys/cache.secret").exists());
 }
 
-fn write_fake_nix(path: &Path) -> io::Result<()> {
-    fs::write(
-        path,
-        r#"#!/usr/bin/env bash
+#[test]
+fn upstream_fixture_models_partial_null_and_failed_queries() {
+    let root = tempfile::tempdir().unwrap();
+    let nix = root.path().join("nix");
+    fs::write(&nix, NIX_FIXTURE).unwrap();
+    fs::set_permissions(&nix, fs::Permissions::from_mode(0o755)).unwrap();
+    for (mode, success, expected) in [
+        ("normal", true, "{\"hit\":{},\"miss\":null}"),
+        ("partial", false, "{\"hit\":{},\"miss\":null}"),
+        ("malformed", true, "invalid JSON"),
+        ("unavailable", false, ""),
+    ] {
+        let output = Command::new(&nix)
+            .args([
+                "path-info",
+                "--store",
+                "https://fixture.invalid",
+                "--json",
+                "hit",
+                "miss",
+            ])
+            .env("WRIX_TEST_NIX_LOG", root.path().join("log"))
+            .env("WRIX_TEST_UPSTREAM", mode)
+            .env("WRIX_TEST_UPSTREAM_HIT", "hit")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.success(), success);
+        assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), expected);
+    }
+    assert!(
+        !Command::new(&nix)
+            .arg("copy")
+            .env("WRIX_TEST_NIX_LOG", root.path().join("log"))
+            .status()
+            .unwrap()
+            .success()
+    );
+}
+
+const NIX_FIXTURE: &str = r#"#!/usr/bin/env bash
 set -euo pipefail
-
-log="$WRIX_FAKE_NIX_LOG"
-printf 'nix' >>"$log"
-for arg in "$@"; do
-  printf ' %s' "$arg" >>"$log"
-done
-printf '\n' >>"$log"
-
-if [[ "$#" -ge 5 && "$1" == "path-info" && "$2" == "--store" && "$4" == "--json" ]]; then
-  case "$WRIX_FAKE_UPSTREAM_RESPONSE" in
-    normal) ;;
-    unavailable) printf 'upstream unavailable\n' >&2; exit 1 ;;
-    malformed) printf 'not JSON\n'; exit 0 ;;
-    *) printf 'unknown upstream fixture response\n' >&2; exit 1 ;;
+printf '%s\n' "$*" >>"$WRIX_TEST_NIX_LOG"
+if [[ "$1" == build ]]; then
+  exit "${WRIX_TEST_BUILD_FAIL:-0}"
+fi
+if [[ "$1" == path-info && "$2" == --store && "$4" == --json ]]; then
+  case "$WRIX_TEST_UPSTREAM" in
+    unavailable) exit 1 ;;
+    malformed) printf 'invalid JSON\n'; exit 0 ;;
+    normal|partial) ;;
+    *) exit 2 ;;
   esac
   shift 4
   printf '{'
-  separator=""
-  for candidate in "$@"; do
-    printf '%s"%s":' "$separator" "$candidate"
-    if [[ -n "$WRIX_FAKE_UPSTREAM_MATCH" && "$candidate" == *"$WRIX_FAKE_UPSTREAM_MATCH"* ]]; then
-      printf '{}'
-    else
-      printf 'null'
-    fi
-    separator=","
+  separator=''
+  for path in "$@"; do
+    printf '%s"%s":' "$separator" "$path"
+    if [[ "$path" == "$WRIX_TEST_UPSTREAM_HIT" ]]; then printf '{}'; else printf 'null'; fi
+    separator=','
   done
   printf '}\n'
-  exit "${WRIX_FAKE_UPSTREAM_PARTIAL_FAILURE:-0}"
+  [[ "$WRIX_TEST_UPSTREAM" == normal ]]
+  exit "$?"
 fi
-
-case "$1" in
-  build)
-    exit 0
-    ;;
-  copy)
-    if [[ "${WRIX_FAKE_UPLOAD_FAIL:-0}" == "1" ]]; then
-      printf 'upload unavailable\n' >&2
-      exit 1
-    fi
-    cache_root="$WRIX_FAKE_CACHE_ROOT"
-    mkdir -p "$cache_root/nar"
-    printf 'nar payload\n' >"$cache_root/nar/project-root.nar"
-    cat >"$cache_root/project-root.narinfo" <<'NARINFO'
-StorePath: /nix/store/project-root-out
-URL: nar/project-root.nar
-Sig: wrix-cache:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
-NARINFO
-    exit 0
-    ;;
-  config)
-    printf 'substituters = https://cache.example\n'
-    ;;
-  path-info)
-    printf '{}\n'
-    ;;
-  *)
-    printf 'unsupported fake nix command: %s\n' "$*" >&2
-    exit 2
-    ;;
-esac
-"#,
-    )?;
-    make_executable(path)
-}
-
-fn write_fake_nix_store(path: &Path) -> io::Result<()> {
-    fs::write(
-        path,
-        r#"#!/usr/bin/env bash
-set -euo pipefail
-
-log="$WRIX_FAKE_NIX_STORE_LOG"
-printf 'nix-store' >>"$log"
-for arg in "$@"; do
-  printf ' %s' "$arg" >>"$log"
-done
-printf '\n' >>"$log"
-
-case "$1" in
-  --generate-binary-cache-key)
-    key_name="$2"
-    secret_path="$3"
-    public_path="$4"
-    counter_file="$WRIX_FAKE_KEY_COUNTER"
-    count=0
-    if [[ -f "$counter_file" ]]; then
-      count="$(<"$counter_file")"
-    fi
-    count=$((count + 1))
-    printf '%s\n' "$count" >"$counter_file"
-    encoded='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
-    if [[ "$count" != "1" ]]; then
-      encoded='BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA='
-    fi
-    printf '%s-secret-%s\n' "$key_name" "$count" >"$secret_path"
-    printf '%s:%s\n' "$key_name" "$encoded" >"$public_path"
-    ;;
-  --check-validity)
-    exit 0
-    ;;
-  --query)
-    if [[ "$WRIX_FAKE_QUERY_FAIL" == "1" ]]; then
-      printf 'closure query failed\n' >&2
-      exit 1
-    fi
-    shift 2
-    for store_path in "$@"; do
-      printf '%s\n' "$store_path"
-    done
-    if [[ -f "$WRIX_FAKE_EXTRA_CLOSURE_FILE" ]]; then
-      cat "$WRIX_FAKE_EXTRA_CLOSURE_FILE"
-    fi
-    ;;
-  *)
-    printf 'unsupported fake nix-store command: %s\n' "$*" >&2
-    exit 2
-    ;;
-esac
-"#,
-    )?;
-    make_executable(path)
-}
-
-#[cfg(unix)]
-fn make_executable(path: &Path) -> io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let mut permissions = fs::metadata(path)?.permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(path, permissions)
-}
-
-#[cfg(not(unix))]
-fn make_executable(_path: &Path) -> io::Result<()> {
-    Ok(())
-}
+printf 'unexpected Nix invocation\n' >&2
+exit 2
+"#;

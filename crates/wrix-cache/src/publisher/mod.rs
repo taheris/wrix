@@ -179,13 +179,16 @@ pub fn status_at(state_root: &Path, cache_root: &Path, settings: Settings) -> Re
 }
 
 fn run_at(workspace: &Workspace, paths: &Paths, mode: Mode) -> Result<Report> {
-    if mode != Mode::RotateKey {
-        paths.ensure()?;
+    match mode {
+        Mode::Publish | Mode::Warm { .. } => paths.ensure_control()?,
+        Mode::Prune => paths.ensure()?,
+        Mode::RotateKey => (),
     }
     run(workspace, paths, mode)
 }
 
 fn status_at_paths(paths: &Paths) -> Result<Report> {
+    paths.ensure_control()?;
     status_report(paths)
 }
 
@@ -254,9 +257,9 @@ fn run(workspace: &Workspace, paths: &Paths, mode: Mode) -> Result<Report> {
             let roots = discover_roots(RootSet::Publish, &paths.settings, cwd)?;
             paths.authorize()?;
             write_manifest(&paths.publish_roots_path(), workspace.hash(), &roots)?;
-            let realized = realized_roots(roots.clone(), cwd)?;
+            let realized = realized_roots(roots)?;
             let pending = read_pending(paths)?;
-            publish_roots(paths, &realized.roots, &pending, Some(&roots)).map(|mut report| {
+            publish_roots(paths, workspace.hash(), &realized.roots, pending).map(|mut report| {
                 report.lines.extend(realized.unrealized);
                 report
             })
@@ -278,7 +281,7 @@ fn run(workspace: &Workspace, paths: &Paths, mode: Mode) -> Result<Report> {
                 .collect();
             let realized = realized_roots(roots, cwd)?;
             let pending = read_pending(paths)?;
-            publish_roots(paths, &realized.roots, &pending, Some(&configured))
+            publish_roots(paths, workspace.hash(), &realized.roots, pending)
         }),
         Mode::Prune => with_explicit_lock(paths, || {
             prune(paths)?;
@@ -316,14 +319,9 @@ fn run_automatic_publish(paths: &Paths, workspace: &WorkspaceHash, root: &Root) 
 }
 
 fn publish_hook_root(paths: &Paths, workspace: &WorkspaceHash, root: &Root) -> Result<Report> {
-    let publisher = crate::backend::publication::Publisher::load(&paths.state_root, workspace)?;
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-    let closure = runtime.block_on(crate::backend::realized_closure(&root.out_paths))?;
+    let closure = closure_paths(&root.out_paths)?;
     let filtered = subtract_upstream(paths, closure.into_iter().collect())?;
-    let selected = filtered.iter().map(PathBuf::from).collect::<Vec<_>>();
-    let count = runtime.block_on(publisher.publish_selected(&selected))?;
+    let count = publish_selected(paths, workspace, &filtered)?;
     write_cache_status(paths, true, Some("ok"), None, None)?;
     Ok(Report {
         lines: vec![format!(
@@ -600,17 +598,10 @@ fn store_paths_valid(paths: &[String]) -> Result<bool> {
     if paths.is_empty() {
         return Ok(false);
     }
-    let output = Command::new(nix_store_bin()?)
-        .arg("--check-validity")
-        .arg("--print-invalid")
-        .args(paths)
-        .stdin(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()?;
-    if !output.status.success() {
-        return Err(process_failed("nix-store --check-validity", &output.stderr));
-    }
-    Ok(output.stdout.is_empty())
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    Ok(runtime.block_on(crate::backend::paths_realized(paths))?)
 }
 
 fn output_paths(installable: &str, cwd: &Path) -> Result<Option<Vec<String>>> {
@@ -673,9 +664,9 @@ fn build_roots(roots: &[Root], cwd: &Path) -> Result<()> {
 
 fn publish_roots(
     paths: &Paths,
+    workspace: &WorkspaceHash,
     roots: &[Root],
-    pending: &[Pending],
-    configured: Option<&[Root]>,
+    pending: Vec<Pending>,
 ) -> Result<Report> {
     paths.authorize()?;
     let root_drvs = roots
@@ -686,7 +677,6 @@ fn publish_roots(
     let mut lines = Vec::new();
     for root in roots {
         let closure = closure_paths(&root.out_paths)?;
-        update_gc_marker(paths, root, &closure)?;
         publishable.extend(closure);
         lines.push(format!("published root: {}", root.installable));
     }
@@ -700,41 +690,23 @@ fn publish_roots(
         }
     }
     let filtered = subtract_upstream(paths, publishable)?;
-    copy_to_cache(paths, &filtered)?;
+    let count = publish_selected(paths, workspace, &filtered)?;
     for path in completed_pending {
         fs::remove_file(&path)?;
         lines.push(format!("drained pending: {}", path.display()));
     }
     write_cache_status(paths, true, Some("ok"), None, None)?;
-    if let Some(configured) = configured {
-        reconcile_gc_markers(paths, configured)?;
-        prune(paths)?;
-    }
-    if filtered.is_empty() {
-        lines.push(String::from("no project cache misses to copy"));
-    } else {
-        lines.push(format!("copied {} project cache paths", filtered.len()));
-    }
+    lines.push(format!(
+        "published {count} project cache paths through Celler"
+    ));
     Ok(Report { lines })
 }
 
 fn closure_paths(out_paths: &[String]) -> Result<Vec<String>> {
-    if out_paths.is_empty() {
-        return Ok(Vec::new());
-    }
-    let output = Command::new(nix_store_bin()?)
-        .arg("--query")
-        .arg("--requisites")
-        .args(out_paths)
-        .stdin(Stdio::null())
-        .output()?;
-    if output.status.success() {
-        return Ok(split_paths(&String::from_utf8_lossy(&output.stdout)));
-    }
-    Err(process_failed(
-        "nix-store --query --requisites",
-        &output.stderr,
-    ))
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    Ok(runtime.block_on(crate::backend::realized_closure(out_paths))?)
 }
 
 fn subtract_upstream(paths: &Paths, candidates: BTreeSet<String>) -> Result<Vec<String>> {
@@ -797,31 +769,17 @@ fn substitutable_paths(substituter: &str, paths: &[String]) -> Result<Vec<String
     parse_path_info_paths(&String::from_utf8_lossy(&output.stdout))
 }
 
-fn copy_to_cache(paths: &Paths, store_paths: &[String]) -> Result<()> {
-    paths.authorize()?;
-    if store_paths.is_empty() {
-        return Ok(());
-    }
-    let mut command = Command::new(nix_bin()?);
-    command
-        .arg("copy")
-        .arg("--to")
-        .arg(format!("file://{}", paths.cache_root.display()))
-        .arg("--no-recursive")
-        .arg("--secret-key-files")
-        .arg(paths.cache_secret_path());
-    for store_path in store_paths {
-        command.arg(store_path);
-    }
-    let output = command
-        .stdin(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(process_failed("nix copy", &output.stderr))
-    }
+fn publish_selected(
+    paths: &Paths,
+    workspace: &WorkspaceHash,
+    store_paths: &[String],
+) -> Result<usize> {
+    let publisher = crate::backend::publication::Publisher::load(&paths.state_root, workspace)?;
+    let selected = store_paths.iter().map(PathBuf::from).collect::<Vec<_>>();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    Ok(runtime.block_on(publisher.publish_selected(&selected))?)
 }
 
 fn prune(paths: &Paths) -> Result<()> {
@@ -965,44 +923,6 @@ fn remove_cache_payload(path: &Path) -> Result<()> {
     }
 }
 
-fn reconcile_gc_markers(paths: &Paths, configured: &[Root]) -> Result<()> {
-    paths.authorize()?;
-    let configured = configured
-        .iter()
-        .map(|root| safe_marker_name(&root.name))
-        .collect::<HashSet<_>>();
-    for (path, _) in marker_records(paths)? {
-        if !path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| configured.contains(name))
-            && matches!(
-                wrix_state::namespace::remove_at(&path)?,
-                wrix_state::namespace::Storage::Filesystem
-            )
-        {
-            remove_cache_payload(&path)?;
-        }
-    }
-    Ok(())
-}
-
-fn marker_records(paths: &Paths) -> Result<Vec<(PathBuf, Vec<u8>)>> {
-    match wrix_state::namespace::closures_at(&paths.gcroots_dir())? {
-        wrix_state::namespace::Listing::Host(rows) => Ok(rows),
-        wrix_state::namespace::Listing::Observer => {
-            let mut rows = Vec::new();
-            if paths.gcroots_dir().try_exists()? {
-                for entry in fs::read_dir(paths.gcroots_dir())? {
-                    let path = entry?.path();
-                    rows.push((path.clone(), fs::read(path)?));
-                }
-            }
-            Ok(rows)
-        }
-    }
-}
-
 fn marker_store_basenames(paths: &Paths) -> Result<Vec<String>> {
     let mut basenames = Vec::new();
     for (_, bytes) in marker_records(paths)? {
@@ -1018,57 +938,6 @@ fn marker_store_basenames(paths: &Paths) -> Result<Vec<String>> {
         }
     }
     Ok(basenames)
-}
-
-fn update_gc_marker(paths: &Paths, root: &Root, closure: &[String]) -> Result<()> {
-    paths.authorize()?;
-    let marker = paths.gcroots_dir().join(safe_marker_name(&root.name));
-    let content = format!("{}\n", closure.join("\n"));
-    if matches!(
-        wrix_state::namespace::write_at(&marker, content.as_bytes())?,
-        wrix_state::namespace::Storage::Filesystem
-    ) {
-        fs::write(marker, content)?;
-    }
-    Ok(())
-}
-
-fn pending_records(paths: &Paths) -> Result<(Vec<(PathBuf, PendingRecord)>, bool)> {
-    match wrix_state::namespace::pending_at(&paths.pending_dir())? {
-        wrix_state::namespace::Listing::Host(rows) => {
-            let records = rows
-                .into_iter()
-                .map(|(path, bytes)| {
-                    serde_json::from_slice(&bytes)
-                        .map(|record| (path.clone(), record))
-                        .map_err(|source| Error::Json {
-                            path: path.display().to_string(),
-                            source,
-                        })
-                })
-                .collect::<Result<Vec<_>>>()?;
-            Ok((records, false))
-        }
-        wrix_state::namespace::Listing::Observer => {
-            if !paths.pending_dir().exists() {
-                return Ok((Vec::new(), true));
-            }
-            let mut records = Vec::new();
-            for entry in fs::read_dir(paths.pending_dir())? {
-                let path = entry?.path();
-                if path.extension().is_none_or(|extension| extension != "json") {
-                    continue;
-                }
-                let bytes = fs::read(&path)?;
-                let record = serde_json::from_slice(&bytes).map_err(|source| Error::Json {
-                    path: path.display().to_string(),
-                    source,
-                })?;
-                records.push((path, record));
-            }
-            Ok((records, true))
-        }
-    }
 }
 
 fn read_pending(paths: &Paths) -> Result<Vec<Pending>> {
