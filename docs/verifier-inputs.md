@@ -28,12 +28,11 @@ declarations, and the connection between resource operands, reads, and
 projections.
 
 Both check and system runners opt into batched input queries. The consumed Loom
-package applies `patches/loom-system-input-batching.patch` to extend its
-existing query-cache priming to system groups, without changing per-annotation
-system execution. Tier identities remain separate. Unknown declarations remain
-always-run; malformed declarations and failed discovery block execution. No
-persistent discovery cache, tier change, marker exception or skip-policy change
-is introduced.
+package uses the pinned upstream source without local patches; query-cache
+priming and system-group batching depend on that upstream version. Tier
+identities remain separate. Unknown declarations remain always-run; malformed
+declarations and failed discovery block execution. No persistent discovery
+cache, tier change, marker exception or skip-policy change is introduced.
 
 `verify:cli.browser-gate-scope` exercises the real consumed Loom planner and
 production Wrix runners in disposable Git repositories. It checks changed
