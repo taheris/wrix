@@ -210,6 +210,7 @@ rewrite_entrypoint() {
   sed \
     -e "s|/workspace|$workspace|g" \
     -e "s|/home/wrix|$home_dir|g" \
+    -e "s|/mnt/wrix/tool-caches|$(dirname "$home_dir")/tool-caches|g" \
     -e "s|/etc/|$(dirname "$etc_wrix")/|g" \
     -e "s|\. /git-ssh-setup\.sh|. $setup_path|g" \
     -e "s|\. /mcp-manifest\.sh|. $mcp_helper|g" \
@@ -286,6 +287,48 @@ assert_output_contains() {
   if [[ "$output" != *"$expected"* ]]; then
     fail "$label: missing '$expected' in output: $output"
   fi
+}
+
+test_tool_cache_mounts_are_fixture_local_both() {
+  local platform mode workspace stdout_path stderr_path case_dir home_dir cache_root status
+  for platform in linux darwin; do
+    for mode in private shared conflict; do
+      workspace="$TEST_TMP/cache-$platform-$mode/workspace"
+      stdout_path="$TEST_TMP/cache-$platform-$mode.out"
+      stderr_path="$TEST_TMP/cache-$platform-$mode.err"
+      case_dir="$TEST_TMP/$platform-direct-cache-$platform-$mode"
+      home_dir="$case_dir/home"
+      cache_root="$case_dir/tool-caches"
+      if [[ "$mode" != shared ]]; then
+        mkdir -p "$home_dir/.cargo/registry"
+        printf 'private cache\n' >"$home_dir/.cargo/registry/marker"
+      fi
+      if [[ "$mode" != private ]]; then
+        mkdir -p "$cache_root/cargo/registry"
+        printf 'fixture cache\n' >"$cache_root/cargo/registry/marker"
+      fi
+      status=0
+      run_entrypoint "$platform" direct "$stdout_path" "$stderr_path" "$workspace" \
+        touch "$workspace/agent-ran" || status=$?
+      if [[ "$mode" == conflict ]]; then
+        [[ "$status" == 1 && ! -e "$workspace/agent-ran" ]] || return 1
+        assert_output_contains "$platform cache conflict" "$(<"$stderr_path")" \
+          "managed cache destination already exists: $home_dir/.cargo/registry" || return 1
+      else
+        [[ "$status" == 0 && -e "$workspace/agent-ran" ]] || {
+          fail "$platform $mode cache setup failed: $(<"$stderr_path")"
+          return 1
+        }
+      fi
+      if [[ "$mode" == shared ]]; then
+        [[ -L "$home_dir/.cargo/registry" ]] || return 1
+        [[ "$(readlink "$home_dir/.cargo/registry")" == "$cache_root/cargo/registry" ]] || return 1
+      else
+        [[ ! -L "$home_dir/.cargo/registry" ]] || return 1
+        [[ "$(<"$home_dir/.cargo/registry/marker")" == 'private cache' ]] || return 1
+      fi
+    done
+  done
 }
 
 test_workspace_bin_path_prepend_both() {
@@ -1043,6 +1086,7 @@ test_retired_tmux_selection_rejected() {
 
 ALL_TESTS=(
   test_runtime_fixtures_do_not_need_env_or_path
+  test_tool_cache_mounts_are_fixture_local_both
   test_workspace_bin_path_prepend_both
   test_selected_native_agents_receive_argv_both_entrypoints
   test_claude_stdio_permission_prompt_opt_in_both_entrypoints

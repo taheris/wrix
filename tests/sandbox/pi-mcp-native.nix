@@ -50,6 +50,7 @@ let
         export PI_TEST_MODEL_FIXTURE=${resources.fixtures.path + "/sandbox/fixtures/model-server.mjs"}
         export PI_TEST_SETTINGS=${(wrix.mkSandbox { }).image.piSettingsJson}
         bash "$REPO_ROOT/tests/sandbox/entrypoint-contract.sh" test_runtime_fixtures_do_not_need_env_or_path
+        bash "$REPO_ROOT/tests/sandbox/entrypoint-contract.sh" test_tool_cache_mounts_are_fixture_local_both
         node --test ${resources.fixtures.path + "/sandbox/pi-mcp-native.mjs"}
         touch "$out"
       '';
