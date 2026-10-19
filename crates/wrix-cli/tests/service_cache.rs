@@ -116,6 +116,29 @@ fn service_fixture_removes_ambient_image_metadata() -> TestResult {
 }
 
 #[test]
+fn retired_cache_prune_fails_without_state_or_runtime_access() -> TestResult {
+    let fixture = Fixture::new()?;
+    fs::write(fixture.workspace.join("wrix.toml"), "invalid policy")?;
+    for args in [
+        vec!["service", "cache", "prune"],
+        vec!["service", "cache", "prune", "--host"],
+    ] {
+        let output = run_command(fixture.command("podman")?.args(args))?;
+        assert!(!output.status.success());
+        assert!(
+            output.stderr.contains("unknown cache command: prune"),
+            "{}",
+            output.stderr
+        );
+        assert!(!output.stderr.contains("invalid policy"));
+    }
+    for path in ["state", "cache", "home", "calls", "run.argv"] {
+        assert!(!fixture.root.path().join(path).exists(), "{path}");
+    }
+    Ok(())
+}
+
+#[test]
 fn service_start_rejects_unbound_ambient_image_substitutes() -> TestResult {
     let fixture = Fixture::new()?;
     let output = run_command(
@@ -306,7 +329,7 @@ fn cache_layout_uses_exact_platform_roots_and_opt_out_creates_no_cache() -> Test
 }
 
 #[test]
-fn service_startup_uses_builtin_legacy_pruning_interval() -> TestResult {
+fn service_startup_does_not_collect_dirty_cache_contents() -> TestResult {
     for elapsed in [3600, 172_800] {
         let fixture = Fixture::new()?;
         let mut command = fixture.command("podman")?;
@@ -334,7 +357,11 @@ fn service_startup_uses_builtin_legacy_pruning_interval() -> TestResult {
         fs::remove_file(fixture.root.path().join("running"))?;
         let output = run_command(&mut command)?;
         assert!(output.status.success(), "{}", output.stderr);
-        assert_eq!(stale.exists(), elapsed < 86_400, "{elapsed}");
+        assert!(stale.exists(), "{elapsed}");
+        let status: Value =
+            serde_json::from_slice(&fs::read(state_root.join("cache-status.json"))?)?;
+        assert_eq!(status["last_prune_epoch"], last_prune);
+        assert_eq!(status["dirty"], true);
     }
     Ok(())
 }

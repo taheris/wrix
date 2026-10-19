@@ -546,7 +546,7 @@ mod test {
         assert_eq!(stderr, Vec::<u8>::new());
         let output = String::from_utf8(stdout).unwrap();
         assert!(output.contains("dolt <status|socket|port|host|sandbox-endpoint|attach|gc|wait>"));
-        assert!(output.contains("cache <config|status|publish|warm|prune|rotate-key>"));
+        assert!(output.contains("cache <config|status|publish|warm|rotate-key>"));
     }
 
     #[test]

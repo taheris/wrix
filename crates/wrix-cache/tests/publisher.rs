@@ -715,6 +715,28 @@ fn status_warns_above_soft_size_without_pruning() {
 }
 
 #[test]
+fn status_does_not_report_legacy_workspace_pruning() {
+    let root = tempfile::tempdir().unwrap();
+    let state = root.path().join("state");
+    fs::create_dir(&state).unwrap();
+    let status = state.join("cache-status.json");
+    let bytes = serde_json::to_vec(&json!({
+        "dirty": true,
+        "last_publish": "ok",
+        "last_error": null,
+        "last_prune": "ok",
+        "last_prune_epoch": 1
+    }))
+    .unwrap();
+    fs::write(&status, &bytes).unwrap();
+    let report =
+        publisher::status_at(&state, &root.path().join("cache"), Settings::default()).unwrap();
+    assert!(report.lines().iter().any(|line| line == "last_publish: ok"));
+    assert!(!report.lines().iter().any(|line| line.contains("prune")));
+    assert_eq!(fs::read(status).unwrap(), bytes);
+}
+
+#[test]
 fn upstream_fixture_models_partial_null_and_failed_queries() {
     let root = tempfile::tempdir().unwrap();
     let nix = root.path().join("nix");

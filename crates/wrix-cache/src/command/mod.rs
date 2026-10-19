@@ -47,7 +47,6 @@ pub enum Command {
     Status,
     Publish,
     Warm,
-    Prune,
     RotateKey,
 }
 
@@ -58,7 +57,6 @@ impl Command {
             "status" => Some(Self::Status),
             "publish" => Some(Self::Publish),
             "warm" => Some(Self::Warm),
-            "prune" => Some(Self::Prune),
             "rotate-key" => Some(Self::RotateKey),
             _ => None,
         }
@@ -67,7 +65,7 @@ impl Command {
 
 pub fn write_help(stdout: &mut impl Write) -> Result<()> {
     stdout.write_all(
-        b"Manage the workspace project cache.\n\nUsage: wrix service cache <command> [options]\n\nCommands:\n  config      Show resolved project-cache settings.\n  status      Show project-cache status and warnings.\n  publish     Publish realized project outputs.\n  warm        Build and publish configured warm roots.\n  prune       Remove cache entries outside current roots.\n  rotate-key  Replace the cache signing key and clear cached content.\n\nOptions:\n  --checks    Include flake checks when warming the cache (default: off).\n  -h, --help  Print help.\n",
+        b"Manage the workspace project cache.\n\nUsage: wrix service cache <command> [options]\n\nCommands:\n  config      Show resolved project-cache settings.\n  status      Show project-cache status and warnings.\n  publish     Publish realized project outputs.\n  warm        Build and publish configured warm roots.\n  rotate-key  Replace the cache signing key and clear cached content.\n\nOptions:\n  --checks    Include flake checks when warming the cache (default: off).\n  -h, --help  Print help.\n",
     )?;
     Ok(())
 }
@@ -86,7 +84,6 @@ pub fn run(command: Command, args: &[String], stdout: &mut impl Write) -> Result
         Command::Status => run_status(args, stdout),
         Command::Publish => run_publish(args, stdout),
         Command::Warm => run_warm(args, stdout),
-        Command::Prune => run_prune(args, stdout),
         Command::RotateKey => run_rotate_key(args, stdout),
     }
 }
@@ -108,13 +105,6 @@ fn run_publish(args: &[String], stdout: &mut impl Write) -> Result<ExitCode> {
 fn run_warm(args: &[String], stdout: &mut impl Write) -> Result<ExitCode> {
     let checks = parse_warm_args(args)?;
     let report = publisher::run_current_workspace(Mode::Warm { checks })?;
-    write_report(stdout, &report)?;
-    Ok(ExitCode::SUCCESS)
-}
-
-fn run_prune(args: &[String], stdout: &mut impl Write) -> Result<ExitCode> {
-    reject_args(args)?;
-    let report = publisher::run_current_workspace(Mode::Prune)?;
     write_report(stdout, &report)?;
     Ok(ExitCode::SUCCESS)
 }
@@ -162,12 +152,19 @@ mod test {
     use super::Command;
 
     #[test]
+    fn retired_prune_is_not_a_cache_command() {
+        assert_eq!(Command::parse("prune"), None);
+        let mut help = Vec::new();
+        super::write_help(&mut help).unwrap();
+        assert!(!String::from_utf8(help).unwrap().contains("prune"));
+    }
+
+    #[test]
     fn cache_command_parser_accepts_public_cache_commands() {
         assert_eq!(Command::parse("config"), Some(Command::Config));
         assert_eq!(Command::parse("status"), Some(Command::Status));
         assert_eq!(Command::parse("publish"), Some(Command::Publish));
         assert_eq!(Command::parse("warm"), Some(Command::Warm));
-        assert_eq!(Command::parse("prune"), Some(Command::Prune));
         assert_eq!(Command::parse("rotate-key"), Some(Command::RotateKey));
     }
 }

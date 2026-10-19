@@ -35,7 +35,7 @@ fn unsupported_arguments_fail_before_any_subprocess() -> TestResult {
     ] {
         commands.push(vec!["service", "dolt", command]);
     }
-    for command in ["status", "publish", "warm", "prune", "rotate-key"] {
+    for command in ["status", "publish", "warm", "rotate-key"] {
         commands.push(vec!["service", "cache", command]);
     }
     for args in commands {

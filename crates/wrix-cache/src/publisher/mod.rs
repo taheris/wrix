@@ -4,7 +4,7 @@ use std::{
     fs::{self, DirBuilder, File, OpenOptions},
     io::{self, ErrorKind},
     os::unix::fs::DirBuilderExt,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
     time::{Duration, SystemTime, SystemTimeError, UNIX_EPOCH},
@@ -80,7 +80,6 @@ impl From<SystemTimeError> for Error {
 pub enum Mode {
     Publish,
     Warm { checks: bool },
-    Prune,
     RotateKey,
 }
 
@@ -181,7 +180,6 @@ pub fn status_at(state_root: &Path, cache_root: &Path, settings: Settings) -> Re
 fn run_at(workspace: &Workspace, paths: &Paths, mode: Mode) -> Result<Report> {
     match mode {
         Mode::Publish | Mode::Warm { .. } => paths.ensure_control()?,
-        Mode::Prune => paths.ensure()?,
         Mode::RotateKey => (),
     }
     run(workspace, paths, mode)
@@ -190,21 +188,6 @@ fn run_at(workspace: &Workspace, paths: &Paths, mode: Mode) -> Result<Report> {
 fn status_at_paths(paths: &Paths) -> Result<Report> {
     paths.ensure_control()?;
     status_report(paths)
-}
-
-pub fn prune_stale_dirty(state_root: &Path, cache_root: &Path, settings: Settings) -> Result<bool> {
-    let paths = Paths {
-        scope: wrix_state::namespace::context_at(state_root)?,
-        state_root: state_root.to_path_buf(),
-        cache_root: cache_root.to_path_buf(),
-        settings,
-    };
-    if !cache_status_dirty(&paths)? || !prune_is_stale(&paths)? {
-        return Ok(false);
-    }
-    paths.ensure()?;
-    with_explicit_lock(&paths, || prune(&paths))?;
-    Ok(true)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -283,12 +266,6 @@ fn run(workspace: &Workspace, paths: &Paths, mode: Mode) -> Result<Report> {
             let pending = read_pending(paths)?;
             publish_roots(paths, workspace.hash(), &realized.roots, pending)
         }),
-        Mode::Prune => with_explicit_lock(paths, || {
-            prune(paths)?;
-            Ok(Report {
-                lines: vec![String::from("pruned project cache")],
-            })
-        }),
         Mode::RotateKey => with_explicit_lock(paths, || rotate_key(paths, workspace.hash())),
     }
 }
@@ -309,7 +286,7 @@ fn run_automatic_publish(paths: &Paths, workspace: &WorkspaceHash, root: &Root) 
         (Ok(mut report), Ok(())) => lines.append(&mut report.lines),
         (Err(error), _) | (_, Err(error)) => {
             record_pending(paths, &root.drv_path, &root.out_paths)?;
-            write_cache_status(paths, true, Some("warning"), None, Some(&error.to_string()))?;
+            write_cache_status(paths, true, Some("warning"), Some(&error.to_string()))?;
             lines.push(format!(
                 "warning: automatic project cache publish failed: {error}"
             ));
@@ -322,7 +299,7 @@ fn publish_hook_root(paths: &Paths, workspace: &WorkspaceHash, root: &Root) -> R
     let closure = closure_paths(&root.out_paths)?;
     let filtered = subtract_upstream(paths, closure.into_iter().collect())?;
     let count = publish_selected(paths, workspace, &filtered)?;
-    write_cache_status(paths, true, Some("ok"), None, None)?;
+    write_cache_status(paths, true, Some("ok"), None)?;
     Ok(Report {
         lines: vec![format!(
             "published {count} project cache paths through Celler"
@@ -695,7 +672,7 @@ fn publish_roots(
         fs::remove_file(&path)?;
         lines.push(format!("drained pending: {}", path.display()));
     }
-    write_cache_status(paths, true, Some("ok"), None, None)?;
+    write_cache_status(paths, true, Some("ok"), None)?;
     lines.push(format!(
         "published {count} project cache paths through Celler"
     ));
@@ -782,164 +759,6 @@ fn publish_selected(
     Ok(runtime.block_on(publisher.publish_selected(&selected))?)
 }
 
-fn prune(paths: &Paths) -> Result<()> {
-    paths.authorize()?;
-    purge_expired_pending(paths)?;
-    let reachable = marker_store_basenames(paths)?;
-    if paths.cache_root.exists() {
-        let mut stale_narinfos = Vec::new();
-        let mut retained_payloads = BTreeSet::new();
-        for entry in fs::read_dir(&paths.cache_root)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.extension().and_then(|value| value.to_str()) != Some("narinfo") {
-                continue;
-            }
-            let Some(stem) = path.file_stem().and_then(|value| value.to_str()) else {
-                continue;
-            };
-            let payloads = narinfo_payload_paths(paths, &path)?;
-            if reachable.iter().any(|base| base.starts_with(stem)) {
-                retained_payloads.extend(payloads);
-            } else {
-                stale_narinfos.push((path, payloads));
-            }
-        }
-        for (narinfo, payloads) in stale_narinfos {
-            fs::remove_file(narinfo)?;
-            for payload in payloads {
-                if !retained_payloads.contains(&payload) {
-                    remove_cache_payload(&payload)?;
-                }
-            }
-        }
-        prune_unreferenced_payloads(paths, &retained_payloads)?;
-        prune_unreachable_logs(paths, &reachable)?;
-    }
-    write_cache_status(paths, false, None, Some("ok"), None)
-}
-
-fn narinfo_payload_paths(paths: &Paths, narinfo: &Path) -> Result<Vec<PathBuf>> {
-    let content = fs::read_to_string(narinfo)?;
-    let mut payloads = Vec::new();
-    for line in content.lines() {
-        let Some(url) = line.strip_prefix("URL:") else {
-            continue;
-        };
-        if let Some(path) = cache_payload_path(paths, url.trim()) {
-            payloads.push(path);
-        }
-    }
-    Ok(payloads)
-}
-
-fn cache_payload_path(paths: &Paths, url: &str) -> Option<PathBuf> {
-    let relative = Path::new(url);
-    if relative.is_absolute() || !relative.starts_with("nar") {
-        return None;
-    }
-    if relative.components().any(|component| {
-        matches!(
-            component,
-            Component::ParentDir | Component::RootDir | Component::Prefix(_)
-        )
-    }) {
-        return None;
-    }
-    Some(paths.cache_root.join(relative))
-}
-
-fn prune_unreferenced_payloads(paths: &Paths, retained: &BTreeSet<PathBuf>) -> Result<()> {
-    let nar_dir = paths.cache_root.join("nar");
-    if nar_dir.exists() {
-        prune_payload_dir(&nar_dir, retained)?;
-    }
-    Ok(())
-}
-
-fn prune_unreachable_logs(paths: &Paths, reachable: &[String]) -> Result<()> {
-    let log_dir = paths.cache_root.join("log");
-    if !log_dir.exists() {
-        return Ok(());
-    }
-    let retained_hashes = reachable
-        .iter()
-        .filter_map(|name| name.split_once('-').map(|(hash, _name)| hash))
-        .collect::<Vec<_>>();
-    prune_log_dir(&log_dir, &retained_hashes)
-}
-
-fn prune_log_dir(dir: &Path, retained_hashes: &[&str]) -> Result<()> {
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if entry.file_type()?.is_dir() {
-            prune_log_dir(&path, retained_hashes)?;
-            if directory_is_empty(&path)? {
-                fs::remove_dir(path)?;
-            }
-        } else {
-            let retained = path
-                .file_name()
-                .and_then(|value| value.to_str())
-                .is_some_and(|name| retained_hashes.iter().any(|hash| name.contains(hash)));
-            if !retained {
-                remove_cache_payload(&path)?;
-            }
-        }
-    }
-    Ok(())
-}
-
-fn prune_payload_dir(dir: &Path, retained: &BTreeSet<PathBuf>) -> Result<()> {
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if entry.file_type()?.is_dir() {
-            prune_payload_dir(&path, retained)?;
-            if directory_is_empty(&path)? {
-                fs::remove_dir(path)?;
-            }
-        } else if !retained.contains(&path) {
-            remove_cache_payload(&path)?;
-        }
-    }
-    Ok(())
-}
-
-fn directory_is_empty(path: &Path) -> Result<bool> {
-    match fs::read_dir(path)?.next() {
-        Some(Ok(_entry)) => Ok(false),
-        Some(Err(error)) => Err(error.into()),
-        None => Ok(true),
-    }
-}
-
-fn remove_cache_payload(path: &Path) -> Result<()> {
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error.into()),
-    }
-}
-
-fn marker_store_basenames(paths: &Paths) -> Result<Vec<String>> {
-    let mut basenames = Vec::new();
-    for (_, bytes) in marker_records(paths)? {
-        let content = std::str::from_utf8(&bytes)
-            .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))?;
-        for store_path in split_paths(content) {
-            if let Some(name) = Path::new(&store_path)
-                .file_name()
-                .and_then(|value| value.to_str())
-            {
-                basenames.push(name.to_owned());
-            }
-        }
-    }
-    Ok(basenames)
-}
-
 fn read_pending(paths: &Paths) -> Result<Vec<Pending>> {
     let mut pending = Vec::new();
     let (records, observer) = pending_records(paths)?;
@@ -981,31 +800,6 @@ fn record_pending(paths: &Paths, drv_path: &str, out_paths: &[String]) -> Result
     };
     write_json(&path, &record)?;
     Ok(path)
-}
-
-fn remove_pending(path: &Path) -> Result<()> {
-    if matches!(
-        wrix_state::namespace::remove_at(path)?,
-        wrix_state::namespace::Storage::Database
-    ) {
-        return Ok(());
-    }
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error.into()),
-    }
-}
-
-fn purge_expired_pending(paths: &Paths) -> Result<()> {
-    paths.authorize()?;
-    let (records, _) = pending_records(paths)?;
-    for (path, record) in records {
-        if pending_expired(&path, &record, paths.settings.pending_retention_secs)? {
-            remove_pending(&path)?;
-        }
-    }
-    Ok(())
 }
 
 fn pending_expired(path: &Path, record: &PendingRecord, retention_secs: u64) -> Result<bool> {
@@ -1065,10 +859,6 @@ fn status_report(paths: &Paths) -> Result<Report> {
             status.last_publish.as_deref().unwrap_or("null")
         ),
         format!(
-            "last_prune: {}",
-            status.last_prune.as_deref().unwrap_or("null")
-        ),
-        format!(
             "last_error: {}",
             status.last_error.as_deref().unwrap_or("null")
         ),
@@ -1111,7 +901,7 @@ fn record_rotated_key(paths: &Paths, key: &cache_key::CachePublicKey) -> Result<
     std::io::Write::write_all(&mut file, format!("{}\n", key.as_str()).as_bytes())?;
     file.sync_all()?;
     fs::rename(temporary, paths.cache_public_path())?;
-    write_cache_status(paths, false, None, Some("key-rotated"), None)
+    write_cache_status(paths, false, None, None)
 }
 
 impl Paths {
@@ -1145,41 +935,12 @@ impl Paths {
         write_json_if_missing(&self.cache_status_path(), &cache_status(false))
     }
 
-    fn ensure(&self) -> Result<()> {
-        self.authorize()?;
-        fs::create_dir_all(&self.state_root)?;
-        fs::create_dir_all(&self.cache_root)?;
-        if !wrix_state::namespace::is_host_root(&self.state_root)? {
-            fs::create_dir_all(self.gcroots_dir())?;
-            fs::create_dir_all(self.pending_dir())?;
-        }
-        fs::create_dir_all(self.keys_dir())?;
-        fs::create_dir_all(self.cache_root.join("nar"))?;
-        fs::create_dir_all(self.cache_root.join("log"))?;
-        write_if_missing(&self.cache_lock_path(), "")?;
-        write_json_if_missing(&self.cache_status_path(), &cache_status(false))?;
-        cache_key::ensure_keypair(
-            &self.key_name(),
-            &self.cache_secret_path(),
-            &self.cache_public_path(),
-            &nix_store_bin()?,
-        )?;
-        write_if_missing(
-            &self.cache_root.join("nix-cache-info"),
-            "StoreDir: /nix/store\nWantMassQuery: 1\nPriority: 40\n",
-        )
-    }
-
     fn cache_lock_path(&self) -> PathBuf {
         self.state_root.join("cache.lock")
     }
 
     fn cache_status_path(&self) -> PathBuf {
         self.state_root.join("cache-status.json")
-    }
-
-    fn gcroots_dir(&self) -> PathBuf {
-        self.state_root.join("gcroots")
     }
 
     fn keys_dir(&self) -> PathBuf {
@@ -1198,31 +959,13 @@ impl Paths {
         self.state_root.join("services.json")
     }
 
-    fn cache_secret_path(&self) -> PathBuf {
-        self.keys_dir().join("cache.secret")
-    }
-
     fn cache_public_path(&self) -> PathBuf {
         self.keys_dir().join("cache.pub")
-    }
-
-    fn key_name(&self) -> String {
-        self.state_root
-            .file_name()
-            .and_then(|value| value.to_str())
-            .map_or_else(
-                || String::from("wrix-cache"),
-                |value| format!("wrix-cache-{value}"),
-            )
     }
 }
 
 fn nix_bin() -> Result<String> {
     executable_from_env("WRIX_NIX_BIN", "nix")
-}
-
-fn nix_store_bin() -> Result<String> {
-    executable_from_env("WRIX_NIX_STORE_BIN", "nix-store")
 }
 
 fn executable_from_env(name: &'static str, default: &str) -> Result<String> {
@@ -1255,7 +998,6 @@ fn write_cache_status(
     paths: &Paths,
     dirty: bool,
     publish: Option<&str>,
-    prune_status: Option<&str>,
     error: Option<&str>,
 ) -> Result<()> {
     paths.authorize()?;
@@ -1263,19 +1005,15 @@ fn write_cache_status(
     let status = CacheStatus {
         dirty,
         last_publish: publish.map(str::to_owned).or(prior.last_publish),
-        last_prune: prune_status.map(str::to_owned).or(prior.last_prune),
+        last_prune: prior.last_prune,
         last_error: error.map(str::to_owned).or_else(|| {
-            if publish.is_some() || prune_status.is_some() {
+            if publish.is_some() {
                 None
             } else {
                 prior.last_error
             }
         }),
-        last_prune_epoch: if prune_status.is_some() {
-            Some(now_epoch()?)
-        } else {
-            prior.last_prune_epoch
-        },
+        last_prune_epoch: prior.last_prune_epoch,
     };
     write_json(&paths.cache_status_path(), &status)
 }
@@ -1293,13 +1031,6 @@ fn read_cache_status(paths: &Paths) -> Result<CacheStatus> {
 
 fn cache_status_dirty(paths: &Paths) -> Result<bool> {
     Ok(read_cache_status(paths)?.dirty)
-}
-
-fn prune_is_stale(paths: &Paths) -> Result<bool> {
-    let Some(last_prune) = read_cache_status(paths)?.last_prune_epoch else {
-        return Ok(true);
-    };
-    Ok(now_epoch()?.saturating_sub(last_prune) > 24 * 60 * 60)
 }
 
 fn write_if_missing(path: &Path, content: impl AsRef<[u8]>) -> Result<()> {

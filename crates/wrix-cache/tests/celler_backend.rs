@@ -1084,6 +1084,15 @@ async fn rotation_invalidates_only_the_selected_view() {
     let legacy = control.path().join("legacy-cache");
     std::fs::create_dir(&legacy).unwrap();
     std::fs::write(legacy.join("keep"), "not a native Celler archive").unwrap();
+    std::fs::write(
+        control.path().join("cache-status.json"),
+        serde_json::to_vec(&json!({
+            "dirty": true, "last_publish": "ok", "last_error": null,
+            "last_prune": "historic-only", "last_prune_epoch": 1
+        }))
+        .unwrap(),
+    )
+    .unwrap();
     let report = tokio::task::spawn_blocking(move || {
         wrix_cache::publisher::run_workspace_at(
             &workspace,
@@ -1096,6 +1105,11 @@ async fn rotation_invalidates_only_the_selected_view() {
     .unwrap()
     .unwrap();
     assert!(report.lines().iter().any(|line| line.contains("republish")));
+    let status: Value =
+        serde_json::from_slice(&std::fs::read(control.path().join("cache-status.json")).unwrap())
+            .unwrap();
+    assert_eq!(status["last_prune"], "historic-only");
+    assert_eq!(status["last_prune_epoch"], 1);
     let replacement = client.public_key().await.unwrap();
     assert_eq!(
         std::fs::read_to_string(control.path().join("keys/cache.pub"))

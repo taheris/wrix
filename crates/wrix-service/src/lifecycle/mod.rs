@@ -166,7 +166,6 @@ pub struct Plan {
     container_name: ContainerName,
     cache_port: Option<u16>,
     dolt: Option<DoltEndpoint>,
-    cache_settings: wrix_cache::config::Settings,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -226,9 +225,7 @@ impl Plan {
         let settings = wrix_cache::config::Settings::for_workspace(&workspace)?;
         let paths = Paths::for_workspace(workspace.hash())?;
         let branch = read_sync_branch(workspace.canonical_path())?;
-        let mut plan = Self::from_parsed(workspace, cache_mode, paths, branch, settings)?;
-        plan.selection = Some(selection);
-        Ok(plan)
+        Self::from_parsed(workspace, cache_mode, paths, branch, &settings)
     }
 
     pub fn for_workspace(workspace: Workspace, cache_mode: CacheMode) -> Result<Self> {
@@ -243,7 +240,7 @@ impl Plan {
     ) -> Result<Self> {
         let settings = wrix_cache::config::Settings::for_workspace(&workspace)?;
         let beads_sync_branch = read_sync_branch(workspace.canonical_path())?;
-        Self::from_parsed(workspace, cache_mode, paths, beads_sync_branch, settings)
+        Self::from_parsed(workspace, cache_mode, paths, beads_sync_branch, &settings)
     }
 
     fn from_parsed(
@@ -251,7 +248,7 @@ impl Plan {
         cache_mode: CacheMode,
         paths: Paths,
         beads_sync_branch: Branch,
-        cache_settings: wrix_cache::config::Settings,
+        cache_settings: &wrix_cache::config::Settings,
     ) -> Result<Self> {
         let container_name = select_container_name(&workspace, &paths)?;
         let prior_ports = PortLease::read(&paths.services_path(), workspace.hash())?;
@@ -298,7 +295,6 @@ impl Plan {
             container_name,
             cache_port,
             dolt,
-            cache_settings,
         })
     }
 
@@ -402,11 +398,6 @@ impl Plan {
             write_if_missing(
                 &self.paths.cache_root().join("nix-cache-info"),
                 nix_cache_info().as_bytes(),
-            )?;
-            wrix_cache::publisher::prune_stale_dirty(
-                self.paths.state_root(),
-                self.paths.cache_root(),
-                self.cache_settings.clone(),
             )?;
         }
         if self.dolt.is_some() {
@@ -720,7 +711,7 @@ fn locked_plan(cache_mode: CacheMode) -> Result<(Plan, fs::File)> {
     )?;
     let lock = paths.lock_registration()?;
     Ok((
-        Plan::from_parsed(workspace, cache_mode, paths, branch, settings)?,
+        Plan::from_parsed(workspace, cache_mode, paths, branch, &settings)?,
         lock,
     ))
 }

@@ -72,7 +72,7 @@ test_wrix_service_cli() {
     assert_contains "dolt help" "$dolt_help" "$command"
   done
 
-  for command in status publish warm prune rotate-key; do
+  for command in status publish warm rotate-key; do
     assert_contains "cache help" "$cache_help" "$command"
   done
 
