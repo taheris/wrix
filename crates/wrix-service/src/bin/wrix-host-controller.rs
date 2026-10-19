@@ -1,7 +1,9 @@
 //! Private supervised host controller entry point; not part of the public Wrix grammar.
 
-use std::{path::PathBuf, process::ExitCode};
-use wrix_service::control::Controller;
+use std::{num::NonZeroUsize, path::PathBuf, process::ExitCode};
+use wrix_service::control::{Controller, serving::Host};
+
+const CONNECTION_CAPACITY: NonZeroUsize = NonZeroUsize::MIN.saturating_add(1023);
 
 #[derive(Debug, displaydoc::Display, thiserror::Error)]
 enum Error {
@@ -34,16 +36,12 @@ async fn run() -> Result<(), Error> {
     }
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let controller = Controller::bind(&root.join("authority"))?;
-    loop {
-        tokio::select! {
-            _ = terminate.recv() => return Ok(controller.close()?),
-            request = controller.serve_one() => {
-                if let Err(error) = request {
-                    tracing::warn!(%error, "private controller request failed");
-                }
-            }
-        }
-    }
+    let host = Host::bind(controller, CONNECTION_CAPACITY).await?;
+    host.serve(async move {
+        terminate.recv().await;
+    })
+    .await?;
+    Ok(())
 }
 
 #[tokio::main]

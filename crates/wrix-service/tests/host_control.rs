@@ -76,6 +76,17 @@ async fn private_controller_process_is_singleton_and_resumes_after_clean_stop() 
             .await
             .unwrap();
         assert!(matches!(reply, Reply::Snapshot { version: 1, .. }));
+        let endpoints: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(root.join("authority/role-endpoints.json")).unwrap(),
+        )
+        .unwrap();
+        for port in endpoints["ports"].as_array().unwrap() {
+            let port = u16::try_from(port.as_u64().unwrap()).unwrap();
+            timeout(BUDGET, rejected(([127, 0, 0, 1], port).into()))
+                .await
+                .unwrap()
+                .unwrap();
+        }
         let mut competitor = start();
         assert!(!competitor.0.wait().unwrap().success());
         assert!(
@@ -913,5 +924,156 @@ async fn namespace_retirement_is_durable_without_changing_peer_authority() -> Te
             .authorize(&namespace('b')?, Permission::Sql)
             .is_ok()
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn controller_host_retains_live_role_routes_during_concurrent_registration() -> TestResult {
+    timeout(BUDGET, async {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().canonicalize()?.join("controller");
+        let controller = Controller::bind(&root)?;
+        let host =
+            wrix_service::control::serving::Host::bind(controller, NonZeroUsize::new(8).unwrap())
+                .await?;
+        let peers = Peers::start(b'P').await?;
+        for role in Role::ALL {
+            host.selection()
+                .select(peers.generation.confirm_ready(role))?;
+        }
+        let [a, b, c, d] = Role::ALL.map(|role| host.address(role));
+        let addresses = [a?, b?, c?, d?];
+        let leases = std::fs::read(root.join("role-endpoints.json"))?;
+        let (stop, shutdown) = oneshot::channel();
+        let task = tokio::spawn(host.serve(async { shutdown.await.unwrap() }));
+        let mut streams = Vec::new();
+        for (index, address) in addresses.iter().enumerate() {
+            streams.push(connect(*address, [b'P', u8::try_from(index)?]).await?);
+        }
+        let first = Client::open(&root)?;
+        let second = Client::open(&root)?;
+        let (first, second) = tokio::join!(
+            first.request(Operation::Register {
+                namespace: namespace('a')?,
+                policy: POLICY
+            }),
+            second.request(Operation::Register {
+                namespace: namespace('b')?,
+                policy: POLICY
+            })
+        );
+        assert_eq!(first?, Reply::Applied);
+        assert_eq!(second?, Reply::Applied);
+        let client = Client::open(&root)?;
+        assert_eq!(
+            client
+                .request(Operation::Register {
+                    namespace: namespace('a')?,
+                    policy: Policy {
+                        dolt: Access::Denied,
+                        ..POLICY
+                    },
+                })
+                .await?,
+            Reply::Conflict
+        );
+        for stream in &mut streams {
+            echo(stream, b"established stream survives registration").await?;
+        }
+        for (index, address) in addresses.iter().enumerate() {
+            let mut stream = connect(*address, [b'P', u8::try_from(index)?]).await?;
+            echo(&mut stream, b"same listener still serves new connections").await?;
+        }
+        assert_eq!(std::fs::read(root.join("role-endpoints.json"))?, leases);
+        assert_eq!(
+            client.request(Operation::Inspect {}).await?,
+            Reply::Snapshot {
+                version: 1,
+                namespaces: [(namespace('a')?, POLICY), (namespace('b')?, POLICY)].into(),
+            }
+        );
+        stop.send(()).unwrap();
+        task.await??;
+        assert!(!root.join("control.sock").exists());
+        for stream in &mut streams {
+            assert_eq!(stream.read(&mut [0]).await?, 0);
+        }
+        Ok::<(), TestError>(())
+    })
+    .await?
+}
+
+#[tokio::test]
+async fn controller_host_restart_keeps_policy_but_not_route_readiness() -> TestResult {
+    timeout(BUDGET, async {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path().canonicalize()?.join("controller");
+        let controller = Controller::bind(&root)?;
+        let host =
+            wrix_service::control::serving::Host::bind(controller, NonZeroUsize::MIN).await?;
+        let peers = Peers::start(b'P').await?;
+        host.selection()
+            .select(peers.generation.confirm_ready(Role::Sql))?;
+        let address = host.address(Role::Sql)?;
+        let (stop, shutdown) = oneshot::channel();
+        let task = tokio::spawn(host.serve(async { shutdown.await.unwrap() }));
+        let client = Client::open(&root)?;
+        assert_eq!(
+            client
+                .request(Operation::Register {
+                    namespace: namespace('a')?,
+                    policy: POLICY,
+                })
+                .await?,
+            Reply::Applied
+        );
+        let mut stream = connect(address, [b'P', 0]).await?;
+        echo(&mut stream, b"known live route before restart").await?;
+        drop(stream);
+        stop.send(()).unwrap();
+        task.await??;
+
+        let controller = Controller::bind(&root)?;
+        let host =
+            wrix_service::control::serving::Host::bind(controller, NonZeroUsize::MIN).await?;
+        assert_eq!(host.address(Role::Sql)?, address);
+        let [a, b, c, d] = Role::ALL.map(|role| host.address(role));
+        let addresses = [a?, b?, c?, d?];
+        let (stop, shutdown) = oneshot::channel();
+        let task = tokio::spawn(host.serve(async { shutdown.await.unwrap() }));
+        for address in addresses {
+            rejected(address).await?;
+        }
+        assert_eq!(
+            client.request(Operation::Inspect {}).await?,
+            Reply::Snapshot {
+                version: 1,
+                namespaces: [(namespace('a')?, POLICY)].into(),
+            }
+        );
+        stop.send(()).unwrap();
+        task.await??;
+        Ok::<(), TestError>(())
+    })
+    .await?
+}
+
+#[tokio::test]
+async fn controller_host_initialization_failure_releases_unstarted_control() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().canonicalize()?.join("controller");
+    let controller = Controller::bind(&root)?;
+    assert!(matches!(
+        wrix_service::control::serving::Host::bind(controller, NonZeroUsize::new(1025).unwrap())
+            .await,
+        Err(wrix_service::control::Error::Route(
+            wrix_service::route::Error::CapacityExceeded
+        ))
+    ));
+    assert!(!root.join("control.sock").exists());
+    let controller = Controller::bind(&root)?;
+    let host = wrix_service::control::serving::Host::bind(controller, NonZeroUsize::MIN).await?;
+    host.serve(std::future::ready(())).await?;
+    assert!(!root.join("control.sock").exists());
     Ok(())
 }

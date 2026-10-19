@@ -252,6 +252,11 @@ impl FrontDoor {
         self.selection.clone()
     }
 
+    /// Bound loopback publication, not evidence of selected native backend readiness.
+    pub fn address(&self, role: Role) -> Result<SocketAddr, Error> {
+        self.listeners.address(role)
+    }
+
     /// Stop accepting on shutdown, then await existing streams without an idle deadline.
     pub async fn serve(self, shutdown: impl Future<Output = ()> + Send) -> Result<(), Error> {
         let [sql, cache, egress, compiler] = &self.listeners.0;
