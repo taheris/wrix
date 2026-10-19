@@ -27,6 +27,8 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 pub enum Error {
     /// fixed-role listener I/O failed: {0}
     Io(#[from] io::Error),
+    /// no loopback port is available for deployment role {role:?}
+    NoAvailablePort { role: Role },
     /// fixed-role selection lock is poisoned
     LockPoisoned,
     /// connection capacity exceeds the fixed-role service limit
@@ -79,6 +81,15 @@ impl Listeners {
         ]))
     }
 
+    pub(crate) async fn bind_deployment(prior: [Option<NonZeroU16>; 4]) -> Result<Self, Error> {
+        Ok(Self([
+            bind_role(Role::Sql, prior[0]).await?,
+            bind_role(Role::CacheRead, prior[1]).await?,
+            bind_role(Role::Egress, prior[2]).await?,
+            bind_role(Role::Compiler, prior[3]).await?,
+        ]))
+    }
+
     pub fn address(&self, role: Role) -> Result<SocketAddr, Error> {
         Ok(self.0[role.index()].local_addr()?)
     }
@@ -111,6 +122,32 @@ async fn bind(port: Port) -> Result<TcpListener, Error> {
         listener,
         Executor::default(),
     ))
+}
+
+async fn bind_role(role: Role, prior: Option<NonZeroU16>) -> Result<TcpListener, Error> {
+    if let Some(port) = prior {
+        match bind(Port::Fixed(port)).await {
+            Ok(listener) => return Ok(listener),
+            Err(Error::Io(error)) if error.kind() == io::ErrorKind::AddrInUse => (),
+            Err(error) => return Err(error),
+        }
+    }
+    let range = match role {
+        Role::Sql => 23_000..25_000,
+        Role::CacheRead => 21_000..23_000,
+        Role::Egress | Role::Compiler => return bind(Port::Available).await,
+    };
+    for port in range.filter_map(NonZeroU16::new) {
+        if Some(port) == prior {
+            continue;
+        }
+        match bind(Port::Fixed(port)).await {
+            Ok(listener) => return Ok(listener),
+            Err(Error::Io(error)) if error.kind() == io::ErrorKind::AddrInUse => (),
+            Err(error) => return Err(error),
+        }
+    }
+    Err(Error::NoAvailablePort { role })
 }
 
 struct Target {

@@ -1,5 +1,6 @@
 //! Versioned private host authority; never mount this socket or its directory into guests.
 
+mod endpoint;
 mod registration;
 pub mod supervision;
 
@@ -43,6 +44,12 @@ pub enum Error {
     Timeout,
     /// private control frame exceeds its limit
     FrameLimit,
+    /// fixed-role transport failed: {0}
+    Route(#[from] crate::route::Error),
+    /// persisted deployment role endpoints are invalid
+    InvalidEndpoints,
+    /// this controller has already issued its deployment role listeners
+    EndpointsAlreadyBound,
     /// private control registry lock is poisoned
     LockPoisoned,
     /// persisted namespace registration has an unsupported version, duplicate identity or excess entries
@@ -223,6 +230,7 @@ pub struct Controller {
     uid: u32,
     namespaces: Mutex<BTreeMap<Namespace, Policy>>,
     registrations: registration::Store,
+    endpoints: endpoint::Store,
 }
 
 impl Controller {
@@ -264,6 +272,7 @@ impl Controller {
         ownership.try_lock_exclusive()?;
         let registrations = registration::Store::open(root)?;
         let namespaces = registrations.load()?;
+        let endpoints = endpoint::Store::open(root)?;
         let credential = Credential::load(root)?;
         let listener = UnixListener::bind(root.join("control.sock"))?;
         fs::set_permissions(root.join("control.sock"), fs::Permissions::from_mode(0o600))?;
@@ -274,6 +283,7 @@ impl Controller {
             uid: metadata.uid(),
             namespaces: Mutex::new(namespaces),
             registrations,
+            endpoints,
         })
     }
 
@@ -283,6 +293,12 @@ impl Controller {
         let path = address.as_pathname().ok_or(Error::PrivateRoot)?;
         fs::remove_file(path)?;
         Ok(())
+    }
+
+    /// Allocate the deployment's complete loopback listener set once, independent of namespaces.
+    /// Callers must retain the listeners in their supervised front door for this controller's lifetime.
+    pub async fn bind_role_listeners(&self) -> Result<crate::route::Listeners, Error> {
+        self.endpoints.bind().await
     }
 
     /// Accept one bounded authenticated request; callers retain supervision of the serving loop.
