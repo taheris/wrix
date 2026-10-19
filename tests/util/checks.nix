@@ -26,6 +26,20 @@
         touch "$out"
       '';
 
+  known-hosts-image-local =
+    pkgs.runCommandLocal "known-hosts-image-local"
+      {
+        nativeBuildInputs = [
+          pkgs.bash
+          pkgs.python3
+        ];
+      }
+      ''
+        set -euo pipefail
+        python ${./test_known_hosts.py} ${../../lib/sandbox/install-known-hosts.sh}
+        touch "$out"
+      '';
+
   known-hosts-runtime-store-purity = pkgs.runCommandLocal "known-hosts-runtime-store-purity" { } ''
     set -euo pipefail
     root="$PWD/root"
