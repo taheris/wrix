@@ -232,14 +232,16 @@ cache/proxy traffic credentials cannot authorize an update.
 The command delegates candidate preparation, explicit activation, native backend
 handoff and safe generation retirement to
 [Generation Handoff](services.md#generation-handoff), including its required
-four-role plan regardless of current repository, idle traffic or stopped roles;
-there is no per-role selector. It applies the invoked host package's bound
-service image through the existing image-source contract, not the project's
-launch configuration, an unpinned latest-release lookup, an arbitrary positional
-image argument or an update of the host CLI itself. Missing/invalid managed
-input fails before live selection changes. Unsupported options, children and
-extra arguments fail before image preparation, grant transfer or service
-mutation; no force, GC-wait, workspace or host-scope alias is implied.
+four-core-role plan plus
+[Provisioned Store Obligations](nix-store.md#bootstrap-protection-and-lifecycle),
+regardless of current repository, idle traffic or stopped roles; there is no
+per-role selector. It applies the invoked host package's bound service image
+through the existing image-source contract, not the project's launch
+configuration, an unpinned latest-release lookup, an arbitrary positional image
+argument or an update of the host CLI itself. Missing/invalid managed input
+fails before live selection changes. Unsupported options, children and extra
+arguments fail before image preparation, grant transfer or service mutation; no
+force, GC-wait, workspace or host-scope alias is implied.
 
 Update requires an existing managed deployment. If absent, fail before creation
 and direct the user to `wrix service start` from a repository. For an existing
@@ -249,15 +251,15 @@ resumes the recorded selection rather than upgrading it.
 
 Help and results identify host-user-wide scope, selected generation/version,
 backend transition outcomes and any still-draining Blue work. Successful
-activation with all four deployment roles ready may return while Blue retains
-old connections; that expected draining is not failure and does not wait for
-entire sandbox lifetimes. Report retirement separately rather than claiming Blue
-was removed or streams migrated. Explain that safe obsolete-generation cleanup
-continues automatically after this command exits; another Wrix invocation or GC
-is not needed once drain/ownership conditions hold. Failed/incomplete required
-role transitions return nonzero and describe known partial effects without
-global rollback, closing protected egress/SQL connections or killing backend
-work. Explain the
+activation with all four core roles and provisioned store obligations ready may
+return while Blue retains old connections; that expected draining is not failure
+and does not wait for entire sandbox lifetimes. Report retirement separately
+rather than claiming Blue was removed or streams migrated. Explain that safe
+obsolete-generation cleanup continues automatically after this command exits;
+another Wrix invocation or GC is not needed once drain/ownership conditions
+hold. Failed/incomplete required role transitions return nonzero and describe
+known partial effects without global rollback, closing protected egress/SQL
+connections or killing backend work. Explain the
 [backend-specific drain units](services.md#cache-and-compiler-backend-handoff):
 clean shutdown may close proven-idle Celler/sccache transports after admitted
 work completes, so their native clients may need to reconnect at unchanged
@@ -506,11 +508,11 @@ it merely to record defaults. When present, it contains policy only — never
 private key material, generated host keys, absolute private-key paths,
 per-machine cache paths, or secrets.
 
-Policy sections are rooted directly in the file: `[git]`, `[init]`, `[cache]`
-and `[tool_caches]`. Unknown sections and keys, including a `wrix` namespace,
-fail rather than being ignored. `cache.md` owns Nix-cache policy and precedence;
-[Tool Cache Controls](#tool-cache-controls) owns the independent sharing
-preference.
+Policy sections are rooted directly in the file: `[git]`, `[init]`, `[cache]`,
+`[tool_caches]` and `[nix_store]`. Unknown sections and keys, including a `wrix`
+namespace, fail rather than being ignored. `cache.md` owns Nix-cache policy and
+precedence; [Tool Cache Controls](#tool-cache-controls) owns the independent
+sharing preference.
 [test](../crates/wrix-core/tests/repository_policy.rs::unknown_policy_sections_and_keys_are_rejected)
 
 Supported Git and init keys:
@@ -551,6 +553,16 @@ creates requested key material only. `git.deploy` is a sandbox grant, not key
 generation, registration or publication. `init deploy` and `init repo --deploy`
 are explicit provisioning requests. The policy reader rejects malformed grants
 and the unsupported `sign_commits` spelling.
+
+### Nix Store Controls
+
+[Service-Owned Nix Stores](nix-store.md#selection-and-host-approval) owns
+run/spawn mode selection and the independent repository preference.
+[Store Operations](nix-store.md#store-operations) owns the passive
+`wrix service nix-store` namespace and its explicit host-authorized operations.
+These do not change existing cache flags or the scopes of existing GC commands.
+Acceptance: [Store Selection](nix-store.md#selection-acceptance) and
+[Store Operations](nix-store.md#operation-acceptance).
 
 ### Tool Cache Controls
 

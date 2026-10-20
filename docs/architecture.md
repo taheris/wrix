@@ -197,7 +197,9 @@ implicitly start or repair it, and direnv reload does not implicitly upgrade it.
 `--host` selection and explicit host shutdown.
 [`wrix service update`](../specs/cli.md#service-update-command) explicitly
 activates the invoked host package's bound service image for this user's
-existing deployment, including all four roles even when idle or stopped,
+existing deployment, including all four core roles even when idle or stopped and
+the
+[Provisioned Nix Pool Obligations](../specs/nix-store.md#bootstrap-protection-and-lifecycle),
 independent of project launch data. It works outside repositories and needs no
 redundant `--host`; an existing stopped deployment is started and activated,
 while initial creation remains ordinary workspace `service start`. Successful
@@ -290,12 +292,15 @@ Native filesystem tests are not evidence of cross-VM VirtioFS lock support; the
 runtime-specific system suites own that proof. Generic Darwin directory staging
 still copies ordinary consumer mounts, not these live managed caches.
 
-Full worker runtimes remain in Podman/optional-krun/Apple boundaries. Shared
-containerd/nix-snapshotter migration, private guest Nix store/database
-persistence, sharing groups and sandbox-origin Nix publication are deferred.
-Workers remain pull-only cache clients; service-side compiler execution is the
-explicit broader capability, not a full-runtime migration or equivalent worker
-isolation.
+Full worker runtimes remain in Podman/optional-krun/Apple boundaries.
+[Service-Owned Nix Stores](../specs/nix-store.md) defines separately admitted
+installed-store reuse: canonical-repository pools, untrusted service builds,
+read-only worker views and protected live roots. Private mode remains the
+constructor/default contract; shared availability requires independent native
+runtime acceptance. This neither migrates workers nor expands host Nix trust.
+Sharing groups and sandbox-origin Celler publication remain outside these
+contracts. Service-side compiler and Nix execution are explicit broader
+capabilities, not worker-equivalent isolation.
 
 ## Agent Runtimes
 
@@ -507,7 +512,7 @@ pointers and recorded metadata are not management authority or proof of live
 readiness.
 
 [Tool-cache storage](../specs/profiles.md#tool-cache-data-boundary) is
-independent of personal-host data and private disposable guest Nix state.
+independent of personal-host data and the selected private/shared Nix store.
 Ordinary Darwin caller mounts retain their copy semantics; managed
 credential/cache delivery must satisfy its own live-update contracts. External
 orchestrators such as Loom may keep their own state under `.wrix/<name>/`; Wrix

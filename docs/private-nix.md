@@ -1,7 +1,9 @@
 # Private Nix in every sandbox
 
 Private, single-user Nix is an invariant of `mkSandbox`, not an optional image
-policy. The consumer chooses its toolchain and agent:
+policy. This capability remains distinct from the independently admitted
+[shared store mode](../specs/nix-store.md); private capability discovery does
+not assert shared-mode readiness. The consumer chooses its toolchain and agent:
 
 ```nix
 wrixLib.mkSandbox {

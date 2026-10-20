@@ -627,6 +627,17 @@ path. Pure image/configuration outputs, explicit `--profile-config` and
 per-launch `SpawnConfig` remain supported. CLI-level selection/help is owned by
 [Host Configuration](cli.md#host-cli-and-project-configuration).
 
+### Launch Nix Store Selection
+
+[Service-Owned Nix Stores](nix-store.md#selection-and-host-approval) owns the
+independent private/shared selection, host approval and restricted-mode
+rejection for run/spawn. Its
+[Bootstrap and Lifecycle](nix-store.md#bootstrap-protection-and-lifecycle)
+contract owns trusted store setup and lifetime protection. Caller mounts or raw
+Nix environment cannot substitute for that admitted path. Acceptance:
+[Store Selection](nix-store.md#selection-acceptance) and
+[Store Platforms](nix-store.md#platform-acceptance).
+
 ### Launch Tool Cache Selection
 
 Acceptance: [Tool Cache Launch Acceptance](#tool-cache-launch-acceptance).
@@ -1470,12 +1481,10 @@ separate from network metadata and remains required.
 - Compatibility interfaces for retired dry-run environment switches
 - A Wrix-managed detached launch mode or background completion observer; callers
   retain supervision of foreground launchers
-- Wrix-managed persistence/reuse of the guest Nix store and writable database
-  across replacement sandboxes is deferred. Initial rollout retains private,
-  image-seeded disposable Nix state: added outputs and mutations are lost on
-  removal, and fresh clients import cached paths again. Safe bootstrap/state
-  reconciliation and concurrent ownership belong to a later design. This does
-  not change workspace/session persistence or existing profile cache mounts.
+- Shared writable guest stores/databases and implicit private-store persistence.
+  Admitted service-owned installed-store reuse belongs to
+  [Service-Owned Nix Stores](nix-store.md), not ordinary profile mounts. Private
+  mode remains image-seeded and disposable.
 - Windows support
 - GPU passthrough
 - Inbound port forwarding

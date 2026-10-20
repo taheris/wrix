@@ -40,7 +40,7 @@ other work remains on the older generation. Each stateful backend still has only
 one active owner. Container separation does not introduce compiler-only
 isolation or a stronger tenant compromise guarantee.
 
-The deployment owns four service families:
+The deployment owns four core service families:
 
 - **Dolt for beads** — the Dolt SQL server for the Beads-owned workspace
   database. `beads.md` owns issue tracking and database storage; this spec owns
@@ -56,6 +56,17 @@ The deployment owns four service families:
 - **Shared compiler** — one actual sccache daemon for eligible shared Rust
   launches under [Shared Compiler Service](#shared-compiler-service), not a
   generic HTTP blob-cache backend or full worker-runtime migration.
+
+### Service-Owned Nix Stores
+
+[Service-Owned Nix Stores](nix-store.md) owns the additional pool-scoped backend
+family, private database/build state, untrusted clients, read-only worker views
+and native GC. Pools use this deployment/controller and single-owner lifecycle;
+they are not new per-workspace service deployments. Their own selection and
+approval do not enable Celler, compiler or proxy grants. Pool state is separate
+from Celler archives and compiler-cache data. Acceptance:
+[Store Pools](nix-store.md#pool-acceptance) and
+[Store Lifecycle](nix-store.md#lifecycle-acceptance).
 
 ### Host Control Service
 
@@ -343,14 +354,18 @@ replace that binding. Resolve and validate it before live selection changes;
 missing input does not authorize guessing or repository discovery. Service
 operations do not require launcher-only `--profile-config`.
 
-The update plan always includes all four deployment roles: gateway, Dolt, Celler
-and shared sccache. Idle or stopped roles and roles unused by the current
-repository are not omitted, and there is no per-role update selector. Complete
-activation requires confirmed readiness at the target for all four roles, not
-just a new gateway or the presence of their binaries in an image. A failed or
-incomplete role remains required even when it currently has no traffic. Updating
-these service roles does not enable cache access, publication or shared tools
-for workspaces whose policies disable them, nor broaden their permissions.
+The update plan always includes all four core deployment roles: gateway, Dolt,
+Celler and shared sccache. Provisioned Nix pools add the ownership, drain and
+readiness obligations in
+[Store Lifecycle](nix-store.md#bootstrap-protection-and-lifecycle); core-role
+readiness alone cannot complete those transitions. Idle or stopped roles and
+roles unused by the current repository are not omitted, and there is no per-role
+update selector. Complete activation requires confirmed readiness at the target
+for all four roles, not just a new gateway or the presence of their binaries in
+an image. A failed or incomplete role remains required even when it currently
+has no traffic. Updating these service roles does not enable cache access,
+publication or shared tools for workspaces whose policies disable them, nor
+broaden their permissions.
 
 Update requires an existing deployment and fails before creation when none
 exists, directing the user to ordinary `wrix service start` from a repository.
@@ -401,11 +416,11 @@ have finished or been safely handed over. Idle Celler/sccache transports follow
 requirement that every idle backend socket close naturally. Selected Green must
 already be ready for the roles it has taken over. Report selection, remaining
 old-generation work and retirement separately; successful routing activation
-does not mean old streams migrated or the old container vanished. Once all four
-deployment role transitions are ready, activation may succeed while protected
-proxy connections still drain; that is not a failed required transition or a
-wait for whole sandbox lifetimes. Failed/incomplete required role transitions
-remain nonzero with known partial state under
+does not mean old streams migrated or the old container vanished. Once all core
+role transitions and provisioned store obligations are ready, activation may
+succeed while protected proxy connections still drain; that is not a failed
+required transition or a wait for whole sandbox lifetimes. Failed/incomplete
+required role transitions remain nonzero with known partial state under
 [CLI Update Results](cli.md#service-update-command). Retirement removes obsolete
 runtime containers, not persistent service data or cached images outside
 explicit image GC. Never retire the last selected gateway merely because it is
@@ -1345,8 +1360,8 @@ Acceptance: [Host Service Acceptance](#host-service-acceptance),
   cache eviction is native and manual collection is host-wide.
 - Moving full worker runtimes into this service container or adopting a shared
   containerd/nix-snapshotter execution appliance. That runtime migration is
-  deferred; explicitly delegated compiler jobs are the separate agreed
-  exception.
+  excluded; delegated compiler jobs and admitted [Nix Realization](nix-store.md)
+  are execution capabilities, not worker-runtime migration.
 - Independent container-level compromise/fault isolation between cohosted
   service components or workspace tenants.
 - Host-native Dolt and host OS account/module provisioning for a native Dolt

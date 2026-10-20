@@ -89,8 +89,9 @@ repository view, not an implicit union of private data or a sharing-group
 service. Host management is the view and publication-audience authority: unlike
 mutable repository Git policy, repository edits or agent configuration cannot
 broaden cache access. Physical deduplication and knowledge of a private hash are
-not read permissions; approved common reads still import into the client's own
-private store. Cache grants are native bearer capabilities under
+not read permissions; approved common reads still import into the consuming Nix
+store; Celler grants do not authorize access to an installed store pool. Cache
+grants are native bearer capabilities under
 [Native Pull Credentials](cache.md#native-pull-credentials): one day for
 launcher-renewed sandbox tokens. Host pull tokens and host-activation pull
 refresh are excluded; host publication uses separate scoped authority. Current
@@ -145,8 +146,14 @@ use belongs to the service runtime budget, not automatically the worker's
 limits. Restricted Rust requires private/local tool caches and receives no
 shared compiler execution route; this prevents its own compiler code bypassing
 the worker's network policy. Proxy guarantees still assume the shared service is
-trusted, not compromised by another cohosted compiler job. No shared parent Nix
-daemon/store or containerd/nix-snapshotter worker migration is introduced.
+trusted, not compromised by another cohosted compiler job. Full worker runtime
+migration remains excluded. Separately admitted service-owned Nix execution and
+its cooperative pool boundary belong to
+[Service-Owned Nix Stores](nix-store.md#execution-and-confidentiality),
+including strict build isolation, public-network-only execution and no host
+substitution authority. Acceptance:
+[Store Execution](nix-store.md#execution-acceptance) and
+[Store Pools](nix-store.md#pool-acceptance).
 
 ### Credential Surfaces
 

@@ -111,10 +111,10 @@ Acceptance:
 [Host Consumption Exclusion Acceptance](#host-consumption-exclusion-acceptance).
 
 Cache flow is one-way: admitted trusted host outputs are published to Celler;
-sandboxes consume them into their own stores. Wrix-managed host Nix contexts do
-not add this shared cache as a substituter, trust its signing keys, issue host
-pull tokens or pull through an alias/alternate URL. Host builds retain their
-independently trusted upstreams and ordinary local-store reuse.
+sandbox-side Nix consumes them into its admitted store. Wrix-managed host Nix
+contexts do not add this shared cache as a substituter, trust its signing keys,
+issue host pull tokens or pull through an alias/alternate URL. Host builds
+retain their independently trusted upstreams and ordinary local-store reuse.
 
 Host publishers use scoped upload/management authority and verified local
 metadata/NAR bytes. Backend responses are untrusted protocol input, not
@@ -254,8 +254,10 @@ helper.
 
 HTTP is the cache client transport. Unix-socket cache substituters, host Nix
 daemon sockets, shared mutable `/nix/store` volumes and host-store-serving
-caches are excluded. Clients still import archives into their own stores; Celler
-is not a shared installed guest store or an automatic host `/nix/store` view.
+caches are excluded. Clients still import archives into the consuming store;
+Celler is not a shared installed guest store or an automatic host `/nix/store`
+view. The separate [Installed Store Plane](nix-store.md) does not change Celler
+transport, signing or audiences.
 
 ### Client Publication Freshness
 
@@ -1468,8 +1470,8 @@ Acceptance: [Celler Backend Acceptance](#celler-backend-acceptance),
   GC.
 - Shared containerd/nix-snapshotter worker migration or moving full worker
   runtimes into the service VM (the explicitly delegated compiler lane is
-  separate). Runtime/image changes are a separate proposal, not a prerequisite
-  for this cache; no shared agent Nix daemon or dynamic dependency-mount broker.
+  separate). The separate [Installed Store Plane](nix-store.md) is not a Celler
+  prerequisite or authorization for a dynamic dependency-mount broker.
 - Service-side read-through population and fetching missing outputs solely to
   seed common; the host pipeline uses eligible outputs already realized locally.
 - Direct remote-builder access; eligible outputs may publish after reaching the
@@ -1480,10 +1482,10 @@ Acceptance: [Celler Backend Acceptance](#celler-backend-acceptance),
   sandbox-origin view/key are required. This avoids another untrusted write and
   credential/publication lifecycle while host activation/pre-push publication
   provides seeding. Guest-only build outputs are not shared through Celler.
-- Shared mutable `/nix/store` volumes as a cache transport. Managed private
-  guest Nix store/database persistence is also deferred under
-  [Sandbox Non-goals](sandbox.md#out-of-scope). Celler does not preserve a
-  client's installed state or remove fresh-client import costs.
+- Shared mutable `/nix/store` volumes as a cache transport. Service-owned
+  installed-store reuse belongs to [Service-Owned Nix Stores](nix-store.md), not
+  this cache contract. Celler itself does not preserve installed client state or
+  remove fresh-client import costs.
 - Non-Nix artifacts: Cargo targets/registry/git, sccache, virtualenvs and uv
   caches remain profile/tool-specific.
   [Shared/Private Tool Caches](profiles.md#shared-and-private-tool-cache-modes)

@@ -210,14 +210,14 @@ cleanup rule or legacy-reference exception.
 
 ## In-Container Nix Store Consistency
 
-The container runs Nix as the runtime user directly against the store — no
-`nix-daemon`, and the in-container build sandbox is disabled (Build pipeline
-step 3; threat-model rationale in `specs/security.md`). On the default boundary
-that user is rootless container-root, which maps to the host user that owns the
-baked store, so it can both _add_ paths (substituting from a binary cache,
-building new derivations) and _mutate_ the baked root-owned paths (replace, GC,
-delete) — store ownership is no longer a write barrier (runtime acceptance owned
-by `sandbox.md`).
+In private mode, the container runs Nix as the runtime user directly against the
+store — no `nix-daemon`, and the in-container build sandbox is disabled (Build
+pipeline step 3; threat-model rationale in `specs/security.md`). On the default
+boundary that user is rootless container-root, which maps to the host user that
+owns the baked store, so it can both _add_ paths (substituting from a binary
+cache, building new derivations) and _mutate_ the baked root-owned paths
+(replace, GC, delete) — store ownership is no longer a write barrier (runtime
+acceptance owned by `sandbox.md`).
 
 The image must still ship a **Nix database that exactly matches its on-disk
 store** — the registered-valid set and the on-disk `/nix/store` contents are the
@@ -260,8 +260,8 @@ The runtime acceptance — a fresh container letting the runtime user run
 
 ## Private Nix Contract
 
-Every `mkSandbox` image supplies private, single-user Nix. There is no policy
-selector, caller-chosen UID or separate native constructor. Discovery is
+Every `mkSandbox` image supplies private, single-user Nix. There is no
+caller-chosen UID or separate native constructor. Discovery is
 `wrixLib.capabilities.privateNix == 1`; it describes the constructor invariant,
 not a permission preset. Conflicting caller mounts, writable directories,
 environment, runtime secrets and agent settings are rejected during
@@ -301,6 +301,14 @@ preservation. A skip, timeout or manifest assertion is not runtime acceptance.
 See [Private Nix](../docs/private-nix.md) for consumer migration and the
 boundary between nested diagnostic acceptance and production/platform
 verification.
+
+## Shared Store Compatibility
+
+[Service-Owned Nix Stores](nix-store.md#bootstrap-protection-and-lifecycle) owns
+the additional versioned shared capability, exact seed closure and trusted
+launch bootstrap. It does not weaken private provisioning or permit caller
+store/configuration overrides. The private capability remains independent of
+shared-mode support. Acceptance: [Store Images](nix-store.md#image-acceptance).
 
 ## Hook Installation
 
