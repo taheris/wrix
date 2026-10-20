@@ -4,6 +4,7 @@ mod cache;
 mod coordination;
 mod dolt;
 mod managed;
+mod owner;
 mod supervisor;
 
 use std::{
@@ -21,7 +22,7 @@ use std::os::unix::{fs::FileTypeExt, net::UnixStream};
 
 use displaydoc::Display;
 use fs2::FileExt;
-use serde::{Deserialize, Deserializer, de};
+use serde::{Deserialize, Deserializer, Serialize, de};
 use thiserror::Error as ThisError;
 use wrix_core::{
     beads_config::{ReadError, read_sync_branch},
@@ -69,6 +70,8 @@ pub enum Error {
     ControlDirectory(#[from] wrix_core::private_directory::Error),
     /// {0}
     Coordination(#[from] coordination::Error),
+    /// {0}
+    SelectedCeller(#[from] owner::Error),
     /// {0}
     CellerLayout(#[from] wrix_cache::backend::layout::Error),
     /// {0}
@@ -183,6 +186,8 @@ pub struct Plan {
     container_name: ContainerName,
     cache_port: Option<u16>,
     dolt: Option<DoltEndpoint>,
+    selected_owner: Option<owner::Selected>,
+    namespace_runtime: RuntimeKind,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -220,6 +225,7 @@ pub enum DoltTransport {
 pub struct Paths {
     state_root: PathBuf,
     cache_root: PathBuf,
+    host_lifecycle: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -268,20 +274,27 @@ impl Plan {
         cache_settings: &wrix_cache::config::Settings,
     ) -> Result<Self> {
         let container_name = select_container_name(&workspace, &paths)?;
-        let prior_ports = PortLease::read(&paths.services_path(), workspace.hash())?;
-        let peer_ports = peer_port_leases(&paths, workspace.hash())?;
+        let prior_ports = PortLease::read(&paths.services_path())?;
+        let selected_owner = paths
+            .host_lifecycle
+            .as_deref()
+            .map(owner::Selected::read)
+            .transpose()?
+            .flatten();
         let cache_port = match cache_mode {
             CacheMode::Enabled
                 if cache_settings.enable
                     && cache_allowed_for_workspace(workspace.canonical_path()) =>
             {
-                Some(select_port(
-                    prior_ports.cache_http_port,
-                    CACHE_PORT_START,
-                    CACHE_PORT_WIDTH,
-                    workspace.hash(),
-                    &peer_ports,
-                )?)
+                Some(match selected_owner.as_ref() {
+                    Some(owner) => owner.port.get(),
+                    None => select_port(
+                        prior_ports.cache_http_port,
+                        CACHE_PORT_START,
+                        CACHE_PORT_WIDTH,
+                        workspace.hash(),
+                    )?,
+                })
             }
             CacheMode::Enabled | CacheMode::Disabled => None,
         };
@@ -312,6 +325,8 @@ impl Plan {
             container_name,
             cache_port,
             dolt,
+            selected_owner,
+            namespace_runtime: RuntimeKind::current(),
         })
     }
 
@@ -343,13 +358,49 @@ impl Plan {
         self.cache_port.is_some()
     }
 
-    const fn has_services(&self) -> bool {
-        self.cache_port.is_some() || self.dolt.is_some()
+    fn owns_cache(&self) -> bool {
+        self.selected_owner
+            .as_ref()
+            .map_or_else(|| self.cache_enabled(), |owner| owner.owns(self))
+    }
+
+    fn owned_cache_port(&self) -> Option<u16> {
+        if !self.owns_cache() {
+            return None;
+        }
+        self.selected_owner
+            .as_ref()
+            .map(|owner| owner.port.get())
+            .or(self.cache_port)
+    }
+
+    fn cache_container_name(&self) -> ContainerName {
+        self.selected_owner
+            .as_ref()
+            .map_or_else(|| self.container_name(), |owner| owner.container.clone())
+    }
+
+    fn reconcile_owner(&mut self, guard: &coordination::Guard) -> Result<()> {
+        let selected = owner::Selected::read(guard.root())?;
+        if self.selected_owner.is_some() && selected.is_none() {
+            return Err(owner::Error::Conflict.into());
+        }
+        if self.cache_enabled()
+            && let Some(owner) = &selected
+        {
+            self.cache_port = Some(owner.port.get());
+        }
+        self.selected_owner = selected;
+        Ok(())
+    }
+
+    fn has_services(&self) -> bool {
+        self.owns_cache() || self.dolt.is_some()
     }
 
     fn selected_host_ports(&self) -> Vec<u16> {
         let mut ports = Vec::new();
-        if let Some(port) = self.cache_port {
+        if let Some(port) = self.owned_cache_port() {
             ports.push(port);
         }
         if let Some(port) = self.dolt_port() {
@@ -379,9 +430,11 @@ impl Plan {
     pub fn ensure_layout(&self) -> Result<()> {
         wrix_core::private_directory::prepare_with_parents(self.paths.state_root())?;
         if self.cache_enabled() {
-            let layout = wrix_cache::backend::layout::Layout::current()?;
-            layout.prepare()?;
-            wrix_cache::backend::layout::runtime::install(layout.metadata())?;
+            if self.selected_owner.is_none() {
+                let layout = wrix_cache::backend::layout::Layout::current()?;
+                layout.prepare()?;
+                wrix_cache::backend::layout::runtime::install(layout.metadata())?;
+            }
             fs::create_dir_all(self.paths.gcroots_dir())?;
             fs::create_dir_all(self.paths.keys_dir())?;
             fs::create_dir_all(self.paths.pending_dir())?;
@@ -537,6 +590,7 @@ impl Paths {
         Self {
             state_root: state_root.into(),
             cache_root: cache_root.into(),
+            host_lifecycle: None,
         }
     }
 
@@ -552,13 +606,18 @@ impl Paths {
         } else {
             env::var_os("XDG_CACHE_HOME").map_or_else(|| home.join(".cache"), PathBuf::from)
         };
-        let layout = crate::deployment::Layout::new(&state_base, &cache_base).map_err(|error| {
-            Error::Operation {
-                message: error.to_string(),
-            }
-        })?;
-        let workspace = layout.workspace(crate::control::Namespace::from(hash));
-        Ok(Self::new(workspace.control_root(), workspace.cache_root()))
+        let host_lifecycle = state_root
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| Error::Operation {
+                message: "workspace state has no host coordination root".into(),
+            })?
+            .join("host-lifecycle");
+        Ok(Self {
+            state_root,
+            cache_root,
+            host_lifecycle: Some(host_lifecycle),
+        })
     }
 
     pub fn state_root(&self) -> &Path {
@@ -653,10 +712,12 @@ impl Status {
 
 pub fn start(cache_mode: CacheMode) -> Result<Status> {
     let (mut plan, _lock) = locked_plan(cache_mode)?;
-    let _host_lock = plan
-        .has_services()
+    let host_lock = (plan.has_services() || plan.cache_enabled())
         .then(|| host_lifecycle_lock(plan.paths()))
         .transpose()?;
+    if let Some(guard) = &host_lock {
+        plan.reconcile_owner(guard)?;
+    }
     if plan.dolt().is_some() {
         plan.authorize()?;
         managed::configure(plan.workspace().canonical_path())?;
@@ -665,7 +726,7 @@ pub fn start(cache_mode: CacheMode) -> Result<Status> {
     if plan.has_services() {
         runtime.binding.as_ref().ok_or(binding::Error::Missing)?;
     }
-    if plan.has_services() {
+    if plan.has_services() || plan.cache_enabled() {
         runtime.ensure_cache_owner_compatible(&plan)?;
     }
     if plan.has_services() && runtime.reconcile_legacy_containers(&plan)? {
@@ -675,7 +736,7 @@ pub fn start(cache_mode: CacheMode) -> Result<Status> {
     let cache = if plan.cache_enabled() {
         Some(cache::prepare(
             &plan,
-            runtime.status(&plan.container_name())?,
+            runtime.status(&plan.cache_container_name())?,
         )?)
     } else {
         None
@@ -686,6 +747,10 @@ pub fn start(cache_mode: CacheMode) -> Result<Status> {
     }
     if let Some(cache) = cache {
         cache::activate(&plan, &cache)?;
+        if plan.selected_owner.is_none() {
+            owner::Selected::from_plan(&plan, runtime.kind)?
+                .record(host_lock.as_ref().ok_or(owner::Error::Invalid)?)?;
+        }
     }
     status_for_plan(plan)
 }
@@ -710,21 +775,29 @@ fn locked_plan(cache_mode: CacheMode) -> Result<(Plan, fs::File)> {
     ))
 }
 
-fn host_lifecycle_lock(paths: &Paths) -> Result<fs::File> {
+fn host_lifecycle_lock(paths: &Paths) -> Result<coordination::Guard> {
     let root = paths
-        .state_base()
-        .and_then(Path::parent)
+        .host_lifecycle
+        .as_deref()
         .ok_or_else(|| Error::Operation {
-            message: "missing host state root for lifecycle coordination".to_owned(),
-        })?
-        .join("host-lifecycle");
-    Ok(coordination::acquire(&root)?)
+            message: "missing host state root for lifecycle coordination".into(),
+        })?;
+    Ok(coordination::acquire(root)?)
 }
 
 pub fn stop(cache_mode: CacheMode) -> Result<Status> {
-    let (plan, _lock) = locked_plan(cache_mode)?;
-    let _host_lock = host_lifecycle_lock(plan.paths())?;
+    let (mut plan, _lock) = locked_plan(cache_mode)?;
+    let host_lock = host_lifecycle_lock(plan.paths())?;
+    plan.reconcile_owner(&host_lock)?;
     let runtime = Runtime::from_env()?;
+    if plan.selected_owner.is_some() && !plan.owns_cache() {
+        runtime.ensure_workspace_stop_safe(&plan)?;
+        cache::retire(&plan)?;
+        if runtime.status(&plan.container_name())? != RuntimeStatus::Missing {
+            runtime.remove(&plan.container_name())?;
+        }
+        return status_for_plan(plan);
+    }
     if plan.dolt().is_none()
         && runtime.status(&plan.container_name())? == RuntimeStatus::Running
         && runtime
@@ -821,6 +894,10 @@ pub fn wait_for_dolt(cache_mode: CacheMode) -> Result<()> {
 fn status_for_plan(plan: Plan) -> Result<Status> {
     let runtime = if plan.dolt().is_none() && cache::is_retired(&plan)? {
         RuntimeStatus::Stopped
+    } else if plan.dolt().is_none() && plan.cache_enabled() && plan.selected_owner.is_some() {
+        let runtime = Runtime::from_env()?;
+        runtime.validate_selected_owner(&plan)?;
+        runtime.status(&plan.cache_container_name())?
     } else {
         Runtime::from_env()?.status(&plan.container_name())?
     };
@@ -1046,7 +1123,8 @@ fn container_name_collides(
     Ok(false)
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 enum RuntimeKind {
     Podman,
     Container,
@@ -1068,6 +1146,10 @@ struct Runtime {
 }
 
 impl RuntimeKind {
+    fn current() -> Self {
+        Self::for_binary(&env::var("WRIX_CONTAINER_RUNTIME").unwrap_or_else(|_| default_runtime()))
+    }
+
     fn for_binary(binary: &str) -> Self {
         let name = Path::new(binary)
             .file_name()
@@ -1134,10 +1216,19 @@ impl Runtime {
         service: SandboxService,
         host_port: u16,
     ) -> Result<SocketAddrV4> {
+        if matches!(service, SandboxService::Cache) {
+            self.validate_selected_owner(plan)?;
+        }
         match self.kind {
             RuntimeKind::Container => {
                 let snapshot = self
-                    .apple_snapshot(plan.container_name().as_str())?
+                    .apple_snapshot(
+                        match service {
+                            SandboxService::Cache => plan.cache_container_name(),
+                            SandboxService::Dolt => plan.container_name(),
+                        }
+                        .as_str(),
+                    )?
                     .ok_or_else(|| service.unavailable())?;
                 if snapshot.runtime_status() != RuntimeStatus::Running {
                     return Err(service.unavailable());
@@ -1168,8 +1259,43 @@ impl Runtime {
         Ok(())
     }
 
+    fn validate_selected_owner(&self, plan: &Plan) -> Result<()> {
+        let Some(owner) = &plan.selected_owner else {
+            return Ok(());
+        };
+        if owner.runtime != self.kind
+            || (owner.container == plan.container_name() && !owner.owns(plan))
+            || self.status(&owner.container)? != RuntimeStatus::Running
+            || self
+                .inspect_label(owner.container.as_str(), "wrix.kind")?
+                .as_deref()
+                != Some("service")
+            || self
+                .inspect_label(owner.container.as_str(), "wrix.workspace.hash")?
+                .as_deref()
+                != Some(owner.workspace.as_str())
+            || self
+                .inspect_label(owner.container.as_str(), CACHE_BACKEND_LABEL)?
+                .as_deref()
+                != Some(CACHE_BACKEND_VERSION)
+            || self
+                .inspect_label(owner.container.as_str(), CACHE_ENABLED_LABEL)?
+                .as_deref()
+                != Some("true")
+            || !self
+                .published_ports(owner.container.as_str())?
+                .contains(&owner.port.get())
+        {
+            return Err(Error::CellerOwnership {
+                container: owner.container.as_str().into(),
+            });
+        }
+        Ok(())
+    }
+
     fn ensure_cache_owner_compatible(&self, plan: &Plan) -> Result<()> {
-        if plan.cache_enabled() {
+        if plan.cache_enabled() || plan.owns_cache() {
+            self.validate_selected_owner(plan)?;
             let alternate = self.alternate();
             if let Some(containers) = alternate.available_container_infos()? {
                 alternate.ensure_cache_inventory_compatible(plan, containers, false)?;
@@ -1201,7 +1327,19 @@ impl Runtime {
                 continue;
             }
             let selected = selected_runtime && container.name == plan.container_name().as_str();
-            if !selected && !plan.cache_enabled() {
+            if !selected && !plan.cache_enabled() && !plan.owns_cache() {
+                continue;
+            }
+            if selected_runtime
+                && let Some(owner) = &plan.selected_owner
+                && owner.runtime == self.kind
+                && container.name == owner.container.as_str()
+            {
+                if selected && !self.running_container_satisfies_plan(&owner.container, plan)? {
+                    return Err(Error::CellerOwnership {
+                        container: container.name,
+                    });
+                }
                 continue;
             }
             let backend = self.inspect_label(&container.name, CACHE_BACKEND_LABEL)?;
@@ -1236,6 +1374,13 @@ impl Runtime {
                 if self.running_container_satisfies_plan(&name, plan)? {
                     return Ok(());
                 }
+                if self
+                    .inspect_label(name.as_str(), CACHE_ENABLED_LABEL)?
+                    .as_deref()
+                    != Some("false")
+                {
+                    self.ensure_workspace_stop_safe(plan)?;
+                }
                 self.remove(&name)?;
             }
             RuntimeStatus::Stopped => self.remove(&name)?,
@@ -1268,18 +1413,14 @@ impl Runtime {
             .arg("--label")
             .arg(format!(
                 "{CACHE_ENABLED_LABEL}={}",
-                if plan.cache_enabled() {
-                    "true"
-                } else {
-                    "false"
-                }
+                if plan.owns_cache() { "true" } else { "false" }
             ))
             .arg("--label")
             .arg(format!(
                 "{DOLT_TRANSPORT_LABEL}={}",
                 expected_dolt_transport_label(plan)
             ));
-        if let Some(port) = plan.cache_port() {
+        if let Some(port) = plan.owned_cache_port() {
             command
                 .arg("--label")
                 .arg(format!("{CACHE_BACKEND_LABEL}={CACHE_BACKEND_VERSION}"));
@@ -1357,7 +1498,7 @@ impl Runtime {
     }
 
     fn running_container_satisfies_plan(&self, name: &ContainerName, plan: &Plan) -> Result<bool> {
-        if plan.cache_enabled()
+        if plan.owns_cache()
             && self
                 .inspect_label(name.as_str(), CACHE_BACKEND_LABEL)?
                 .as_deref()
@@ -1365,7 +1506,7 @@ impl Runtime {
         {
             return Ok(false);
         }
-        if plan.cache_enabled()
+        if plan.owns_cache()
             && self
                 .inspect_label(name.as_str(), CACHE_ENABLED_LABEL)?
                 .as_deref()
@@ -1373,12 +1514,21 @@ impl Runtime {
         {
             return Ok(false);
         }
-        if plan.cache_enabled()
+        if plan.owns_cache()
             && plan.dolt().is_some()
             && self
                 .inspect_label(name.as_str(), SUPERVISION_LABEL)?
                 .as_deref()
                 != Some(SUPERVISION_VERSION)
+        {
+            return Ok(false);
+        }
+        if plan.selected_owner.is_some()
+            && !plan.owns_cache()
+            && self
+                .inspect_label(name.as_str(), CACHE_ENABLED_LABEL)?
+                .as_deref()
+                == Some("true")
         {
             return Ok(false);
         }
@@ -1433,6 +1583,7 @@ impl Runtime {
 
     fn refresh_unavailable_ports(&self, plan: &mut Plan) -> Result<()> {
         if let Some(port) = plan.cache_port
+            && plan.selected_owner.is_none()
             && !self.port_available_for_plan(port, plan)?
         {
             plan.cache_port =
@@ -2010,7 +2161,7 @@ fn is_loopback_port_available(port: u16) -> bool {
 }
 
 fn container_command(plan: &Plan) -> String {
-    match (plan.cache_enabled(), plan.dolt()) {
+    match (plan.owns_cache(), plan.dolt()) {
         (true, Some(dolt)) => supervisor::command(
             wrix_cache::backend::layout::runtime::COMMAND,
             &dolt_server_command(dolt),

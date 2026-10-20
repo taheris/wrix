@@ -4,7 +4,7 @@ use std::{
     fs::{self, File, OpenOptions},
     io,
     os::unix::fs::{MetadataExt, OpenOptionsExt},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use displaydoc::Display;
@@ -21,9 +21,20 @@ pub enum Error {
     Permissions,
 }
 
-/// Serializes cooperating host mutations; this is not backend quiescence or release evidence.
-/// Callers retain the file through inspection, layout changes and runtime mutation.
-pub fn acquire(root: &Path) -> Result<File, Error> {
+/// Host mutation exclusion, not backend quiescence or process-lifetime ownership.
+pub struct Guard {
+    _lock: File,
+    root: PathBuf,
+}
+
+impl Guard {
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+}
+
+/// Serializes cooperating host mutations; retain through inspection and runtime mutation.
+pub fn acquire(root: &Path) -> Result<Guard, Error> {
     wrix_core::private_directory::prepare_with_parents(root)?;
     let lock = OpenOptions::new()
         .create(true)
@@ -42,7 +53,10 @@ pub fn acquire(root: &Path) -> Result<File, Error> {
         return Err(Error::Permissions);
     }
     lock.lock_exclusive()?;
-    Ok(lock)
+    Ok(Guard {
+        _lock: lock,
+        root: root.to_path_buf(),
+    })
 }
 
 #[cfg(test)]
@@ -56,7 +70,7 @@ mod test {
         let root = directory.path().join("host");
         let first = acquire(&root).unwrap();
         let path = root.join("lifecycle.lock");
-        let inode = first.metadata().unwrap().ino();
+        let inode = fs::metadata(&path).unwrap().ino();
         let contender = OpenOptions::new()
             .read(true)
             .write(true)
@@ -69,9 +83,9 @@ mod test {
         drop(first);
         contender.try_lock_exclusive().unwrap();
         drop(contender);
-        let second = acquire(&root).unwrap();
-        assert_eq!(second.metadata().unwrap().ino(), inode);
-        assert_eq!(second.metadata().unwrap().mode() & 0o777, 0o600);
+        let _second = acquire(&root).unwrap();
+        assert_eq!(fs::metadata(&path).unwrap().ino(), inode);
+        assert_eq!(fs::metadata(&path).unwrap().mode() & 0o777, 0o600);
         assert_eq!(fs::metadata(root).unwrap().mode() & 0o777, 0o700);
     }
 

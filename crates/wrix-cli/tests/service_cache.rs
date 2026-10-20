@@ -56,6 +56,7 @@ impl Fixture {
             .env("WRIX_NIX_STORE", common::command_path("nix-store")?)
             .env("WRIX_IMAGE_KEEP_FILE", self.root.path().join("mru.json"))
             .env("WRIX_TEST_CALLS", self.root.path().join("calls"))
+            .env("WRIX_TEST_JQ_BIN", common::command_path("jq")?)
             .env("WRIX_TEST_IMAGE", self.root.path().join("image"))
             .env("WRIX_TEST_RUNNING", self.root.path().join("running"))
             .env("WRIX_TEST_RUN_ARGS", self.root.path().join("run.argv"))
@@ -663,9 +664,17 @@ fn service_startup_does_not_collect_dirty_cache_contents() -> TestResult {
                 "last_error": null, "last_prune_epoch": last_prune,
             }))?,
         )?;
-        fs::remove_file(fixture.root.path().join("running"))?;
         let output = run_command(&mut command)?;
         assert!(output.status.success(), "{}", output.stderr);
+        assert!(stale.exists(), "{elapsed}");
+        fs::remove_file(fixture.root.path().join("running"))?;
+        let output = run_command(&mut command)?;
+        assert!(!output.status.success());
+        assert!(
+            output.stderr.contains("explicit host-wide maintenance"),
+            "{}",
+            output.stderr
+        );
         assert!(stale.exists(), "{elapsed}");
         let status: Value =
             serde_json::from_slice(&fs::read(state_root.join("cache-status.json"))?)?;
@@ -834,11 +843,18 @@ fn service_runtime_fixture_conforms_to_missing_running_and_image_contracts() -> 
                 .args(args)
                 .output()?)
         };
-        assert!(
-            !invoke(&["image", "inspect", "wrix-service:test"])?
-                .status
-                .success()
-        );
+        let image_inspect: &[&str] = if runtime == "container" {
+            &["image", "inspect", "wrix-service:test"]
+        } else {
+            &[
+                "image",
+                "inspect",
+                "--format",
+                "{{.Id}}",
+                "wrix-service:test",
+            ]
+        };
+        assert!(!invoke(image_inspect)?.status.success());
         assert!(!invoke(&["inspect", "workspace-service"])?.status.success());
         if runtime == "container" {
             let output = invoke(&["image", "list", "--format", "json"])?;
@@ -846,7 +862,7 @@ fn service_runtime_fixture_conforms_to_missing_running_and_image_contracts() -> 
             assert_eq!(serde_json::from_slice::<Value>(&output.stdout)?, json!([]));
         }
         fs::write(fixture.root.path().join("image"), "installed image")?;
-        let image = invoke(&["image", "inspect", "wrix-service:test"])?;
+        let image = invoke(image_inspect)?;
         assert!(image.status.success());
         let digest = format!("sha256:{}", "a".repeat(64));
         if runtime == "container" {
@@ -861,18 +877,71 @@ fn service_runtime_fixture_conforms_to_missing_running_and_image_contracts() -> 
             assert_eq!(String::from_utf8(image.stdout)?.trim(), digest);
         }
         assert!(
-            invoke(&["run", "-d", "--name", "workspace-service", "image"])?
-                .status
-                .success()
+            invoke(&[
+                "run",
+                "-d",
+                "--name",
+                "workspace-service",
+                "--label",
+                "wrix.kind=service",
+                "-p",
+                "127.0.0.1:21234:8080",
+                "image",
+            ])?
+            .status
+            .success()
         );
-        let running = invoke(&["inspect", "workspace-service"])?;
+        let running = if runtime == "container" {
+            invoke(&["inspect", "workspace-service"])?
+        } else {
+            invoke(&[
+                "inspect",
+                "--format",
+                "{{.State.Running}}",
+                "workspace-service",
+            ])?
+        };
         assert!(running.status.success());
         if runtime == "container" {
             let value: Value = serde_json::from_slice(&running.stdout)?;
             assert_eq!(value[0]["status"]["state"], "running");
+            assert_eq!(value[0]["configuration"]["labels"]["wrix.kind"], "service");
+            assert_eq!(
+                value[0]["configuration"]["publishedPorts"][0]["hostPort"],
+                21_234
+            );
         } else {
             assert_eq!(String::from_utf8(running.stdout)?.trim(), "true");
+            let label = invoke(&[
+                "inspect",
+                "--format",
+                "{{ index .Config.Labels \"wrix.kind\" }}",
+                "workspace-service",
+            ])?;
+            assert!(label.status.success());
+            assert_eq!(String::from_utf8(label.stdout)?.trim(), "service");
+            let ports = invoke(&["port", "workspace-service"])?;
+            assert!(ports.status.success());
+            assert_eq!(
+                String::from_utf8(ports.stdout)?.trim(),
+                "8080/tcp -> 127.0.0.1:21234"
+            );
         }
+        let alternate = if runtime == "podman" {
+            "container"
+        } else {
+            "podman"
+        };
+        let other = Command::new(fixture.bin.join(alternate))
+            .envs(
+                environment
+                    .get_envs()
+                    .filter_map(|(key, value)| value.map(|value| (key, value))),
+            )
+            .args(["inspect", "workspace-service"])
+            .output()?;
+        assert!(!other.status.success());
+        assert!(String::from_utf8(other.stderr)?.contains("no such object"));
         assert_eq!(invoke(&["unsupported"])?.status.code(), Some(64));
     }
     Ok(())

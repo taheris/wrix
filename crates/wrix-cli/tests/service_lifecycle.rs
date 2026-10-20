@@ -28,12 +28,20 @@ case "$*" in
   'image inspect '*) printf '[{"id":"sha256:%s","digest":"sha256:%s"}]\n' "${WRIX_TEST_DIGEST:?}" "$WRIX_TEST_DIGEST"; exit 0 ;;
   'image tag '*) exit 0 ;;
   'list --all --format json') ;;
-  "inspect ${WRIX_TEST_SERVICE_NAME:?}" | 'inspect wrix-service-peer') ;;
-  "rm -f ${WRIX_TEST_SERVICE_NAME:?}")
-    printf '[]\n' >"${WRIX_TEST_RUNTIME_JSON:?}"
+  'inspect '*)
+    if [[ "$#" -ne 2 || "$2" == -* ]]; then
+      printf 'unexpected Apple container command: %s\n' "$*" >&2
+      exit 64
+    fi
+    ;;
+  'rm -f '*)
+    [[ "$#" -eq 3 ]]
+    "${WRIX_TEST_JQ_BIN:?}" --arg name "$3" 'map(select(.configuration.id != $name))' \
+      "${WRIX_TEST_RUNTIME_JSON:?}" >"${WRIX_TEST_RUNTIME_JSON}.new"
+    mv "${WRIX_TEST_RUNTIME_JSON}.new" "$WRIX_TEST_RUNTIME_JSON"
     exit 0
     ;;
-  "run -d --name ${WRIX_TEST_SERVICE_NAME:?} "*)
+  'run -d --name '*)
     printf '%s\n' "$@" >"${WRIX_TEST_RUN_ARGS:?}"
     cp "${WRIX_TEST_RUNTIME_REPLACEMENT:?}" "${WRIX_TEST_RUNTIME_JSON:?}"
     exit 0
@@ -253,6 +261,7 @@ impl Fixture {
                 self.root.path().join("binding.json"),
             )
             .env("WRIX_TEST_DIGEST", "a".repeat(64))
+            .env("WRIX_TEST_JQ_BIN", common::command_path("jq")?)
             .env("HOME", self.root.path().join("home"))
             .env("XDG_STATE_HOME", self.root.path().join("state"))
             .env("XDG_CACHE_HOME", self.root.path().join("cache"))
@@ -1348,9 +1357,25 @@ fn host_lifecycle_lock_blocks_starts_from_unrelated_workspaces() -> TestResult {
     let mut children = children.into_iter();
     let selected = children.next().unwrap().wait_with_output()?;
     assert!(selected.status.success(), "{:?}", selected);
-    let peer = children.next().unwrap().wait_with_output()?;
-    assert!(!peer.status.success());
-    assert!(String::from_utf8(peer.stderr)?.contains("explicit host-wide maintenance"));
+    let peer_output = children.next().unwrap().wait_with_output()?;
+    if peer_output.status.success() {
+        let output = run_command(
+            fixture
+                .command()?
+                .current_dir(&peer)
+                .args(["service", "endpoints"]),
+        )?;
+        assert!(output.status.success(), "{}", output.stderr);
+        let metadata: Value = serde_json::from_str(&output.stdout)?;
+        assert_eq!(
+            metadata["endpoints"]["cache_http"],
+            fixture.metadata["endpoints"]["cache_http"]
+        );
+        let state: PathBuf = serde_json::from_value(metadata["state_root"].clone())?;
+        assert!(state.join("celler-publisher.json").is_file());
+    } else {
+        assert!(String::from_utf8(peer_output.stderr)?.contains("explicit host-wide maintenance"));
+    }
     assert!(!fixture.root.path().join("run.argv").exists());
     Ok(())
 }
@@ -1483,6 +1508,191 @@ fn cache_only_retirement_preserves_backend_and_reopens_only_after_registration()
     assert!(!state.join("celler-retired").exists());
     assert_eq!(fs::read(state.join("keys/cache.pub"))?, before[2]);
     assert!(!fixture.root.path().join("run.argv").exists());
+    Ok(())
+}
+
+#[test]
+fn namespaces_reuse_the_selected_celler_owner_and_retire_without_removing_it() -> TestResult {
+    use std::os::unix::fs::MetadataExt;
+    for dolt in [false, true] {
+        let mut fixture = Fixture::new()?;
+        fixture.disable_dolt()?;
+        let output = fixture.run("start")?;
+        assert!(output.status.success(), "{}", output.stderr);
+        let state = fixture.state_root()?;
+        let host = state.parent().unwrap().parent().unwrap();
+        let selection = host.join("host-lifecycle/celler-owner.json");
+        let configuration = host.join("service-data/celler/server.toml");
+        let selection_before = fs::read(&selection)?;
+        let configuration_inode = fs::metadata(&configuration)?.ino();
+        let owner_key = fs::read(state.join("keys/cache.pub"))?;
+        let peer = fixture.root.path().join("peer");
+        fs::create_dir(&peer)?;
+        initialize_repository(&peer)?;
+        if dolt {
+            fs::create_dir_all(peer.join(".beads/dolt"))?;
+        }
+        let output = run_command(
+            fixture
+                .command()?
+                .current_dir(&peer)
+                .args(["service", "endpoints"]),
+        )?;
+        assert!(output.status.success(), "{}", output.stderr);
+        let metadata: Value = serde_json::from_str(&output.stdout)?;
+        assert_eq!(
+            metadata["endpoints"]["cache_http"],
+            fixture.metadata["endpoints"]["cache_http"]
+        );
+        assert_ne!(
+            metadata["container_name"],
+            fixture.metadata["container_name"]
+        );
+        if dolt {
+            let mut replacement = fixture.snapshot.clone();
+            replacement.as_array_mut().unwrap().push(json!({
+                "configuration": {
+                    "id": metadata["container_name"],
+                    "labels": {
+                        "wrix.kind": "service",
+                        "wrix.workspace": metadata["workspace_path"],
+                        "wrix.workspace.hash": metadata["workspace_hash"],
+                        "wrix.cache.enabled": "false",
+                        "wrix.service.supervision": "1",
+                        "wrix.dolt.transport": "tcp",
+                        "wrix.dolt.auth": "tcp-root-v1"
+                    },
+                    "publishedPorts": [{"hostPort": metadata["endpoints"]["dolt_tcp"]["port"], "count": 1}]
+                },
+                "status": {"state": "running", "networks": [{"ipv4Address": "192.168.64.13/24"}]}
+            }));
+            fs::write(
+                fixture.root.path().join("replacement.json"),
+                serde_json::to_vec(&replacement)?,
+            )?;
+        }
+        let output = run_command(
+            fixture
+                .command()?
+                .current_dir(&peer)
+                .args(["service", "start"]),
+        )?;
+        assert!(output.status.success(), "{}", output.stderr);
+        let peer_state: PathBuf = serde_json::from_value(metadata["state_root"].clone())?;
+        let identity =
+            wrix_core::path::WorkspaceHash::parse(metadata["workspace_hash"].as_str().unwrap())?;
+        assert!(wrix_cache::backend::publication::Publisher::load(&peer_state, &identity).is_ok());
+        let output = run_command(fixture.command()?.current_dir(&peer).args([
+            "service",
+            "endpoints",
+            "--sandbox-cache",
+        ]))?;
+        assert!(output.status.success(), "{}", output.stderr);
+        let guest: Value = serde_json::from_str(&output.stdout)?;
+        assert_eq!(
+            guest["endpoints"]["cache_http"],
+            json!({"host": "192.168.64.12", "port": 8080})
+        );
+        if dolt {
+            let output = run_command(fixture.command()?.current_dir(&peer).args([
+                "service",
+                "dolt",
+                "sandbox-endpoint",
+            ]))?;
+            assert!(output.status.success(), "{}", output.stderr);
+            assert_eq!(
+                serde_json::from_str::<Value>(&output.stdout)?,
+                json!({"host": "192.168.64.13", "port": 3306})
+            );
+        }
+        let output = fixture.run("stop")?;
+        assert!(output.status.success(), "{}", output.stderr);
+        assert!(wrix_cache::backend::publication::Publisher::load(&peer_state, &identity).is_ok());
+        let output = run_command(
+            fixture
+                .command()?
+                .current_dir(&peer)
+                .args(["service", "status"]),
+        )?;
+        assert!(output.status.success(), "{}", output.stderr);
+        assert!(output.stdout.contains("Running"), "{}", output.stdout);
+        assert_eq!(fs::read(&selection)?, selection_before);
+        assert_eq!(fs::metadata(&configuration)?.ino(), configuration_inode);
+        assert_eq!(fs::read(state.join("keys/cache.pub"))?, owner_key);
+        if dolt {
+            let args = fs::read_to_string(fixture.root.path().join("run.argv"))?;
+            assert!(args.contains("wrix.cache.enabled=false"));
+            assert!(!args.contains("/var/lib/wrix/celler"));
+            assert!(!args.contains("/var/cache/wrix/celler"));
+            assert!(!args.contains(wrix_cache::backend::layout::runtime::COMMAND));
+        } else {
+            assert!(!fixture.root.path().join("run.argv").exists());
+        }
+        let output = run_command(
+            fixture
+                .command()?
+                .current_dir(&peer)
+                .args(["service", "stop"]),
+        )?;
+        assert!(output.status.success(), "{}", output.stderr);
+        assert!(matches!(
+            wrix_cache::backend::publication::Publisher::load(&peer_state, &identity),
+            Err(wrix_cache::backend::publication::Error::Retired)
+        ));
+        let remaining: Value =
+            serde_json::from_slice(&fs::read(fixture.root.path().join("runtime.json"))?)?;
+        assert_eq!(remaining, fixture.snapshot);
+        assert_eq!(fs::read(&selection)?, selection_before);
+        let owner_identity = wrix_core::path::WorkspaceHash::parse(
+            fixture.metadata["workspace_hash"].as_str().unwrap(),
+        )?;
+        assert!(matches!(
+            wrix_cache::backend::publication::Publisher::load(&state, &owner_identity),
+            Err(wrix_cache::backend::publication::Error::Retired)
+        ));
+        let output = fixture.run("start")?;
+        assert!(output.status.success(), "{}", output.stderr);
+        assert!(wrix_cache::backend::publication::Publisher::load(&state, &owner_identity).is_ok());
+        assert_eq!(fs::read(state.join("keys/cache.pub"))?, owner_key);
+    }
+    Ok(())
+}
+
+#[test]
+fn selected_celler_owner_is_not_replaced_when_its_runtime_identity_is_unconfirmed() -> TestResult {
+    for (change, value) in [
+        ("/status/state", json!("stopped")),
+        (
+            "/configuration/labels/wrix.workspace.hash",
+            json!("f".repeat(64)),
+        ),
+        ("/configuration/labels/wrix.cache.backend", json!("unknown")),
+        ("/configuration/publishedPorts", json!([])),
+    ] {
+        let mut fixture = Fixture::new()?;
+        fixture.disable_dolt()?;
+        let output = fixture.run("start")?;
+        assert!(output.status.success(), "{}", output.stderr);
+        *fixture.snapshot[0].pointer_mut(change).unwrap() = value;
+        fixture.write_snapshot()?;
+        let state = fixture.state_root()?;
+        let host = state.parent().unwrap().parent().unwrap();
+        let selection = host.join("host-lifecycle/celler-owner.json");
+        let before = fs::read(&selection)?;
+        let runtime = fs::read(fixture.root.path().join("runtime.json"))?;
+        let output = fixture.run("start")?;
+        assert!(!output.status.success(), "{change}");
+        assert!(
+            output.stderr.contains("explicit host-wide maintenance"),
+            "{}",
+            output.stderr
+        );
+        assert_eq!(fs::read(&selection)?, before);
+        assert_eq!(fs::read(fixture.root.path().join("runtime.json"))?, runtime);
+        assert!(!fixture.root.path().join("run.argv").exists());
+        let calls = fs::read_to_string(fixture.root.path().join("runtime.log"))?;
+        assert!(!calls.lines().any(|line| line.starts_with("rm ")));
+    }
     Ok(())
 }
 
