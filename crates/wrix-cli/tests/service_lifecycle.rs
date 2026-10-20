@@ -1,6 +1,9 @@
 #[path = "common/celler.rs"]
 mod celler;
 mod common;
+#[cfg(target_os = "linux")]
+#[path = "common/component.rs"]
+mod component;
 #[path = "common/peer_runtime.rs"]
 mod peer_runtime;
 #[path = "common/service_binding.rs"]
@@ -20,36 +23,7 @@ use fs2::FileExt;
 use serde_json::{Value, json};
 use wrix_sandbox::command::Command as LaunchCommand;
 
-const APPLE_RUNTIME: &str = r#"#!/usr/bin/env bash
-set -euo pipefail
-printf '%s\n' "$*" >>"${WRIX_TEST_RUNTIME_LOG:?}"
-case "$*" in
-  'image list --format json') printf '[{"configuration":{"name":"wrix-service:test"},"id":"sha256:%s"}]\n' "${WRIX_TEST_DIGEST:?}"; exit 0 ;;
-  'image inspect '*) printf '[{"id":"sha256:%s","digest":"sha256:%s"}]\n' "${WRIX_TEST_DIGEST:?}" "$WRIX_TEST_DIGEST"; exit 0 ;;
-  'image tag '*) exit 0 ;;
-  'list --all --format json') ;;
-  'inspect '*)
-    if [[ "$#" -ne 2 || "$2" == -* ]]; then
-      printf 'unexpected Apple container command: %s\n' "$*" >&2
-      exit 64
-    fi
-    ;;
-  'rm -f '*)
-    [[ "$#" -eq 3 ]]
-    "${WRIX_TEST_JQ_BIN:?}" --arg name "$3" 'map(select(.configuration.id != $name))' \
-      "${WRIX_TEST_RUNTIME_JSON:?}" >"${WRIX_TEST_RUNTIME_JSON}.new"
-    mv "${WRIX_TEST_RUNTIME_JSON}.new" "$WRIX_TEST_RUNTIME_JSON"
-    exit 0
-    ;;
-  'run -d --name '*)
-    printf '%s\n' "$@" >"${WRIX_TEST_RUN_ARGS:?}"
-    cp "${WRIX_TEST_RUNTIME_REPLACEMENT:?}" "${WRIX_TEST_RUNTIME_JSON:?}"
-    exit 0
-    ;;
-  *) printf 'unexpected Apple container command: %s\n' "$*" >&2; exit 64 ;;
-esac
-cat "${WRIX_TEST_RUNTIME_JSON:?}"
-"#;
+const APPLE_RUNTIME: &str = include_str!("fixtures/apple-service-runtime.sh");
 
 #[test]
 fn running_cache_reentry_restores_only_the_verifier_from_existing_private_authority() -> TestResult
@@ -149,6 +123,9 @@ fn malformed_sync_branch_fails_before_service_runtime_or_layout() -> TestResult 
 
 struct Fixture {
     server: std::cell::RefCell<Option<celler::Server>>,
+    reservation: std::cell::RefCell<Option<TcpListener>>,
+    #[cfg(target_os = "linux")]
+    component: Option<component::Server>,
     root: tempfile::TempDir,
     workspace: PathBuf,
     runtime: PathBuf,
@@ -183,6 +160,9 @@ impl Fixture {
         fs::copy(&runtime, root.path().join("bin/container"))?;
         let mut fixture = Self {
             server: std::cell::RefCell::new(None),
+            reservation: std::cell::RefCell::new(None),
+            #[cfg(target_os = "linux")]
+            component: None,
             root,
             workspace,
             runtime,
@@ -199,6 +179,16 @@ impl Fixture {
             env!("CARGO_BIN_EXE_wrix"),
             fixture.metadata,
         );
+        let listener =
+            TcpListener::bind(("127.0.0.1", fixture.port("cache_http")?)).or_else(|error| {
+                if error.kind() == std::io::ErrorKind::AddrInUse {
+                    TcpListener::bind(("127.0.0.1", 0))
+                } else {
+                    Err(error)
+                }
+            })?;
+        fixture.metadata["endpoints"]["cache_http"]["port"] = json!(listener.local_addr()?.port());
+        *fixture.reservation.borrow_mut() = Some(listener);
         fixture.snapshot = json!([{
             "configuration": {
                 "id": fixture.metadata["container_name"],
@@ -278,6 +268,14 @@ impl Fixture {
             )
             .env("WRIX_TEST_RUN_ARGS", self.root.path().join("run.argv"))
             .env(
+                "WRIX_TEST_COMPONENT_BIN",
+                env!("CARGO_BIN_EXE_wrix-service-supervisor"),
+            )
+            .env(
+                "WRIX_TEST_COMPONENT_ROOT",
+                self.root.path().join("component-runtime"),
+            )
+            .env(
                 "WRIX_TEST_RUNTIME_REPLACEMENT",
                 self.root.path().join("replacement.json"),
             )
@@ -303,6 +301,22 @@ impl Fixture {
         Ok(command)
     }
 
+    #[cfg(target_os = "linux")]
+    fn enable_components(&mut self) -> TestResult {
+        if self.component.is_some() {
+            return Err("component fixture already running".into());
+        }
+        self.snapshot[0]["configuration"]["labels"]["wrix.service.supervision"] = json!("2");
+        self.write_snapshot()?;
+        self.component = Some(component::Server::start(
+            &self.root.path().join("component-runtime"),
+            self.metadata["workspace_hash"]
+                .as_str()
+                .ok_or("missing component namespace")?,
+        )?);
+        Ok(())
+    }
+
     fn api(&self) -> TestResult {
         if self.server.borrow().is_some() {
             return Ok(());
@@ -310,15 +324,23 @@ impl Fixture {
         let labels = &self.snapshot[0]["configuration"]["labels"];
         let modern = labels["wrix.cache.backend"] == "celler-v2"
             && labels["wrix.cache.enabled"] == "true"
-            && labels["wrix.service.supervision"] == "1"
+            && labels["wrix.service.supervision"]
+                .as_str()
+                .is_some_and(|version| matches!(version, "1" | "2"))
             && (labels["wrix.dolt.transport"] == "disabled"
                 || labels["wrix.dolt.auth"] == "tcp-root-v1");
-        let port = if self.snapshot[0]["status"]["state"] == "running" && modern {
-            Some(self.port("cache_http")?)
-        } else {
-            None
-        };
-        *self.server.borrow_mut() = Some(celler::Server::watch(self.root.path(), port));
+        let listener = self.reservation.borrow_mut().take();
+        *self.server.borrow_mut() = Some(
+            if self.snapshot[0]["status"]["state"] == "running" && modern {
+                celler::Server::reserved(
+                    self.root.path(),
+                    listener.ok_or("running fixture lost its port reservation")?,
+                )?
+            } else {
+                drop(listener);
+                celler::Server::watch(self.root.path(), None)
+            },
+        );
         Ok(())
     }
 
@@ -550,10 +572,8 @@ fn apple_start_recreates_legacy_static_tcp_services_for_authentication_bootstrap
     let marker = fixture.workspace.join(".beads/dolt/keep");
     fs::write(&marker, "persistent database")?;
 
-    for _ in 0..2 {
-        let output = fixture.run("start")?;
-        assert!(output.status.success(), "{}", output.stderr);
-    }
+    let output = fixture.run("start")?;
+    assert!(output.status.success(), "{}", output.stderr);
     let log = fs::read_to_string(fixture.root.path().join("runtime.log"))?;
     assert_eq!(
         log.lines()
@@ -578,7 +598,8 @@ fn apple_start_recreates_legacy_static_tcp_services_for_authentication_bootstrap
         "{args}"
     );
     assert!(
-        args.contains("CREATE USER IF NOT EXISTS 'root'@'%'"),
+        args.contains("CREATE USER IF NOT EXISTS")
+            && args.contains("GRANT ALL PRIVILEGES ON *.* TO"),
         "{args}"
     );
     assert_eq!(fs::read_to_string(marker)?, "persistent database");
@@ -597,10 +618,8 @@ fn legacy_static_combined_services_are_recreated_with_child_supervision() -> Tes
         .unwrap()
         .remove("wrix.service.supervision");
     fixture.write_snapshot()?;
-    for _ in 0..2 {
-        let output = fixture.run("start")?;
-        assert!(output.status.success(), "{}", output.stderr);
-    }
+    let output = fixture.run("start")?;
+    assert!(output.status.success(), "{}", output.stderr);
     let log = fs::read_to_string(fixture.root.path().join("runtime.log"))?;
     assert_eq!(
         log.lines().filter(|line| line.starts_with("run ")).count(),
@@ -608,8 +627,9 @@ fn legacy_static_combined_services_are_recreated_with_child_supervision() -> Tes
         "{log}"
     );
     let args = fs::read_to_string(fixture.root.path().join("run.argv"))?;
-    assert!(args.contains("wrix.service.supervision=1"));
-    assert!(args.contains("wait -n"));
+    assert!(args.contains("wrix.service.supervision=2"));
+    assert!(args.contains("exec wrix-service-supervisor serve"));
+    assert!(args.contains("/var/lib/wrix/service-supervisor"));
     Ok(())
 }
 
@@ -1696,6 +1716,112 @@ fn selected_celler_owner_is_not_replaced_when_its_runtime_identity_is_unconfirme
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn cohosted_namespace_retirement_and_reentry_preserve_celler_and_peer_admission() -> TestResult {
+    use std::os::unix::fs::MetadataExt;
+    let mut fixture = Fixture::new()?;
+    fixture.enable_components()?;
+    let output = fixture.run("start")?;
+    assert!(output.status.success(), "{}", output.stderr);
+    let state = fixture.state_root()?;
+    let host = state.parent().unwrap().parent().unwrap();
+    let selection = host.join("host-lifecycle/celler-owner.json");
+    let configuration = host.join("service-data/celler/server.toml");
+    let before = fs::read(&selection)?;
+    let configuration_inode = fs::metadata(&configuration)?.ino();
+    let key = fs::read(state.join("keys/cache.pub"))?;
+    let key_inode = fs::metadata(state.join("keys/cache.pub"))?.ino();
+    let component = fixture.component.as_ref().unwrap();
+    let celler_pid = fs::read(component.root().join("celler.pid"))?;
+    let peer = fixture.root.path().join("cohost-peer");
+    fs::create_dir(&peer)?;
+    initialize_repository(&peer)?;
+    let output = run_command(
+        fixture
+            .command()?
+            .current_dir(&peer)
+            .args(["service", "start"]),
+    )?;
+    assert!(output.status.success(), "{}", output.stderr);
+    let output = run_command(
+        fixture
+            .command()?
+            .current_dir(&peer)
+            .args(["service", "endpoints"]),
+    )?;
+    let peer_metadata: Value = serde_json::from_str(&output.stdout)?;
+    let peer_state: PathBuf = serde_json::from_value(peer_metadata["state_root"].clone())?;
+    let peer_hash =
+        wrix_core::path::WorkspaceHash::parse(peer_metadata["workspace_hash"].as_str().unwrap())?;
+    let output = fixture.run("stop")?;
+    assert!(output.status.success(), "{}", output.stderr);
+    assert!(output.stdout.contains("Stopped"), "{}", output.stdout);
+    assert!(!state.join("component-transition.json").exists());
+    assert!(wrix_cache::backend::publication::Publisher::load(&peer_state, &peer_hash).is_ok());
+    let output = run_command(
+        fixture
+            .command()?
+            .current_dir(&peer)
+            .args(["service", "start"]),
+    )?;
+    assert!(output.status.success(), "{}", output.stderr);
+    for _ in 0..2 {
+        let output = fixture.run("start")?;
+        assert!(output.status.success(), "{}", output.stderr);
+    }
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while fs::read_to_string(component.root().join("launches"))?
+        .lines()
+        .count()
+        != 2
+    {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(fs::read(component.root().join("celler.pid"))?, celler_pid);
+    assert_eq!(fs::read(selection)?, before);
+    assert_eq!(fs::metadata(configuration)?.ino(), configuration_inode);
+    assert_eq!(fs::read(state.join("keys/cache.pub"))?, key);
+    assert_eq!(fs::metadata(state.join("keys/cache.pub"))?.ino(), key_inode);
+    let log = fs::read_to_string(fixture.root.path().join("runtime.log"))?;
+    assert!(
+        !log.lines()
+            .any(|line| line.starts_with("run ") || line.starts_with("rm ")),
+        "{log}"
+    );
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn unconfirmed_component_dispatch_fences_later_mutations_and_passive_status() -> TestResult {
+    let mut fixture = Fixture::new()?;
+    fixture.enable_components()?;
+    let output = fixture.run("start")?;
+    assert!(output.status.success(), "{}", output.stderr);
+    fixture.component.as_mut().unwrap().stop()?;
+    let output = fixture.run("stop")?;
+    assert!(!output.status.success());
+    let state = fixture.state_root()?;
+    let pending = fs::read(state.join("component-transition.json"))?;
+    let log = fs::read(fixture.root.path().join("runtime.log"))?;
+    for operation in ["start", "stop", "status"] {
+        let output = fixture.run(operation)?;
+        assert!(!output.status.success());
+        assert!(
+            output
+                .stderr
+                .contains("prior component dispatch is unconfirmed"),
+            "{}",
+            output.stderr
+        );
+        assert_eq!(fs::read(state.join("component-transition.json"))?, pending);
+        assert_eq!(fs::read(fixture.root.path().join("runtime.log"))?, log);
+    }
+    Ok(())
+}
+
 #[test]
 fn workspace_stop_rejects_uncertain_backend_state_before_removal() -> TestResult {
     let mut fixture = Fixture::new()?;
@@ -1789,6 +1915,7 @@ fn hold_host_lifecycle_lock(fixture: &Fixture) -> TestResult<fs::File> {
 #[test]
 fn concurrent_service_starts_share_one_lifecycle_owner() -> TestResult {
     let mut fixture = Fixture::new()?;
+    fixture.disable_dolt()?;
     fixture.snapshot[0]["status"]["state"] = json!("stopped");
     fixture.write_snapshot()?;
     fixture.api()?;
@@ -2012,22 +2139,27 @@ fn fake_apple_runtime_exposes_native_json_and_rejects_podman_flags() -> TestResu
     let removed: Value =
         serde_json::from_slice(&fs::read(fixture.root.path().join("runtime.json"))?)?;
     assert_eq!(removed, json!([]));
-    assert!(
-        fixture
-            .runtime_command()?
-            .args([
-                "run",
-                "-d",
-                "--name",
-                name,
-                "image",
-                "sh",
-                "-c",
-                "sleep infinity"
-            ])
-            .status()?
-            .success()
-    );
+    let mut command = fixture.runtime_command()?;
+    command.args(["run", "-d", "--name", name]);
+    for (key, value) in fixture.snapshot[0]["configuration"]["labels"]
+        .as_object()
+        .unwrap()
+    {
+        command
+            .arg("--label")
+            .arg(format!("{key}={}", value.as_str().unwrap()));
+    }
+    for port in fixture.snapshot[0]["configuration"]["publishedPorts"]
+        .as_array()
+        .unwrap()
+    {
+        command.arg("-p").arg(format!(
+            "127.0.0.1:{}:{}",
+            port["hostPort"], port["containerPort"]
+        ));
+    }
+    command.args(["image", "sh", "-c", "sleep infinity"]);
+    assert!(command.status()?.success());
     let replacement: Value =
         serde_json::from_slice(&fs::read(fixture.root.path().join("runtime.json"))?)?;
     assert_eq!(replacement, fixture.snapshot);

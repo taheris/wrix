@@ -2,6 +2,7 @@
   pkgs,
   hostPkgs ? pkgs,
   celler,
+  supervisor,
   asTarball ? false,
 }:
 
@@ -24,6 +25,7 @@ let
   labels = {
     "wrix.managed" = "true";
     "wrix.image.kind" = "service";
+    "wrix.service.supervision" = "2";
   };
   contents = [
     dockerTools.binSh
@@ -31,6 +33,7 @@ let
     coreutils
     dolt
     celler
+    supervisor
     util-linux
   ];
   imageConfig = {

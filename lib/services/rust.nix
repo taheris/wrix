@@ -178,17 +178,20 @@ in
       ...
     }:
     {
-      nativeBuildInputs = nativeBuildInputs ++ [
-        pkgs.beads
-        pkgs.dolt
-        pkgs.hostname
-        pkgs.jq
-        pkgs.nix
-        pkgs.openssh
-        pkgs.openssl
-        pkgs.python3
-        pkgs.tmux
-      ];
+      nativeBuildInputs =
+        nativeBuildInputs
+        ++ [
+          pkgs.beads
+          pkgs.dolt
+          pkgs.hostname
+          pkgs.jq
+          pkgs.nix
+          pkgs.openssh
+          pkgs.openssl
+          pkgs.python3
+          pkgs.tmux
+        ]
+        ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.util-linux ];
       preCheck = preCheck + ''
         HOME="$(mktemp -d)"
         export HOME
@@ -208,6 +211,11 @@ in
     inherit pkgs;
     inherit (rustProfile) craneLib;
   };
+  supervisor =
+    pkgs.runCommand "wrix-service-supervisor" { meta = binaryMeta "wrix-service-supervisor"; }
+      ''
+        install -Dm755 "${workspace.bin}/bin/wrix-service-supervisor" "$out/bin/wrix-service-supervisor"
+      '';
   cacheHook = mkBinaryPackage "wrix-cache-hook";
   cachePublish = mkBinaryPackage "wrix-cache-publish";
 }

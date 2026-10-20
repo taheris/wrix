@@ -27,10 +27,20 @@ pub struct Server {
 impl Server {
     /// Binds only after the external runtime has recorded its native HTTP port.
     pub fn watch(root: &Path, running_port: Option<u16>) -> Self {
+        Self::start(root, running_port, None)
+    }
+
+    pub fn reserved(root: &Path, listener: TcpListener) -> io::Result<Self> {
+        let port = listener.local_addr()?.port();
+        listener.set_nonblocking(true)?;
+        Ok(Self::start(root, Some(port), Some(listener)))
+    }
+
+    fn start(root: &Path, running_port: Option<u16>, listener: Option<TcpListener>) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let signal = Arc::clone(&stop);
         let root = root.to_owned();
-        let worker = thread::spawn(move || run(&root, running_port, &signal));
+        let worker = thread::spawn(move || run(&root, running_port, listener, &signal));
         Self {
             stop,
             worker: Some(worker),
@@ -43,15 +53,25 @@ impl Drop for Server {
         self.stop.store(true, Ordering::Relaxed);
         if let Some(worker) = self.worker.take() {
             match worker.join() {
+                Ok(Err(error)) if thread::panicking() => {
+                    tracing::warn!(%error, "Celler fixture cleanup failed during an earlier failure");
+                }
                 Ok(result) => assert!(result.is_ok(), "Celler fixture failed: {result:?}"),
+                Err(_) if thread::panicking() => {
+                    tracing::warn!("Celler fixture worker panicked during an earlier failure");
+                }
                 Err(panic) => std::panic::resume_unwind(panic),
             }
         }
     }
 }
 
-fn run(root: &Path, mut port: Option<u16>, stop: &AtomicBool) -> io::Result<()> {
-    let mut listener = None;
+fn run(
+    root: &Path,
+    mut port: Option<u16>,
+    mut listener: Option<TcpListener>,
+    stop: &AtomicBool,
+) -> io::Result<()> {
     while !stop.load(Ordering::Relaxed) {
         if let Some(recorded) = recorded_port(&root.join("run.argv"))?
             && port != Some(recorded)
@@ -183,8 +203,9 @@ fn serve(root: &Path, mut stream: TcpStream) -> io::Result<()> {
 #[test]
 fn fixture_native_configuration_matches_production_registration_protocol() -> TestResult {
     let root = tempfile::tempdir()?;
-    let port = TcpListener::bind("127.0.0.1:0")?.local_addr()?.port();
-    let _server = Server::watch(root.path(), Some(port));
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let port = listener.local_addr()?.port();
+    let _server = Server::reserved(root.path(), listener)?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
@@ -196,7 +217,6 @@ fn fixture_native_configuration_matches_production_registration_protocol() -> Te
         "fixture-authority",
     )?;
     runtime.block_on(async {
-        tokio::time::sleep(Duration::from_millis(50)).await;
         assert_eq!(
             client.register(Duration::from_hours(720)).await?.as_str(),
             KEY

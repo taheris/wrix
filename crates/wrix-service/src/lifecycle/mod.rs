@@ -5,7 +5,7 @@ mod coordination;
 mod dolt;
 mod managed;
 mod owner;
-mod supervisor;
+pub mod supervisor;
 
 use std::{
     env, fs, io,
@@ -42,7 +42,7 @@ const CACHE_ENABLED_LABEL: &str = "wrix.cache.enabled";
 const CACHE_BACKEND_LABEL: &str = "wrix.cache.backend";
 const CACHE_BACKEND_VERSION: &str = "celler-v2";
 const SUPERVISION_LABEL: &str = "wrix.service.supervision";
-const SUPERVISION_VERSION: &str = "1";
+const SUPERVISION_VERSION: &str = "2";
 const DOLT_TRANSPORT_LABEL: &str = "wrix.dolt.transport";
 const DOLT_AUTH_LABEL: &str = "wrix.dolt.auth";
 const DOLT_AUTH_VERSION: &str = "tcp-root-v1";
@@ -78,6 +78,8 @@ pub enum Error {
     CellerRuntime(#[from] wrix_cache::backend::layout::runtime::Error),
     /// {0}
     CellerBootstrap(#[from] cache::Error),
+    /// {0}
+    Component(#[from] supervisor::Error),
     /// runtime image operation failed: {source}
     Image { source: runtime_image::Error },
     /// environment variable {name} must be valid Unicode
@@ -226,6 +228,7 @@ pub struct Paths {
     state_root: PathBuf,
     cache_root: PathBuf,
     host_lifecycle: Option<PathBuf>,
+    component_root: PathBuf,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -233,6 +236,12 @@ pub enum RuntimeStatus {
     Running,
     Stopped,
     Missing,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum RunDisposition {
+    Created,
+    Retained,
 }
 
 #[derive(Clone, Debug)]
@@ -587,10 +596,13 @@ impl DoltTransport {
 
 impl Paths {
     pub fn new(state_root: impl Into<PathBuf>, cache_root: impl Into<PathBuf>) -> Self {
+        let state_root = state_root.into();
+        let component_root = state_root.join("component-data");
         Self {
-            state_root: state_root.into(),
+            state_root,
             cache_root: cache_root.into(),
             host_lifecycle: None,
+            component_root,
         }
     }
 
@@ -613,10 +625,16 @@ impl Paths {
                 message: "workspace state has no host coordination root".into(),
             })?
             .join("host-lifecycle");
+        let component_root = host_lifecycle
+            .parent()
+            .ok_or(supervisor::Error::Incompatible)?
+            .join("service-data/supervisor")
+            .join(hash.as_str());
         Ok(Self {
             state_root,
             cache_root,
             host_lifecycle: Some(host_lifecycle),
+            component_root,
         })
     }
 
@@ -718,6 +736,7 @@ pub fn start(cache_mode: CacheMode) -> Result<Status> {
     if let Some(guard) = &host_lock {
         plan.reconcile_owner(guard)?;
     }
+    supervisor::transition::ensure_clear(plan.paths().state_root(), plan.workspace().hash())?;
     if plan.dolt().is_some() {
         plan.authorize()?;
         managed::configure(plan.workspace().canonical_path())?;
@@ -742,8 +761,12 @@ pub fn start(cache_mode: CacheMode) -> Result<Status> {
         None
     };
     plan.ensure_layout()?;
-    if plan.has_services() {
-        runtime.ensure_running(&plan)?;
+    if plan.has_services()
+        && runtime.ensure_running(&plan)? == RunDisposition::Retained
+        && plan.owns_cache()
+        && plan.dolt().is_some()
+    {
+        runtime.resume_component(&plan, host_lock.as_ref().ok_or(owner::Error::Invalid)?)?;
     }
     if let Some(cache) = cache {
         cache::activate(&plan, &cache)?;
@@ -789,6 +812,7 @@ pub fn stop(cache_mode: CacheMode) -> Result<Status> {
     let (mut plan, _lock) = locked_plan(cache_mode)?;
     let host_lock = host_lifecycle_lock(plan.paths())?;
     plan.reconcile_owner(&host_lock)?;
+    supervisor::transition::ensure_clear(plan.paths().state_root(), plan.workspace().hash())?;
     let runtime = Runtime::from_env()?;
     if plan.selected_owner.is_some() && !plan.owns_cache() {
         runtime.ensure_workspace_stop_safe(&plan)?;
@@ -796,6 +820,22 @@ pub fn stop(cache_mode: CacheMode) -> Result<Status> {
         if runtime.status(&plan.container_name())? != RuntimeStatus::Missing {
             runtime.remove(&plan.container_name())?;
         }
+        return status_for_plan(plan);
+    }
+    if plan.owns_cache()
+        && plan.dolt().is_some()
+        && runtime.status(&plan.container_name())? == RuntimeStatus::Running
+        && runtime.supervision(&plan.container_name())? == Some(supervisor::Version::Components)
+    {
+        runtime.ensure_cache_owner_compatible(&plan)?;
+        cache::retire(&plan)?;
+        let pending = supervisor::transition::Pending::begin(
+            &host_lock,
+            plan.paths().state_root(),
+            plan.workspace().hash(),
+            supervisor::transition::Change::Retire,
+        )?;
+        pending.finish(runtime.component_observation(&plan, supervisor::Action::Retire)?)?;
         return status_for_plan(plan);
     }
     if plan.dolt().is_none()
@@ -892,7 +932,21 @@ pub fn wait_for_dolt(cache_mode: CacheMode) -> Result<()> {
 }
 
 fn status_for_plan(plan: Plan) -> Result<Status> {
-    let runtime = if plan.dolt().is_none() && cache::is_retired(&plan)? {
+    supervisor::transition::ensure_clear(plan.paths().state_root(), plan.workspace().hash())?;
+    let runtime = if plan.owns_cache() && plan.dolt().is_some() && cache::is_retired(&plan)? {
+        let runtime = Runtime::from_env()?;
+        runtime.validate_selected_owner(&plan)?;
+        let status = runtime.status(&plan.container_name())?;
+        if status == RuntimeStatus::Running
+            && runtime.supervision(&plan.container_name())? == Some(supervisor::Version::Components)
+            && runtime.component_observation(&plan, supervisor::Action::Inspect)?
+                == supervisor::Observation::Retired
+        {
+            RuntimeStatus::Stopped
+        } else {
+            status
+        }
+    } else if plan.dolt().is_none() && cache::is_retired(&plan)? {
         RuntimeStatus::Stopped
     } else if plan.dolt().is_none() && plan.cache_enabled() && plan.selected_owner.is_some() {
         let runtime = Runtime::from_env()?;
@@ -1365,14 +1419,13 @@ impl Runtime {
         Ok(())
     }
 
-    fn ensure_running(&self, plan: &Plan) -> Result<()> {
-        plan.authorize()?;
+    fn ensure_running(&self, plan: &Plan) -> Result<RunDisposition> {
         let name = plan.container_name();
         match self.status(&name)? {
             RuntimeStatus::Running => {
                 self.reconcile_legacy_containers(plan)?;
                 if self.running_container_satisfies_plan(&name, plan)? {
-                    return Ok(());
+                    return Ok(RunDisposition::Retained);
                 }
                 if self
                     .inspect_label(name.as_str(), CACHE_ENABLED_LABEL)?
@@ -1433,6 +1486,14 @@ impl Runtime {
                 ));
             }
         }
+        if plan.owns_cache() && plan.dolt().is_some() {
+            wrix_core::private_directory::prepare_with_parents(&plan.paths().component_root)?;
+            command.arg("-v").arg(format!(
+                "{}:{}:rw",
+                plan.paths().component_root.display(),
+                supervisor::DIRECTORY
+            ));
+        }
         if let Some(dolt) = plan.dolt() {
             if dolt.transport() == DoltTransport::Tcp {
                 command
@@ -1487,13 +1548,62 @@ impl Runtime {
             .stderr(Stdio::piped());
         let output = command.output()?;
         if output.status.success() {
-            Ok(())
+            Ok(RunDisposition::Created)
         } else {
             let message = String::from_utf8_lossy(&output.stderr).into_owned();
             bind_port_from_runtime_error(&message).map_or_else(
                 || Err(Error::Operation { message }),
                 |port| Err(self.port_in_use_error(port)),
             )
+        }
+    }
+
+    fn supervision(&self, name: &ContainerName) -> Result<Option<supervisor::Version>> {
+        Ok(self
+            .inspect_label(name.as_str(), SUPERVISION_LABEL)?
+            .as_deref()
+            .and_then(supervisor::Version::parse))
+    }
+
+    fn component_observation(
+        &self,
+        plan: &Plan,
+        action: supervisor::Action,
+    ) -> Result<supervisor::Observation> {
+        let name = plan.container_name();
+        let mut command = Command::new(&self.binary);
+        command.args([
+            "exec",
+            name.as_str(),
+            "wrix-service-supervisor",
+            action.as_str(),
+            supervisor::DIRECTORY,
+            plan.workspace().hash().as_str(),
+        ]);
+        Ok(supervisor::transport::execute(command)?)
+    }
+
+    fn resume_component(&self, plan: &Plan, guard: &coordination::Guard) -> Result<()> {
+        if self.supervision(&plan.container_name())? != Some(supervisor::Version::Components) {
+            return Ok(());
+        }
+        match self.component_observation(plan, supervisor::Action::Inspect)? {
+            supervisor::Observation::Active => Ok(()),
+            supervisor::Observation::Retired => {
+                let change = supervisor::transition::Change::Resume;
+                let pending = supervisor::transition::Pending::begin(
+                    guard,
+                    plan.paths().state_root(),
+                    plan.workspace().hash(),
+                    change,
+                )?;
+                pending.finish(self.component_observation(plan, change.action())?)?;
+                Ok(())
+            }
+            supervisor::Observation::Retiring | supervisor::Observation::Busy => {
+                Err(supervisor::Error::Busy.into())
+            }
+            supervisor::Observation::Rejected => Err(supervisor::Error::Incompatible.into()),
         }
     }
 
@@ -1514,13 +1624,12 @@ impl Runtime {
         {
             return Ok(false);
         }
-        if plan.owns_cache()
-            && plan.dolt().is_some()
-            && self
-                .inspect_label(name.as_str(), SUPERVISION_LABEL)?
-                .as_deref()
-                != Some(SUPERVISION_VERSION)
-        {
+        let supervision = if plan.owns_cache() && plan.dolt().is_some() {
+            self.supervision(name)?
+        } else {
+            None
+        };
+        if plan.owns_cache() && plan.dolt().is_some() && supervision.is_none() {
             return Ok(false);
         }
         if plan.selected_owner.is_some()
@@ -1542,7 +1651,16 @@ impl Runtime {
         if let Some(dolt) = plan.dolt() {
             match dolt.transport() {
                 DoltTransport::UnixSocket if !is_unix_socket(dolt.socket_path())? => {
-                    return Ok(false);
+                    if supervision != Some(supervisor::Version::Components)
+                        || !matches!(
+                            self.component_observation(plan, supervisor::Action::Inspect)?,
+                            supervisor::Observation::Active
+                                | supervisor::Observation::Retiring
+                                | supervisor::Observation::Retired
+                        )
+                    {
+                        return Ok(false);
+                    }
                 }
                 DoltTransport::Tcp
                     if self
@@ -2163,6 +2281,7 @@ fn is_loopback_port_available(port: u16) -> bool {
 fn container_command(plan: &Plan) -> String {
     match (plan.owns_cache(), plan.dolt()) {
         (true, Some(dolt)) => supervisor::command(
+            plan.workspace().hash(),
             wrix_cache::backend::layout::runtime::COMMAND,
             &dolt_server_command(dolt),
         ),
