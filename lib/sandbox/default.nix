@@ -43,6 +43,7 @@ let
   };
   imageTagLib = import ../util/image-tag.nix { };
   privateNix = import ./private-nix.nix { inherit (pkgs) lib; };
+  sharedNix = import ./shared-nix.nix;
 
   # podman accepts `localhost/<name>:<tag>` refs; Apple's `container` CLI
   # uses bare `<name>:<tag>`. Match the convention each launcher expects.
@@ -493,6 +494,7 @@ let
             ref = mkImageRef image;
             source = "${image.source}";
             inherit (image) source_kind;
+            shared_nix = image.sharedNix;
             digest = "";
           };
           agent = {
@@ -614,5 +616,8 @@ in
     validateNetworkRules
     ;
   inherit (manifest) mkProfileImages;
-  capabilities.privateNix = privateNix.version;
+  capabilities = {
+    privateNix = privateNix.version;
+    sharedNix = sharedNix.version;
+  };
 }

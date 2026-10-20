@@ -41,6 +41,18 @@ those into another override. Rebuild the images and their generated
 rejects images lacking the current private-Nix contract label before starting
 the sandbox, including cached images and per-launch image-source overrides.
 
+The independent `wrixLib.capabilities.sharedNix` value describes the shared
+image-input contract. Images expose `image.sharedNix` (a version and immutable
+`seed_closure` path list), also emitted as `ProfileConfig.image.shared_nix` and
+in Linux descriptor metadata. The `wrix.nix.shared` label and
+`/etc/wrix/shared-nix-version` marker agree with that version; the image's
+`wrix.nix.seed` label commits to the immutable seed-list path. The list covers
+exactly the materialized image store, including references found only in agent
+or MCP configuration. It is input to trusted seeding, not a database to restore.
+This metadata neither selects shared mode nor certifies any runtime transport;
+shared launch still requires independent host approval and service/runtime
+acceptance. Private construction and startup remain the default.
+
 ## Construction and execution
 
 `lib/sandbox/private-nix.nix` owns the contract version and construction-side

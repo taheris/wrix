@@ -23,6 +23,10 @@ let
   profileManifest = packages.profile-images;
   nativeEntry = profileManifest.manifest.rust.pi;
   nativeSandbox = profileManifest.sandboxes.rust.pi;
+  sharedNixTests = import ./sandbox/shared-nix.nix {
+    inherit pkgs linuxPkgs wrix;
+    profileSandboxes = profileManifest.sandboxes;
+  };
 
   nativeProfiles =
     assert
@@ -149,6 +153,7 @@ in
     loom-devshell = devshellCli;
     loom-native-profiles = nativeProfiles;
   }
+  // sharedNixTests.checks
   // import ./sandbox/private-nix.nix {
     inherit
       pkgs
@@ -157,7 +162,7 @@ in
       ;
     profileSandboxes = profileManifest.sandboxes;
   };
-  ciApps = [
+  ciApps = sharedNixTests.ciApps ++ [
     (ciApp "test-loom-devshell" devshellCli)
     (ciApp "test-loom-agent-images" agentImages)
     {

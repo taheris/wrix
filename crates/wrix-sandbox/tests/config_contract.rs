@@ -50,6 +50,42 @@ fn profile_value(platform: Platform) -> Value {
 }
 
 #[test]
+fn shared_image_metadata_is_optional_and_independent_of_private_profiles() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("profile.json");
+    let seed = "/nix/store/00000000000000000000000000000000-closure-info/store-paths";
+    for platform in [Platform::Linux, Platform::Darwin] {
+        let mut value = profile_value(platform);
+        fs::write(&path, value.to_string()).unwrap();
+        assert!(
+            load_profile_config(&path, platform)
+                .unwrap()
+                .image
+                .shared_nix
+                .is_none()
+        );
+        for version in [1, 2] {
+            value["image"]["shared_nix"] = json!({"version": version, "seed_closure": seed});
+            fs::write(&path, value.to_string()).unwrap();
+            let image = load_profile_config(&path, platform).unwrap().image;
+            let metadata = image.shared_nix.unwrap();
+            assert_eq!(metadata.version.require_supported().is_ok(), version == 1);
+            assert_eq!(metadata.seed_closure.as_path().to_str(), Some(seed));
+        }
+        for invalid in [
+            json!({}),
+            json!({"version": 0, "seed_closure": seed}),
+            json!({"version": 1, "seed_closure": "/tmp/store-paths"}),
+            json!({"version": 1, "seed_closure": seed, "approve": true}),
+        ] {
+            value["image"]["shared_nix"] = invalid;
+            fs::write(&path, value.to_string()).unwrap();
+            assert!(load_profile_config(&path, platform).is_err());
+        }
+    }
+}
+
+#[test]
 fn managed_cache_declarations_are_closed_and_platform_independent() {
     use wrix_sandbox::command::config::ManagedCache;
     let root = tempfile::tempdir().unwrap();
@@ -362,6 +398,9 @@ fn nix_generated_builtin_profiles_match_parser() {
         );
         assert_eq!(config.image.source.kind(), platform.expected_source_kind());
         assert!(config.image.digest.is_some());
+        let shared = config.image.shared_nix.as_ref().unwrap();
+        shared.version.require_supported().unwrap();
+        assert!(shared.seed_closure.as_path().is_file());
         assert_eq!(config.agent.kind.as_str(), "pi");
         let wire: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
         assert_eq!(wire["schema"], 1);

@@ -4,6 +4,7 @@ let
     "/nix"
     "/etc/nix"
     "/etc/wrix/private-nix-version"
+    "/etc/wrix/shared-nix-version"
     "/homeless-shelter"
     "/network-bootstrap.sh"
     "/network-ready.sh"

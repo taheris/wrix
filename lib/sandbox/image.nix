@@ -44,9 +44,11 @@ let
     concatStringsSep
     mapAttrsToList
     optional
+    optionalAttrs
     optionalString
     ;
   privateNix = import ./private-nix.nix { inherit (pkgs) lib; };
+  sharedNixContract = import ./shared-nix.nix;
   sshConfig = import ../util/ssh.nix;
   knownHosts = import ./known-hosts.nix { inherit pkgs; };
 
@@ -202,7 +204,25 @@ let
       }
   );
 
+  configurationInputs = {
+    "mcp-available.json" = mcpAvailableJson;
+  }
+  // optionalAttrs (agent == "claude") {
+    "claude-config.json" = claudeConfigJson;
+    "claude-settings.json" = claudeSettingsJson;
+  }
+  // optionalAttrs (agent == "pi") {
+    "pi-settings.json" = piSettingsJson;
+  };
+  configurationRoots = pkgs.linkFarm "wrix-image-configuration" (
+    mapAttrsToList (name: path: {
+      name = "share/wrix/image-inputs/${name}";
+      inherit path;
+    }) configurationInputs
+  );
+
   leafContents = [
+    configurationRoots
     pkgs.dockerTools.usrBinEnv
     pkgs.dockerTools.binSh
     pkgs.dockerTools.caCertificates
@@ -236,6 +256,11 @@ let
   # unperturbed.
   imageNixDb = imageBuilderPkgs.closureInfo {
     rootPaths = materializedRoots;
+  };
+
+  sharedNix = {
+    inherit (sharedNixContract) version;
+    seed_closure = "${imageNixDb}/store-paths";
   };
 
   # dockerTools builds config/layer metadata in derivations that run after the
@@ -293,6 +318,10 @@ let
     "wrix.profile.name" = profile.name;
     "wrix.agent.kind" = agent;
     "wrix.nix.private" = toString privateNix.version;
+    "wrix.nix.shared" = toString sharedNix.version;
+    "wrix.nix.seed" = builtins.hashString "sha256" (
+      builtins.unsafeDiscardStringContext sharedNix.seed_closure
+    );
   };
 
   rawImage = buildImage {
@@ -314,6 +343,7 @@ let
       mkdir -p etc/wrix
       printf '%s\n' '${agent}' > etc/wrix/image-agent
       printf '%s\n' '${toString privateNix.version}' > etc/wrix/private-nix-version
+      printf '%s\n' '${toString sharedNix.version}' > etc/wrix/shared-nix-version
       ${optionalString (agent == "direct") ''
         cp ${directExecutableFile} etc/wrix/direct-executable
       ''}
@@ -419,6 +449,7 @@ let
     inherit agent;
     oci_layout = "${ociLayout}";
     oci_ref = "latest";
+    shared_nix = sharedNix;
     materialized_roots = map toString materializedRoots;
     lower_tiers_closure = "${agentImage.lowerTiersClosure}/store-paths";
     layering_pipeline = "${layeringPipeline}";
@@ -505,5 +536,6 @@ rawImage
     mcpAvailableJson
     piSettingsJson
     profileEnv
+    sharedNix
     ;
 }

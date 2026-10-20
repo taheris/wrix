@@ -238,6 +238,7 @@ pub struct Image {
     pub reference: ImageRef,
     pub source: Source,
     pub digest: Option<Digest>,
+    pub shared_nix: Option<wrix_core::nix_store::Image>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -641,6 +642,7 @@ impl RawProfileConfig {
                 source: Source::parse(source, source_kind)
                     .map_err(|source| ConfigError::InvalidImageSource { source })?,
                 digest: image.digest,
+                shared_nix: image.shared_nix,
             },
             agent: Agent { kind },
             resources: self.resources.unwrap_or_default(),
@@ -766,6 +768,7 @@ struct RawImage {
     source: Option<String>,
     source_kind: Option<SourceKind>,
     digest: Option<Digest>,
+    shared_nix: Option<wrix_core::nix_store::Image>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -897,6 +900,7 @@ fn validate_mount_destination(destination: &str) -> Result<(), ConfigError> {
         "/nix",
         "/etc/nix",
         "/etc/wrix/private-nix-version",
+        "/etc/wrix/shared-nix-version",
         "/homeless-shelter",
         "/network-bootstrap.sh",
         "/network-ready.sh",
@@ -1316,6 +1320,7 @@ mod test {
             "/etc/nix",
             "/etc/wrix",
             "/etc/wrix/private-nix-version",
+            "/etc/wrix/shared-nix-version",
             "/homeless-shelter",
             "/network-bootstrap.sh",
             "/network-ready.sh",

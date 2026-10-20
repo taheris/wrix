@@ -222,7 +222,7 @@ safe reconciliation before readmission.
 
 - Factory image and launch metadata agree on independent shared capability and
   exact seed closure while preserving private-Nix provisioning and layering.
-  [check?](test-ci:test-shared-nix-image-contract)
+  [check](test-ci:test-shared-nix-image-contract)
 
 ### Protection Acceptance
 
