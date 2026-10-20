@@ -1,6 +1,8 @@
 #[path = "common/celler.rs"]
 mod celler;
 mod common;
+#[path = "common/peer_runtime.rs"]
+mod peer_runtime;
 #[path = "common/service_binding.rs"]
 mod service_binding;
 
@@ -1014,11 +1016,14 @@ fn assert_cache_start_preserves_owner(fixture: &Fixture) -> TestResult {
     for name in ["cache.lock", "publish-roots.json", "pending"] {
         assert!(!state.join(name).exists(), "{name}");
     }
-    let log = fs::read_to_string(fixture.root.path().join("runtime.log"))?;
-    assert!(
-        !log.lines()
-            .any(|line| line.starts_with("rm ") || line.starts_with("image "))
-    );
+    let log_path = fixture.root.path().join("runtime.log");
+    if log_path.exists() {
+        let log = fs::read_to_string(log_path)?;
+        assert!(
+            !log.lines()
+                .any(|line| line.starts_with("rm ") || line.starts_with("image "))
+        );
+    }
     assert_eq!(fs::read(state.join("services.json"))?, metadata);
     assert_eq!(fs::read(state.join("keys/cache.pub"))?, key);
     assert_eq!(
@@ -1110,6 +1115,141 @@ fn cache_start_rejects_competing_guarded_owner_without_claiming_shared_reuse() -
     fixture.snapshot[0]["configuration"]["labels"]["wrix.workspace"] = json!("/peer");
     fixture.write_snapshot()?;
     assert_cache_start_preserves_owner(&fixture)?;
+    Ok(())
+}
+
+#[test]
+fn cache_start_rejects_running_celler_in_the_other_runtime() -> TestResult {
+    for backend in ["celler-v1", "celler-v2", "unknown-version"] {
+        let fixture = Fixture::new()?;
+        peer_runtime::install(
+            &fixture.root.path().join("bin"),
+            "wrix-service-peer",
+            backend,
+            "true",
+        )?;
+        assert_cache_start_preserves_owner(&fixture)?;
+        let log = fs::read_to_string(fixture.root.path().join("bin/peer.log"))?;
+        assert!(log.contains("{{.State.Running}}"));
+        assert!(!log.lines().any(|line| line.starts_with("rm ")));
+    }
+    Ok(())
+}
+
+#[test]
+fn identical_container_names_in_different_runtimes_do_not_authorize_reuse() -> TestResult {
+    let fixture = Fixture::new()?;
+    peer_runtime::install(
+        &fixture.root.path().join("bin"),
+        fixture.metadata["container_name"].as_str().unwrap(),
+        "celler-v2",
+        "true",
+    )?;
+    assert_cache_start_preserves_owner(&fixture)?;
+    Ok(())
+}
+
+#[test]
+fn inaccessible_other_runtime_does_not_authorize_cache_start() -> TestResult {
+    let fixture = Fixture::new()?;
+    peer_runtime::install(
+        &fixture.root.path().join("bin"),
+        "wrix-service-peer",
+        "celler-v2",
+        "unavailable",
+    )?;
+    let output = fixture.run("start")?;
+    assert!(!output.status.success());
+    assert!(
+        output.stderr.contains("cannot connect to Podman machine"),
+        "{}",
+        output.stderr
+    );
+    assert!(!fixture.root.path().join("run.argv").exists());
+    assert!(!fixture.state_root()?.join("cache.lock").exists());
+    assert!(!fixture.root.path().join("runtime.log").exists());
+    Ok(())
+}
+
+#[test]
+fn podman_start_checks_apple_backend_ownership_before_selected_runtime_access() -> TestResult {
+    let fixture = Fixture::new()?;
+    let selected = fixture.root.path().join("bin/podman");
+    fs::write(
+        &selected,
+        "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'selected runtime was accessed\\n' >&2\nexit 64\n",
+    )?;
+    set_mode(&selected, 0o755)?;
+    let output = run_command(
+        fixture
+            .command()?
+            .env("WRIX_CONTAINER_RUNTIME", selected)
+            .args(["service", "start"]),
+    )?;
+    assert!(!output.status.success());
+    assert!(
+        output.stderr.contains("explicit host-wide maintenance"),
+        "{}",
+        output.stderr
+    );
+    assert!(!output.stderr.contains("selected runtime was accessed"));
+    assert!(!fixture.root.path().join("run.argv").exists());
+    assert!(!fixture.state_root()?.join("cache.lock").exists());
+    Ok(())
+}
+
+#[test]
+fn installed_other_runtime_with_missing_interpreter_is_not_treated_as_absent() -> TestResult {
+    let fixture = Fixture::new()?;
+    let peer = fixture.root.path().join("bin/podman");
+    fs::write(&peer, "#!/definitely/missing/interpreter\n")?;
+    set_mode(&peer, 0o755)?;
+    let output = fixture.run("start")?;
+    assert!(!output.status.success());
+    assert!(
+        output.stderr.contains("service lifecycle I/O failed"),
+        "{}",
+        output.stderr
+    );
+    assert!(!fixture.root.path().join("runtime.log").exists());
+    assert!(!fixture.root.path().join("run.argv").exists());
+    assert!(!fixture.state_root()?.join("cache.lock").exists());
+    Ok(())
+}
+
+#[test]
+fn unknown_other_runtime_state_is_not_treated_as_stopped() -> TestResult {
+    let fixture = Fixture::new()?;
+    peer_runtime::install(
+        &fixture.root.path().join("bin"),
+        "wrix-service-peer",
+        "celler-v2",
+        "stopping",
+    )?;
+    let output = fixture.run("start")?;
+    assert!(!output.status.success());
+    assert!(
+        output.stderr.contains("unknown running state"),
+        "{}",
+        output.stderr
+    );
+    assert!(!fixture.root.path().join("run.argv").exists());
+    assert!(!fixture.state_root()?.join("cache.lock").exists());
+    Ok(())
+}
+
+#[test]
+fn stopped_backend_in_the_other_runtime_does_not_prevent_cache_reentry() -> TestResult {
+    let fixture = Fixture::new()?;
+    peer_runtime::install(
+        &fixture.root.path().join("bin"),
+        "wrix-service-peer",
+        "celler-v1",
+        "false",
+    )?;
+    let output = fixture.run("start")?;
+    assert!(output.status.success(), "{}", output.stderr);
+    assert!(!fixture.root.path().join("run.argv").exists());
     Ok(())
 }
 

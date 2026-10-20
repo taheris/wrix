@@ -1151,11 +1151,38 @@ impl Runtime {
     }
 
     fn ensure_cache_owner_compatible(&self, plan: &Plan) -> Result<()> {
-        for container in self.list_container_infos()? {
+        if plan.cache_enabled() {
+            let alternate = self.alternate();
+            if let Some(containers) = alternate.available_container_infos()? {
+                alternate.ensure_cache_inventory_compatible(plan, containers, false)?;
+            }
+        }
+        self.ensure_cache_inventory_compatible(plan, self.list_container_infos()?, true)
+    }
+
+    fn alternate(&self) -> Self {
+        let (kind, binary) = match self.kind {
+            RuntimeKind::Podman => (RuntimeKind::Container, "container"),
+            RuntimeKind::Container => (RuntimeKind::Podman, "podman"),
+        };
+        Self {
+            kind,
+            binary: binary.to_owned(),
+            binding: None,
+        }
+    }
+
+    fn ensure_cache_inventory_compatible(
+        &self,
+        plan: &Plan,
+        containers: Vec<ContainerInfo>,
+        selected_runtime: bool,
+    ) -> Result<()> {
+        for container in containers {
             if container.kind.as_deref() != Some("service") {
                 continue;
             }
-            let selected = container.name == plan.container_name().as_str();
+            let selected = selected_runtime && container.name == plan.container_name().as_str();
             if !selected && !plan.cache_enabled() {
                 continue;
             }
@@ -1474,14 +1501,75 @@ impl Runtime {
     }
 
     fn list_container_infos(&self) -> Result<Vec<ContainerInfo>> {
-        if self.kind == RuntimeKind::Container {
-            return Ok(self
-                .apple_snapshots(&["list", "--all", "--format", "json"])?
-                .into_iter()
-                .map(apple::Snapshot::into_info)
-                .collect());
+        self.available_container_infos()?
+            .ok_or_else(|| Error::Operation {
+                message: format!("container runtime {} is unavailable", self.binary),
+            })
+    }
+
+    fn binary_absent(&self) -> io::Result<bool> {
+        let binary = Path::new(&self.binary);
+        let candidates = if binary.components().count() > 1 {
+            vec![binary.to_path_buf()]
+        } else if let Some(path) = env::var_os("PATH") {
+            env::split_paths(&path)
+                .map(|root| root.join(binary))
+                .collect()
+        } else {
+            return Ok(false);
+        };
+        for path in candidates {
+            match fs::symlink_metadata(path) {
+                Ok(_) => return Ok(false),
+                Err(source) if source.kind() == io::ErrorKind::NotFound => {}
+                Err(source) => return Err(source),
+            }
         }
-        let names = self.list_container_names()?;
+        Ok(true)
+    }
+
+    fn available_container_infos(&self) -> Result<Option<Vec<ContainerInfo>>> {
+        let args: &[&str] = match self.kind {
+            RuntimeKind::Container => &["list", "--all", "--format", "json"],
+            RuntimeKind::Podman => &["ps", "-a", "--format", "{{.Names}}"],
+        };
+        let output = match Command::new(&self.binary)
+            .args(args)
+            .stdin(Stdio::null())
+            .output()
+        {
+            Ok(output) => output,
+            Err(source) if source.kind() == io::ErrorKind::NotFound && self.binary_absent()? => {
+                return Ok(None);
+            }
+            Err(source) => return Err(source.into()),
+        };
+        if !output.status.success() {
+            return Err(Error::Operation {
+                message: format!(
+                    "failed to list containers in {}: {}{}",
+                    self.binary,
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                ),
+            });
+        }
+        if self.kind == RuntimeKind::Container {
+            let snapshots: Vec<apple::Snapshot> = serde_json::from_slice(&output.stdout)
+                .map_err(|source| Error::AppleJson { source })?;
+            return Ok(Some(
+                snapshots
+                    .into_iter()
+                    .map(apple::Snapshot::into_info)
+                    .collect(),
+            ));
+        }
+        let names: Vec<_> = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(str::to_owned)
+            .collect();
         let mut containers = Vec::with_capacity(names.len());
         for name in names {
             containers.push(ContainerInfo {
@@ -1492,32 +1580,7 @@ impl Runtime {
                 name,
             });
         }
-        Ok(containers)
-    }
-
-    fn list_container_names(&self) -> Result<Vec<String>> {
-        let output = Command::new(&self.binary)
-            .arg("ps")
-            .arg("-a")
-            .arg("--format")
-            .arg("{{.Names}}")
-            .stdin(Stdio::null())
-            .output()?;
-        if !output.status.success() {
-            return Err(Error::Operation {
-                message: format!(
-                    "failed to list containers: {}{}",
-                    String::from_utf8_lossy(&output.stdout),
-                    String::from_utf8_lossy(&output.stderr)
-                ),
-            });
-        }
-        Ok(String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .map(str::to_owned)
-            .collect())
+        Ok(Some(containers))
     }
 
     fn apple_snapshots(&self, args: &[&str]) -> Result<Vec<apple::Snapshot>> {
