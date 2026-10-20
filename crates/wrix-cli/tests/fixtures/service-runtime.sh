@@ -4,7 +4,7 @@ set -euo pipefail
 runtime="${0##*/}"
 printf '%s\0' "$@" >>"${WRIX_TEST_CALLS:?}"
 snapshot() {
-  "${WRIX_TEST_JQ_BIN:?}" -Rsc '
+  "${WRIX_TEST_JQ_BIN:?}" --arg image "${WRIX_TEST_IMAGE_ID:-$WRIX_TEST_DIGEST}" -Rsc '
     split("\u0000")[:-1] as $args |
     def values($flag): [range(0; ($args | length) - 1) as $i |
       select($args[$i] == $flag) | $args[$i + 1]];
@@ -15,7 +15,7 @@ snapshot() {
       containerPort: (.[2] | tonumber), proto: "tcp", count: 1
     })) as $ports |
     [{configuration: {id: values("--name")[0], labels: $labels, publishedPorts: $ports,
-        image: {descriptor: {digest: $args[-4]}}},
+        image: {descriptor: {digest: (if $args[-4] | startswith("sha256:") then $args[-4] else $image end)}}},
       status: {state: "running"}}]
   ' "${WRIX_TEST_RUN_ARGS:?}"
 }
@@ -54,6 +54,10 @@ case "${1:-} ${2:-}" in
   'image inspect')
     [[ -f "${WRIX_TEST_IMAGE:?}" ]] || exit 1
     if [[ "$runtime" == container ]]; then
+      if [[ "${!#}" == sha256:* ]]; then
+        printf 'unsupported fixture: Apple image lookup requires a stored reference\n' >&2
+        exit 64
+      fi
       printf '[{"id":"%s","digest":"%s","labels":{"wrix.nix.private":"%s"}}]\n' "${WRIX_TEST_IMAGE_ID:-$WRIX_TEST_DIGEST}" "${WRIX_TEST_CONTENT_DIGEST:-$WRIX_TEST_DIGEST}" "${WRIX_TEST_PRIVATE_NIX_VERSION:-1}"
     elif [[ "${4:-}" == '{{ index .Config.Labels "wrix.nix.private" }}' ]]; then
       printf '%s\n' "${WRIX_TEST_PRIVATE_NIX_VERSION:-1}"

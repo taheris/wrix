@@ -755,22 +755,30 @@ fn service_start_uses_shared_image_digest_preflight_without_pruning() -> TestRes
                 usize::from(!installed && runtime == "container")
             );
             let args = fs::read(fixture.root.path().join("run.argv"))?;
-            assert!(
-                args.split(|byte| *byte == 0)
-                    .any(|arg| arg == digest.as_bytes())
-            );
-            assert!(
-                !args
-                    .split(|byte| *byte == 0)
-                    .any(|arg| arg == b"wrix-service:test")
-            );
+            let target = if runtime == "podman" {
+                digest.as_bytes()
+            } else {
+                b"wrix-service:test"
+            };
+            assert!(args.split(|byte| *byte == 0).any(|arg| arg == target));
+            if runtime == "podman" {
+                assert!(
+                    args.split(|byte| *byte == 0)
+                        .any(|arg| arg == b"--pull=never")
+                );
+                assert!(
+                    !args
+                        .split(|byte| *byte == 0)
+                        .any(|arg| arg == b"wrix-service:test")
+                );
+            }
         }
     }
     Ok(())
 }
 
 #[test]
-fn selected_owner_keeps_its_frozen_image_when_the_callers_package_changes() -> TestResult {
+fn selected_owner_preserves_its_record_when_the_callers_package_changes() -> TestResult {
     use std::os::unix::fs::MetadataExt;
     for (runtime, kind) in [
         ("podman", "nix-descriptor"),
@@ -803,12 +811,17 @@ fn selected_owner_keeps_its_frozen_image_when_the_callers_package_changes() -> T
         let inode = fs::metadata(&selection)?.ino();
         let key = fs::read(state.join("keys/cache.pub"))?;
         let selected: Value = serde_json::from_slice(&before)?;
-        assert_eq!(selected["schema_version"], 2);
-        assert_eq!(selected["recipe"]["binding"]["image"], "wrix-service:test");
-        assert_eq!(
-            selected["recipe"]["image_id"],
-            format!("sha256:{}", "a".repeat(64))
-        );
+        if runtime == "podman" {
+            assert_eq!(selected["schema_version"], 2);
+            assert_eq!(selected["recipe"]["binding"]["image"], "wrix-service:test");
+            assert_eq!(
+                selected["recipe"]["image_id"],
+                format!("sha256:{}", "a".repeat(64))
+            );
+        } else {
+            assert_eq!(selected["schema_version"], 1);
+            assert!(selected.get("recipe").is_none());
+        }
         let binding = fixture.root.path().join("binding.json");
         let mut caller: Value = serde_json::from_slice(&fs::read(&binding)?)?;
         caller["image"] = json!("wrix-service:new-package");
@@ -826,6 +839,10 @@ fn selected_owner_keeps_its_frozen_image_when_the_callers_package_changes() -> T
         let args = fs::read(fixture.root.path().join("run.argv"))?;
         let mut args: Vec<_> = args.split(|byte| *byte == 0).map(<[u8]>::to_vec).collect();
         let image = args.len() - 5;
+        if runtime == "container" {
+            assert_eq!(args[image], b"wrix-service:test");
+            continue;
+        }
         assert_eq!(args[image], format!("sha256:{}", "a".repeat(64)).as_bytes());
         args[image] = format!("sha256:{}", "b".repeat(64)).into_bytes();
         let changed = args.join(&0);
@@ -845,42 +862,61 @@ fn selected_owner_keeps_its_frozen_image_when_the_callers_package_changes() -> T
 }
 
 #[test]
-fn wrong_installed_content_is_rejected_before_starting_an_owner() -> TestResult {
-    for (runtime, kind) in [
-        ("podman", "nix-descriptor"),
-        ("container", "docker-archive"),
-    ] {
-        let fixture = Fixture::new()?;
-        service_binding::create(fixture.root.path(), &fixture.bin, kind)?;
-        let output = run_command(
-            fixture
-                .command(runtime)?
-                .args(["service", "start"])
-                .env("WRIX_SERVICE_ALLOW_TEMP_CACHE", "1")
-                .env(
-                    "WRIX_TEST_CONTENT_DIGEST",
-                    format!("sha256:{}", "b".repeat(64)),
-                ),
-        )?;
-        assert!(!output.status.success());
-        assert!(
-            output
-                .stderr
-                .contains("does not match the bound content digest"),
-            "{}",
-            output.stderr
-        );
-        assert!(!fixture.root.path().join("run.argv").exists());
-        let host = if cfg!(target_os = "macos") {
-            fixture
-                .root
-                .path()
-                .join("home/Library/Application Support/wrix")
-        } else {
-            fixture.root.path().join("state/wrix")
-        };
-        assert!(!host.join("host-lifecycle/celler-owner.json").exists());
-    }
+fn wrong_installed_podman_config_identity_is_rejected_before_starting_an_owner() -> TestResult {
+    let fixture = Fixture::new()?;
+    service_binding::create(fixture.root.path(), &fixture.bin, "nix-descriptor")?;
+    let output = run_command(
+        fixture
+            .command("podman")?
+            .args(["service", "start"])
+            .env("WRIX_SERVICE_ALLOW_TEMP_CACHE", "1")
+            .env("WRIX_TEST_IMAGE_ID", format!("sha256:{}", "b".repeat(64))),
+    )?;
+    assert!(!output.status.success());
+    assert!(
+        output
+            .stderr
+            .contains("does not match the bound content digest"),
+        "{}",
+        output.stderr
+    );
+    assert!(!fixture.root.path().join("run.argv").exists());
+    let host = if cfg!(target_os = "macos") {
+        fixture
+            .root
+            .path()
+            .join("home/Library/Application Support/wrix")
+    } else {
+        fixture.root.path().join("state/wrix")
+    };
+    assert!(!host.join("host-lifecycle/celler-owner.json").exists());
+    Ok(())
+}
+
+#[test]
+fn podman_pins_the_config_identity_not_the_registry_manifest_digest() -> TestResult {
+    let fixture = Fixture::new()?;
+    service_binding::create(fixture.root.path(), &fixture.bin, "nix-descriptor")?;
+    let output = run_command(
+        fixture
+            .command("podman")?
+            .args(["service", "start"])
+            .env("WRIX_SERVICE_ALLOW_TEMP_CACHE", "1")
+            .env(
+                "WRIX_TEST_CONTENT_DIGEST",
+                format!("sha256:{}", "b".repeat(64)),
+            ),
+    )?;
+    assert!(output.status.success(), "{}", output.stderr);
+    let args = fs::read(fixture.root.path().join("run.argv"))?;
+    assert!(
+        args.split(|byte| *byte == 0)
+            .any(|arg| arg == format!("sha256:{}", "a".repeat(64)).as_bytes())
+    );
+    assert!(
+        args.split(|byte| *byte == 0)
+            .any(|arg| arg == b"--pull=never")
+    );
     Ok(())
 }
 
@@ -935,6 +971,20 @@ fn image_copy_fixture_conforms_to_raw_inspection_and_archive_output() -> TestRes
         format!("Loaded: untagged@sha256:{}", "a".repeat(64))
     );
     assert!(fixture.root.path().join("image").exists());
+    assert_eq!(
+        invoke(
+            "container",
+            &[
+                "image",
+                "inspect",
+                "-q",
+                &format!("sha256:{}", "a".repeat(64))
+            ]
+        )?
+        .status
+        .code(),
+        Some(64)
+    );
     assert!(
         !invoke(
             "skopeo",

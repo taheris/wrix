@@ -115,7 +115,9 @@ pub enum Error {
     Operation { message: String },
     /// Celler ownership in container {container} requires explicit host-wide maintenance; ordinary startup cannot replace a running backend or start a competing owner
     CellerOwnership { container: String },
-    /// workspace stop cannot shut down running shared Celler backend {container}; namespace retirement requires host-wide lifecycle integration, not container removal
+    /// service identity or compatibility in container {container} requires explicit host-wide maintenance; ordinary startup cannot adopt or migrate an unverified service
+    IncompatibleService { container: String },
+    /// workspace stop cannot remove shared Celler backend {container}; namespace retirement requires host-wide lifecycle integration, not container removal
     CellerWorkspaceStop { container: String },
     /// service port {port} is already in use by {owner}; stop that process/container or free the port before retrying
     PortInUse { port: u16, owner: String },
@@ -240,8 +242,29 @@ pub enum RuntimeStatus {
 }
 
 enum RunDisposition {
-    Created(Box<owner::Recipe>),
+    Created(Option<Box<owner::Recipe>>),
     Retained,
+}
+
+enum PreparedImage {
+    Pinned(Box<owner::Recipe>),
+    Reference(ImageRef),
+}
+
+impl PreparedImage {
+    fn as_str(&self) -> &str {
+        match self {
+            Self::Pinned(recipe) => recipe.image_id.as_str(),
+            Self::Reference(reference) => reference.as_str(),
+        }
+    }
+
+    fn into_recipe(self) -> Option<Box<owner::Recipe>> {
+        match self {
+            Self::Pinned(recipe) => Some(recipe),
+            Self::Reference(_) => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -737,19 +760,19 @@ pub fn start(cache_mode: CacheMode) -> Result<Status> {
         plan.reconcile_owner(guard)?;
     }
     supervisor::transition::ensure_clear(plan.paths().state_root(), plan.workspace().hash())?;
-    if plan.dolt().is_some() {
-        plan.authorize()?;
-        managed::configure(plan.workspace().canonical_path())?;
-    }
     let runtime = Runtime::from_env()?;
     if plan.has_services() {
         runtime.binding.as_ref().ok_or(binding::Error::Missing)?;
     }
     if plan.has_services() || plan.cache_enabled() {
         runtime.ensure_cache_owner_compatible(&plan)?;
+        runtime.ensure_namespace_compatible(&plan)?;
     }
     if plan.has_services() && runtime.reconcile_legacy_containers(&plan)? {
         plan = Plan::for_current_dir(cache_mode)?;
+    }
+    if plan.dolt().is_some() {
+        managed::configure(plan.workspace().canonical_path())?;
     }
     runtime.refresh_unavailable_ports(&mut plan)?;
     let cache = if plan.cache_enabled() {
@@ -775,7 +798,7 @@ pub fn start(cache_mode: CacheMode) -> Result<Status> {
         cache::activate(&plan, &cache)?;
         if plan.selected_owner.is_none() {
             let recipe = match disposition {
-                Some(RunDisposition::Created(recipe)) => Some(*recipe),
+                Some(RunDisposition::Created(recipe)) => recipe.map(|recipe| *recipe),
                 Some(RunDisposition::Retained) | None => None,
             };
             owner::Selected::from_plan(&plan, runtime.kind, recipe)?
@@ -1227,8 +1250,10 @@ impl RuntimeKind {
 impl ContainerInfo {
     fn belongs_to_workspace(&self, plan: &Plan) -> bool {
         let workspace_path = plan.workspace().canonical_path().display().to_string();
-        self.workspace_hash.as_deref() == Some(plan.workspace().hash().as_str())
-            || self.workspace_path.as_deref() == Some(workspace_path.as_str())
+        self.workspace_hash.as_deref().map_or_else(
+            || self.workspace_path.as_deref() == Some(workspace_path.as_str()),
+            |hash| hash == plan.workspace().hash().as_str(),
+        )
     }
 
     fn publishes_any(&self, ports: &[u16]) -> bool {
@@ -1308,13 +1333,19 @@ impl Runtime {
 
     fn ensure_workspace_stop_safe(&self, plan: &Plan) -> Result<()> {
         let name = plan.container_name();
-        if self.status(&name)? == RuntimeStatus::Running
+        let status = self.status(&name)?;
+        if status != RuntimeStatus::Missing
             && self
                 .inspect_label(name.as_str(), CACHE_BACKEND_LABEL)?
                 .is_some()
         {
             return Err(Error::CellerWorkspaceStop {
                 container: name.as_str().to_owned(),
+            });
+        }
+        if status != RuntimeStatus::Missing && !self.namespace_identity_matches(plan)? {
+            return Err(Error::IncompatibleService {
+                container: name.as_str().into(),
             });
         }
         Ok(())
@@ -1429,7 +1460,43 @@ impl Runtime {
         Ok(())
     }
 
+    fn is_legacy_cache_only(&self, name: &str) -> Result<bool> {
+        Ok(self.inspect_label(name, CACHE_BACKEND_LABEL)?.is_none()
+            && self.inspect_label(name, "wrix.dolt.transport")?.as_deref() == Some("disabled"))
+    }
+
+    fn namespace_identity_matches(&self, plan: &Plan) -> Result<bool> {
+        let name = plan.container_name();
+        let identity = ContainerInfo {
+            name: name.as_str().into(),
+            kind: self.inspect_label(name.as_str(), "wrix.kind")?,
+            workspace_hash: self.inspect_label(name.as_str(), "wrix.workspace.hash")?,
+            workspace_path: self.inspect_label(name.as_str(), "wrix.workspace")?,
+            published_ports: Vec::new(),
+        };
+        Ok(identity.kind.as_deref() == Some("service") && identity.belongs_to_workspace(plan))
+    }
+
+    fn ensure_namespace_compatible(&self, plan: &Plan) -> Result<()> {
+        let name = plan.container_name();
+        let status = self.status(&name)?;
+        if status == RuntimeStatus::Missing {
+            return Ok(());
+        }
+        if !self.namespace_identity_matches(plan)?
+            || (status == RuntimeStatus::Running
+                && !self.running_container_satisfies_plan(&name, plan)?)
+            || (status == RuntimeStatus::Stopped && !self.is_legacy_cache_only(name.as_str())?)
+        {
+            return Err(Error::IncompatibleService {
+                container: name.as_str().into(),
+            });
+        }
+        Ok(())
+    }
+
     fn ensure_running(&self, plan: &Plan) -> Result<RunDisposition> {
+        self.ensure_namespace_compatible(plan)?;
         let name = plan.container_name();
         match self.status(&name)? {
             RuntimeStatus::Running => {
@@ -1437,14 +1504,9 @@ impl Runtime {
                 if self.running_container_satisfies_plan(&name, plan)? {
                     return Ok(RunDisposition::Retained);
                 }
-                if self
-                    .inspect_label(name.as_str(), CACHE_ENABLED_LABEL)?
-                    .as_deref()
-                    != Some("false")
-                {
-                    self.ensure_workspace_stop_safe(plan)?;
-                }
-                self.remove(&name)?;
+                return Err(Error::IncompatibleService {
+                    container: name.as_str().into(),
+                });
             }
             RuntimeStatus::Stopped => self.remove(&name)?,
             RuntimeStatus::Missing => {}
@@ -1459,7 +1521,7 @@ impl Runtime {
             .arg("--name")
             .arg(name.as_str());
         if self.kind == RuntimeKind::Podman {
-            command.arg("--restart=unless-stopped");
+            command.args(["--restart=unless-stopped", "--pull=never"]);
         }
         command
             .arg("--label")
@@ -1549,7 +1611,7 @@ impl Runtime {
             }
         }
         command
-            .arg(image.image_id.as_str())
+            .arg(image.as_str())
             .arg("sh")
             .arg("-c")
             .arg(container_command(plan))
@@ -1558,7 +1620,7 @@ impl Runtime {
             .stderr(Stdio::piped());
         let output = command.output()?;
         if output.status.success() {
-            Ok(RunDisposition::Created(Box::new(image)))
+            Ok(RunDisposition::Created(image.into_recipe()))
         } else {
             let message = String::from_utf8_lossy(&output.stderr).into_owned();
             bind_port_from_runtime_error(&message).map_or_else(
@@ -1618,11 +1680,18 @@ impl Runtime {
     }
 
     fn running_container_satisfies_plan(&self, name: &ContainerName, plan: &Plan) -> Result<bool> {
+        if !self.namespace_identity_matches(plan)? {
+            return Ok(false);
+        }
         if plan.owns_cache()
-            && self
+            && (self
                 .inspect_label(name.as_str(), CACHE_BACKEND_LABEL)?
                 .as_deref()
                 != Some(CACHE_BACKEND_VERSION)
+                || self
+                    .inspect_label(name.as_str(), "wrix.workspace.hash")?
+                    .as_deref()
+                    != Some(plan.workspace().hash().as_str()))
         {
             return Ok(false);
         }
@@ -1694,19 +1763,30 @@ impl Runtime {
         plan.authorize()?;
         let planned_name = plan.container_name();
         let selected_ports = plan.selected_host_ports();
-        let mut removed = false;
-        for container in self.list_container_infos()? {
-            if container.name == planned_name.as_str() {
-                continue;
-            }
-            if container.belongs_to_workspace(plan)
-                || container.is_legacy_service_on_selected_port(&selected_ports)
+        let candidates: Vec<_> = self
+            .list_container_infos()?
+            .into_iter()
+            .filter(|container| {
+                container.name != planned_name.as_str()
+                    && container.kind.as_deref() == Some("service")
+                    && (container.belongs_to_workspace(plan)
+                        || container.is_legacy_service_on_selected_port(&selected_ports))
+            })
+            .collect();
+        for container in &candidates {
+            if !container.belongs_to_workspace(plan)
+                || self.status_identifier(&container.name)? != RuntimeStatus::Stopped
+                || !self.is_legacy_cache_only(&container.name)?
             {
-                self.remove_identifier(&container.name)?;
-                removed = true;
+                return Err(Error::IncompatibleService {
+                    container: container.name.clone(),
+                });
             }
         }
-        Ok(removed)
+        for container in &candidates {
+            self.remove_identifier(&container.name)?;
+        }
+        Ok(!candidates.is_empty())
     }
 
     fn refresh_unavailable_ports(&self, plan: &mut Plan) -> Result<()> {
@@ -1990,7 +2070,7 @@ impl Runtime {
         }
     }
 
-    fn ensure_image(&self, plan: &Plan) -> Result<owner::Recipe> {
+    fn ensure_image(&self, plan: &Plan) -> Result<PreparedImage> {
         let candidate = self.binding.as_ref().ok_or(binding::Error::Missing)?;
         let root = plan
             .paths()
@@ -2014,6 +2094,9 @@ impl Runtime {
             )?,
         )?;
         if self.image_exists(candidate.image())? {
+            if self.kind == RuntimeKind::Container {
+                return Ok(PreparedImage::Reference(candidate.image().clone()));
+            }
             let target = Target::Reference(candidate.image().clone());
             let image_id = store
                 .image_id(runtime, &target)?
@@ -2021,21 +2104,17 @@ impl Runtime {
                     message: "installed service image has no immutable native identity".into(),
                 })?;
             let image_id = parse_image_id(image_id.as_str())?;
-            if store
-                .image_digest(runtime, &Target::Digest(image_id.clone()))?
-                .as_ref()
-                != Some(&digest)
-            {
+            if image_id != digest {
                 return Err(Error::Operation {
                     message: "installed service image does not match the bound content digest"
                         .into(),
                 });
             }
-            Ok(owner::Recipe {
+            Ok(PreparedImage::Pinned(Box::new(owner::Recipe {
                 binding: candidate.clone(),
                 image_id,
                 config_digest: digest,
-            })
+            })))
         } else {
             Err(Error::InstalledImageUnavailable {
                 path: candidate.source().path().display().to_string(),

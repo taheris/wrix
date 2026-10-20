@@ -3,7 +3,14 @@ set -euo pipefail
 printf '%s\n' "$*" >>"${WRIX_TEST_RUNTIME_LOG:?}"
 case "$*" in
   'image list --format json') printf '[{"configuration":{"name":"wrix-service:test"},"id":"sha256:%s"}]\n' "${WRIX_TEST_DIGEST:?}"; exit 0 ;;
-  'image inspect '*) printf '[{"id":"sha256:%s","digest":"sha256:%s"}]\n' "${WRIX_TEST_DIGEST:?}" "$WRIX_TEST_DIGEST"; exit 0 ;;
+  'image inspect '*)
+    if [[ "${!#}" == sha256:* ]]; then
+      printf 'unsupported fixture: Apple image lookup requires a stored reference\n' >&2
+      exit 64
+    fi
+    printf '[{"id":"sha256:%s","digest":"sha256:%s"}]\n' "${WRIX_TEST_DIGEST:?}" "$WRIX_TEST_DIGEST"
+    exit 0
+    ;;
   'image tag '*) exit 0 ;;
   'list --all --format json') ;;
   'inspect '*)
@@ -22,7 +29,7 @@ case "$*" in
   'run -d --name '*)
     printf '%s\n' "$@" >"${WRIX_TEST_RUN_ARGS:?}"
     printf '%s\0' "$@" >"${WRIX_TEST_RUN_ARGS}.nul"
-    "${WRIX_TEST_JQ_BIN:?}" -Rsc --slurpfile previous "${WRIX_TEST_RUNTIME_REPLACEMENT:?}" '
+    "${WRIX_TEST_JQ_BIN:?}" --arg image "sha256:${WRIX_TEST_DIGEST:?}" -Rsc --slurpfile previous "${WRIX_TEST_RUNTIME_REPLACEMENT:?}" '
       split("\u0000")[:-1] as $args |
       def values($flag): [range(0; ($args | length) - 1) as $i |
         select($args[$i] == $flag) | $args[$i + 1]];
@@ -35,7 +42,7 @@ case "$*" in
       })) as $ports |
       $previous[0] | map(if .configuration.id == $name then
         .configuration.labels = $labels | .configuration.publishedPorts = $ports |
-        .configuration.image = {descriptor: {digest: $args[-4]}} | .status.state = "running"
+        .configuration.image = {descriptor: {digest: (if $args[-4] | startswith("sha256:") then $args[-4] else $image end)}} | .status.state = "running"
       else . end)
     ' "${WRIX_TEST_RUN_ARGS}.nul" >"${WRIX_TEST_RUNTIME_JSON:?}"
     exit 0
