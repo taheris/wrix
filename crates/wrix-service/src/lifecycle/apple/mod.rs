@@ -37,8 +37,7 @@ enum Status {
 #[serde(rename_all = "lowercase")]
 enum State {
     Running,
-    #[serde(other)]
-    Other,
+    Stopped,
 }
 
 #[derive(Debug, Deserialize)]
@@ -55,7 +54,7 @@ impl Snapshot {
         let (Status::Nested { state, .. } | Status::Legacy(state)) = &self.status;
         match state {
             State::Running => RuntimeStatus::Running,
-            State::Other => RuntimeStatus::Stopped,
+            State::Stopped => RuntimeStatus::Stopped,
         }
     }
 

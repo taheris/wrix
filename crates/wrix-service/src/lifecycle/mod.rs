@@ -101,6 +101,8 @@ pub enum Error {
     InstalledImageUnavailable { path: String, image: String },
     /// service lifecycle operation failed: {message}
     Operation { message: String },
+    /// Celler ownership in container {container} requires explicit host-wide maintenance; ordinary startup cannot replace a running backend or start a competing owner
+    CellerOwnership { container: String },
     /// service port {port} is already in use by {owner}; stop that process/container or free the port before retrying
     PortInUse { port: u16, owner: String },
     /// no available loopback port in {start}-{end}
@@ -651,6 +653,9 @@ pub fn start(cache_mode: CacheMode) -> Result<Status> {
     if plan.has_services() {
         runtime.binding.as_ref().ok_or(binding::Error::Missing)?;
     }
+    if plan.has_services() {
+        runtime.ensure_cache_owner_compatible(&plan)?;
+    }
     if plan.has_services() && runtime.reconcile_legacy_containers(&plan)? {
         plan = Plan::for_current_dir(cache_mode)?;
     }
@@ -1094,6 +1099,38 @@ impl Runtime {
             }
             RuntimeKind::Podman => Err(service.unavailable()),
         }
+    }
+
+    fn ensure_cache_owner_compatible(&self, plan: &Plan) -> Result<()> {
+        for container in self.list_container_infos()? {
+            if container.kind.as_deref() != Some("service") {
+                continue;
+            }
+            let selected = container.name == plan.container_name().as_str();
+            if !selected && !plan.cache_enabled() {
+                continue;
+            }
+            let backend = self.inspect_label(&container.name, CACHE_BACKEND_LABEL)?;
+            if backend.is_none()
+                || self
+                    .inspect_label(&container.name, CACHE_ENABLED_LABEL)?
+                    .as_deref()
+                    == Some("false")
+                || self.status_identifier(&container.name)? != RuntimeStatus::Running
+            {
+                continue;
+            }
+            if selected
+                && backend.as_deref() == Some(CACHE_BACKEND_VERSION)
+                && self.running_container_satisfies_plan(&plan.container_name(), plan)?
+            {
+                continue;
+            }
+            return Err(Error::CellerOwnership {
+                container: container.name,
+            });
+        }
+        Ok(())
     }
 
     fn ensure_running(&self, plan: &Plan) -> Result<()> {
@@ -1633,23 +1670,37 @@ impl Runtime {
     }
 
     fn status(&self, name: &ContainerName) -> Result<RuntimeStatus> {
+        self.status_identifier(name.as_str())
+    }
+
+    fn status_identifier(&self, name: &str) -> Result<RuntimeStatus> {
         if self.kind == RuntimeKind::Container {
             return Ok(self
-                .apple_snapshot(name.as_str())?
+                .apple_snapshot(name)?
                 .as_ref()
                 .map_or(RuntimeStatus::Missing, apple::Snapshot::runtime_status));
         }
         let output = Command::new(&self.binary)
-            .args(["inspect", "--format", "{{.State.Running}}", name.as_str()])
+            .args(["inspect", "--format", "{{.State.Running}}", name])
             .stdin(Stdio::null())
             .output()?;
         if !output.status.success() {
-            return Ok(RuntimeStatus::Missing);
+            let message = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            if is_missing_container_remove_error(&message) {
+                return Ok(RuntimeStatus::Missing);
+            }
+            return Err(Error::Operation { message });
         }
-        if String::from_utf8_lossy(&output.stdout).trim() == "true" {
-            Ok(RuntimeStatus::Running)
-        } else {
-            Ok(RuntimeStatus::Stopped)
+        match String::from_utf8_lossy(&output.stdout).trim() {
+            "true" => Ok(RuntimeStatus::Running),
+            "false" => Ok(RuntimeStatus::Stopped),
+            _ => Err(Error::Operation {
+                message: format!("container {name} returned an unknown running state"),
+            }),
         }
     }
 }
@@ -2057,6 +2108,58 @@ mod test {
         is_missing_container_remove_error, parse_published_ports,
     };
     use wrix_core::path::Workspace;
+
+    fn inspection_fixture(body: &str) -> (tempfile::TempDir, super::Runtime) {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().unwrap();
+        let binary = root.path().join("podman");
+        std::fs::write(
+            &binary,
+            format!(
+                "#!/usr/bin/env bash\nset -euo pipefail\n[[ \"$*\" == 'inspect --format {{{{.State.Running}}}} owner' ]] || exit 64\n{body}\n"
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let runtime = super::Runtime {
+            binary: binary.to_str().unwrap().to_owned(),
+            kind: RuntimeKind::Podman,
+            binding: None,
+        };
+        (root, runtime)
+    }
+
+    #[test]
+    fn runtime_inspection_fixture_distinguishes_native_running_stopped_and_missing_states() {
+        for (body, expected) in [
+            ("printf 'true\\n'", super::RuntimeStatus::Running),
+            ("printf 'false\\n'", super::RuntimeStatus::Stopped),
+            (
+                "printf 'Error: no such container: owner\\n' >&2; exit 125",
+                super::RuntimeStatus::Missing,
+            ),
+        ] {
+            let (_root, runtime) = inspection_fixture(body);
+            assert_eq!(runtime.status_identifier("owner").unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn uncertain_runtime_inspection_is_not_permission_to_replace_a_backend() {
+        for body in [
+            "printf 'permission denied\\n' >&2; exit 125",
+            "exit 1",
+            "printf 'unknown\\n'",
+            "printf ''",
+        ] {
+            let (_root, runtime) = inspection_fixture(body);
+            assert!(matches!(
+                runtime.status_identifier("owner"),
+                Err(super::Error::Operation { .. })
+            ));
+        }
+    }
 
     #[test]
     fn service_plan_retains_the_shared_yaml_branch() {

@@ -23,7 +23,7 @@ case "$*" in
   'image inspect '*) printf '[{"id":"sha256:%s","digest":"sha256:%s"}]\n' "${WRIX_TEST_DIGEST:?}" "$WRIX_TEST_DIGEST"; exit 0 ;;
   'image tag '*) exit 0 ;;
   'list --all --format json') ;;
-  "inspect ${WRIX_TEST_SERVICE_NAME:?}") ;;
+  "inspect ${WRIX_TEST_SERVICE_NAME:?}" | 'inspect wrix-service-peer') ;;
   "rm -f ${WRIX_TEST_SERVICE_NAME:?}")
     printf '[]\n' >"${WRIX_TEST_RUNTIME_JSON:?}"
     exit 0
@@ -448,8 +448,12 @@ fn repeated_apple_service_start_preserves_busy_owned_endpoints() -> TestResult {
 }
 
 #[test]
-fn apple_start_recreates_legacy_tcp_services_for_authentication_bootstrap() -> TestResult {
+fn apple_start_recreates_legacy_static_tcp_services_for_authentication_bootstrap() -> TestResult {
     let mut fixture = Fixture::new()?;
+    fixture.snapshot[0]["configuration"]["labels"]
+        .as_object_mut()
+        .unwrap()
+        .remove("wrix.cache.backend");
     fixture.snapshot[0]["configuration"]["labels"]
         .as_object_mut()
         .unwrap()
@@ -494,8 +498,12 @@ fn apple_start_recreates_legacy_tcp_services_for_authentication_bootstrap() -> T
 }
 
 #[test]
-fn legacy_combined_services_are_recreated_with_child_supervision() -> TestResult {
+fn legacy_static_combined_services_are_recreated_with_child_supervision() -> TestResult {
     let mut fixture = Fixture::new()?;
+    fixture.snapshot[0]["configuration"]["labels"]
+        .as_object_mut()
+        .unwrap()
+        .remove("wrix.cache.backend");
     fixture.snapshot[0]["configuration"]["labels"]
         .as_object_mut()
         .unwrap()
@@ -904,21 +912,127 @@ fn cache_start_replaces_a_legacy_static_backend_without_replacing_local_key_meta
 }
 
 #[test]
-fn cache_start_does_not_reuse_a_backend_without_lifetime_ownership_guard() -> TestResult {
+fn cache_start_preserves_running_backend_without_lifetime_ownership_guard() -> TestResult {
     let mut fixture = Fixture::new()?;
     fixture.disable_dolt()?;
     fixture.snapshot[0]["configuration"]["labels"]["wrix.cache.backend"] = json!("celler-v1");
+    fixture.write_snapshot()?;
+    assert_cache_start_preserves_owner(&fixture)?;
+    Ok(())
+}
+
+fn assert_cache_start_preserves_owner(fixture: &Fixture) -> TestResult {
+    let state = fixture.state_root()?;
+    let metadata = fs::read(state.join("services.json"))?;
+    let key = fs::read(state.join("keys/cache.pub"))?;
+    let snapshot = fs::read(fixture.root.path().join("runtime.json"))?;
+    let output = fixture.run("start")?;
+    assert!(!output.status.success());
+    assert!(
+        output.stderr.contains("explicit host-wide maintenance"),
+        "{}",
+        output.stderr
+    );
+    assert!(!fixture.root.path().join("run.argv").exists());
+    for name in ["cache.lock", "publish-roots.json", "pending"] {
+        assert!(!state.join(name).exists(), "{name}");
+    }
+    let log = fs::read_to_string(fixture.root.path().join("runtime.log"))?;
+    assert!(
+        !log.lines()
+            .any(|line| line.starts_with("rm ") || line.starts_with("image "))
+    );
+    assert_eq!(fs::read(state.join("services.json"))?, metadata);
+    assert_eq!(fs::read(state.join("keys/cache.pub"))?, key);
+    assert_eq!(
+        fs::read(fixture.root.path().join("runtime.json"))?,
+        snapshot
+    );
+    Ok(())
+}
+
+#[test]
+fn cache_start_preserves_guarded_owner_when_other_required_features_are_incompatible() -> TestResult
+{
+    let mut fixture = Fixture::new()?;
+    fixture.snapshot[0]["configuration"]["labels"]
+        .as_object_mut()
+        .unwrap()
+        .remove("wrix.dolt.auth");
+    fixture.write_snapshot()?;
+    assert_cache_start_preserves_owner(&fixture)?;
+    Ok(())
+}
+
+#[test]
+fn cache_start_does_not_treat_unknown_apple_state_as_stopped() -> TestResult {
+    let mut fixture = Fixture::new()?;
+    fixture.disable_dolt()?;
+    fixture.snapshot[0]["configuration"]["labels"]["wrix.cache.backend"] = json!("celler-v1");
+    fixture.snapshot[0]["status"]["state"] = json!("stopping");
+    fixture.write_snapshot()?;
+    let state = fixture.state_root()?;
+    let metadata = fs::read(state.join("services.json"))?;
+    let snapshot = fs::read(fixture.root.path().join("runtime.json"))?;
+    let output = fixture.run("start")?;
+    assert!(!output.status.success());
+    assert!(
+        output.stderr.contains("invalid Apple container JSON"),
+        "{}",
+        output.stderr
+    );
+    assert!(!fixture.root.path().join("run.argv").exists());
+    let log = fs::read_to_string(fixture.root.path().join("runtime.log"))?;
+    assert!(
+        !log.lines()
+            .any(|line| line.starts_with("rm ") || line.starts_with("image "))
+    );
+    assert_eq!(fs::read(state.join("services.json"))?, metadata);
+    assert_eq!(
+        fs::read(fixture.root.path().join("runtime.json"))?,
+        snapshot
+    );
+    Ok(())
+}
+
+#[test]
+fn cache_start_can_recreate_a_stopped_unguarded_backend() -> TestResult {
+    let mut fixture = Fixture::new()?;
+    fixture.disable_dolt()?;
+    fixture.snapshot[0]["configuration"]["labels"]["wrix.cache.backend"] = json!("celler-v1");
+    fixture.snapshot[0]["status"]["state"] = json!("stopped");
     fixture.write_snapshot()?;
     let output = fixture.run("start")?;
     assert!(output.status.success(), "{}", output.stderr);
     let args = fs::read_to_string(fixture.root.path().join("run.argv"))?;
     assert!(args.contains(wrix_cache::backend::layout::runtime::COMMAND));
-    assert!(args.contains("wrix.cache.backend=celler-v2"));
-    let log = fs::read_to_string(fixture.root.path().join("runtime.log"))?;
-    assert!(log.contains(&format!(
-        "rm -f {}",
-        fixture.metadata["container_name"].as_str().unwrap()
-    )));
+    Ok(())
+}
+
+#[test]
+fn cache_start_rejects_foreign_running_unguarded_owner_before_layout_changes() -> TestResult {
+    let mut fixture = Fixture::new()?;
+    fixture.disable_dolt()?;
+    fixture.snapshot[0]["configuration"]["id"] = json!("wrix-service-peer");
+    fixture.snapshot[0]["configuration"]["labels"]["wrix.workspace.hash"] =
+        json!("0123456789abcdef");
+    fixture.snapshot[0]["configuration"]["labels"]["wrix.workspace"] = json!("/peer");
+    fixture.snapshot[0]["configuration"]["labels"]["wrix.cache.backend"] = json!("celler-v1");
+    fixture.write_snapshot()?;
+    assert_cache_start_preserves_owner(&fixture)?;
+    Ok(())
+}
+
+#[test]
+fn cache_start_rejects_competing_guarded_owner_without_claiming_shared_reuse() -> TestResult {
+    let mut fixture = Fixture::new()?;
+    fixture.disable_dolt()?;
+    fixture.snapshot[0]["configuration"]["id"] = json!("wrix-service-peer");
+    fixture.snapshot[0]["configuration"]["labels"]["wrix.workspace.hash"] =
+        json!("0123456789abcdef");
+    fixture.snapshot[0]["configuration"]["labels"]["wrix.workspace"] = json!("/peer");
+    fixture.write_snapshot()?;
+    assert_cache_start_preserves_owner(&fixture)?;
     Ok(())
 }
 
@@ -986,10 +1100,7 @@ fn launcher_fails_before_agent_start_without_a_guest_cache_address() -> TestResu
 #[test]
 fn concurrent_service_starts_share_one_lifecycle_owner() -> TestResult {
     let mut fixture = Fixture::new()?;
-    fixture.snapshot[0]["configuration"]["labels"]
-        .as_object_mut()
-        .unwrap()
-        .remove("wrix.dolt.auth");
+    fixture.snapshot[0]["status"]["state"] = json!("stopped");
     fixture.write_snapshot()?;
     let mut children = Vec::new();
     for _ in 0..4 {
