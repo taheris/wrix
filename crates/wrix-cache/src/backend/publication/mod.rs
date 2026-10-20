@@ -1,5 +1,7 @@
 //! Runtime host authority for one private publication view.
 
+pub mod registration;
+
 use std::{
     fs::{self, DirBuilder, File, OpenOptions},
     io::{self, Read, Write},
@@ -57,6 +59,14 @@ pub enum Error {
     Permissions,
     /// invalid host-private Celler publication binding
     Binding,
+    /// invalid host-private publication directory: {0}
+    Directory(#[from] wrix_core::private_directory::Error),
+    /// namespace lock and public key must be single-link regular files owned by the control directory owner, without group/other write access
+    UnsafeRegistrationFile,
+    /// timed out waiting for the namespace publication lock; no backend request was dispatched
+    LockTimeout,
+    /// Celler registration succeeded, but local key or publication authority recording failed; backend changes remain active: {source}
+    RegistrationCommitted { source: Box<Error> },
     /// {0}
     Issuer(#[from] super::issuer::Error),
     /// Celler publication binding belongs to a different workspace

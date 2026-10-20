@@ -14,6 +14,8 @@ use wrix_cache::backend::{Client, Error};
 
 #[path = "common/celler/mod.rs"]
 mod native;
+#[path = "common/registration/mod.rs"]
+mod registration;
 
 const PUBLIC_KEY: &str = "fixture:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
 const RETENTION: Duration = Duration::from_hours(720);
@@ -42,6 +44,14 @@ impl Server {
     }
 
     fn start_with_authorization(
+        exchanges: Vec<Exchange>,
+        check: impl Fn(&str) + Send + 'static,
+    ) -> Self {
+        Self::start_for_namespace("private".into(), exchanges, check)
+    }
+
+    fn start_for_namespace(
+        namespace: String,
         exchanges: Vec<Exchange>,
         check: impl Fn(&str) + Send + 'static,
     ) -> Self {
@@ -74,7 +84,10 @@ impl Server {
                 let header = String::from_utf8(header).unwrap();
                 assert_eq!(
                     header.lines().next().unwrap(),
-                    format!("{} /_api/v1/cache-config/private HTTP/1.1", exchange.method)
+                    format!(
+                        "{} /_api/v1/cache-config/{namespace} HTTP/1.1",
+                        exchange.method
+                    )
                 );
                 check(&header);
                 let lower = header.to_ascii_lowercase();
@@ -818,19 +831,24 @@ async fn integration_does_not_require_shared_worker_runtime() {
     let server = native::Server::start_verification_only(&layout);
     let control = tempfile::tempdir().unwrap();
     let workspace = wrix_core::path::Workspace::from_path(control.path()).unwrap();
-    wrix_cache::backend::publication::Publisher::install_issuer(
+    let key = wrix_cache::backend::publication::registration::provision_private(
         control.path(),
         workspace.hash(),
         &server.endpoint,
-        CacheName::new("private".into()).unwrap(),
         &server.issuer_root(),
         RETENTION,
+        Duration::from_secs(1),
     )
+    .await
     .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(control.path().join("keys/cache.pub")).unwrap(),
+        format!("{}\n", key.as_str())
+    );
     let publisher =
         wrix_cache::backend::publication::Publisher::load(control.path(), workspace.hash())
             .unwrap();
-    let key = publisher.register().await.unwrap();
+    assert_eq!(publisher.register().await.unwrap(), key);
     std::fs::write(
         control.path().join("publish-roots.json"),
         json!({"roots": [{
@@ -852,9 +870,27 @@ async fn integration_does_not_require_shared_worker_runtime() {
     .unwrap();
     assert_eq!(binding["schema_version"], 2);
     assert!(binding.get("token").is_none());
-    let response = server
-        .get(&format!("private/{}.narinfo", native::hash(&selected)))
-        .await;
+    let namespace = binding["namespace"].as_str().unwrap();
+    assert_eq!(
+        namespace,
+        wrix_cache::backend::publication::registration::private_namespace(workspace.hash())
+            .unwrap()
+            .as_str()
+    );
+    let token = wrix_cache::backend::issuer::Authority::open(&server.issuer_root())
+        .unwrap()
+        .publication_token(&CacheName::new(namespace.into()).unwrap())
+        .unwrap();
+    let response = reqwest::Client::new()
+        .get(format!(
+            "{}{namespace}/{}.narinfo",
+            server.endpoint,
+            native::hash(&selected)
+        ))
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap();
     assert_eq!(response.status(), 200);
     assert!(response.text().await.unwrap().contains(&format!(
         "Sig: {}:",
