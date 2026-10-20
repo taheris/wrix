@@ -1018,13 +1018,7 @@ async fn publisher_reuses_rust_store_client() {
 }
 
 #[tokio::test]
-#[ignore = "requires packaged Celler, Linux user/mount namespaces, Nix and OpenSSL"]
 async fn managed_layout_preserves_signing_and_archives_across_native_backend_replacement() {
-    if !native::in_isolated_store(
-        "managed_layout_preserves_signing_and_archives_across_native_backend_replacement",
-    ) {
-        return;
-    }
     let root = tempfile::tempdir().unwrap();
     let layout = wrix_cache::backend::layout::Layout::resolve(
         wrix_cache::backend::layout::Platform::Linux,
@@ -1033,17 +1027,13 @@ async fn managed_layout_preserves_signing_and_archives_across_native_backend_rep
         None,
     )
     .unwrap();
-    let path = native::add_file("persistent native Celler archive", "persistent-celler");
+    let fixture =
+        native::archive::Archive::file("persistent native Celler archive", "persistent-celler");
+    let path = fixture.path.clone();
     let server = native::Server::start_in_layout(&layout);
     let client = server.client("private");
     let key = client.register(RETENTION).await.unwrap();
-    assert_eq!(
-        client
-            .publish_selected(std::slice::from_ref(&path))
-            .await
-            .unwrap(),
-        1
-    );
+    server.upload("private", &fixture).await;
     let resource = format!("private/{}.narinfo", native::hash(&path));
     let before = server.get(&resource).await.text().await.unwrap();
     assert!(before.contains("Sig: "));
@@ -1373,11 +1363,140 @@ async fn publication_is_scoped_without_recursive_expansion() {
 }
 
 #[tokio::test]
-#[ignore = "requires packaged Celler, Linux user/mount namespaces, Nix and OpenSSL"]
+async fn signed_native_http_imports_into_a_fresh_local_store_without_namespaces() {
+    let server = native::Server::start();
+    let key = server.client("private").register(RETENTION).await.unwrap();
+    let archive = native::archive::Archive::file("sandbox-native signed import", "signed-import");
+    server.upload("private", &archive).await;
+    let endpoint = format!("{}private", server.endpoint);
+    let accepted = native::import::Store::new();
+    let result = accepted.copy(
+        &endpoint,
+        &native::pull_token(),
+        key.as_str(),
+        &archive.path,
+    );
+    assert!(result.status.success(), "{:?}", result.stderr);
+    assert_eq!(
+        accepted.read(&archive.path).unwrap(),
+        b"sandbox-native signed import"
+    );
+    let rejected = native::import::Store::new();
+    let result = rejected.copy(&endpoint, &native::pull_token(), PUBLIC_KEY, &archive.path);
+    assert!(!result.status.success());
+    assert!(rejected.read(&archive.path).is_err());
+}
+
+#[tokio::test]
+async fn reachable_unsigned_narinfo_is_rejected_by_a_fresh_native_client() {
+    let server = native::Server::start();
+    let key = server.client("private").register(RETENTION).await.unwrap();
+    let archive = native::archive::Archive::file("reachable unsigned control", "unsigned-control");
+    server.upload("private", &archive).await;
+    let resource = format!("private/{}.narinfo", native::hash(&archive.path));
+    let signed_info = server.get(&resource).await.text().await.unwrap();
+    let unsigned =
+        native::unsigned::Server::start(native::hash(&archive.path), &signed_info, &archive.bytes);
+    let http = reqwest::Client::new();
+    let response = http
+        .get(format!(
+            "{}{}.narinfo",
+            unsigned.endpoint,
+            native::hash(&archive.path)
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let info = response.text().await.unwrap();
+    assert!(!info.lines().any(|line| line.starts_with("Sig: ")));
+    let url = info
+        .lines()
+        .find_map(|line| line.strip_prefix("URL: "))
+        .unwrap();
+    let response = http
+        .get(format!("{}{url}", unsigned.endpoint))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.bytes().await.unwrap().as_ref(), archive.bytes);
+    let rejected = native::import::Store::new();
+    let result = rejected.copy(
+        &unsigned.endpoint,
+        &native::pull_token(),
+        key.as_str(),
+        &archive.path,
+    );
+    assert!(!result.status.success());
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("signature"),
+        "{:?}",
+        result.stderr
+    );
+    assert!(rejected.read(&archive.path).is_err());
+}
+
+#[tokio::test]
+async fn native_rsa_registration_repairs_local_metadata_without_changing_a_valid_signing_key() {
+    use std::os::unix::fs::MetadataExt as _;
+    use wrix_cache::backend::{issuer::Authority, publication::registration};
+
+    let server = native::Server::start_with_issuer();
+    let root = tempfile::tempdir().unwrap();
+    let workspace = wrix_core::path::Workspace::from_path(root.path()).unwrap();
+    let state = root.path().join("control");
+    let issuer_root = server.issuer_root();
+    let provision = || {
+        registration::provision_private(
+            &state,
+            workspace.hash(),
+            &server.endpoint,
+            &issuer_root,
+            RETENTION,
+            Duration::from_secs(1),
+        )
+    };
+    let key = provision().await.unwrap();
+    let namespace = registration::private_namespace(workspace.hash()).unwrap();
+    let archive =
+        native::archive::Archive::file("retained native signing state", "metadata-repair");
+    server.upload(namespace.as_str(), &archive).await;
+    let resource = format!("{}/{}.narinfo", namespace, native::hash(&archive.path));
+    let before = server.get(&resource).await.text().await.unwrap();
+    let key_path = state.join("keys/cache.pub");
+    let inode = std::fs::metadata(&key_path).unwrap().ino();
+    assert_eq!(provision().await.unwrap(), key);
+    assert_eq!(std::fs::metadata(&key_path).unwrap().ino(), inode);
+    std::fs::write(&key_path, "malformed local verifier").unwrap();
+    assert_eq!(provision().await.unwrap(), key);
+    assert_eq!(
+        std::fs::read_to_string(&key_path).unwrap().trim(),
+        key.as_str()
+    );
+    assert_eq!(server.get(&resource).await.text().await.unwrap(), before);
+    let token = Authority::open(&server.issuer_root())
+        .unwrap()
+        .publication_token(&namespace)
+        .unwrap();
+    let peer = Client::new(
+        &server.endpoint,
+        CacheName::new("peer".into()).unwrap(),
+        &token,
+    )
+    .unwrap();
+    let result = peer.register(RETENTION).await;
+    assert!(
+        matches!(
+            result,
+            Err(Error::Status(reqwest::StatusCode::UNAUTHORIZED))
+        ),
+        "{result:?}"
+    );
+}
+
+#[tokio::test]
 async fn key_registration_and_failed_repair_preserve_valid_state() {
-    if !native::in_isolated_store("key_registration_and_failed_repair_preserve_valid_state") {
-        return;
-    }
     let server = native::Server::start();
     let client = server.client("private");
     let peer = server.client("peer");
@@ -1398,24 +1517,16 @@ async fn key_registration_and_failed_repair_preserve_valid_state() {
 }
 
 #[tokio::test]
-#[ignore = "requires packaged Celler, Linux user/mount namespaces, Nix and OpenSSL"]
 async fn rotation_invalidates_only_the_selected_view() {
-    if !native::in_isolated_store("rotation_invalidates_only_the_selected_view") {
-        return;
-    }
-    let path = native::add_file("retained by peer", "shared-native-store");
+    let fixture = native::archive::Archive::file("retained by peer", "shared-native-store");
+    let path = fixture.path.clone();
     let server = native::Server::start();
     let client = server.client("private");
     let peer = server.client("peer");
     let key = client.register(RETENTION).await.unwrap();
     let peer_key = peer.register(RETENTION).await.unwrap();
-    client
-        .publish_selected(std::slice::from_ref(&path))
-        .await
-        .unwrap();
-    peer.publish_selected(std::slice::from_ref(&path))
-        .await
-        .unwrap();
+    server.upload("private", &fixture).await;
+    server.upload("peer", &fixture).await;
     let control = tempfile::tempdir().unwrap();
     let workspace = wrix_core::path::Workspace::from_path(control.path()).unwrap();
     write_binding(
@@ -1483,10 +1594,7 @@ async fn rotation_invalidates_only_the_selected_view() {
             .status(),
         200
     );
-    client
-        .publish_selected(std::slice::from_ref(&path))
-        .await
-        .unwrap();
+    server.upload("private", &fixture).await;
     assert_eq!(client.public_key().await.unwrap(), replacement);
     assert_eq!(
         server

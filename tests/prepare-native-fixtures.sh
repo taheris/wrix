@@ -10,8 +10,9 @@ main() {
     WRIX_TEST_PREK_BUILD_SPEC
     WRIX_TEST_PACKAGED_WRIX
     WRIX_TEST_DEVSHELL_HOOK
+    WRIX_TEST_CELLERD
   )
-  local members=(hooks runner broken-runner builder-spec packaged-wrix devshell-hook)
+  local members=(hooks runner broken-runner builder-spec packaged-wrix devshell-hook cellerd)
   local name index root fixtures="" missing=0 value
   local values=()
 
@@ -47,7 +48,7 @@ main() {
     fi
     case "$name" in
       WRIX_TEST_PREK_HOOKS) [[ -d "$value" ]] ;;
-      WRIX_TEST_PREK_RUNNER|WRIX_TEST_BROKEN_PREK_RUNNER|WRIX_TEST_PACKAGED_WRIX) [[ -f "$value" && -x "$value" ]] ;;
+      WRIX_TEST_PREK_RUNNER|WRIX_TEST_BROKEN_PREK_RUNNER|WRIX_TEST_PACKAGED_WRIX|WRIX_TEST_CELLERD) [[ -f "$value" && -x "$value" ]] ;;
       *) [[ -f "$value" ]] ;;
     esac || {
       printf 'Wrong file type or permissions for packaging fixture %s: %s\n' "$name" "$value" >&2

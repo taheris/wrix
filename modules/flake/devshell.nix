@@ -21,6 +21,7 @@ _:
         env = {
           LOOM_PROFILES_MANIFEST = "${config.packages.profile-images}";
           WRIX_AGENT = "pi";
+          WRIX_TEST_CELLERD = "${wrix.rustPackage.celler}/bin/cellerd";
         };
 
         packages = [

@@ -1,11 +1,36 @@
 # Services verifiers
 
+## Sandbox-native backend tests
+
+Run `cargo nextest run` in the development shell. Its native-fixture setup
+supplies pinned `cellerd`, without requiring a container engine, `unshare`,
+mounts, FUSE, TUN or KVM. The development shell also exports `WRIX_TEST_CELLERD`
+for direct `cargo test` invocations.
+
+The ordinary `celler_backend` suite now starts real Celler processes against
+private temporary databases and archives. It checks registration and repair, RSA
+publication credentials and exact-view rejection, retained signing state across
+process replacement, and view-scoped rotation. Native Nix dumps create small
+archive fixtures without a store connection. Fresh `local?root=...` stores then
+import signed archives over real HTTP with signature enforcement enabled;
+wrong-key and reachable unsigned controls must fail. No physical-host store,
+daemon, configuration or trusted-key list is changed.
+
+These are component integration tests, not deployed worker, container mount,
+production build sandbox, shared installed-store or performance acceptance.
+Canonical-daemon/native-lock tests retain their isolated-store prerequisite;
+platform transport and installed end-to-end gates remain separate.
+
 ## Verifier boundaries
 
 `specs/services.md` binds Rust-owned contracts to native tests and assembled
 transport contracts to `test-ci` apps. Dry-run ENV/MOUNT output and a simulated
 Apple inventory are command-planning evidence, not container exposure or guest
 SQL evidence.
+
+The retained launcher table below includes legacy static-cache probes. Those
+probes still need conversion before they can accept the Celler backend; do not
+count their old payload assertions as native Celler transport evidence.
 
 | Criterion                   | Production seam                                                                      | Existing proof and bounded correction                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | --------------------------- | ------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -28,9 +53,8 @@ and launcher logic are real. The legacy lifecycle image-source smoke may still
 be run explicitly for its Nix-built source boundary; it is not the authoritative
 native image-delegation binding.
 
-No publisher, key, server-policy, identity, or service startup contract is
-changed. Platform/prerequisite skips remain gaps in live execution evidence, not
-passing transport results.
+Platform/prerequisite skips remain gaps in live execution evidence, not passing
+transport results.
 
 ## VM execution
 

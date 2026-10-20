@@ -125,8 +125,14 @@ let
     ]
   );
 
+  cellerPackage = import ./celler.nix {
+    inherit pkgs;
+    inherit (rustProfile) craneLib;
+  };
+
   fixtures = import ../../tests/prek/native-fixtures.nix {
     inherit pkgs;
+    celler = cellerPackage;
     packagedWrix = wrixPackage;
     devshellHook = prekDevShellHook;
   };
@@ -207,10 +213,7 @@ in
   binding = serviceBinding;
   inherit controllerBinding controllerPackage;
   focusNotification = mkBinaryPackage "wrix-focus-notification";
-  celler = import ./celler.nix {
-    inherit pkgs;
-    inherit (rustProfile) craneLib;
-  };
+  celler = cellerPackage;
   supervisor =
     pkgs.runCommand "wrix-service-supervisor" { meta = binaryMeta "wrix-service-supervisor"; }
       ''

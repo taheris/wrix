@@ -15,6 +15,7 @@ MEMBERS = {
     "WRIX_TEST_PREK_BUILD_SPEC": "builder-spec",
     "WRIX_TEST_PACKAGED_WRIX": "packaged-wrix",
     "WRIX_TEST_DEVSHELL_HOOK": "devshell-hook",
+    "WRIX_TEST_CELLERD": "cellerd",
 }
 
 
@@ -34,7 +35,7 @@ class Preparation(unittest.TestCase):
                 path.mkdir()
             else:
                 path.write_text("fixture\n")
-                if "RUNNER" in name or name == "WRIX_TEST_PACKAGED_WRIX":
+                if "RUNNER" in name or name in {"WRIX_TEST_PACKAGED_WRIX", "WRIX_TEST_CELLERD"}:
                     path.chmod(0o755)
         self.env_file = self.root / "environment"
         self.env_file.write_text("")
@@ -105,6 +106,13 @@ printf '%s\\n' "$WRIX_FIXTURE_BUNDLE"
         result = self.run_script()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("WRIX_TEST_PREK_RUNNER", result.stderr)
+        self.assertEqual(self.env_file.read_text(), "")
+
+    def test_non_executable_celler_is_rejected_before_export(self):
+        (self.bundle / "cellerd").chmod(0o644)
+        result = self.run_script()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("WRIX_TEST_CELLERD", result.stderr)
         self.assertEqual(self.env_file.read_text(), "")
 
     def test_newline_in_an_override_cannot_inject_an_environment_variable(self):

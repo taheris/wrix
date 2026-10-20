@@ -11,5 +11,5 @@ test-group = "deployment-role-ports"
 command = ["bash", "tests/prepare-native-fixtures.sh"]
 
 [[profile.default.scripts]]
-filter = "package(wrix-cli) & (binary(init_config) | binary(init_idempotency) | binary(init_prek) | binary(prek_bundle_build) | binary(prek_runtime))"
+filter = "(package(wrix-cli) & (binary(init_config) | binary(init_idempotency) | binary(init_prek) | binary(prek_bundle_build) | binary(prek_runtime))) | (package(wrix-cache) & binary(celler_backend))"
 setup = "packaging-fixtures"

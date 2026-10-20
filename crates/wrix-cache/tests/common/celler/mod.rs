@@ -14,6 +14,10 @@ use serde_json::json;
 use tempfile::TempDir;
 use wrix_cache::backend::Client;
 
+pub mod archive;
+pub mod import;
+pub mod unsigned;
+
 const SECRET: &str = "disposable-celler-test-credential-32-bytes";
 
 pub fn in_isolated_store(test: &str) -> bool {
@@ -43,6 +47,7 @@ pub struct Server {
     child: Child,
     root: TempDir,
     database: PathBuf,
+    issuer: Option<wrix_cache::backend::issuer::Authority>,
 }
 
 impl Server {
@@ -51,7 +56,7 @@ impl Server {
         let database = root.path().join("metadata.db");
         let archives = root.path().join("archives");
         fs::create_dir(&archives).unwrap();
-        Self::spawn(root, database, &archives)
+        Self::spawn(root, database, &archives, None)
     }
 
     pub fn start_in_layout(layout: &wrix_cache::backend::layout::Layout) -> Self {
@@ -60,16 +65,56 @@ impl Server {
             tempfile::tempdir().unwrap(),
             layout.metadata().join("metadata.db"),
             layout.archives(),
+            None,
         )
     }
 
-    fn spawn(root: TempDir, database: PathBuf, archives: &Path) -> Self {
+    pub fn start_with_issuer() -> Self {
+        let root = tempfile::tempdir().unwrap();
+        let metadata = root.path().join("verification");
+        fs::create_dir(&metadata).unwrap();
+        let issuer = wrix_cache::backend::issuer::Authority::provision(
+            &root.path().join("issuer"),
+            &metadata,
+        )
+        .unwrap();
+        let database = root.path().join("metadata.db");
+        let archives = root.path().join("archives");
+        fs::create_dir(&archives).unwrap();
+        Self::spawn(root, database, &archives, Some(issuer))
+    }
+
+    fn spawn(
+        root: TempDir,
+        database: PathBuf,
+        archives: &Path,
+        issuer: Option<wrix_cache::backend::issuer::Authority>,
+    ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         drop(listener);
         let endpoint = format!("http://{address}/");
         let path = root.path();
-        fs::write(path.join("jwt.key"), SECRET).unwrap();
+        let jwt = if issuer.is_some() {
+            format!(
+                "rs256-public-key-file = {:?}",
+                path.join("verification/jwt.pub").display().to_string()
+            )
+        } else {
+            fs::write(path.join("jwt.key"), SECRET).unwrap();
+            format!(
+                "hs256-secret-key-file = {:?}",
+                path.join("jwt.key").display().to_string()
+            )
+        };
+        let token = issuer.as_ref().map_or_else(
+            || token(true),
+            |authority| {
+                authority
+                    .publication_token(&CacheName::new("private".into()).unwrap())
+                    .unwrap()
+            },
+        );
         let config = format!(
             "listen = {address:?}\nallowed-hosts = [{address:?}]\napi-endpoint = {endpoint:?}\nsoft-delete-caches = false\nrequire-proof-of-possession = true\n\
             [database]\nurl = {database:?}\n\
@@ -77,11 +122,11 @@ impl Server {
             [chunking]\nnar-size-threshold = 0\nmin-size = 16384\navg-size = 65536\nmax-size = 262144\n\
             [compression]\ntype = \"none\"\n\
             [garbage-collection]\ninterval = \"0s\"\n\
-            [jwt]\nhs256-secret-key-file = {key:?}\n",
+            [jwt]\n{jwt}\n",
             address = address.to_string(),
             database = format!("sqlite://{}?mode=rwc", database.display()),
             storage = archives.display().to_string(),
-            key = path.join("jwt.key").display().to_string(),
+            jwt = jwt,
         );
         fs::write(path.join("server.toml"), config).unwrap();
         let executable = std::env::var_os("WRIX_TEST_CELLERD")
@@ -98,10 +143,11 @@ impl Server {
             .unwrap();
         let mut server = Self {
             endpoint,
-            token: token(true),
+            token,
             child,
             root,
             database,
+            issuer,
         };
         let deadline = Instant::now() + Duration::from_secs(15);
         while TcpStream::connect(address).is_err() {
@@ -154,6 +200,7 @@ impl Server {
             child,
             root,
             database: layout.metadata().join("metadata.db"),
+            issuer: Some(issuer),
         };
         let deadline = Instant::now() + Duration::from_secs(15);
         while TcpStream::connect("127.0.0.1:8080").is_err() {
@@ -192,12 +239,52 @@ impl Server {
         Client::new(
             &self.endpoint,
             CacheName::new(namespace.to_owned()).unwrap(),
-            &self.token,
+            &self.publication_token(namespace),
         )
         .unwrap()
     }
 
+    fn publication_token(&self, namespace: &str) -> String {
+        self.issuer.as_ref().map_or_else(
+            || self.token.clone(),
+            |issuer| {
+                issuer
+                    .publication_token(&CacheName::new(namespace.into()).unwrap())
+                    .unwrap()
+            },
+        )
+    }
+
+    pub async fn upload(&self, namespace: &str, archive: &archive::Archive) {
+        use attic::api::v1::upload_path::CELLER_NAR_INFO_PREAMBLE_SIZE;
+
+        let preamble = serde_json::to_vec(&archive.metadata(namespace)).unwrap();
+        let length = preamble.len();
+        let body: Vec<_> = preamble
+            .into_iter()
+            .chain(archive.bytes.iter().copied())
+            .collect();
+        let response = reqwest::Client::new()
+            .put(format!("{}_api/v1/upload-path", self.endpoint))
+            .bearer_auth(self.publication_token(namespace))
+            .header(CELLER_NAR_INFO_PREAMBLE_SIZE, length)
+            .body(body)
+            .send()
+            .await
+            .unwrap();
+        let status = response.status();
+        assert!(
+            status.is_success(),
+            "{status}: {}",
+            response.text().await.unwrap()
+        );
+    }
+
     pub fn pull_client(&self) -> Client {
+        assert!(
+            self.issuer.is_none(),
+            "shared-secret fixture pull credentials require the shared-secret backend"
+        );
         Client::new(
             &self.endpoint,
             CacheName::new(String::from("private")).unwrap(),
@@ -218,7 +305,7 @@ impl Server {
     pub async fn get(&self, resource: &str) -> reqwest::Response {
         reqwest::Client::new()
             .get(format!("{}{resource}", self.endpoint))
-            .bearer_auth(&self.token)
+            .bearer_auth(self.publication_token(resource.split('/').next().unwrap()))
             .send()
             .await
             .unwrap()
