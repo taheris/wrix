@@ -5,7 +5,7 @@ use std::{
 };
 
 use displaydoc::Display;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use wrix_sandbox::image::{Digest, ImageRef, Source, SourceKind};
 
@@ -27,14 +27,14 @@ pub enum Error {
     Digest(String),
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct Artifact {
     path: PathBuf,
     derivation: PathBuf,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Wire {
     schema: u8,
@@ -45,7 +45,8 @@ struct Wire {
 }
 
 /// An immutable package-selected image target, independent of executable and project paths.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(try_from = "Wire")]
 pub struct Candidate {
     image: ImageRef,
     source: Source,
@@ -56,20 +57,7 @@ pub struct Candidate {
 impl Candidate {
     /// Parse package metadata without realizing sources or contacting a runtime.
     pub fn load(path: &Path) -> Result<Self, Error> {
-        let wire: Wire = serde_json::from_slice(&fs::read(path)?)?;
-        if wire.schema != 1 {
-            return Err(Error::Metadata("unsupported schema"));
-        }
-        wire.source.check()?;
-        wire.digest.check()?;
-        let source = Source::parse(wire.source.path.clone(), wire.source_kind)
-            .map_err(|_| Error::Metadata("invalid source path"))?;
-        Ok(Self {
-            image: wire.image,
-            source,
-            source_artifact: wire.source,
-            digest_artifact: wire.digest,
-        })
+        Ok(serde_json::from_slice(&fs::read(path)?)?)
     }
 
     /// Resolve only the invoked package's explicit binding; ambient data cannot supply it.
@@ -127,6 +115,39 @@ impl Candidate {
         self.digest_artifact.realize(roots, &digest_output)?;
         let value = fs::read_to_string(&self.digest_artifact.path)?;
         Digest::parse(value.trim()).map_err(|_| Error::Digest(value))
+    }
+}
+
+impl TryFrom<Wire> for Candidate {
+    type Error = Error;
+
+    fn try_from(wire: Wire) -> Result<Self, Error> {
+        if wire.schema != 1 {
+            return Err(Error::Metadata("unsupported schema"));
+        }
+        wire.source.check()?;
+        wire.digest.check()?;
+        let source = Source::parse(wire.source.path.clone(), wire.source_kind)
+            .map_err(|_| Error::Metadata("invalid source path"))?;
+        Ok(Self {
+            image: wire.image,
+            source,
+            source_artifact: wire.source,
+            digest_artifact: wire.digest,
+        })
+    }
+}
+
+impl Serialize for Candidate {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        Wire {
+            schema: 1,
+            image: self.image.clone(),
+            source_kind: self.source.kind(),
+            source: self.source_artifact.clone(),
+            digest: self.digest_artifact.clone(),
+        }
+        .serialize(serializer)
     }
 }
 

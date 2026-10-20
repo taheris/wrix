@@ -14,7 +14,8 @@ snapshot() {
       hostAddress: .[0], hostPort: (.[1] | tonumber),
       containerPort: (.[2] | tonumber), proto: "tcp", count: 1
     })) as $ports |
-    [{configuration: {id: values("--name")[0], labels: $labels, publishedPorts: $ports},
+    [{configuration: {id: values("--name")[0], labels: $labels, publishedPorts: $ports,
+        image: {descriptor: {digest: $args[-4]}}},
       status: {state: "running"}}]
   ' "${WRIX_TEST_RUN_ARGS:?}"
 }
@@ -53,18 +54,20 @@ case "${1:-} ${2:-}" in
   'image inspect')
     [[ -f "${WRIX_TEST_IMAGE:?}" ]] || exit 1
     if [[ "$runtime" == container ]]; then
-      printf '[{"id":"%s","digest":"%s","labels":{"wrix.nix.private":"%s"}}]\n' "${WRIX_TEST_DIGEST:?}" "$WRIX_TEST_DIGEST" "${WRIX_TEST_PRIVATE_NIX_VERSION:-1}"
+      printf '[{"id":"%s","digest":"%s","labels":{"wrix.nix.private":"%s"}}]\n' "${WRIX_TEST_IMAGE_ID:-$WRIX_TEST_DIGEST}" "${WRIX_TEST_CONTENT_DIGEST:-$WRIX_TEST_DIGEST}" "${WRIX_TEST_PRIVATE_NIX_VERSION:-1}"
     elif [[ "${4:-}" == '{{ index .Config.Labels "wrix.nix.private" }}' ]]; then
       printf '%s\n' "${WRIX_TEST_PRIVATE_NIX_VERSION:-1}"
+    elif [[ "${4:-}" == '{{.Id}}' ]]; then
+      printf '%s\n' "${WRIX_TEST_IMAGE_ID:-$WRIX_TEST_DIGEST}"
     else
-      printf '%s\n' "${WRIX_TEST_DIGEST:?}"
+      printf '%s\n' "${WRIX_TEST_CONTENT_DIGEST:-$WRIX_TEST_DIGEST}"
     fi
     ;;
   'image exists') [[ -f "${WRIX_TEST_IMAGE:?}" ]] ;;
   'image list')
     [[ "$*" == 'image list --format json' ]]
     if [[ -f "${WRIX_TEST_IMAGE:?}" ]]; then
-      printf '[{"configuration":{"name":"wrix-service:test"},"id":"%s"}]\n' "${WRIX_TEST_DIGEST:?}"
+      printf '[{"configuration":{"name":"wrix-service:test"},"id":"%s"}]\n' "${WRIX_TEST_IMAGE_ID:-$WRIX_TEST_DIGEST}"
     else
       printf '[]\n'
     fi
@@ -104,6 +107,8 @@ case "${1:-} ${2:-}" in
       snapshot
     elif [[ "${3:-}" == '{{.State.Running}}' ]]; then
       printf 'true\n'
+    elif [[ "${3:-}" == '{{.Image}}' ]]; then
+      snapshot | "${WRIX_TEST_JQ_BIN:?}" -r '.[0].configuration.image.descriptor.digest'
     elif [[ "${3:-}" == '{{ index .Config.Labels "'*'" }}' ]]; then
       key="${3#'{{ index .Config.Labels "'}"
       key="${key%'" }}'}"

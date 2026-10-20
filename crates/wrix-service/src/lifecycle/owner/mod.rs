@@ -13,7 +13,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error as ThisError;
 use wrix_core::path::{ContainerName, WorkspaceHash};
 
-use super::{CACHE_BACKEND_VERSION, Plan, RuntimeKind, coordination};
+use super::{CACHE_BACKEND_VERSION, Plan, RuntimeKind, binding, coordination};
+use wrix_sandbox::image::Digest;
 
 const FILE: &str = "celler-owner.json";
 const LIMIT: u64 = 4096;
@@ -42,6 +43,16 @@ pub(super) struct Selected {
     pub workspace: WorkspaceHash,
     pub container: ContainerName,
     pub port: NonZeroU16,
+    pub recipe: Option<Recipe>,
+}
+
+/// Package provenance and immutable native image identity of a newly created owner.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Recipe {
+    pub binding: binding::Candidate,
+    pub image_id: Digest,
+    pub config_digest: Digest,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -53,6 +64,8 @@ struct Wire {
     workspace_hash: String,
     container_name: String,
     cache_http_port: NonZeroU16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    recipe: Option<Recipe>,
 }
 
 impl Selected {
@@ -62,7 +75,11 @@ impl Selected {
             && self.container == plan.container_name()
     }
 
-    pub fn from_plan(plan: &Plan, runtime: RuntimeKind) -> Result<Self, Error> {
+    pub fn from_plan(
+        plan: &Plan,
+        runtime: RuntimeKind,
+        recipe: Option<Recipe>,
+    ) -> Result<Self, Error> {
         Ok(Self {
             runtime,
             workspace: plan.workspace().hash().clone(),
@@ -71,6 +88,7 @@ impl Selected {
                 .owned_cache_port()
                 .and_then(NonZeroU16::new)
                 .ok_or(Error::Invalid)?,
+            recipe,
         })
     }
 
@@ -102,7 +120,11 @@ impl Selected {
             return Err(Error::Invalid);
         }
         let wire: Wire = serde_json::from_slice(&bytes)?;
-        if wire.schema_version != 1 || wire.backend_version != CACHE_BACKEND_VERSION {
+        if !matches!(
+            (wire.schema_version, wire.recipe.is_some()),
+            (1, false) | (2, true)
+        ) || wire.backend_version != CACHE_BACKEND_VERSION
+        {
             return Err(Error::Invalid);
         }
         Ok(Some(Self {
@@ -110,6 +132,7 @@ impl Selected {
             workspace: WorkspaceHash::parse(&wire.workspace_hash).map_err(|_| Error::Invalid)?,
             container: ContainerName::from_persisted(wire.container_name).ok_or(Error::Invalid)?,
             port: wire.cache_http_port,
+            recipe: wire.recipe,
         }))
     }
 
@@ -125,15 +148,20 @@ impl Selected {
             };
         }
         let wire = Wire {
-            schema_version: 1,
+            schema_version: if self.recipe.is_some() { 2 } else { 1 },
             backend_version: CACHE_BACKEND_VERSION.into(),
             runtime: self.runtime,
             workspace_hash: self.workspace.as_str().into(),
             container_name: self.container.as_str().into(),
             cache_http_port: self.port,
+            recipe: self.recipe.clone(),
         };
+        let bytes = serde_json::to_vec(&wire)?;
+        if bytes.len() as u64 > LIMIT {
+            return Err(Error::Invalid);
+        }
         let mut temporary = tempfile::NamedTempFile::new_in(root)?;
-        temporary.write_all(&serde_json::to_vec(&wire)?)?;
+        temporary.write_all(&bytes)?;
         temporary.as_file().sync_all()?;
         temporary
             .persist(root.join(FILE))

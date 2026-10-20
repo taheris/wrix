@@ -2158,10 +2158,13 @@ fn fake_apple_runtime_exposes_native_json_and_rejects_podman_flags() -> TestResu
             port["hostPort"], port["containerPort"]
         ));
     }
-    command.args(["image", "sh", "-c", "sleep infinity"]);
+    let image = format!("sha256:{}", "a".repeat(64));
+    command.args([image.as_str(), "sh", "-c", "sleep infinity"]);
     assert!(command.status()?.success());
     let replacement: Value =
         serde_json::from_slice(&fs::read(fixture.root.path().join("runtime.json"))?)?;
-    assert_eq!(replacement, fixture.snapshot);
+    let mut expected = fixture.snapshot.clone();
+    expected[0]["configuration"]["image"] = json!({"descriptor": {"digest": image}});
+    assert_eq!(replacement, expected);
     Ok(())
 }

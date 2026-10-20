@@ -14,6 +14,7 @@ fn selected(root: &Path) -> Selected {
         workspace: workspace.hash().clone(),
         container: workspace.container_name(),
         port: NonZeroU16::new(21_345).unwrap(),
+        recipe: None,
     }
 }
 
@@ -66,6 +67,102 @@ fn selected_metadata_rejects_unsafe_files_without_repair() {
     fs::rename(&target, host.join(FILE)).unwrap();
     fs::set_permissions(host.join(FILE), fs::Permissions::from_mode(0o644)).unwrap();
     assert!(matches!(Selected::read(&host), Err(Error::Permissions)));
+}
+
+fn recipe() -> Recipe {
+    serde_json::from_value(serde_json::json!({
+        "binding": {
+            "schema": 1,
+            "image": "localhost/wrix-service:selected",
+            "source_kind": "nix-descriptor",
+            "source": {"path": "/nix/store/source", "derivation": "/nix/store/source.drv"},
+            "digest": {"path": "/nix/store/digest/value", "derivation": "/nix/store/digest.drv"}
+        },
+        "image_id": format!("sha256:{}", "a".repeat(64)),
+        "config_digest": format!("sha256:{}", "b".repeat(64))
+    }))
+    .unwrap()
+}
+
+#[test]
+fn new_owner_retains_exact_package_binding_and_native_identity() {
+    let root = tempfile::tempdir().unwrap();
+    let host = root.path().join("host-lifecycle");
+    let guard = coordination::acquire(&host).unwrap();
+    let mut owner = selected(root.path());
+    owner.recipe = Some(recipe());
+    owner.record(&guard).unwrap();
+    assert_eq!(Selected::read(&host).unwrap(), Some(owner.clone()));
+    let bytes = fs::read(host.join(FILE)).unwrap();
+    let wire: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(wire["schema_version"], 2);
+    assert_eq!(
+        wire["recipe"]["binding"]["image"],
+        "localhost/wrix-service:selected"
+    );
+    let mut caller = owner;
+    caller.recipe.as_mut().unwrap().config_digest =
+        Digest::parse(&format!("sha256:{}", "c".repeat(64))).unwrap();
+    assert!(matches!(caller.record(&guard), Err(Error::Conflict)));
+    assert_eq!(fs::read(host.join(FILE)).unwrap(), bytes);
+}
+
+#[test]
+fn legacy_owner_is_not_implicitly_assigned_the_callers_package() {
+    let root = tempfile::tempdir().unwrap();
+    let host = root.path().join("host-lifecycle");
+    let guard = coordination::acquire(&host).unwrap();
+    let mut owner = selected(root.path());
+    owner.record(&guard).unwrap();
+    let before = fs::read(host.join(FILE)).unwrap();
+    let inode = fs::metadata(host.join(FILE)).unwrap().ino();
+    owner.recipe = Some(recipe());
+    assert!(matches!(owner.record(&guard), Err(Error::Conflict)));
+    assert_eq!(fs::read(host.join(FILE)).unwrap(), before);
+    assert_eq!(fs::metadata(host.join(FILE)).unwrap().ino(), inode);
+    assert_eq!(Selected::read(&host).unwrap().unwrap().recipe, None);
+}
+
+#[test]
+fn frozen_owner_rejects_incomplete_or_unvalidated_provenance() {
+    let root = tempfile::tempdir().unwrap();
+    let host = root.path().join("host-lifecycle");
+    let guard = coordination::acquire(&host).unwrap();
+    let mut owner = selected(root.path());
+    owner.recipe = Some(recipe());
+    owner.record(&guard).unwrap();
+    let original: serde_json::Value =
+        serde_json::from_slice(&fs::read(host.join(FILE)).unwrap()).unwrap();
+    for (path, value) in [
+        ("/schema_version", serde_json::json!(1)),
+        ("/recipe", serde_json::Value::Null),
+        ("/recipe/image_id", serde_json::json!("opaque-id")),
+        ("/recipe/config_digest", serde_json::json!("sha256:short")),
+        ("/recipe/binding/schema", serde_json::json!(2)),
+        (
+            "/recipe/binding/source/path",
+            serde_json::json!("/tmp/../escape"),
+        ),
+    ] {
+        let mut changed = original.clone();
+        *changed.pointer_mut(path).unwrap() = value;
+        fs::write(host.join(FILE), serde_json::to_vec(&changed).unwrap()).unwrap();
+        assert!(Selected::read(&host).is_err(), "{path}");
+    }
+}
+
+#[test]
+fn oversized_frozen_record_is_rejected_before_creating_selection() {
+    let root = tempfile::tempdir().unwrap();
+    let host = root.path().join("host-lifecycle");
+    let guard = coordination::acquire(&host).unwrap();
+    let mut owner = selected(root.path());
+    let mut value = serde_json::to_value(recipe()).unwrap();
+    value["binding"]["source"]["path"] =
+        serde_json::json!(format!("/nix/store/{}", "x".repeat(4096)));
+    owner.recipe = Some(serde_json::from_value(value).unwrap());
+    assert!(matches!(owner.record(&guard), Err(Error::Invalid)));
+    assert!(!host.join(FILE).exists());
 }
 
 #[test]

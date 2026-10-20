@@ -3,6 +3,7 @@ use std::{collections::BTreeMap, num::NonZeroU16, ops::RangeInclusive};
 use serde::{Deserialize, Deserializer, de};
 
 use super::{ContainerInfo, RuntimeStatus};
+use wrix_sandbox::image::Digest;
 
 #[derive(Debug, Deserialize)]
 pub(super) struct Snapshot {
@@ -18,8 +19,19 @@ pub(super) struct Configuration {
     pub id: String,
     #[serde(default)]
     pub labels: BTreeMap<String, String>,
+    image: Option<Image>,
     #[serde(default)]
     published_ports: Vec<PublishedPort>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Image {
+    descriptor: Descriptor,
+}
+
+#[derive(Debug, Deserialize)]
+struct Descriptor {
+    digest: Digest,
 }
 
 #[derive(Debug, Deserialize)]
@@ -50,6 +62,13 @@ struct Network {
 struct PublishedPort(RangeInclusive<u16>);
 
 impl Snapshot {
+    pub fn image_id(&self) -> Option<&Digest> {
+        self.configuration
+            .image
+            .as_ref()
+            .map(|image| &image.descriptor.digest)
+    }
+
     pub const fn runtime_status(&self) -> RuntimeStatus {
         let (Status::Nested { state, .. } | Status::Legacy(state)) = &self.status;
         match state {

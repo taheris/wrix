@@ -30,7 +30,8 @@ use wrix_core::{
     path::{ContainerName, Workspace, WorkspaceHash},
 };
 use wrix_sandbox::image::{
-    self as runtime_image, CommandStore, ImageRef, InstallRequest, Runtime as ImageRuntime,
+    self as runtime_image, CommandStore, Digest, ImageRef, InstallRequest, Runtime as ImageRuntime,
+    Store as _, Target,
 };
 
 const SCHEMA_VERSION: u8 = 1;
@@ -238,9 +239,8 @@ pub enum RuntimeStatus {
     Missing,
 }
 
-#[derive(Clone, Copy, Eq, PartialEq)]
 enum RunDisposition {
-    Created,
+    Created(Box<owner::Recipe>),
     Retained,
 }
 
@@ -761,8 +761,11 @@ pub fn start(cache_mode: CacheMode) -> Result<Status> {
         None
     };
     plan.ensure_layout()?;
-    if plan.has_services()
-        && runtime.ensure_running(&plan)? == RunDisposition::Retained
+    let disposition = plan
+        .has_services()
+        .then(|| runtime.ensure_running(&plan))
+        .transpose()?;
+    if matches!(disposition, Some(RunDisposition::Retained))
         && plan.owns_cache()
         && plan.dolt().is_some()
     {
@@ -771,7 +774,11 @@ pub fn start(cache_mode: CacheMode) -> Result<Status> {
     if let Some(cache) = cache {
         cache::activate(&plan, &cache)?;
         if plan.selected_owner.is_none() {
-            owner::Selected::from_plan(&plan, runtime.kind)?
+            let recipe = match disposition {
+                Some(RunDisposition::Created(recipe)) => Some(*recipe),
+                Some(RunDisposition::Retained) | None => None,
+            };
+            owner::Selected::from_plan(&plan, runtime.kind, recipe)?
                 .record(host_lock.as_ref().ok_or(owner::Error::Invalid)?)?;
         }
     }
@@ -1339,6 +1346,9 @@ impl Runtime {
             || !self
                 .published_ports(owner.container.as_str())?
                 .contains(&owner.port.get())
+            || (owner.recipe.is_some()
+                && self.container_image_id(&owner.container)?
+                    != owner.recipe.as_ref().map(|recipe| recipe.image_id.clone()))
         {
             return Err(Error::CellerOwnership {
                 container: owner.container.as_str().into(),
@@ -1539,7 +1549,7 @@ impl Runtime {
             }
         }
         command
-            .arg(image.as_str())
+            .arg(image.image_id.as_str())
             .arg("sh")
             .arg("-c")
             .arg(container_command(plan))
@@ -1548,7 +1558,7 @@ impl Runtime {
             .stderr(Stdio::piped());
         let output = command.output()?;
         if output.status.success() {
-            Ok(RunDisposition::Created)
+            Ok(RunDisposition::Created(Box::new(image)))
         } else {
             let message = String::from_utf8_lossy(&output.stderr).into_owned();
             bind_port_from_runtime_error(&message).map_or_else(
@@ -1896,6 +1906,18 @@ impl Runtime {
             .find(|snapshot| snapshot.configuration.id == name))
     }
 
+    fn container_image_id(&self, name: &ContainerName) -> Result<Option<Digest>> {
+        if self.kind == RuntimeKind::Container {
+            return Ok(self
+                .apple_snapshot(name.as_str())?
+                .and_then(|snapshot| snapshot.image_id().cloned()));
+        }
+        self.inspect_format(name.as_str(), "{{.Image}}")?
+            .as_deref()
+            .map(parse_image_id)
+            .transpose()
+    }
+
     fn inspect_label(&self, name: &str, label: &str) -> Result<Option<String>> {
         if self.kind == RuntimeKind::Container {
             return Ok(self
@@ -1968,7 +1990,7 @@ impl Runtime {
         }
     }
 
-    fn ensure_image(&self, plan: &Plan) -> Result<&ImageRef> {
+    fn ensure_image(&self, plan: &Plan) -> Result<owner::Recipe> {
         let candidate = self.binding.as_ref().ok_or(binding::Error::Missing)?;
         let root = plan
             .paths()
@@ -1992,7 +2014,28 @@ impl Runtime {
             )?,
         )?;
         if self.image_exists(candidate.image())? {
-            Ok(candidate.image())
+            let target = Target::Reference(candidate.image().clone());
+            let image_id = store
+                .image_id(runtime, &target)?
+                .ok_or_else(|| Error::Operation {
+                    message: "installed service image has no immutable native identity".into(),
+                })?;
+            let image_id = parse_image_id(image_id.as_str())?;
+            if store
+                .image_digest(runtime, &Target::Digest(image_id.clone()))?
+                .as_ref()
+                != Some(&digest)
+            {
+                return Err(Error::Operation {
+                    message: "installed service image does not match the bound content digest"
+                        .into(),
+                });
+            }
+            Ok(owner::Recipe {
+                binding: candidate.clone(),
+                image_id,
+                config_digest: digest,
+            })
         } else {
             Err(Error::InstalledImageUnavailable {
                 path: candidate.source().path().display().to_string(),
@@ -2192,6 +2235,17 @@ fn ss_port_owner(port: u16) -> Option<String> {
         .map(str::trim)
         .find(|line| line.contains(&needle))
         .map(|line| format!("process reported by ss ({line})"))
+}
+
+fn parse_image_id(value: &str) -> Result<Digest> {
+    let normalized = if value.starts_with("sha256:") {
+        value.to_owned()
+    } else {
+        format!("sha256:{value}")
+    };
+    Digest::parse(&normalized).map_err(|_| Error::InvalidImageDigest {
+        value: value.to_owned(),
+    })
 }
 
 fn default_runtime() -> String {

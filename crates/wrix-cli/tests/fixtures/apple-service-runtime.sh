@@ -34,7 +34,8 @@ case "$*" in
         containerPort: (.[2] | tonumber), proto: "tcp", count: 1
       })) as $ports |
       $previous[0] | map(if .configuration.id == $name then
-        .configuration.labels = $labels | .configuration.publishedPorts = $ports | .status.state = "running"
+        .configuration.labels = $labels | .configuration.publishedPorts = $ports |
+        .configuration.image = {descriptor: {digest: $args[-4]}} | .status.state = "running"
       else . end)
     ' "${WRIX_TEST_RUN_ARGS}.nul" >"${WRIX_TEST_RUNTIME_JSON:?}"
     exit 0

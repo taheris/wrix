@@ -757,9 +757,129 @@ fn service_start_uses_shared_image_digest_preflight_without_pruning() -> TestRes
             let args = fs::read(fixture.root.path().join("run.argv"))?;
             assert!(
                 args.split(|byte| *byte == 0)
+                    .any(|arg| arg == digest.as_bytes())
+            );
+            assert!(
+                !args
+                    .split(|byte| *byte == 0)
                     .any(|arg| arg == b"wrix-service:test")
             );
         }
+    }
+    Ok(())
+}
+
+#[test]
+fn selected_owner_keeps_its_frozen_image_when_the_callers_package_changes() -> TestResult {
+    use std::os::unix::fs::MetadataExt;
+    for (runtime, kind) in [
+        ("podman", "nix-descriptor"),
+        ("container", "docker-archive"),
+    ] {
+        let fixture = Fixture::new()?;
+        service_binding::create(fixture.root.path(), &fixture.bin, kind)?;
+        let mut command = fixture.command(runtime)?;
+        command
+            .args(["service", "start"])
+            .env("WRIX_SERVICE_ALLOW_TEMP_CACHE", "1");
+        let output = run_command(&mut command)?;
+        assert!(output.status.success(), "{}", output.stderr);
+        let metadata = run_command(
+            fixture
+                .command(runtime)?
+                .args(["service", "endpoints"])
+                .env("WRIX_SERVICE_ALLOW_TEMP_CACHE", "1"),
+        )?;
+        assert!(metadata.status.success(), "{}", metadata.stderr);
+        let metadata: Value = serde_json::from_str(&metadata.stdout)?;
+        let state = PathBuf::from(metadata["state_root"].as_str().unwrap());
+        let selection = state
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("host-lifecycle/celler-owner.json");
+        let before = fs::read(&selection)?;
+        let inode = fs::metadata(&selection)?.ino();
+        let key = fs::read(state.join("keys/cache.pub"))?;
+        let selected: Value = serde_json::from_slice(&before)?;
+        assert_eq!(selected["schema_version"], 2);
+        assert_eq!(selected["recipe"]["binding"]["image"], "wrix-service:test");
+        assert_eq!(
+            selected["recipe"]["image_id"],
+            format!("sha256:{}", "a".repeat(64))
+        );
+        let binding = fixture.root.path().join("binding.json");
+        let mut caller: Value = serde_json::from_slice(&fs::read(&binding)?)?;
+        caller["image"] = json!("wrix-service:new-package");
+        fs::write(&binding, serde_json::to_vec(&caller)?)?;
+        fs::write(fixture.root.path().join("calls"), "")?;
+        let output = run_command(&mut command)?;
+        assert!(output.status.success(), "{}", output.stderr);
+        let calls = fs::read(fixture.root.path().join("calls"))?;
+        let calls: Vec<_> = calls.split(|byte| *byte == 0).collect();
+        assert!(!calls.contains(&b"image".as_slice()));
+        assert!(!calls.contains(&b"run".as_slice()));
+        assert_eq!(fs::read(&selection)?, before);
+        assert_eq!(fs::metadata(&selection)?.ino(), inode);
+        assert_eq!(fs::read(state.join("keys/cache.pub"))?, key);
+        let args = fs::read(fixture.root.path().join("run.argv"))?;
+        let mut args: Vec<_> = args.split(|byte| *byte == 0).map(<[u8]>::to_vec).collect();
+        let image = args.len() - 5;
+        assert_eq!(args[image], format!("sha256:{}", "a".repeat(64)).as_bytes());
+        args[image] = format!("sha256:{}", "b".repeat(64)).into_bytes();
+        let changed = args.join(&0);
+        fs::write(fixture.root.path().join("run.argv"), &changed)?;
+        let output = run_command(&mut command)?;
+        assert!(!output.status.success());
+        assert!(
+            output.stderr.contains("explicit host-wide maintenance"),
+            "{}",
+            output.stderr
+        );
+        assert_eq!(fs::read(fixture.root.path().join("run.argv"))?, changed);
+        assert_eq!(fs::read(&selection)?, before);
+        assert_eq!(fs::read(state.join("keys/cache.pub"))?, key);
+    }
+    Ok(())
+}
+
+#[test]
+fn wrong_installed_content_is_rejected_before_starting_an_owner() -> TestResult {
+    for (runtime, kind) in [
+        ("podman", "nix-descriptor"),
+        ("container", "docker-archive"),
+    ] {
+        let fixture = Fixture::new()?;
+        service_binding::create(fixture.root.path(), &fixture.bin, kind)?;
+        let output = run_command(
+            fixture
+                .command(runtime)?
+                .args(["service", "start"])
+                .env("WRIX_SERVICE_ALLOW_TEMP_CACHE", "1")
+                .env(
+                    "WRIX_TEST_CONTENT_DIGEST",
+                    format!("sha256:{}", "b".repeat(64)),
+                ),
+        )?;
+        assert!(!output.status.success());
+        assert!(
+            output
+                .stderr
+                .contains("does not match the bound content digest"),
+            "{}",
+            output.stderr
+        );
+        assert!(!fixture.root.path().join("run.argv").exists());
+        let host = if cfg!(target_os = "macos") {
+            fixture
+                .root
+                .path()
+                .join("home/Library/Application Support/wrix")
+        } else {
+            fixture.root.path().join("state/wrix")
+        };
+        assert!(!host.join("host-lifecycle/celler-owner.json").exists());
     }
     Ok(())
 }

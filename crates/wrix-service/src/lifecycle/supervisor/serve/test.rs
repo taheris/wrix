@@ -200,7 +200,11 @@ async fn unexpected_celler_exit_stops_dolt_and_fails_supervision() {
             ..
         })
     ));
-    assert!(Held::acquire(server.root.path()).unwrap().is_some());
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+    while Held::acquire(server.root.path()).unwrap().is_none() {
+        assert!(tokio::time::Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
 }
 
 #[tokio::test]
