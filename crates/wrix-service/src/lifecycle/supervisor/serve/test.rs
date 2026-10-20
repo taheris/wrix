@@ -261,6 +261,49 @@ fn stale_socket_cleanup_preserves_non_socket_and_symlink_targets() {
 }
 
 #[tokio::test]
+async fn guard_probe_failure_stops_owned_celler_without_clearing_uncertainty() {
+    let mut server = Server::new(sleeper).unwrap();
+    server.ready().await.unwrap();
+    let pid = fs::read_to_string(server.root.path().join("first.pid")).unwrap();
+    fs::set_permissions(
+        server.root.path().join("dolt-epoch.lock"),
+        fs::Permissions::from_mode(0o644),
+    )
+    .unwrap();
+    let retirement = client::request(server.root.path(), &server.namespace, Action::Retire).await;
+    assert!(matches!(
+        retirement,
+        Ok(Observation::Retiring) | Err(Error::Io(_))
+    ));
+    let result = server.thread.take().unwrap().join().unwrap();
+    let alive = NativeCommand::new("kill")
+        .args(["-0", pid.trim()])
+        .output()
+        .unwrap()
+        .status
+        .success();
+    if alive {
+        assert!(
+            NativeCommand::new("kill")
+                .args(["-TERM", pid.trim()])
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    assert!(
+        !alive,
+        "guard probe failure orphaned the owned Celler process"
+    );
+    assert!(matches!(result, Err(Error::Cleanup { source, cleanup })
+        if matches!(*source, Error::Permissions) && matches!(*cleanup, Error::Permissions)));
+    let record: serde_json::Value =
+        serde_json::from_slice(&fs::read(server.root.path().join("component.json")).unwrap())
+            .unwrap();
+    assert_eq!(record["epoch"], "serving");
+}
+
+#[tokio::test]
 async fn native_descendants_hold_retirement_busy_after_the_main_child_exits() {
     let mut server = Server::new(|root| {
         format!(

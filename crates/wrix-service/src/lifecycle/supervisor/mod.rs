@@ -81,6 +81,11 @@ pub enum Error {
     Exited { role: Role, code: Option<i32> },
     /// cannot signal the owned component process; retirement remains unconfirmed
     Signal,
+    /// component supervision failed: {source}; owned component cleanup also failed: {cleanup}
+    Cleanup {
+        source: Box<Error>,
+        cleanup: Box<Error>,
+    },
 }
 
 pub(super) fn command(namespace: &WorkspaceHash, first: &str, second: &str) -> String {

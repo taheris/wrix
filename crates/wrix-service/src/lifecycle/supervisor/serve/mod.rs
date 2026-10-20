@@ -89,8 +89,14 @@ pub async fn run(
     owner.begin()?;
     let mut first = spawn(first_recipe)?;
     let mut phase = match owner.intent() {
-        Intent::Active => Phase::Active {
-            child: held.spawn(root, second_recipe)?,
+        Intent::Active => match held.spawn(root, second_recipe) {
+            Ok(child) => Phase::Active { child },
+            Err(error) => {
+                return complete(
+                    Err(error),
+                    cleanup(&mut first, Phase::Draining, &mut owner, root, &socket).await,
+                );
+            }
         },
         Intent::Retired => Phase::Retired(held),
     };
@@ -109,13 +115,19 @@ pub async fn run(
         };
         match event {
             Event::First(status) => {
-                break Err(Error::Exited {
-                    role: Role::Celler,
-                    code: status?.code(),
-                });
+                break match status {
+                    Ok(status) => Err(Error::Exited {
+                        role: Role::Celler,
+                        code: status.code(),
+                    }),
+                    Err(error) => Err(error.into()),
+                };
             }
             Event::Second(status) => {
-                let status = status?;
+                let status = match status {
+                    Ok(status) => status,
+                    Err(error) => break Err(error.into()),
+                };
                 if matches!(phase, Phase::Active { .. }) {
                     break Err(Error::Exited {
                         role: Role::Dolt,
@@ -125,7 +137,10 @@ pub async fn run(
                 phase = Phase::Draining;
             }
             Event::Connection(connection) => {
-                let (stream, _) = connection?;
+                let (stream, _) = match connection {
+                    Ok(connection) => connection,
+                    Err(error) => break Err(error.into()),
+                };
                 let permit = match capacity.clone().try_acquire_owned() {
                     Ok(permit) => permit,
                     Err(error) => {
@@ -170,22 +185,54 @@ pub async fn run(
             }
             Event::Request(None) => break Err(Error::Disconnected),
             Event::Probe => {
-                if matches!(phase, Phase::Draining)
-                    && let Some(held) = Held::acquire(root)?
-                {
-                    phase = Phase::Retired(held);
+                if matches!(phase, Phase::Draining) {
+                    match Held::acquire(root) {
+                        Ok(Some(held)) => phase = Phase::Retired(held),
+                        Ok(None) => (),
+                        Err(error) => break Err(error),
+                    }
                 }
             }
             Event::Stop => break Ok(()),
         }
     };
-    terminate(&first)?;
-    let held = stop_phase(phase, root).await?;
-    first.wait().await?;
+    complete(
+        result,
+        cleanup(&mut first, phase, &mut owner, root, &socket).await,
+    )
+}
+
+fn complete(result: Result<(), Error>, cleanup: Result<(), Error>) -> Result<(), Error> {
+    match (result, cleanup) {
+        (Err(source), Err(cleanup)) => Err(Error::Cleanup {
+            source: Box::new(source),
+            cleanup: Box::new(cleanup),
+        }),
+        (result, Ok(())) => result,
+        (Ok(()), cleanup) => cleanup,
+    }
+}
+
+async fn cleanup(
+    first: &mut Child,
+    phase: Phase,
+    owner: &mut Owner,
+    root: &Path,
+    socket: &Path,
+) -> Result<(), Error> {
+    let (first, held) = tokio::join!(stop_child(first), stop_phase(phase, root));
+    first?;
+    let held = held?;
     owner.finish()?;
-    fs::remove_file(&socket)?;
+    fs::remove_file(socket)?;
     drop(held);
-    result
+    Ok(())
+}
+
+async fn stop_child(child: &mut Child) -> Result<(), Error> {
+    terminate(child)?;
+    child.wait().await?;
+    Ok(())
 }
 
 fn apply(
