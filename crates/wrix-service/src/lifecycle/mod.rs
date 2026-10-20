@@ -670,12 +670,20 @@ pub fn start(cache_mode: CacheMode) -> Result<Status> {
         plan = Plan::for_current_dir(cache_mode)?;
     }
     runtime.refresh_unavailable_ports(&mut plan)?;
-    if plan.cache_enabled() {
-        cache::prepare(&plan, runtime.status(&plan.container_name())?)?;
-    }
+    let cache = if plan.cache_enabled() {
+        Some(cache::prepare(
+            &plan,
+            runtime.status(&plan.container_name())?,
+        )?)
+    } else {
+        None
+    };
     plan.ensure_layout()?;
     if plan.has_services() {
         runtime.ensure_running(&plan)?;
+    }
+    if let Some(cache) = cache {
+        cache::activate(&plan, &cache)?;
     }
     status_for_plan(plan)
 }

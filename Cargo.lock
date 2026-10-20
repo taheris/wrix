@@ -3245,6 +3245,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror",
+ "tokio",
  "tracing",
  "tracing-subscriber",
  "wrix-beads",

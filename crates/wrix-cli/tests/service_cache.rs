@@ -1,3 +1,5 @@
+#[path = "common/celler.rs"]
+mod celler;
 mod common;
 #[path = "common/service_binding.rs"]
 mod service_binding;
@@ -8,6 +10,7 @@ use common::{TestResult, run_command, set_mode, wrix_command_with_path};
 use serde_json::{Value, json};
 
 struct Fixture {
+    _server: celler::Server,
     root: tempfile::TempDir,
     workspace: PathBuf,
     bin: PathBuf,
@@ -30,11 +33,12 @@ impl Fixture {
         }
         service_binding::create(root.path(), &bin, "nix-descriptor")?;
         fs::write(root.path().join("image"), "installed")?;
-        common::initialize_host_scope(root.path())?;
+        let server = celler::Server::watch(root.path(), None);
         Ok(Self {
             root,
             workspace,
             bin,
+            _server: server,
         })
     }
 
@@ -166,6 +170,81 @@ fn cache_start_bootstraps_host_private_issuer_without_static_fallback() -> TestR
     assert!(!output.stderr.contains("PRIVATE KEY"));
     assert!(!state.join("keys/cache.secret").exists());
     assert!(!PathBuf::from(metadata["cache_root"].as_str().unwrap()).exists());
+    let namespace = wrix_cache::backend::publication::registration::private_namespace(
+        &wrix_core::path::WorkspaceHash::parse(metadata["workspace_hash"].as_str().unwrap())?,
+    )?;
+    let binding: Value = serde_json::from_slice(&fs::read(state.join("celler-publisher.json"))?)?;
+    assert_eq!(binding["namespace"], namespace.as_str());
+    assert_eq!(binding["issuer_root"], issuer.to_str().unwrap());
+    assert!(binding.get("token").is_none());
+    assert_eq!(
+        fs::read_to_string(state.join("keys/cache.pub"))?,
+        format!("{}\n", celler::KEY)
+    );
+    let requests = fs::read_to_string(fixture.root.path().join("celler-requests"))?;
+    assert_eq!(
+        requests,
+        format!(
+            "GET /_api/v1/cache-config/{namespace}\nPATCH /_api/v1/cache-config/{namespace}\nGET /_api/v1/cache-config/{namespace}\n"
+        )
+    );
+    Ok(())
+}
+
+#[test]
+fn startup_authentication_failure_does_not_confuse_runtime_liveness_with_readiness() -> TestResult {
+    let fixture = Fixture::new()?;
+    fs::write(fixture.root.path().join("celler-status"), "403")?;
+    let output = run_command(
+        fixture
+            .command("podman")?
+            .args(["service", "start"])
+            .env("WRIX_SERVICE_ALLOW_TEMP_CACHE", "1"),
+    )?;
+    assert!(!output.status.success());
+    assert!(output.stderr.contains("HTTP 403"), "{}", output.stderr);
+    assert!(!output.stdout.contains("runtime: Running"));
+    assert!(fixture.root.path().join("running").exists());
+    let metadata = fixture.endpoints(true)?;
+    let state = PathBuf::from(metadata["state_root"].as_str().unwrap());
+    assert!(!state.join("keys/cache.pub").exists());
+    assert!(!state.join("celler-publisher.json").exists());
+    let requests = fs::read_to_string(fixture.root.path().join("celler-requests"))?;
+    assert_eq!(
+        requests.lines().count(),
+        1,
+        "authentication failure must not retry"
+    );
+    assert!(!output.stderr.contains("Bearer"));
+    Ok(())
+}
+
+#[test]
+fn confirmed_startup_reports_failed_local_admission_without_rollback_claims() -> TestResult {
+    use std::os::unix::fs::symlink;
+    let fixture = Fixture::new()?;
+    let metadata = fixture.endpoints(true)?;
+    let state = PathBuf::from(metadata["state_root"].as_str().unwrap());
+    wrix_core::private_directory::prepare_with_parents(&state.join("keys"))?;
+    let outside = fixture.root.path().join("outside.pub");
+    fs::write(&outside, "preserve external key")?;
+    symlink(&outside, state.join("keys/cache.pub"))?;
+    let output = run_command(
+        fixture
+            .command("podman")?
+            .args(["service", "start"])
+            .env("WRIX_SERVICE_ALLOW_TEMP_CACHE", "1"),
+    )?;
+    assert!(!output.status.success());
+    assert!(
+        output.stderr.contains("backend changes remain active"),
+        "{}",
+        output.stderr
+    );
+    assert!(!state.join("celler-publisher.json").exists());
+    assert_eq!(fs::read_to_string(outside)?, "preserve external key");
+    assert!(fixture.root.path().join("celler-policy.json").exists());
+    assert!(fixture.root.path().join("running").exists());
     Ok(())
 }
 
@@ -385,7 +464,7 @@ fn celler_layout_separates_managed_cache_data_from_host_authority() -> TestResul
         }
         assert!(!cache_root.exists());
         assert!(!state_root.join("keys/cache.secret").exists());
-        assert!(!state_root.join("keys/cache.pub").exists());
+        assert_eq!(state_root.join("keys/cache.pub").exists(), cache);
         if cache {
             let persisted: Value =
                 serde_json::from_slice(&fs::read(state_root.join("services.json"))?)?;

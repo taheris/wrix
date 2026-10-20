@@ -1,10 +1,18 @@
-//! Host-private issuer bootstrap; backend observations cannot select authority paths.
+//! Authenticated cache readiness; backend observations cannot select authority paths.
 
-use std::path::{Component, Path};
+use std::{
+    io,
+    path::{Component, Path, PathBuf},
+    time::Duration,
+};
 
 use displaydoc::Display;
 use thiserror::Error as ThisError;
-use wrix_cache::backend::{issuer::Authority, layout::Layout};
+use wrix_cache::backend::{
+    issuer::Authority,
+    layout::Layout,
+    publication::{Publisher, registration::provision_private},
+};
 
 use super::{Plan, RuntimeStatus};
 
@@ -16,11 +24,28 @@ pub enum Error {
     Layout(#[from] wrix_cache::backend::layout::Error),
     /// {0}
     Issuer(#[from] wrix_cache::backend::issuer::Error),
+    /// authenticated Celler namespace readiness failed; runtime startup may have succeeded: {0}
+    Registration(#[from] wrix_cache::backend::publication::Error),
+    /// cannot initialize authenticated Celler readiness: {0}
+    Runtime(#[from] io::Error),
+    /// authenticated Celler readiness exceeded its deadline; backend or local registration may have changed, but readiness is unconfirmed
+    Deadline,
+    /// {0}
+    Settings(#[from] wrix_cache::config::ReadError),
+}
+
+const DEFAULT_RETENTION: Duration = Duration::from_hours(720);
+const READY_TIMEOUT: Duration = Duration::from_secs(10);
+
+pub(super) struct Prepared {
+    issuer: PathBuf,
+    retention: Duration,
+    lock_timeout: Duration,
 }
 
 /// Callers hold workspace and host lifecycle locks and have rejected competing backend owners.
 /// Running backends require existing private authority; bootstrap never invents its replacement.
-pub(super) fn prepare(plan: &Plan, status: RuntimeStatus) -> Result<(), Error> {
+pub(super) fn prepare(plan: &Plan, status: RuntimeStatus) -> Result<Prepared, Error> {
     let layout = Layout::current()?;
     let host = plan
         .paths()
@@ -34,7 +59,56 @@ pub(super) fn prepare(plan: &Plan, status: RuntimeStatus) -> Result<(), Error> {
     }
     layout.prepare()?;
     Authority::provision(&issuer, layout.metadata())?;
-    Ok(())
+    let retention = match Publisher::load(plan.paths().state_root(), plan.workspace().hash()) {
+        Ok(publisher) => publisher.retention(),
+        Err(wrix_cache::backend::publication::Error::Io(error))
+            if error.kind() == io::ErrorKind::NotFound =>
+        {
+            DEFAULT_RETENTION
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let settings = wrix_cache::config::Settings::current()?;
+    Ok(Prepared {
+        issuer,
+        retention,
+        lock_timeout: Duration::from_millis(settings.explicit_lock_timeout_ms),
+    })
+}
+
+/// Runtime liveness alone never admits publication or establishes authenticated readiness.
+pub(super) fn activate(plan: &Plan, prepared: &Prepared) -> Result<(), Error> {
+    let Some(port) = plan.cache_port() else {
+        return Err(Error::Location);
+    };
+    let endpoint = format!("http://127.0.0.1:{port}/");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(async {
+        tokio::time::timeout(READY_TIMEOUT + prepared.lock_timeout, async {
+            loop {
+                match provision_private(
+                    plan.paths().state_root(),
+                    plan.workspace().hash(),
+                    &endpoint,
+                    &prepared.issuer,
+                    prepared.retention,
+                    prepared.lock_timeout,
+                )
+                .await
+                {
+                    Ok(_) => return Ok(()),
+                    Err(wrix_cache::backend::publication::Error::Backend(
+                        wrix_cache::backend::Error::Transport,
+                    )) => tokio::time::sleep(Duration::from_millis(200)).await,
+                    Err(error) => return Err(Error::Registration(error)),
+                }
+            }
+        })
+        .await
+        .map_err(|_| Error::Deadline)?
+    })
 }
 
 fn check_location(issuer: &Path, layout: &Layout, workspace: &Path) -> Result<(), Error> {

@@ -1,3 +1,5 @@
+#[path = "common/celler.rs"]
+mod celler;
 mod common;
 #[path = "common/service_binding.rs"]
 mod service_binding;
@@ -61,6 +63,30 @@ fn running_cache_reentry_restores_only_the_verifier_from_existing_private_author
 }
 
 #[test]
+fn reentry_preserves_host_selected_finite_publication_retention() -> TestResult {
+    let fixture = Fixture::new()?;
+    let state = fixture.state_root()?;
+    let host = state.parent().unwrap().parent().unwrap();
+    let workspace = wrix_core::path::Workspace::from_path(&fixture.workspace)?;
+    wrix_cache::backend::publication::Publisher::install_issuer(
+        &state,
+        workspace.hash(),
+        &format!("http://127.0.0.1:{}/", fixture.port("cache_http")?),
+        wrix_cache::backend::publication::registration::private_namespace(workspace.hash())?,
+        &host.join("host-control/celler-issuer"),
+        Duration::from_hours(168),
+    )?;
+    let output = fixture.run("start")?;
+    assert!(output.status.success(), "{}", output.stderr);
+    let active: Value =
+        serde_json::from_slice(&fs::read(fixture.root.path().join("celler-policy.json"))?)?;
+    assert_eq!(active["retention_period"]["Period"], 7 * 24 * 60 * 60);
+    let publisher = wrix_cache::backend::publication::Publisher::load(&state, workspace.hash())?;
+    assert_eq!(publisher.retention(), Duration::from_hours(168));
+    Ok(())
+}
+
+#[test]
 fn running_cache_owner_cannot_bootstrap_replacement_issuer_authority() -> TestResult {
     let fixture = Fixture::new()?;
     let state = fixture.state_root()?;
@@ -112,6 +138,7 @@ fn malformed_sync_branch_fails_before_service_runtime_or_layout() -> TestResult 
 }
 
 struct Fixture {
+    server: std::cell::RefCell<Option<celler::Server>>,
     root: tempfile::TempDir,
     workspace: PathBuf,
     runtime: PathBuf,
@@ -145,6 +172,7 @@ impl Fixture {
         service_binding::create(root.path(), &root.path().join("bin"), "docker-archive")?;
         fs::copy(&runtime, root.path().join("bin/container"))?;
         let mut fixture = Self {
+            server: std::cell::RefCell::new(None),
             root,
             workspace,
             runtime,
@@ -264,7 +292,29 @@ impl Fixture {
         Ok(command)
     }
 
+    fn api(&self) -> TestResult {
+        if self.server.borrow().is_some() {
+            return Ok(());
+        }
+        let labels = &self.snapshot[0]["configuration"]["labels"];
+        let modern = labels["wrix.cache.backend"] == "celler-v2"
+            && labels["wrix.cache.enabled"] == "true"
+            && labels["wrix.service.supervision"] == "1"
+            && (labels["wrix.dolt.transport"] == "disabled"
+                || labels["wrix.dolt.auth"] == "tcp-root-v1");
+        let port = if self.snapshot[0]["status"]["state"] == "running" && modern {
+            Some(self.port("cache_http")?)
+        } else {
+            None
+        };
+        *self.server.borrow_mut() = Some(celler::Server::watch(self.root.path(), port));
+        Ok(())
+    }
+
     fn run(&self, operation: &str) -> TestResult<RunResult> {
+        if operation == "start" {
+            self.api()?;
+        }
         run_command(self.command()?.args(["service", operation]))
     }
 
@@ -292,6 +342,7 @@ impl Fixture {
     }
 
     fn launch_command(&self, mode: LaunchCommand, workspace: &Path) -> TestResult<Command> {
+        self.api()?;
         let bin = self.root.path().join("bin");
         fs::create_dir_all(&bin)?;
         for name in ["podman", "container", "route", "skopeo"] {
@@ -447,7 +498,6 @@ fn null_fixture_endpoint_reports_cli_workspace_and_payload() -> TestResult {
 #[test]
 fn repeated_apple_service_start_preserves_busy_owned_endpoints() -> TestResult {
     let fixture = Fixture::new()?;
-    let _cache = TcpListener::bind(("127.0.0.1", fixture.port("cache_http")?))?;
     let _dolt = TcpListener::bind(("127.0.0.1", fixture.port("dolt_tcp")?))?;
 
     for _ in 0..2 {
@@ -1132,6 +1182,7 @@ fn host_lifecycle_lock_blocks_starts_from_unrelated_workspaces() -> TestResult {
     fs::create_dir(&peer)?;
     initialize_repository(&peer)?;
     let lock = hold_host_lifecycle_lock(&fixture)?;
+    fixture.api()?;
     let mut children = Vec::new();
     for workspace in [&fixture.workspace, &peer] {
         children.push(
@@ -1255,6 +1306,7 @@ fn concurrent_service_starts_share_one_lifecycle_owner() -> TestResult {
     let mut fixture = Fixture::new()?;
     fixture.snapshot[0]["status"]["state"] = json!("stopped");
     fixture.write_snapshot()?;
+    fixture.api()?;
     let mut children = Vec::new();
     for _ in 0..4 {
         children.push(

@@ -252,6 +252,11 @@ impl Publisher {
         })
     }
 
+    /// The finite host-selected policy retained by this publication binding.
+    pub const fn retention(&self) -> Duration {
+        self.retention
+    }
+
     /// Missing paths remain missing; native store and backend failures propagate unchanged.
     pub async fn publish_selected(&self, paths: &[PathBuf]) -> Result<usize> {
         Ok(self.authority.client()?.publish_selected(paths).await?)
