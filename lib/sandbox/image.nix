@@ -44,7 +44,7 @@ let
     concatStringsSep
     mapAttrsToList
     optional
-    optionalAttrs
+    optionals
     optionalString
     ;
   privateNix = import ./private-nix.nix { inherit (pkgs) lib; };
@@ -97,7 +97,7 @@ let
   piSettingsJson =
     if agent == "pi" then pkgs.writeText "pi-settings.json" (toJSON piSettings) else null;
 
-  mcpAvailableJson = pkgs.writeText "wrix-mcp-available.json" (toJSON {
+  mcpAvailable = {
     schema = 1;
     runtime_selection = mcpRuntime;
     servers = mapAttrsToList (name: config: {
@@ -106,7 +106,8 @@ let
       args = config.args or [ ];
       env = config.env or { };
     }) mcpServerConfigs;
-  });
+  };
+  mcpAvailableJson = pkgs.writeText "wrix-mcp-available.json" (toJSON mcpAvailable);
 
   # Agent runtime selection. Exactly one agent package rides the agent tier —
   # new runtimes plug in by extending the supported `agent` values. No
@@ -204,30 +205,33 @@ let
       }
   );
 
-  configurationInputs = {
-    "mcp-available.json" = mcpAvailableJson;
-  }
-  // optionalAttrs (agent == "claude") {
-    "claude-config.json" = claudeConfigJson;
-    "claude-settings.json" = claudeSettingsJson;
-  }
-  // optionalAttrs (agent == "pi") {
-    "pi-settings.json" = piSettingsJson;
-  };
-  configurationRoots = pkgs.linkFarm "wrix-image-configuration" (
-    mapAttrsToList (name: path: {
-      name = "share/wrix/image-inputs/${name}";
-      inherit path;
-    }) configurationInputs
+  # The generated JSON is copied into /etc, not installed as a store package.
+  # Only its context-bearing runtime references belong in the installed closure;
+  # including the JSON itself would invalidate store layers for plaintext edits.
+  configurationRoots = import ./configuration-roots.nix { inherit (pkgs) lib; } (
+    [ mcpAvailable ]
+    ++ optionals (agent == "claude") [
+      claudeConfig
+      claudeSettings
+    ]
+    ++ optional (agent == "pi") piSettings
+  );
+  configurationContents = optional (configurationRoots != [ ]) (
+    pkgs.linkFarm "wrix-image-configuration" (
+      map (path: {
+        name = "share/wrix/image-inputs/${builtins.unsafeDiscardStringContext (baseNameOf path)}";
+        inherit path;
+      }) configurationRoots
+    )
   );
 
   leafContents = [
-    configurationRoots
     pkgs.dockerTools.usrBinEnv
     pkgs.dockerTools.binSh
     pkgs.dockerTools.caCertificates
     profileEnv
   ]
+  ++ configurationContents
   ++ optional (networkBootstrapSh != null) networkTools;
 
   # The image's MATERIALIZED on-disk store, registered in the baked Nix DB so the

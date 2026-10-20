@@ -37,6 +37,11 @@ let
       ];
   plain = mkFixture "pi" { };
   changed = mkFixture "pi" { env.WRIX_CONFIGURATION_REFERENCE = "${configOnly}"; };
+  plaintextChanged = mkFixture "pi" {
+    env.WRIX_CONFIGURATION_REFERENCE = "${configOnly}";
+    env.WRIX_PLAINTEXT_VARIANT = "does-not-change-the-installed-store";
+  };
+  configurationRoots = import ../../lib/sandbox/configuration-roots.nix { inherit (pkgs) lib; };
   archive = import ../../lib/sandbox/image.nix {
     pkgs = linuxPkgs;
     hostPkgs = pkgs;
@@ -79,6 +84,26 @@ let
     ++ [ ((imageCase archive) // { required_paths = [ (toString configOnly) ]; }) ];
   casesFile = pkgs.writeText "shared-nix-images.json" (toJSON cases);
   api =
+    assert
+      configurationRoots {
+        nested = [
+          configOnly
+          "${configOnly}/bin/tool"
+        ];
+      } == [
+        (toString configOnly)
+      ];
+    assert configurationRoots "${configOnly}?annotation" == [ (toString configOnly) ];
+    assert configurationRoots configOnly.drvPath == [ configOnly.drvPath ];
+    assert configurationRoots (pkgs.lib.strings.addContextFrom configOnly "plaintext") == [ ];
+    assert configurationRoots (builtins.unsafeDiscardStringContext "${configOnly}") == [ ];
+    assert
+      configurationRoots [
+        null
+        true
+        1
+        { ignored = "plaintext"; }
+      ] == [ ];
     assert wrix.capabilities.privateNix == 1;
     assert wrix.capabilities.sharedNix == 1;
     assert all (
@@ -95,6 +120,9 @@ let
     assert plain.image.stableProfileImage.drvPath == changed.image.stableProfileImage.drvPath;
     assert plain.image.agentImage.drvPath == changed.image.agentImage.drvPath;
     assert plain.image.sharedNix.seed_closure != changed.image.sharedNix.seed_closure;
+    assert changed.image.sharedNix.seed_closure == plaintextChanged.image.sharedNix.seed_closure;
+    assert changed.image.ociLayout.storeLayers == plaintextChanged.image.ociLayout.storeLayers;
+    assert changed.image.source != plaintextChanged.image.source;
     pkgs.runCommandLocal "shared-nix-api" { } ''touch "$out"'';
   artifacts =
     pkgs.runCommandLocal "shared-nix-image-contract" { nativeBuildInputs = [ pkgs.python3 ]; }
