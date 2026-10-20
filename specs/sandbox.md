@@ -573,8 +573,8 @@ implicit-port form is accepted.
   default. This leaves the existing `--dangerously-skip-permissions` behavior
   unchanged, not an approval enforcement boundary. See
   [Claude stdio clients](../docs/claude-stdio.md) for client/version
-  compatibility.
-  [test](../tests/sandbox/entrypoint-contract.sh#test_claude_stdio_permission_prompt_opt_in_both_entrypoints)
+  compatibility. [system](bash tests/sandbox/entrypoint-contract.sh
+  test_claude_stdio_permission_prompt_opt_in_both_entrypoints)
 - `git` — optional object with independently optional boolean `deploy` and
   `sign` overrides; absence inherits repository policy, explicit `false`
   disables the corresponding grant, and explicit `true` enables it
