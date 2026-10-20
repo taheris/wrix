@@ -1249,8 +1249,89 @@ fn unsafe_host_lifecycle_lock_fails_before_owner_inspection_or_layout() -> TestR
 }
 
 #[test]
+fn workspace_stop_preserves_running_celler_even_with_cache_opt_out() -> TestResult {
+    for backend in ["celler-v1", "celler-v2", "celler-unknown"] {
+        for enabled in [true, false] {
+            let mut fixture = Fixture::new()?;
+            fixture.snapshot[0]["configuration"]["labels"]["wrix.cache.backend"] = json!(backend);
+            fixture.write_snapshot()?;
+            let state = fixture.state_root()?;
+            let host = state.parent().unwrap().parent().unwrap();
+            let peer = host.join("service-data/celler/peer-state");
+            fs::write(&peer, "common and peer membership must survive")?;
+            let paths = [
+                fixture.root.path().join("runtime.json"),
+                state.join("services.json"),
+                state.join("keys/cache.pub"),
+                host.join("host-control/celler-issuer/issuer.pem"),
+                host.join("service-data/celler/jwt.pub"),
+                peer,
+            ];
+            let before = paths.iter().map(fs::read).collect::<Result<Vec<_>, _>>()?;
+            let output = run_command(
+                fixture
+                    .command()?
+                    .env("WRIX_NIX_CACHE_ENABLE", enabled.to_string())
+                    .args(["service", "stop"]),
+            )?;
+            assert!(!output.status.success());
+            assert!(
+                output
+                    .stderr
+                    .contains("workspace stop cannot shut down running shared Celler"),
+                "{}",
+                output.stderr
+            );
+            let after = paths.iter().map(fs::read).collect::<Result<Vec<_>, _>>()?;
+            assert_eq!(after, before);
+            let calls = fs::read_to_string(fixture.root.path().join("runtime.log"))?;
+            assert!(!calls.lines().any(|line| line.starts_with("rm ")));
+            assert!(!fixture.root.path().join("run.argv").exists());
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn workspace_stop_rejects_uncertain_backend_state_before_removal() -> TestResult {
+    let mut fixture = Fixture::new()?;
+    fixture.snapshot[0]["status"]["state"] = json!("stopping");
+    fixture.write_snapshot()?;
+    let before = fs::read(fixture.root.path().join("runtime.json"))?;
+    let output = fixture.run("stop")?;
+    assert!(!output.status.success());
+    assert!(
+        output.stderr.contains("invalid Apple container JSON"),
+        "{}",
+        output.stderr
+    );
+    let calls = fs::read_to_string(fixture.root.path().join("runtime.log"))?;
+    assert!(!calls.lines().any(|line| line.starts_with("rm ")));
+    assert_eq!(fs::read(fixture.root.path().join("runtime.json"))?, before);
+    Ok(())
+}
+
+#[test]
+fn workspace_stop_can_remove_running_legacy_static_service() -> TestResult {
+    let mut fixture = Fixture::new()?;
+    fixture.snapshot[0]["configuration"]["labels"]
+        .as_object_mut()
+        .unwrap()
+        .remove("wrix.cache.backend");
+    fixture.write_snapshot()?;
+    let output = fixture.run("stop")?;
+    assert!(output.status.success(), "{}", output.stderr);
+    let snapshot: Value =
+        serde_json::from_slice(&fs::read(fixture.root.path().join("runtime.json"))?)?;
+    assert_eq!(snapshot, json!([]));
+    Ok(())
+}
+
+#[test]
 fn host_lifecycle_lock_blocks_stop_before_container_removal() -> TestResult {
-    let fixture = Fixture::new()?;
+    let mut fixture = Fixture::new()?;
+    fixture.snapshot[0]["status"]["state"] = json!("stopped");
+    fixture.write_snapshot()?;
     let snapshot = fs::read(fixture.root.path().join("runtime.json"))?;
     let lock = hold_host_lifecycle_lock(&fixture)?;
     let mut child = fixture

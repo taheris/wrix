@@ -109,6 +109,8 @@ pub enum Error {
     Operation { message: String },
     /// Celler ownership in container {container} requires explicit host-wide maintenance; ordinary startup cannot replace a running backend or start a competing owner
     CellerOwnership { container: String },
+    /// workspace stop cannot shut down running shared Celler backend {container}; namespace retirement requires host-wide lifecycle integration, not container removal
+    CellerWorkspaceStop { container: String },
     /// service port {port} is already in use by {owner}; stop that process/container or free the port before retrying
     PortInUse { port: u16, owner: String },
     /// no available loopback port in {start}-{end}
@@ -723,7 +725,7 @@ pub fn stop(cache_mode: CacheMode) -> Result<Status> {
     let (plan, _lock) = locked_plan(cache_mode)?;
     let _host_lock = host_lifecycle_lock(plan.paths())?;
     let runtime = Runtime::from_env()?;
-    plan.authorize()?;
+    runtime.ensure_workspace_stop_safe(&plan)?;
     runtime.remove(&plan.container_name())?;
     status_for_plan(plan)
 }
@@ -1132,6 +1134,20 @@ impl Runtime {
             }
             RuntimeKind::Podman => Err(service.unavailable()),
         }
+    }
+
+    fn ensure_workspace_stop_safe(&self, plan: &Plan) -> Result<()> {
+        let name = plan.container_name();
+        if self.status(&name)? == RuntimeStatus::Running
+            && self
+                .inspect_label(name.as_str(), CACHE_BACKEND_LABEL)?
+                .is_some()
+        {
+            return Err(Error::CellerWorkspaceStop {
+                container: name.as_str().to_owned(),
+            });
+        }
+        Ok(())
     }
 
     fn ensure_cache_owner_compatible(&self, plan: &Plan) -> Result<()> {
