@@ -304,11 +304,11 @@ verification.
 
 ## Shared Store Compatibility
 
-[Service-Owned Nix Stores](nix-store.md#bootstrap-protection-and-lifecycle) owns
-the additional versioned shared capability, exact seed closure and trusted
-launch bootstrap. It does not weaken private provisioning or permit caller
+[Service-Owned Nix Stores](store.md#bootstrap-protection-and-lifecycle) owns the
+additional versioned shared capability, exact seed closure and trusted launch
+bootstrap. It does not weaken private provisioning or permit caller
 store/configuration overrides. The private capability remains independent of
-shared-mode support. Acceptance: [Store Images](nix-store.md#image-acceptance).
+shared-mode support. Acceptance: [Store Images](store.md#image-acceptance).
 
 ## Hook Installation
 

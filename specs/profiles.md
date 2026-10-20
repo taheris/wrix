@@ -289,13 +289,13 @@ contents or other explicit mounts. Selective directory/Git-source exclusions and
 confidentiality tracking into compiled artifacts are deferred.
 
 This does not create a common Cargo `target/` directory, select the independent
-[Nix Store Mode](nix-store.md#selection-and-host-approval), authorize worker
-Celler uploads, or broaden ordinary Celler read grants. Delegated compiler
-access to its originating outputs is not cross-worker Cargo target reuse. Native
-tool capacity controls remain separate; sharing is not a hard aggregate disk
-quota or a new Wrix budget/eviction coordinator. Cargo/uv backing and
-shared-daemon integration must meet these modes without turning ordinary
-directory staging into a general write-back guarantee.
+[Nix Store Mode](store.md#selection-and-host-approval), authorize worker Celler
+uploads, or broaden ordinary Celler read grants. Delegated compiler access to
+its originating outputs is not cross-worker Cargo target reuse. Native tool
+capacity controls remain separate; sharing is not a hard aggregate disk quota or
+a new Wrix budget/eviction coordinator. Cargo/uv backing and shared-daemon
+integration must meet these modes without turning ordinary directory staging
+into a general write-back guarantee.
 
 Caller-declared mounts retain the existing explicit mount contract; built-in
 defaults do not make arbitrary consumer mounts safe. `sandbox.md` owns

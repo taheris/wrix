@@ -59,14 +59,14 @@ The deployment owns four core service families:
 
 ### Service-Owned Nix Stores
 
-[Service-Owned Nix Stores](nix-store.md) owns the additional pool-scoped backend
+[Service-Owned Nix Stores](store.md) owns the additional pool-scoped backend
 family, private database/build state, untrusted clients, read-only worker views
 and native GC. Pools use this deployment/controller and single-owner lifecycle;
 they are not new per-workspace service deployments. Their own selection and
 approval do not enable Celler, compiler or proxy grants. Pool state is separate
 from Celler archives and compiler-cache data. Acceptance:
-[Store Pools](nix-store.md#pool-acceptance) and
-[Store Lifecycle](nix-store.md#lifecycle-acceptance).
+[Store Pools](store.md#pool-acceptance) and
+[Store Lifecycle](store.md#lifecycle-acceptance).
 
 ### Host Control Service
 
@@ -357,7 +357,7 @@ operations do not require launcher-only `--profile-config`.
 The update plan always includes all four core deployment roles: gateway, Dolt,
 Celler and shared sccache. Provisioned Nix pools add the ownership, drain and
 readiness obligations in
-[Store Lifecycle](nix-store.md#bootstrap-protection-and-lifecycle); core-role
+[Store Lifecycle](store.md#bootstrap-protection-and-lifecycle); core-role
 readiness alone cannot complete those transitions. Idle or stopped roles and
 roles unused by the current repository are not omitted, and there is no per-role
 update selector. Complete activation requires confirmed readiness at the target
@@ -1360,8 +1360,8 @@ Acceptance: [Host Service Acceptance](#host-service-acceptance),
   cache eviction is native and manual collection is host-wide.
 - Moving full worker runtimes into this service container or adopting a shared
   containerd/nix-snapshotter execution appliance. That runtime migration is
-  excluded; delegated compiler jobs and admitted [Nix Realization](nix-store.md)
-  are execution capabilities, not worker-runtime migration.
+  excluded; delegated compiler jobs and admitted [Nix Realization](store.md) are
+  execution capabilities, not worker-runtime migration.
 - Independent container-level compromise/fault isolation between cohosted
   service components or workspace tenants.
 - Host-native Dolt and host OS account/module provisioning for a native Dolt

@@ -233,7 +233,7 @@ The command delegates candidate preparation, explicit activation, native backend
 handoff and safe generation retirement to
 [Generation Handoff](services.md#generation-handoff), including its required
 four-core-role plan plus
-[Provisioned Store Obligations](nix-store.md#bootstrap-protection-and-lifecycle),
+[Provisioned Store Obligations](store.md#bootstrap-protection-and-lifecycle),
 regardless of current repository, idle traffic or stopped roles; there is no
 per-role selector. It applies the invoked host package's bound service image
 through the existing image-source contract, not the project's launch
@@ -556,13 +556,13 @@ and the unsupported `sign_commits` spelling.
 
 ### Nix Store Controls
 
-[Service-Owned Nix Stores](nix-store.md#selection-and-host-approval) owns
-run/spawn mode selection and the independent repository preference.
-[Store Operations](nix-store.md#store-operations) owns the passive
+[Service-Owned Nix Stores](store.md#selection-and-host-approval) owns run/spawn
+mode selection and the independent repository preference.
+[Store Operations](store.md#store-operations) owns the passive
 `wrix service nix-store` namespace and its explicit host-authorized operations.
 These do not change existing cache flags or the scopes of existing GC commands.
-Acceptance: [Store Selection](nix-store.md#selection-acceptance) and
-[Store Operations](nix-store.md#operation-acceptance).
+Acceptance: [Store Selection](store.md#selection-acceptance) and
+[Store Operations](store.md#operation-acceptance).
 
 ### Tool Cache Controls
 

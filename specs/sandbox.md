@@ -629,14 +629,14 @@ per-launch `SpawnConfig` remain supported. CLI-level selection/help is owned by
 
 ### Launch Nix Store Selection
 
-[Service-Owned Nix Stores](nix-store.md#selection-and-host-approval) owns the
+[Service-Owned Nix Stores](store.md#selection-and-host-approval) owns the
 independent private/shared selection, host approval and restricted-mode
 rejection for run/spawn. Its
-[Bootstrap and Lifecycle](nix-store.md#bootstrap-protection-and-lifecycle)
-contract owns trusted store setup and lifetime protection. Caller mounts or raw
-Nix environment cannot substitute for that admitted path. Acceptance:
-[Store Selection](nix-store.md#selection-acceptance) and
-[Store Platforms](nix-store.md#platform-acceptance).
+[Bootstrap and Lifecycle](store.md#bootstrap-protection-and-lifecycle) contract
+owns trusted store setup and lifetime protection. Caller mounts or raw Nix
+environment cannot substitute for that admitted path. Acceptance:
+[Store Selection](store.md#selection-acceptance) and
+[Store Platforms](store.md#platform-acceptance).
 
 ### Launch Tool Cache Selection
 
@@ -1483,7 +1483,7 @@ separate from network metadata and remains required.
   retain supervision of foreground launchers
 - Shared writable guest stores/databases and implicit private-store persistence.
   Admitted service-owned installed-store reuse belongs to
-  [Service-Owned Nix Stores](nix-store.md), not ordinary profile mounts. Private
+  [Service-Owned Nix Stores](store.md), not ordinary profile mounts. Private
   mode remains image-seeded and disposable.
 - Windows support
 - GPU passthrough

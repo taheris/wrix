@@ -256,7 +256,7 @@ HTTP is the cache client transport. Unix-socket cache substituters, host Nix
 daemon sockets, shared mutable `/nix/store` volumes and host-store-serving
 caches are excluded. Clients still import archives into the consuming store;
 Celler is not a shared installed guest store or an automatic host `/nix/store`
-view. The separate [Installed Store Plane](nix-store.md) does not change Celler
+view. The separate [Installed Store Plane](store.md) does not change Celler
 transport, signing or audiences.
 
 ### Client Publication Freshness
@@ -1470,7 +1470,7 @@ Acceptance: [Celler Backend Acceptance](#celler-backend-acceptance),
   GC.
 - Shared containerd/nix-snapshotter worker migration or moving full worker
   runtimes into the service VM (the explicitly delegated compiler lane is
-  separate). The separate [Installed Store Plane](nix-store.md) is not a Celler
+  separate). The separate [Installed Store Plane](store.md) is not a Celler
   prerequisite or authorization for a dynamic dependency-mount broker.
 - Service-side read-through population and fetching missing outputs solely to
   seed common; the host pipeline uses eligible outputs already realized locally.
@@ -1483,7 +1483,7 @@ Acceptance: [Celler Backend Acceptance](#celler-backend-acceptance),
   credential/publication lifecycle while host activation/pre-push publication
   provides seeding. Guest-only build outputs are not shared through Celler.
 - Shared mutable `/nix/store` volumes as a cache transport. Service-owned
-  installed-store reuse belongs to [Service-Owned Nix Stores](nix-store.md), not
+  installed-store reuse belongs to [Service-Owned Nix Stores](store.md), not
   this cache contract. Celler itself does not preserve installed client state or
   remove fresh-client import costs.
 - Non-Nix artifacts: Cargo targets/registry/git, sccache, virtualenvs and uv

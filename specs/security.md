@@ -149,11 +149,10 @@ the worker's network policy. Proxy guarantees still assume the shared service is
 trusted, not compromised by another cohosted compiler job. Full worker runtime
 migration remains excluded. Separately admitted service-owned Nix execution and
 its cooperative pool boundary belong to
-[Service-Owned Nix Stores](nix-store.md#execution-and-confidentiality),
-including strict build isolation, public-network-only execution and no host
-substitution authority. Acceptance:
-[Store Execution](nix-store.md#execution-acceptance) and
-[Store Pools](nix-store.md#pool-acceptance).
+[Service-Owned Nix Stores](store.md#execution-and-confidentiality), including
+strict build isolation, public-network-only execution and no host substitution
+authority. Acceptance: [Store Execution](store.md#execution-acceptance) and
+[Store Pools](store.md#pool-acceptance).
 
 ### Credential Surfaces
 

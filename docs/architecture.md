@@ -199,7 +199,7 @@ implicitly start or repair it, and direnv reload does not implicitly upgrade it.
 activates the invoked host package's bound service image for this user's
 existing deployment, including all four core roles even when idle or stopped and
 the
-[Provisioned Nix Pool Obligations](../specs/nix-store.md#bootstrap-protection-and-lifecycle),
+[Provisioned Nix Pool Obligations](../specs/store.md#bootstrap-protection-and-lifecycle),
 independent of project launch data. It works outside repositories and needs no
 redundant `--host`; an existing stopped deployment is started and activated,
 while initial creation remains ordinary workspace `service start`. Successful
@@ -293,7 +293,7 @@ runtime-specific system suites own that proof. Generic Darwin directory staging
 still copies ordinary consumer mounts, not these live managed caches.
 
 Full worker runtimes remain in Podman/optional-krun/Apple boundaries.
-[Service-Owned Nix Stores](../specs/nix-store.md) defines separately admitted
+[Service-Owned Nix Stores](../specs/store.md) defines separately admitted
 installed-store reuse: canonical-repository pools, untrusted service builds,
 read-only worker views and protected live roots. Private mode remains the
 constructor/default contract; shared availability requires independent native
