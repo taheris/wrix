@@ -59,15 +59,16 @@ pub(super) fn prepare(plan: &Plan, status: RuntimeStatus) -> Result<Prepared, Er
     }
     layout.prepare()?;
     Authority::provision(&issuer, layout.metadata())?;
-    let retention = match Publisher::load(plan.paths().state_root(), plan.workspace().hash()) {
-        Ok(publisher) => publisher.retention(),
-        Err(wrix_cache::backend::publication::Error::Io(error))
-            if error.kind() == io::ErrorKind::NotFound =>
-        {
-            DEFAULT_RETENTION
-        }
-        Err(error) => return Err(error.into()),
-    };
+    let retention =
+        match Publisher::retained_policy(plan.paths().state_root(), plan.workspace().hash()) {
+            Ok(retention) => retention,
+            Err(wrix_cache::backend::publication::Error::Io(error))
+                if error.kind() == io::ErrorKind::NotFound =>
+            {
+                DEFAULT_RETENTION
+            }
+            Err(error) => return Err(error.into()),
+        };
     let settings = wrix_cache::config::Settings::current()?;
     Ok(Prepared {
         issuer,
@@ -109,6 +110,26 @@ pub(super) fn activate(plan: &Plan, prepared: &Prepared) -> Result<(), Error> {
         .await
         .map_err(|_| Error::Deadline)?
     })
+}
+
+pub(super) fn retire(plan: &Plan) -> Result<(), Error> {
+    let settings = wrix_cache::config::Settings::current()?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(wrix_cache::backend::publication::retirement::retire(
+        plan.paths().state_root(),
+        plan.workspace().hash(),
+        Duration::from_millis(settings.explicit_lock_timeout_ms),
+    ))?;
+    Ok(())
+}
+
+pub(super) fn is_retired(plan: &Plan) -> Result<bool, Error> {
+    Ok(wrix_cache::backend::publication::retirement::is_retired(
+        plan.paths().state_root(),
+        plan.workspace().hash(),
+    )?)
 }
 
 fn check_location(issuer: &Path, layout: &Layout, workspace: &Path) -> Result<(), Error> {

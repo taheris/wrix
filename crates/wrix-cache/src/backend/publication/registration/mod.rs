@@ -2,7 +2,7 @@
 
 use std::{
     fs::{File, Metadata, OpenOptions},
-    io::{self, Write},
+    io::{self, Read, Write},
     os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::Path,
     time::Duration,
@@ -44,7 +44,8 @@ pub async fn provision_private(
             namespace,
             issuer_root,
             retention,
-        )
+        )?;
+        super::retirement::activate(state_root, workspace)
     };
     record().map_err(|source| Error::RegistrationCommitted {
         source: Box::new(source),
@@ -68,7 +69,7 @@ pub fn private_namespace(workspace: &WorkspaceHash) -> Result<CacheName> {
     CacheName::new(format!("wrix-{}", URL_SAFE_NO_PAD.encode(digest))).map_err(|_| Error::Binding)
 }
 
-async fn acquire(state_root: &Path, timeout: Duration) -> Result<File> {
+pub(super) async fn acquire(state_root: &Path, timeout: Duration) -> Result<File> {
     let directory = private_directory(state_root)?;
     let lock = OpenOptions::new()
         .create(true)
@@ -107,7 +108,25 @@ fn record_key(state_root: &Path, key: &CachePublicKey) -> Result<()> {
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(&destination)
     {
-        Ok(file) => check_regular(&file.metadata()?, &directory)?,
+        Ok(file) => {
+            check_regular(&file.metadata()?, &directory)?;
+            let mut bytes = Vec::new();
+            file.take(super::MAX_BINDING_BYTES + 1)
+                .read_to_end(&mut bytes)?;
+            if bytes.len() as u64 > super::MAX_BINDING_BYTES {
+                return Err(Error::Binding);
+            }
+            // Only malformed public metadata is repairable from authenticated native state.
+            if let Ok(text) = std::str::from_utf8(&bytes)
+                && let Ok(retained) = CachePublicKey::parse(text.trim())
+            {
+                return if &retained == key {
+                    Ok(())
+                } else {
+                    Err(Error::RetainedKeyConflict)
+                };
+            }
+        }
         Err(error) if error.kind() == io::ErrorKind::NotFound => (),
         Err(error) => return Err(error.into()),
     }

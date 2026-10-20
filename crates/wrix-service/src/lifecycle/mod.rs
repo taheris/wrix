@@ -725,6 +725,20 @@ pub fn stop(cache_mode: CacheMode) -> Result<Status> {
     let (plan, _lock) = locked_plan(cache_mode)?;
     let _host_lock = host_lifecycle_lock(plan.paths())?;
     let runtime = Runtime::from_env()?;
+    if plan.dolt().is_none()
+        && runtime.status(&plan.container_name())? == RuntimeStatus::Running
+        && runtime
+            .inspect_label(plan.container_name().as_str(), CACHE_BACKEND_LABEL)?
+            .as_deref()
+            == Some(CACHE_BACKEND_VERSION)
+        && runtime.running_container_satisfies_plan(&plan.container_name(), &plan)?
+    {
+        cache::retire(&plan)?;
+        return Ok(Status {
+            runtime: RuntimeStatus::Stopped,
+            plan,
+        });
+    }
     runtime.ensure_workspace_stop_safe(&plan)?;
     runtime.remove(&plan.container_name())?;
     status_for_plan(plan)
@@ -805,7 +819,11 @@ pub fn wait_for_dolt(cache_mode: CacheMode) -> Result<()> {
 }
 
 fn status_for_plan(plan: Plan) -> Result<Status> {
-    let runtime = Runtime::from_env()?.status(&plan.container_name())?;
+    let runtime = if plan.dolt().is_none() && cache::is_retired(&plan)? {
+        RuntimeStatus::Stopped
+    } else {
+        Runtime::from_env()?.status(&plan.container_name())?
+    };
     Ok(Status { runtime, plan })
 }
 

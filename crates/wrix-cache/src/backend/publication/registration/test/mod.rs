@@ -54,6 +54,27 @@ async fn namespace_lock_refuses_symlink_and_hardlink_targets() {
 }
 
 #[test]
+fn registration_preserves_a_valid_key_when_the_backend_reports_a_different_key() {
+    let root = tempfile::tempdir().unwrap();
+    let retained =
+        CachePublicKey::parse("fixture:11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=").unwrap();
+    let different =
+        CachePublicKey::parse("fixture:PUAXw+hDiVqStwqnTRt+vJyYLM8uxJaMwM1V8Sr0Zgw=").unwrap();
+    record_key(root.path(), &retained).unwrap();
+    let path = root.path().join("keys/cache.pub");
+    let before = fs::read(&path).unwrap();
+    let inode = fs::metadata(&path).unwrap().ino();
+    assert!(matches!(
+        record_key(root.path(), &different),
+        Err(Error::RetainedKeyConflict)
+    ));
+    assert_eq!(fs::read(&path).unwrap(), before);
+    record_key(root.path(), &retained).unwrap();
+    assert_eq!(fs::metadata(&path).unwrap().ino(), inode);
+    assert_eq!(fs::read(path).unwrap(), before);
+}
+
+#[test]
 fn public_key_recording_replaces_readable_keys_but_not_unsafe_targets() {
     let root = tempfile::tempdir().unwrap();
     let keys = root.path().join("keys");

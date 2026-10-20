@@ -1,6 +1,7 @@
 //! Runtime host authority for one private publication view.
 
 pub mod registration;
+pub mod retirement;
 
 use std::{
     fs::{self, DirBuilder, File, OpenOptions},
@@ -63,6 +64,8 @@ pub enum Error {
     Directory(#[from] wrix_core::private_directory::Error),
     /// namespace lock and public key must be single-link regular files owned by the control directory owner, without group/other write access
     UnsafeRegistrationFile,
+    /// native registration reported a different key from retained valid namespace metadata; explicit key reconciliation is required
+    RetainedKeyConflict,
     /// timed out waiting for the namespace publication lock; no backend request was dispatched
     LockTimeout,
     /// Celler registration succeeded, but local key or publication authority recording failed; backend changes remain active: {source}
@@ -71,6 +74,10 @@ pub enum Error {
     Issuer(#[from] super::issuer::Error),
     /// Celler publication binding belongs to a different workspace
     Workspace,
+    /// namespace publication is retired; authenticated service startup is required
+    Retired,
+    /// namespace publication was retired, but directory durability could not be confirmed: {0}
+    RetirementCommitted(io::Error),
     /// {0}
     Backend(#[from] super::Error),
     /// Celler publication authority was replaced, but directory durability could not be confirmed: {0}
@@ -214,6 +221,19 @@ impl Publisher {
 
     /// Reads only host control state; no environment, repository configuration or service mounts.
     pub fn load(state_root: &Path, workspace: &WorkspaceHash) -> Result<Self> {
+        if retirement::is_retired(state_root, workspace)? {
+            return Err(Error::Retired);
+        }
+        Self::load_authority(state_root, workspace)
+    }
+
+    /// Retains policy across retirement without admitting publication.
+    pub fn retained_policy(state_root: &Path, workspace: &WorkspaceHash) -> Result<Duration> {
+        retirement::is_retired(state_root, workspace)?;
+        Ok(Self::load_authority(state_root, workspace)?.retention())
+    }
+
+    fn load_authority(state_root: &Path, workspace: &WorkspaceHash) -> Result<Self> {
         let directory = private_directory(state_root)?;
         let file = open_binding(state_root)?;
         check_file(&file.metadata()?, &directory)?;

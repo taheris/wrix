@@ -1433,6 +1433,60 @@ fn workspace_stop_preserves_running_celler_even_with_cache_opt_out() -> TestResu
 }
 
 #[test]
+fn cache_only_retirement_preserves_backend_and_reopens_only_after_registration() -> TestResult {
+    let mut fixture = Fixture::new()?;
+    fixture.disable_dolt()?;
+    let output = fixture.run("start")?;
+    assert!(output.status.success(), "{}", output.stderr);
+    let state = fixture.state_root()?;
+    let identity = wrix_core::path::WorkspaceHash::parse(
+        fixture.metadata["workspace_hash"].as_str().unwrap(),
+    )?;
+    let paths = [
+        fixture.root.path().join("runtime.json"),
+        state.join("services.json"),
+        state.join("keys/cache.pub"),
+        state.join("celler-publisher.json"),
+    ];
+    let before = paths.iter().map(fs::read).collect::<Result<Vec<_>, _>>()?;
+    for _ in 0..2 {
+        let output = fixture.run("stop")?;
+        assert!(output.status.success(), "{}", output.stderr);
+        assert!(output.stdout.contains("Stopped"), "{}", output.stdout);
+    }
+    assert!(matches!(
+        wrix_cache::backend::publication::Publisher::load(&state, &identity),
+        Err(wrix_cache::backend::publication::Error::Retired)
+    ));
+    let output = fixture.run("status")?;
+    assert!(output.status.success(), "{}", output.stderr);
+    assert!(output.stdout.contains("Stopped"), "{}", output.stdout);
+    assert_eq!(
+        paths.iter().map(fs::read).collect::<Result<Vec<_>, _>>()?,
+        before
+    );
+    let calls = fs::read_to_string(fixture.root.path().join("runtime.log"))?;
+    assert!(!calls.lines().any(|line| line.starts_with("rm ")));
+    assert!(!fixture.root.path().join("run.argv").exists());
+    fs::write(fixture.root.path().join("celler-status"), "403")?;
+    let output = fixture.run("start")?;
+    assert!(!output.status.success());
+    assert!(matches!(
+        wrix_cache::backend::publication::Publisher::load(&state, &identity),
+        Err(wrix_cache::backend::publication::Error::Retired)
+    ));
+    assert_eq!(fs::read(state.join("keys/cache.pub"))?, before[2]);
+    fs::remove_file(fixture.root.path().join("celler-status"))?;
+    let output = fixture.run("start")?;
+    assert!(output.status.success(), "{}", output.stderr);
+    assert!(wrix_cache::backend::publication::Publisher::load(&state, &identity).is_ok());
+    assert!(!state.join("celler-retired").exists());
+    assert_eq!(fs::read(state.join("keys/cache.pub"))?, before[2]);
+    assert!(!fixture.root.path().join("run.argv").exists());
+    Ok(())
+}
+
+#[test]
 fn workspace_stop_rejects_uncertain_backend_state_before_removal() -> TestResult {
     let mut fixture = Fixture::new()?;
     fixture.snapshot[0]["status"]["state"] = json!("stopping");
