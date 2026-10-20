@@ -3237,6 +3237,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "displaydoc",
+ "fs2",
  "libc",
  "rusqlite",
  "rustix",
@@ -3313,6 +3314,7 @@ version = "0.1.0"
 dependencies = [
  "displaydoc",
  "fs2",
+ "libc",
  "rama-core",
  "rama-net",
  "rama-tcp",

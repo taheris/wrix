@@ -25,8 +25,7 @@ wrix-service = { workspace = true }
 wrix-state = { workspace = true }
 
 [dev-dependencies]
-rusqlite = { workspace = true }
-rustix = { workspace = true }
+fs2 = { workspace = true }
 libc = { workspace = true }
 
 [lints]

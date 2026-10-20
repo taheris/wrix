@@ -12,6 +12,7 @@ use std::{
 };
 
 use common::{RunResult, TestResult, run_command, set_mode, wrix_command_with_path};
+use fs2::FileExt;
 use serde_json::{Value, json};
 use wrix_sandbox::command::Command as LaunchCommand;
 
@@ -1095,6 +1096,132 @@ fn launcher_fails_before_agent_start_without_a_guest_cache_address() -> TestResu
         assert!(!fixture.root.path().join("argv").exists());
     }
     Ok(())
+}
+
+#[test]
+fn host_lifecycle_lock_blocks_starts_from_unrelated_workspaces() -> TestResult {
+    let mut fixture = Fixture::new()?;
+    fixture.disable_dolt()?;
+    let peer = fixture.root.path().join("peer");
+    fs::create_dir(&peer)?;
+    initialize_repository(&peer)?;
+    let lock = hold_host_lifecycle_lock(&fixture)?;
+    let mut children = Vec::new();
+    for workspace in [&fixture.workspace, &peer] {
+        children.push(
+            fixture
+                .command()?
+                .current_dir(workspace)
+                .args(["service", "start"])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::piped())
+                .spawn()?,
+        );
+    }
+    let deadline = Instant::now() + Duration::from_millis(500);
+    while Instant::now() < deadline {
+        for child in &mut children {
+            assert!(child.try_wait()?.is_none(), "startup bypassed host lock");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!fixture.root.path().join("runtime.log").exists());
+    assert!(!fixture.state_root()?.join("publish-roots.json").exists());
+    drop(lock);
+    let mut children = children.into_iter();
+    let selected = children.next().unwrap().wait_with_output()?;
+    assert!(selected.status.success(), "{:?}", selected);
+    let peer = children.next().unwrap().wait_with_output()?;
+    assert!(!peer.status.success());
+    assert!(String::from_utf8(peer.stderr)?.contains("explicit host-wide maintenance"));
+    assert!(!fixture.root.path().join("run.argv").exists());
+    Ok(())
+}
+
+#[test]
+fn unsafe_host_lifecycle_lock_fails_before_owner_inspection_or_layout() -> TestResult {
+    use std::os::unix::fs::symlink;
+
+    let fixture = Fixture::new()?;
+    let lock = hold_host_lifecycle_lock(&fixture)?;
+    let host = fixture
+        .state_root()?
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("host-lifecycle");
+    drop(lock);
+    fs::remove_file(host.join("lifecycle.lock"))?;
+    let target = fixture.root.path().join("unrelated");
+    fs::write(&target, "preserve")?;
+    symlink(&target, host.join("lifecycle.lock"))?;
+    for operation in ["start", "stop"] {
+        let output = fixture.run(operation)?;
+        assert!(!output.status.success());
+        assert!(
+            output.stderr.contains("host lifecycle coordination"),
+            "{}",
+            output.stderr
+        );
+    }
+    assert_eq!(fs::read_to_string(target)?, "preserve");
+    assert!(!fixture.root.path().join("runtime.log").exists());
+    assert!(!fixture.state_root()?.join("publish-roots.json").exists());
+    Ok(())
+}
+
+#[test]
+fn host_lifecycle_lock_blocks_stop_before_container_removal() -> TestResult {
+    let fixture = Fixture::new()?;
+    let snapshot = fs::read(fixture.root.path().join("runtime.json"))?;
+    let lock = hold_host_lifecycle_lock(&fixture)?;
+    let mut child = fixture
+        .command()?
+        .args(["service", "stop"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    let deadline = Instant::now() + Duration::from_millis(500);
+    while Instant::now() < deadline {
+        assert!(child.try_wait()?.is_none(), "stop bypassed host lock");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!fixture.root.path().join("runtime.log").exists());
+    assert_eq!(
+        fs::read(fixture.root.path().join("runtime.json"))?,
+        snapshot
+    );
+    drop(lock);
+    let output = child.wait_with_output()?;
+    assert!(output.status.success(), "{:?}", output);
+    let log = fs::read_to_string(fixture.root.path().join("runtime.log"))?;
+    assert_eq!(
+        log.lines().filter(|line| line.starts_with("rm ")).count(),
+        1
+    );
+    Ok(())
+}
+
+fn hold_host_lifecycle_lock(fixture: &Fixture) -> TestResult<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let root = fixture
+        .state_root()?
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| std::io::Error::other("fixture has no host state root"))?
+        .join("host-lifecycle");
+    wrix_core::private_directory::prepare_with_parents(&root)?;
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .mode(0o600)
+        .open(root.join("lifecycle.lock"))?;
+    file.lock_exclusive()?;
+    Ok(file)
 }
 
 #[test]

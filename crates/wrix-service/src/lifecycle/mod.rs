@@ -1,5 +1,6 @@
 mod apple;
 pub mod binding;
+mod coordination;
 mod dolt;
 mod managed;
 mod supervisor;
@@ -65,6 +66,8 @@ pub enum Error {
     },
     /// {0}
     ControlDirectory(#[from] wrix_core::private_directory::Error),
+    /// {0}
+    Coordination(#[from] coordination::Error),
     /// {0}
     CellerLayout(#[from] wrix_cache::backend::layout::Error),
     /// {0}
@@ -645,6 +648,10 @@ impl Status {
 
 pub fn start(cache_mode: CacheMode) -> Result<Status> {
     let (mut plan, _lock) = locked_plan(cache_mode)?;
+    let _host_lock = plan
+        .has_services()
+        .then(|| host_lifecycle_lock(plan.paths()))
+        .transpose()?;
     if plan.dolt().is_some() {
         plan.authorize()?;
         managed::configure(plan.workspace().canonical_path())?;
@@ -687,8 +694,20 @@ fn locked_plan(cache_mode: CacheMode) -> Result<(Plan, fs::File)> {
     ))
 }
 
+fn host_lifecycle_lock(paths: &Paths) -> Result<fs::File> {
+    let root = paths
+        .state_base()
+        .and_then(Path::parent)
+        .ok_or_else(|| Error::Operation {
+            message: "missing host state root for lifecycle coordination".to_owned(),
+        })?
+        .join("host-lifecycle");
+    Ok(coordination::acquire(&root)?)
+}
+
 pub fn stop(cache_mode: CacheMode) -> Result<Status> {
     let (plan, _lock) = locked_plan(cache_mode)?;
+    let _host_lock = host_lifecycle_lock(plan.paths())?;
     let runtime = Runtime::from_env()?;
     plan.authorize()?;
     runtime.remove(&plan.container_name())?;
