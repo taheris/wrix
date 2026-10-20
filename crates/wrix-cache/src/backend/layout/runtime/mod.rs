@@ -10,7 +10,8 @@ use std::{
 use displaydoc::Display;
 use thiserror::Error as ThisError;
 
-pub const COMMAND: &str = "exec cellerd --config /var/lib/wrix/celler/server.toml";
+/// Retains exclusive metadata ownership in the backend process; contention exits 75 without opening Celler.
+pub const COMMAND: &str = "exec flock --exclusive --nonblock --conflict-exit-code 75 --no-fork /var/lib/wrix/celler/backend.lock cellerd --config /var/lib/wrix/celler/server.toml";
 pub const CONFIG_NAME: &str = "server.toml";
 pub const VERIFIER_NAME: &str = "jwt.pub";
 

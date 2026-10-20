@@ -142,7 +142,7 @@ impl Fixture {
                     "wrix.workspace": fixture.metadata["workspace_path"],
                     "wrix.workspace.hash": fixture.metadata["workspace_hash"],
                     "wrix.cache.enabled": "true",
-                    "wrix.cache.backend": "celler-v1",
+                    "wrix.cache.backend": "celler-v2",
                     "wrix.service.supervision": "1",
                     "wrix.dolt.transport": "tcp",
                     "wrix.dolt.auth": "tcp-root-v1"
@@ -898,8 +898,27 @@ fn cache_start_replaces_a_legacy_static_backend_without_replacing_local_key_meta
     assert!(output.status.success(), "{}", output.stderr);
     let args = fs::read_to_string(fixture.root.path().join("run.argv"))?;
     assert!(args.contains(wrix_cache::backend::layout::runtime::COMMAND));
-    assert!(args.contains("wrix.cache.backend=celler-v1"));
+    assert!(args.contains("wrix.cache.backend=celler-v2"));
     assert_eq!(fs::read(fixture.state_root()?.join("keys/cache.pub"))?, key);
+    Ok(())
+}
+
+#[test]
+fn cache_start_does_not_reuse_a_backend_without_lifetime_ownership_guard() -> TestResult {
+    let mut fixture = Fixture::new()?;
+    fixture.disable_dolt()?;
+    fixture.snapshot[0]["configuration"]["labels"]["wrix.cache.backend"] = json!("celler-v1");
+    fixture.write_snapshot()?;
+    let output = fixture.run("start")?;
+    assert!(output.status.success(), "{}", output.stderr);
+    let args = fs::read_to_string(fixture.root.path().join("run.argv"))?;
+    assert!(args.contains(wrix_cache::backend::layout::runtime::COMMAND));
+    assert!(args.contains("wrix.cache.backend=celler-v2"));
+    let log = fs::read_to_string(fixture.root.path().join("runtime.log"))?;
+    assert!(log.contains(&format!(
+        "rm -f {}",
+        fixture.metadata["container_name"].as_str().unwrap()
+    )));
     Ok(())
 }
 

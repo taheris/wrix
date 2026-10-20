@@ -3,7 +3,7 @@ use std::{
     io::Write,
     net::{TcpListener, TcpStream},
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::{Child, Command, Output, Stdio},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -147,16 +147,7 @@ impl Server {
         let token = issuer
             .publication_token(&CacheName::new("private".into()).unwrap())
             .unwrap();
-        let executable = std::env::var_os("WRIX_TEST_CELLERD").unwrap();
-        let log = File::create(root.path().join("server.log")).unwrap();
-        let child = Command::new(executable)
-            .args(["--config", "/var/lib/wrix/celler/server.toml"])
-            .env("NIX_REMOTE", "unix:///no-host-store-daemon")
-            .stdin(Stdio::null())
-            .stdout(log.try_clone().unwrap())
-            .stderr(log)
-            .spawn()
-            .unwrap();
+        let child = verification_command(root.path()).spawn().unwrap();
         let mut server = Self {
             endpoint: String::from("http://127.0.0.1:8080/"),
             token,
@@ -175,6 +166,22 @@ impl Server {
             thread::sleep(Duration::from_millis(20));
         }
         server
+    }
+
+    pub fn competing_runtime(&self) -> Output {
+        verification_command(self.root.path()).output().unwrap()
+    }
+
+    pub fn restart_verification_only(&mut self) {
+        self.child.kill().unwrap();
+        self.child.wait().unwrap();
+        self.child = verification_command(self.root.path()).spawn().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while TcpStream::connect("127.0.0.1:8080").is_err() {
+            assert!(self.child.try_wait().unwrap().is_none());
+            assert!(Instant::now() < deadline, "Celler restart timeout");
+            thread::sleep(Duration::from_millis(20));
+        }
     }
 
     pub fn issuer_root(&self) -> PathBuf {
@@ -216,6 +223,31 @@ impl Server {
             .await
             .unwrap()
     }
+}
+
+fn verification_command(root: &Path) -> Command {
+    let executable = PathBuf::from(std::env::var_os("WRIX_TEST_CELLERD").unwrap());
+    assert_eq!(executable.file_name().unwrap(), "cellerd");
+    let original = std::env::var_os("PATH").unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(executable.parent().unwrap().to_owned())
+            .chain(std::env::split_paths(&original)),
+    )
+    .unwrap();
+    let log = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(root.join("server.log"))
+        .unwrap();
+    let mut command = Command::new("sh");
+    command
+        .args(["-c", wrix_cache::backend::layout::runtime::COMMAND])
+        .env("PATH", path)
+        .env("NIX_REMOTE", "unix:///no-host-store-daemon")
+        .stdin(Stdio::null())
+        .stdout(log.try_clone().unwrap())
+        .stderr(log);
+    command
 }
 
 impl Drop for Server {

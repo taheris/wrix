@@ -18,6 +18,8 @@ pkgs.runCommand "cache-celler-packaging"
           jq -e '.materialized_roots | all(test("wrix-cache-serve") | not)' '${wrix.serviceImage.source}'
           backend="$(jq -r '.materialized_roots[] | select(test("-celler-"))' '${wrix.serviceImage.source}')"
           test -x "$backend/bin/cellerd"
+          guard="$(jq -r '.materialized_roots[] | select(test("-util-linux-"))' '${wrix.serviceImage.source}')"
+          test -x "$guard/bin/flock"
         ''
       else
         ''
@@ -27,6 +29,7 @@ pkgs.runCommand "cache-celler-packaging"
             tar -xf "archive/$layer" -C root
           done < <(jq -r '.[0].Layers[]' archive/manifest.json)
           test -L root/bin/cellerd
+          test -L root/bin/flock
           test ! -e root/bin/wrix-cache-serve
         ''
     }

@@ -13,6 +13,7 @@ let
     dockerTools
     jq
     runCommandLocal
+    util-linux
     writeText
     ;
 
@@ -30,6 +31,7 @@ let
     coreutils
     dolt
     celler
+    util-linux
   ];
   imageConfig = {
     Env = [

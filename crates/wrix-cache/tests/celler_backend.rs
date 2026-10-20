@@ -880,6 +880,62 @@ async fn integration_does_not_require_shared_worker_runtime() {
 }
 
 #[tokio::test]
+#[ignore = "requires packaged Celler, Linux user/mount/network namespaces, Nix, ip, flock and OpenSSL"]
+async fn production_runtime_excludes_competing_owners_until_process_exit() {
+    const TEST: &str = "production_runtime_excludes_competing_owners_until_process_exit";
+    if !native::in_isolated_store(TEST) {
+        return;
+    }
+    if std::env::var_os("WRIX_TEST_RUNTIME_NAMESPACE").is_none() {
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/cache/runtime-layout.sh");
+        let status = std::process::Command::new("unshare")
+            .args(["-n", "bash"])
+            .arg(script)
+            .arg(std::env::current_exe().unwrap())
+            .args(["--ignored", "--exact", TEST, "--nocapture"])
+            .status()
+            .unwrap();
+        assert!(status.success(), "runtime layout fixture failed: {status}");
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let layout = wrix_cache::backend::layout::Layout::resolve(
+        wrix_cache::backend::layout::Platform::Linux,
+        root.path(),
+        None,
+        None,
+    )
+    .unwrap();
+    let mut server = native::Server::start_verification_only(&layout);
+    let key = server.client("private").register(RETENTION).await.unwrap();
+    let path = native::add_file("lifetime-owned database", "backend-owner");
+    server
+        .client("private")
+        .publish_selected(std::slice::from_ref(&path))
+        .await
+        .unwrap();
+    let resource = format!("private/{}.narinfo", native::hash(&path));
+    let before = server.get(&resource).await.text().await.unwrap();
+    for _ in 0..2 {
+        let competing = server.competing_runtime();
+        assert_eq!(competing.status.code(), Some(75));
+        assert_eq!(
+            server.client("private").register(RETENTION).await.unwrap(),
+            key
+        );
+        assert_eq!(server.get(&resource).await.text().await.unwrap(), before);
+    }
+    server.restart_verification_only();
+    assert_eq!(
+        server.client("private").register(RETENTION).await.unwrap(),
+        key
+    );
+    assert_eq!(server.get(&resource).await.text().await.unwrap(), before);
+    assert_eq!(server.competing_runtime().status.code(), Some(75));
+}
+
+#[tokio::test]
 #[ignore = "requires packaged Celler, Linux user/mount namespaces, Nix and OpenSSL"]
 async fn publisher_reuses_rust_store_client() {
     if !native::in_isolated_store("publisher_reuses_rust_store_client") {
