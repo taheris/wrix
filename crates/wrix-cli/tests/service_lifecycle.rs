@@ -40,22 +40,48 @@ cat "${WRIX_TEST_RUNTIME_JSON:?}"
 "#;
 
 #[test]
-fn service_fixture_keeps_native_host_state_private() -> TestResult {
+fn running_cache_reentry_restores_only_the_verifier_from_existing_private_authority() -> TestResult
+{
     let fixture = Fixture::new()?;
-    let state_root = fixture.state_root()?;
-    let native_root = state_root
-        .parent()
-        .and_then(Path::parent)
-        .ok_or("missing native root")?;
-    assert_eq!(common::mode(native_root)?, 0o700);
-    assert_eq!(common::mode(&state_root.join("keys"))?, 0o700);
-    if !Path::new("/etc/wrix/image-agent").exists() {
-        assert_eq!(common::mode(&native_root.join("state.db"))?, 0o600);
+    let state = fixture.state_root()?;
+    let host = state.parent().unwrap().parent().unwrap();
+    let issuer = host.join("host-control/celler-issuer/issuer.pem");
+    let verifier = host.join("service-data/celler/jwt.pub");
+    let private = fs::read(&issuer)?;
+    let public = fs::read(&verifier)?;
+    fs::remove_file(&verifier)?;
+    for _ in 0..2 {
+        let output = fixture.run("start")?;
+        assert!(output.status.success(), "{}", output.stderr);
+        assert_eq!(fs::read(&issuer)?, private);
+        assert_eq!(fs::read(&verifier)?, public);
     }
-    let imported: Value = serde_json::from_slice(&common::read_namespace_document(
-        &state_root.join("services.json"),
-    )?)?;
-    assert_eq!(imported, fixture.metadata);
+    assert!(!fixture.root.path().join("run.argv").exists());
+    Ok(())
+}
+
+#[test]
+fn running_cache_owner_cannot_bootstrap_replacement_issuer_authority() -> TestResult {
+    let fixture = Fixture::new()?;
+    let state = fixture.state_root()?;
+    let host = state.parent().unwrap().parent().unwrap();
+    let issuer = host.join("host-control/celler-issuer/issuer.pem");
+    let verifier = host.join("service-data/celler/jwt.pub");
+    let before = fs::read(&verifier)?;
+    fs::remove_file(&issuer)?;
+    let output = fixture.run("start")?;
+    assert!(!output.status.success());
+    assert!(
+        output.stderr.contains("host-private Celler issuer"),
+        "{}",
+        output.stderr
+    );
+    assert!(!issuer.exists());
+    assert_eq!(fs::read(verifier)?, before);
+    assert!(!host.join("service-data/celler/server.toml").exists());
+    assert!(!fixture.root.path().join("run.argv").exists());
+    let calls = fs::read_to_string(fixture.root.path().join("runtime.log"))?;
+    assert!(!calls.lines().any(|line| line.starts_with("rm ")));
     Ok(())
 }
 
@@ -163,7 +189,7 @@ impl Fixture {
             fixture.root.path().join("replacement.json"),
             serde_json::to_vec_pretty(&fixture.snapshot)?,
         )?;
-        service_binding::provision_celler_verifier(fixture.root.path())?;
+        service_binding::provision_celler_authority(fixture.root.path())?;
         let state_root = fixture.state_root()?;
         fs::DirBuilder::new()
             .recursive(true)

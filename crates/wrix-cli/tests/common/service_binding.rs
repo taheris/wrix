@@ -7,7 +7,7 @@ use serde_json::json;
 
 use super::{TestResult, set_mode};
 
-pub fn provision_celler_verifier(root: &Path) -> TestResult {
+pub fn provision_celler_authority(root: &Path) -> TestResult {
     let layout = wrix_cache::backend::layout::Layout::resolve(
         if cfg!(target_os = "macos") {
             wrix_cache::backend::layout::Platform::Darwin
@@ -19,9 +19,14 @@ pub fn provision_celler_verifier(root: &Path) -> TestResult {
         Some(&root.join("cache")),
     )?;
     layout.prepare()?;
-    fs::write(
-        layout.metadata().join("jwt.pub"),
-        include_str!("../fixtures/celler-verifier.pem"),
+    let host = layout
+        .metadata()
+        .parent()
+        .and_then(Path::parent)
+        .ok_or("missing fixture host state root")?;
+    wrix_cache::backend::issuer::Authority::provision(
+        &host.join("host-control/celler-issuer"),
+        layout.metadata(),
     )?;
     Ok(())
 }

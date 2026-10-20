@@ -139,8 +139,46 @@ fn retired_cache_prune_fails_without_state_or_runtime_access() -> TestResult {
 }
 
 #[test]
-fn cache_start_requires_verification_authority_without_static_fallback() -> TestResult {
+fn cache_start_bootstraps_host_private_issuer_without_static_fallback() -> TestResult {
     let fixture = Fixture::new()?;
+    let output = run_command(
+        fixture
+            .command("podman")?
+            .args(["service", "start"])
+            .env("WRIX_SERVICE_ALLOW_TEMP_CACHE", "1"),
+    )?;
+    assert!(output.status.success(), "{}", output.stderr);
+    let metadata = fixture.endpoints(true)?;
+    let state = PathBuf::from(metadata["state_root"].as_str().unwrap());
+    let host = state.parent().unwrap().parent().unwrap();
+    let issuer = host.join("host-control/celler-issuer");
+    let delegated = host.join("service-data/celler");
+    wrix_cache::backend::issuer::Authority::open(&issuer)?;
+    let private = fs::read(issuer.join("issuer.pem"))?;
+    let verifier = fs::read(delegated.join("jwt.pub"))?;
+    assert!(String::from_utf8_lossy(&private).contains("PRIVATE KEY"));
+    assert!(String::from_utf8_lossy(&verifier).contains("PUBLIC KEY"));
+    assert!(!String::from_utf8_lossy(&verifier).contains("PRIVATE KEY"));
+    assert!(!delegated.join("issuer.pem").exists());
+    let arguments = fs::read(fixture.root.path().join("run.argv"))?;
+    assert!(!String::from_utf8_lossy(&arguments).contains(issuer.to_str().unwrap()));
+    assert!(!output.stdout.contains("PRIVATE KEY"));
+    assert!(!output.stderr.contains("PRIVATE KEY"));
+    assert!(!state.join("keys/cache.secret").exists());
+    assert!(!PathBuf::from(metadata["cache_root"].as_str().unwrap()).exists());
+    Ok(())
+}
+
+#[test]
+fn cache_start_preserves_conflicting_verifier_without_committing_private_authority() -> TestResult {
+    let fixture = Fixture::new()?;
+    let metadata = fixture.endpoints(true)?;
+    let state = PathBuf::from(metadata["state_root"].as_str().unwrap());
+    let host = state.parent().unwrap().parent().unwrap();
+    let delegated = host.join("service-data/celler");
+    wrix_core::private_directory::prepare_with_parents(&delegated)?;
+    let verifier = include_str!("fixtures/celler-verifier.pem");
+    fs::write(delegated.join("jwt.pub"), verifier)?;
     let output = run_command(
         fixture
             .command("podman")?
@@ -149,15 +187,33 @@ fn cache_start_requires_verification_authority_without_static_fallback() -> Test
     )?;
     assert!(!output.status.success());
     assert!(
-        output.stderr.contains("public verification key"),
+        output.stderr.contains("explicit recovery"),
         "{}",
         output.stderr
     );
+    assert_eq!(fs::read_to_string(delegated.join("jwt.pub"))?, verifier);
+    assert!(!host.join("host-control/celler-issuer/issuer.pem").exists());
+    assert!(!delegated.join("server.toml").exists());
     assert!(!fixture.root.path().join("run.argv").exists());
-    let metadata = fixture.endpoints(true)?;
+    assert!(!state.join("services.json").exists());
+    Ok(())
+}
+
+#[test]
+fn cache_opt_out_creates_no_issuer_authority() -> TestResult {
+    let fixture = Fixture::new()?;
+    let output = run_command(
+        fixture
+            .command("podman")?
+            .args(["service", "start", "--no-cache"]),
+    )?;
+    assert!(output.status.success(), "{}", output.stderr);
+    let metadata = fixture.endpoints(false)?;
     let state = PathBuf::from(metadata["state_root"].as_str().unwrap());
-    assert!(!state.join("keys/cache.secret").exists());
-    assert!(!PathBuf::from(metadata["cache_root"].as_str().unwrap()).exists());
+    let host = state.parent().unwrap().parent().unwrap();
+    assert!(!host.join("host-control").exists());
+    assert!(!host.join("service-data/celler").exists());
+    assert!(!fixture.root.path().join("run.argv").exists());
     Ok(())
 }
 
@@ -287,7 +343,7 @@ fn celler_layout_separates_managed_cache_data_from_host_authority() -> TestResul
     for cache in [false, true] {
         let fixture = Fixture::new()?;
         if cache {
-            service_binding::provision_celler_verifier(fixture.root.path())?;
+            service_binding::provision_celler_authority(fixture.root.path())?;
         }
         let mut command = fixture.command("podman")?;
         command
@@ -385,7 +441,7 @@ fn enabled_service_prepares_only_private_shared_celler_data_and_opt_out_does_not
         assert!(!layout.metadata().exists());
         assert!(!layout.archives().exists());
         if cache {
-            service_binding::provision_celler_verifier(fixture.root.path())?;
+            service_binding::provision_celler_authority(fixture.root.path())?;
         }
         let mut command = fixture.command("podman")?;
         command
@@ -504,7 +560,7 @@ fn service_rejects_symlinked_control_before_lock_or_runtime_access() -> TestResu
 fn service_startup_does_not_collect_dirty_cache_contents() -> TestResult {
     for elapsed in [3600, 172_800] {
         let fixture = Fixture::new()?;
-        service_binding::provision_celler_verifier(fixture.root.path())?;
+        service_binding::provision_celler_authority(fixture.root.path())?;
         let mut command = fixture.command("podman")?;
         command
             .args(["service", "start"])
@@ -548,7 +604,7 @@ fn service_start_uses_shared_image_digest_preflight_without_pruning() -> TestRes
     ] {
         for installed in [false, true] {
             let fixture = Fixture::new()?;
-            service_binding::provision_celler_verifier(fixture.root.path())?;
+            service_binding::provision_celler_authority(fixture.root.path())?;
             let source = fixture.root.path().join("source");
             let layout = fixture.root.path().join("layout");
             let digest = format!("sha256:{}", "a".repeat(64));

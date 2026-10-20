@@ -1,5 +1,6 @@
 mod apple;
 pub mod binding;
+mod cache;
 mod coordination;
 mod dolt;
 mod managed;
@@ -72,6 +73,8 @@ pub enum Error {
     CellerLayout(#[from] wrix_cache::backend::layout::Error),
     /// {0}
     CellerRuntime(#[from] wrix_cache::backend::layout::runtime::Error),
+    /// {0}
+    CellerBootstrap(#[from] cache::Error),
     /// runtime image operation failed: {source}
     Image { source: runtime_image::Error },
     /// environment variable {name} must be valid Unicode
@@ -667,7 +670,10 @@ pub fn start(cache_mode: CacheMode) -> Result<Status> {
         plan = Plan::for_current_dir(cache_mode)?;
     }
     runtime.refresh_unavailable_ports(&mut plan)?;
-    plan.ensure_layout_locked()?;
+    if plan.cache_enabled() {
+        cache::prepare(&plan, runtime.status(&plan.container_name())?)?;
+    }
+    plan.ensure_layout()?;
     if plan.has_services() {
         runtime.ensure_running(&plan)?;
     }
