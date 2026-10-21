@@ -211,7 +211,7 @@ wrix_host_nix_config_main() {
   local service_bin="${WRIX_SERVICE_BIN:-wrix}"
   local hook_bin="${WRIX_CACHE_HOOK_BIN:-wrix-cache-hook}"
   local publish_bin="${WRIX_CACHE_PUBLISH_BIN:-wrix-cache-publish}"
-  local require_trusted cache_config
+  local require_trusted cache_config cache_status
   local endpoints workspace_hash state_root cache_root public_key manifest_path hook_build_root hook_store hook_path before_config after_config owner_uid owner_gid
 
   command -v "${WRIX_NIX_BIN:-nix}" >/dev/null 2>&1 || { wrix_host_fail "nix is not on PATH"; return 1; }
@@ -266,8 +266,11 @@ wrix_host_nix_config_main() {
     wrix_host_assert_line_equals "post-build-hook" "$after_config" "post-build-hook" "$hook_path" || return 1
   fi
 
-  if [[ "${WRIX_NIX_CACHE_REMINDER:-1}" != "0" ]] && { [[ ! -f "$manifest_path" ]] || ! grep -q '"drv_path"\|"drvPath"' "$manifest_path"; }; then
-    printf 'wrix: project cache publish manifest is empty; run wrix service cache publish to refresh it.\n' >&2
+  if [[ "${WRIX_NIX_CACHE_REMINDER:-1}" != "0" ]]; then
+    cache_status="$("$service_bin" service cache status)" || return 1
+    if printf '%s\n' "$cache_status" | grep -Fxq 'publication roots: 0'; then
+      printf 'wrix: project cache publish manifest is empty; run wrix service cache publish to refresh it.\n' >&2
+    fi
   fi
 
   if [[ "${WRIX_HOST_NIX_CONFIG_PRINT:-0}" == "1" ]]; then

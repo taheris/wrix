@@ -482,14 +482,15 @@ server, pane registry, or automatic conversation cleanup is involved.
 ## State Layout
 
 The native-root private `state.db` owns host workspace associations and service,
-cache-status, publication, pending and closure control metadata. Filesystem
-copies are exports, not host authority. `wrix-state` supplies checked contexts
-whose evidence survives selection through effects; pure core workspace values
-are descriptions, not capabilities.
-[Workspace admission](../specs/workspaces.md) owns independent initialization,
-scope acknowledgment, integration selection, explicit import and admission.
-Native secrets, databases, locks and payloads keep their existing owners and
-formats; they are not folded into this control store.
+cache-status, publication, pending and closure control metadata. Host operations
+do not emit redundant JSON, queue or closure-list files. Worker projections
+remain observations; imported legacy copies require explicit operator
+retirement. `wrix-state` supplies checked contexts whose evidence survives
+selection through effects; pure core workspace values are descriptions, not
+capabilities. [Workspace admission](../specs/workspaces.md) owns independent
+initialization, scope acknowledgment, integration selection, explicit import and
+admission. Native secrets, databases, locks and payloads keep their existing
+owners and formats; they are not folded into this control store.
 
 Workspace-local `.wrix/` holds only workspace-visible, non-secret runtime
 artefacts:

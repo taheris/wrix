@@ -456,8 +456,12 @@ fn root_category_enabled(root: &Root, config: &Roots) -> bool {
 
 fn roots_from_file(path: &Path) -> Result<Vec<Root>> {
     let content = read_document(path)?.ok_or_else(|| io::Error::from(ErrorKind::NotFound))?;
+    roots_from_bytes(path, &content)
+}
+
+fn roots_from_bytes(path: &Path, content: &[u8]) -> Result<Vec<Root>> {
     let manifest =
-        serde_json::from_slice::<RootManifest>(&content).map_err(|source| Error::Json {
+        serde_json::from_slice::<RootManifest>(content).map_err(|source| Error::Json {
             path: path.display().to_string(),
             source,
         })?;
@@ -956,8 +960,11 @@ fn reconcile_gc_markers(paths: &Paths, configured: &[Root]) -> Result<()> {
             .file_name()
             .and_then(|name| name.to_str())
             .is_some_and(|name| configured.contains(name))
+            && matches!(
+                wrix_state::namespace::remove_at(&path)?,
+                wrix_state::namespace::Storage::Filesystem
+            )
         {
-            wrix_state::namespace::remove_at(&path)?;
             remove_cache_payload(&path)?;
         }
     }
@@ -1001,8 +1008,12 @@ fn update_gc_marker(paths: &Paths, root: &Root, closure: &[String]) -> Result<()
     paths.authorize()?;
     let marker = paths.gcroots_dir().join(safe_marker_name(&root.name));
     let content = format!("{}\n", closure.join("\n"));
-    wrix_state::namespace::write_at(&marker, content.as_bytes())?;
-    fs::write(marker, content)?;
+    if matches!(
+        wrix_state::namespace::write_at(&marker, content.as_bytes())?,
+        wrix_state::namespace::Storage::Filesystem
+    ) {
+        fs::write(marker, content)?;
+    }
     Ok(())
 }
 
@@ -1067,7 +1078,9 @@ fn read_pending(paths: &Paths) -> Result<Vec<Pending>> {
 
 fn record_pending(paths: &Paths, drv_path: &str, out_paths: &[String]) -> Result<PathBuf> {
     paths.authorize()?;
-    fs::create_dir_all(paths.pending_dir())?;
+    if !wrix_state::namespace::is_host_root(&paths.state_root)? {
+        fs::create_dir_all(paths.pending_dir())?;
+    }
     let created_at_epoch = now_epoch()?;
     let filename = format!(
         "{}-{}-{}.json",
@@ -1086,7 +1099,12 @@ fn record_pending(paths: &Paths, drv_path: &str, out_paths: &[String]) -> Result
 }
 
 fn remove_pending(path: &Path) -> Result<()> {
-    wrix_state::namespace::remove_at(path)?;
+    if matches!(
+        wrix_state::namespace::remove_at(path)?,
+        wrix_state::namespace::Storage::Database
+    ) {
+        return Ok(());
+    }
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
@@ -1146,9 +1164,15 @@ fn status_report(paths: &Paths) -> Result<Report> {
     let cache_size = directory_size(&paths.cache_root)?;
     let status = read_cache_status(paths)?;
     let endpoints = read_endpoints_text(paths)?;
+    let manifest_path = paths.publish_roots_path();
+    let publication_roots = match read_document(&manifest_path)? {
+        Some(bytes) => roots_from_bytes(&manifest_path, &bytes)?.len(),
+        None => 0,
+    };
     let mut lines = vec![
         format!("cache size: {cache_size} bytes"),
         format!("pending records: {}", pending.len()),
+        format!("publication roots: {publication_roots}"),
         format!("oldest pending age: {pending_age}"),
         format!("dirty: {}", cache_status_dirty(paths)?),
         format!(
@@ -1234,8 +1258,10 @@ impl Paths {
         self.authorize()?;
         fs::create_dir_all(&self.state_root)?;
         fs::create_dir_all(&self.cache_root)?;
-        fs::create_dir_all(self.gcroots_dir())?;
-        fs::create_dir_all(self.pending_dir())?;
+        if !wrix_state::namespace::is_host_root(&self.state_root)? {
+            fs::create_dir_all(self.gcroots_dir())?;
+            fs::create_dir_all(self.pending_dir())?;
+        }
         fs::create_dir_all(self.keys_dir())?;
         fs::create_dir_all(self.cache_root.join("nar"))?;
         fs::create_dir_all(self.cache_root.join("log"))?;
@@ -1399,8 +1425,12 @@ fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
         source,
     })?;
     content.push('\n');
-    wrix_state::namespace::write_at(path, content.as_bytes())?;
-    fs::write(path, content)?;
+    if matches!(
+        wrix_state::namespace::write_at(path, content.as_bytes())?,
+        wrix_state::namespace::Storage::Filesystem
+    ) {
+        fs::write(path, content)?;
+    }
     Ok(())
 }
 
@@ -1410,7 +1440,7 @@ fn write_json_if_missing(path: &Path, value: &impl Serialize) -> Result<()> {
         source,
     })?;
     match wrix_state::namespace::ensure_at(path, &content)? {
-        wrix_state::namespace::Source::Host(Some(bytes)) => fs::write(path, bytes)?,
+        wrix_state::namespace::Source::Host(Some(_)) => (),
         wrix_state::namespace::Source::Host(None) => {
             return Err(wrix_state::store::Error::Unsupported.into());
         }

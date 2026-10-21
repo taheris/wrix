@@ -1,3 +1,5 @@
+#[path = "consolidation.rs"]
+mod consolidation;
 #[path = "retention.rs"]
 mod retention;
 

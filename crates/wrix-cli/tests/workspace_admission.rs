@@ -348,6 +348,7 @@ fn host_cache_status_uses_database_not_export_files_and_is_read_only() {
     )
     .unwrap();
     fs::write(native.join("pending/one.json"), serde_json::to_vec(&serde_json::json!({"created_at_epoch":now,"drv_path":"/nix/store/example.drv","out_paths":[]})).unwrap()).unwrap();
+    fs::write(native.join("publish-roots.json"), serde_json::to_vec(&serde_json::json!({"roots":[{"name":"project","installable":".#project","drv_path":"/nix/store/example.drv","out_paths":[]}]})).unwrap()).unwrap();
     assert!(
         fixture
             .run(&["import-native", "--native-key", &key])
@@ -363,6 +364,7 @@ fn host_cache_status_uses_database_not_export_files_and_is_read_only() {
     );
     fs::remove_file(native.join("cache-status.json")).unwrap();
     fs::remove_file(native.join("pending/one.json")).unwrap();
+    fs::remove_file(native.join("publish-roots.json")).unwrap();
     let before = snapshot(&fixture.state());
     let output = fixture.application(&checkout, &["service", "cache", "status"]);
     assert!(
@@ -372,6 +374,7 @@ fn host_cache_status_uses_database_not_export_files_and_is_read_only() {
     );
     let rendered = String::from_utf8(output.stdout).unwrap();
     assert!(rendered.contains("last_publish: imported"));
+    assert!(rendered.contains("publication roots: 1"));
     assert!(rendered.contains("pending records: 1"));
     assert_eq!(snapshot(&fixture.state()), before);
 }

@@ -206,9 +206,11 @@ Workspace-private state roots remain platform-native:
 | Linux    | `${XDG_STATE_HOME:-$HOME/.local/state}/wrix/workspaces/<workspace-hash>/` |
 | Darwin   | `$HOME/Library/Application Support/wrix/workspaces/<workspace-hash>/`     |
 
-`<state-root>/services.json` exports namespace references to shared role
-endpoints and its metadata schema version. Host metadata authority and explicit
-native import follow
+Host namespace endpoint references and their schema version live in the
+native-root `state.db`, not a per-workspace `services.json` copy. The
+`wrix service endpoints` interface and worker projections render the required
+endpoint observations without exposing the database. Host metadata authority and
+explicit native import follow
 [Workspace Control Storage](workspaces.md#native-control-storage). Host-managed
 deployment state also records selected generation/version, serving/draining
 roles and ownership transitions; it is not an agent-controlled selection or a
@@ -773,8 +775,9 @@ credential. The service preserves the logical transport distinction:
   operations.
 
 When Darwin or another fallback needs Dolt TCP, the service binds only a
-host-loopback port and publishes the exact endpoint through `services.json` /
-`wrix service endpoints`. Linux does not publish a Dolt TCP port by default.
+host-loopback port and publishes the exact endpoint through
+`wrix service endpoints` and worker projections. Linux does not publish a Dolt
+TCP port by default.
 
 TCP startup provisions scoped workspace authorization for forwarded clients and
 preserves database contents, unrelated users/grants and existing passwords.

@@ -171,20 +171,28 @@ Acceptance: [Celler Backend Acceptance](#celler-backend-acceptance) and
 Host-private workspace control state uses the platform-native state root defined
 by [Services State Layout](services.md#state-layout). Control metadata authority
 and explicit import follow
-[Workspace Control Storage](workspaces.md#native-control-storage); the JSON and
-closure-marker files below are exports, not host fallback authority:
+[Workspace Control Storage](workspaces.md#native-control-storage). Host cache
+status, publication manifests, deferred candidates and closure lists live only
+in the native-root `state.db`, alongside service metadata. Ordinary host
+operations do not materialize JSON or `pending/` and `gcroots/` metadata
+exports. The remaining per-workspace native resources include:
 
 ```text
 <state-root>/
 ├── cache.lock              # namespace publication/rotation lock
-├── cache-status.json       # exported publication/pending status and last error
+├── service.lock            # service lifecycle lock
+├── keys/cache.secret       # private publication credential
 ├── keys/cache.pub          # repository-private view's public key
-├── pending/                # exported deferred post-build candidates
-│   └── <timestamp>-<pid>-<drv-hash>.json
-├── gcroots/                # exported closure metadata, not actual Nix retention roots
-├── publish-roots.json      # exported build-graph and configured-root registry
-└── services.json           # exported service endpoint metadata and schema
+├── hook-wrapper/           # generated hook package build inputs
+└── host-nix-roots/         # actual Nix retention roots for hook/runtime packages
 ```
+
+Worker-side filesystem projections remain non-authoritative. Legacy host JSON
+and closure-list files require explicit supported import; neither import nor
+ordinary operations silently rewrite/delete them. Their explicit retirement
+follows the workspace storage contract. Closure lists are metadata, unlike the
+actual Nix retention roots retained above. Immutable hook configuration
+snapshots are runtime package inputs, not mutable host metadata exports.
 
 Host publishing credentials, credential-issuer/management authority and
 authoritative manifests stay outside service-visible mounts. Credentials are
@@ -577,13 +585,16 @@ consult workspace files for authoritative scope. Re-entry installs a matching
 immutable policy snapshot.
 
 Retain actual Nix GC roots for the configured wrapper/helper/interpreter.
-Host-private `publish-roots.json` admits selected canonical graphs and
-configured supplementary roots; hook events cannot enroll unrelated builds.
-Canonical completion reconciles substitution-only builds. Standalone
-publish/warm refresh only their component, preserving in-flight registrations.
-First and real cached activation reconcile already-realized selected outputs
-without a manual manifest refresh or broad root scan. A non-Wrix post-build hook
-is rejected rather than silently replaced/chained.
+Host-private publication records in `state.db` admit selected canonical graphs
+and configured supplementary roots; hook events cannot enroll unrelated builds.
+The hook's manifest-path argument identifies that record, not a required host
+file. The empty-manifest reminder reads the CLI's publication-root count rather
+than probing an obsolete filesystem export. Canonical completion reconciles
+substitution-only builds. Standalone publish/warm refresh only their component,
+preserving in-flight registrations. First and real cached activation reconcile
+already-realized selected outputs without a manual manifest refresh or broad
+root scan. A non-Wrix post-build hook is rejected rather than silently
+replaced/chained.
 
 ### Cache commands, locking, and retention
 
@@ -601,7 +612,7 @@ commands retain their contracts; this default adds no host-scoped cache
 information workflow.
 
 `wrix service cache publish` is realized-only: it evaluates configured publish
-roots, refreshes that admission component of `publish-roots.json`, publishes
+roots, refreshes that admission component of the publication records, publishes
 already-realized eligible paths, drains matching pending candidates and reports
 unrealized roots without building them. Canonical graph registrations remain
 independent of this supplementary-root refresh.
@@ -614,11 +625,11 @@ nonzero on real errors.
 
 Publication and key rotation take `<state-root>/cache.lock`. The automatic
 publisher reports waiting; on timeout it saves `DRV_PATH`/`OUT_PATHS` in durable
-`pending/` JSON, warns and exits 0 rather than failing the completed build
-solely for cache contention. Automatic publication errors are reported; explicit
-cache commands remain strict. Pending candidates default to seven-day retention
-and are reported by cache status. This namespace lock policy is separate from
-the host-GC acquisition budget in
+database pending records (worker observers use `pending/` JSON), warns and exits
+0 rather than failing the completed build solely for cache contention. Automatic
+publication errors are reported; explicit cache commands remain strict. Pending
+candidates default to seven-day retention and are reported by cache status. This
+namespace lock policy is separate from the host-GC acquisition budget in
 [Services GC Contention](services.md#gc-contention).
 
 Celler copies are an evictable optimization, not an artifact archive. Both
@@ -1288,8 +1299,8 @@ valid unchanged key through the Celler publication/signing path.
   [test?](../crates/wrix-cache/tests/build_pipeline.rs::private_publication_uses_admitted_scope_and_upstream_filtering)
 
 - Lock contention in the automatic publisher prints a waiting message; lock
-  timeout writes a pending JSON record and warning, and a later explicit publish
-  drains matching pending records
+  timeout records durable pending work and a warning, and a later explicit
+  publish drains matching pending records
   [test](../crates/wrix-cache/tests/publisher.rs::lock_timeout_records_pending_and_explicit_publish_drains)
 
 - Configured-root refresh updates publication admission without erasing

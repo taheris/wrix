@@ -1,4 +1,4 @@
-//! Host control documents and non-authoritative filesystem exports.
+//! Host control records and non-authoritative worker filesystem projections.
 
 pub mod document;
 pub(crate) mod scope;
@@ -25,6 +25,11 @@ use std::{
     path::{Path, PathBuf},
 };
 use wrix_core::path::WorkspaceHash;
+
+pub enum Storage {
+    Database,
+    Filesystem,
+}
 
 pub enum Source {
     Host(Option<Vec<u8>>),
@@ -127,9 +132,9 @@ pub fn read_at(path: &Path) -> Result<Source, Error> {
     Ok(Source::Host(value))
 }
 
-pub fn write_at(path: &Path, value: &[u8]) -> Result<(), Error> {
+pub fn write_at(path: &Path, value: &[u8]) -> Result<Storage, Error> {
     let Some(target) = Target::parse(path)? else {
-        return Ok(());
+        return Ok(Storage::Filesystem);
     };
     target.owner.parse(value, &target.key)?;
     let store = Store::mutate(&target.host, false)?;
@@ -138,7 +143,7 @@ pub fn write_at(path: &Path, value: &[u8]) -> Result<(), Error> {
         "INSERT INTO namespace_metadata VALUES (?1, ?2, ?3) ON CONFLICT(native_key, owner) DO UPDATE SET value = excluded.value",
         params![target.key.as_str(), target.owner.tag(), value]
     )?;
-    Ok(())
+    Ok(Storage::Database)
 }
 
 pub fn ensure_at(path: &Path, value: &[u8]) -> Result<Source, Error> {
@@ -162,9 +167,9 @@ pub fn ensure_at(path: &Path, value: &[u8]) -> Result<Source, Error> {
     Ok(Source::Host(Some(value)))
 }
 
-pub fn remove_at(path: &Path) -> Result<(), Error> {
+pub fn remove_at(path: &Path) -> Result<Storage, Error> {
     let Some(target) = Target::parse(path)? else {
-        return Ok(());
+        return Ok(Storage::Filesystem);
     };
     if !matches!(target.owner, Owner::Pending(_) | Owner::Closure(_)) {
         return Err(Error::Unsupported);
@@ -175,7 +180,7 @@ pub fn remove_at(path: &Path) -> Result<(), Error> {
         "DELETE FROM namespace_metadata WHERE native_key = ?1 AND owner = ?2",
         params![target.key.as_str(), target.owner.tag()],
     )?;
-    Ok(())
+    Ok(Storage::Database)
 }
 
 pub enum Listing {

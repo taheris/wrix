@@ -52,7 +52,6 @@ fn prepare_native_scope() {
     let manifest = serde_json::to_vec(&serde_json::json!({"schema_version":1,"workspace_hash":context.key().as_str(),"roots":[{"name":"project","installable":".#project","drv_path":DRV,"out_paths":[]}]})).unwrap();
     let path = state.join("publish-roots.json");
     namespace::write_at(&path, &manifest).unwrap();
-    fs::write(path, manifest).unwrap();
     fs::write(
         std::env::var_os("WRIX_TEST_KEY_FILE").unwrap(),
         context.key().as_str(),
@@ -81,7 +80,7 @@ fn verify_native_queue() {
 }
 
 #[test]
-fn host_hook_uses_database_manifest_after_export_deletion_and_queues_under_contention() {
+fn host_hook_uses_database_only_metadata_and_queues_under_contention() {
     let hook = Path::new(env!("CARGO_BIN_EXE_wrix-cache-hook"));
     let publisher = Path::new(env!("CARGO_BIN_EXE_wrix-cache-publish"));
     let setup = std::env::current_exe().unwrap();
@@ -175,7 +174,7 @@ fn host_hook_uses_database_manifest_after_export_deletion_and_queues_under_conte
         String::from_utf8_lossy(&output.stderr)
     );
     let secret_before = fs::read(keys.join("cache.secret")).unwrap();
-    fs::remove_file(native.join("publish-roots.json")).unwrap();
+    assert!(!native.join("publish-roots.json").exists());
     let settings = Settings {
         lock_timeout_ms: 1,
         ..Settings::default()
@@ -247,15 +246,14 @@ fn host_hook_uses_database_manifest_after_export_deletion_and_queues_under_conte
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    let pending = fs::read_dir(native.join("pending"))
-        .unwrap()
-        .map(|entry| fs::read(entry.unwrap().path()).unwrap())
-        .collect::<Vec<_>>();
-    assert_eq!(pending.len(), 1);
-    let pending: serde_json::Value = serde_json::from_slice(&pending[0]).unwrap();
-    assert_eq!(pending["drv_path"], DRV);
-    for entry in fs::read_dir(native.join("pending")).unwrap() {
-        fs::remove_file(entry.unwrap().path()).unwrap();
+    for name in [
+        "services.json",
+        "cache-status.json",
+        "publish-roots.json",
+        "pending",
+        "gcroots",
+    ] {
+        assert!(!native.join(name).exists(), "{name}");
     }
     let output = isolation::command_as(
         root.path(),

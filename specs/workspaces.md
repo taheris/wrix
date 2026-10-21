@@ -56,11 +56,21 @@ schema, malformed expected records and a missing expected database fail closed
 rather than initializing replacement authority.
 
 Namespace metadata includes service endpoint documents, cache status,
-publication manifests, pending candidates and closure-marker metadata.
-Corresponding native files are exports, not alternative host authority. Explicit
-import admits supported existing metadata without rewriting native files.
-Worker-visible exports remain observations. Repository databases are optional
+publication manifests, pending candidates and closure-marker metadata. Host
+operations store these records only in the database. They do not create or
+recreate `services.json`, `cache-status.json`, `publish-roots.json`, `pending/`
+or closure-list `gcroots/` files. Worker filesystem projections remain
+observations, not alternative host authority. Repository databases are optional
 and non-authorizing; none is required by this protocol.
+
+Explicit import admits supported existing metadata without rewriting or deleting
+native files. Ordinary host updates and queue/closure retirement leave those
+legacy files untouched. Before initial import, quiesce older writers and back up
+native state. After checking imported records and service/cache observations,
+removal of known obsolete regular metadata files is a separate, explicit
+operator action. A repeated import is not evidence that files subsequently
+written by an older binary were imported. Never remove keys, actual Nix
+retention roots, runtime state or payloads as metadata cleanup.
 
 Secrets and key material, native Dolt/Celler/Nix databases, sockets, runtime
 locks, actual retention roots, cache payloads, notification state, controller
@@ -196,9 +206,15 @@ operations.
   [test](../crates/wrix-cli/tests/workspace_admission.rs::host_cache_status_uses_database_not_export_files_and_is_read_only)
 - Cache pruning uses recorded closures after export deletion, preserving keys.
   [test](../crates/wrix-cli/tests/workspace_admission.rs::hardening::retention::cache_prune_uses_recorded_closures_after_export_deletion_without_rotating_keys)
-- The actual host hook selects the publishing owner and uses database manifests,
-  queuing authoritative pending work under contention even without exports.
-  [test](../crates/wrix-cache/tests/host_hook.rs::host_hook_uses_database_manifest_after_export_deletion_and_queues_under_contention)
+- Host service and cache commands persist control records without creating
+  redundant JSON, pending or closure-list exports; secrets and locks stay
+  native.
+  [test](../crates/wrix-cli/tests/workspace_admission.rs::hardening::consolidation::host_service_and_cache_commands_create_database_records_without_metadata_exports)
+- Host updates and queue/closure retirement preserve explicitly imported files.
+  [test](../crates/wrix-cli/tests/workspace_admission.rs::hardening::consolidation::host_mutations_preserve_imported_files_while_retiring_database_pending_and_closures)
+- The actual host hook selects the publishing owner and queues authoritative
+  pending work under contention without creating metadata export files.
+  [test](../crates/wrix-cache/tests/host_hook.rs::host_hook_uses_database_only_metadata_and_queues_under_contention)
 - Admitted Beads push retains caller Git ownership and caller worktree guards.
   [test](../crates/wrix-cli/tests/workspace_admission.rs::hardening::admitted_beads_push_retains_caller_git_ownership_and_caller_path_guards)
 - Worker launch refuses a checkout containing the host-selected resolver.

@@ -46,6 +46,10 @@ impl Fixture {
     }
 
     pub fn application(&self, caller: &Path, args: &[&str]) -> Output {
+        self.application_command(caller, args).output().unwrap()
+    }
+
+    pub fn application_command(&self, caller: &Path, args: &[&str]) -> Command {
         let mut command = if self.isolated {
             install_executable(
                 self.root.path(),
@@ -83,9 +87,8 @@ impl Fixture {
                 },
             )
             .env("WRIX_CACHE_ENABLE", "0")
-            .env("WRIX_DOLT_TRANSPORT", "unix")
-            .output()
-            .unwrap()
+            .env("WRIX_DOLT_TRANSPORT", "unix");
+        command
     }
     pub fn inside(&self, relative: &str) -> PathBuf {
         if self.isolated {

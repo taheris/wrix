@@ -357,9 +357,11 @@ impl Plan {
         fs::create_dir_all(self.paths.state_root())?;
         if self.cache_enabled() {
             fs::create_dir_all(self.paths.cache_root())?;
-            fs::create_dir_all(self.paths.gcroots_dir())?;
+            if !wrix_state::namespace::is_host_root(self.paths.state_root())? {
+                fs::create_dir_all(self.paths.gcroots_dir())?;
+                fs::create_dir_all(self.paths.pending_dir())?;
+            }
             fs::create_dir_all(self.paths.keys_dir())?;
-            fs::create_dir_all(self.paths.pending_dir())?;
             fs::create_dir_all(self.paths.cache_root().join("nar"))?;
             fs::create_dir_all(self.paths.cache_root().join("log"))?;
             write_if_missing(&self.paths.cache_lock_path(), "")?;
@@ -399,8 +401,12 @@ impl Plan {
     fn write_services(&self) -> Result<()> {
         self.authorize()?;
         let bytes = self.services_json();
-        wrix_state::namespace::write_at(&self.paths.services_path(), bytes.as_bytes())?;
-        managed::atomic_write(&self.paths.services_path(), bytes.as_bytes())?;
+        if matches!(
+            wrix_state::namespace::write_at(&self.paths.services_path(), bytes.as_bytes())?,
+            wrix_state::namespace::Storage::Filesystem
+        ) {
+            managed::atomic_write(&self.paths.services_path(), bytes.as_bytes())?;
+        }
         Ok(())
     }
 
@@ -1917,7 +1923,7 @@ fn nix_cache_info() -> String {
 
 fn write_if_missing(path: &Path, content: impl AsRef<[u8]>) -> Result<()> {
     match wrix_state::namespace::ensure_at(path, content.as_ref())? {
-        wrix_state::namespace::Source::Host(Some(bytes)) => fs::write(path, bytes)?,
+        wrix_state::namespace::Source::Host(Some(_)) => (),
         wrix_state::namespace::Source::Host(None) => {
             return Err(wrix_state::store::Error::Unsupported.into());
         }
