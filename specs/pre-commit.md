@@ -222,6 +222,9 @@ marker. [system](verify:prek.ci-platform-policy)
 
 ## Success Criteria
 
+- The repository pre-push chain stops after a failed Nix flake check without
+  invoking Loom verification; successful Nix checks allow the verifier to run.
+  [system](verify:prek.config-wrapper-contract)
 - Packaged `wrix init repo` repairs the stale current runner binding before hook
   selection; bare `wrix init` reports the problem without changing bindings or
   hook configuration.

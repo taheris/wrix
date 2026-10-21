@@ -30,9 +30,6 @@
           inherit (workspace) cargoArtifacts;
           patches = spawnPatches;
           nativeBuildInputs = [ pkgs.git ];
-          preCheck = ''
-            export TMPDIR=/tmp
-          '';
           cargoNextestExtraArgs = "-p loom-driver -E 'test(wrix_launch_) | test(wrix_runner_)'";
         };
       loomCli = mkLoom pkgs;

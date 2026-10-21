@@ -158,7 +158,7 @@ index aea078a..4a094f0 100644
  fn path_is_empty(path: &Path) -> bool {
      path.as_os_str().is_empty()
  }
-@@ -448,6 +501,51 @@ mod tests {
+@@ -448,6 +501,67 @@ mod tests {
          }
      }
 
@@ -169,7 +169,23 @@ index aea078a..4a094f0 100644
 +        let mut cfg = sample_config(None);
 +        cfg.model_id = Some("test-model".into());
 +        cfg.shutdown_grace = Some(Duration::from_secs(5));
-+        let scratch = tempfile::tempdir().unwrap();
++        let mut rejected = Vec::new();
++        let scratch = [
++            std::env::current_dir().unwrap(),
++            std::fs::canonicalize("/tmp").unwrap(),
++        ]
++        .into_iter()
++        .find_map(|root| {
++            match crate::scratch::directory::Directory::open(&root) {
++                Ok(_) => Some(tempfile::tempdir_in(root).unwrap()),
++                Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
++                    rejected.push(error);
++                    None
++                }
++                Err(error) => panic!("cannot observe scratch ancestor: {error}"),
++            }
++        })
++        .unwrap_or_else(|| panic!("no trusted fixture ancestor: {rejected:?}"));
 +        std::fs::set_permissions(scratch.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
 +        let file = crate::scratch::runtime::Config::write(scratch.path(), &cfg).unwrap();
 +        let bytes = std::fs::read(file.path()).unwrap();

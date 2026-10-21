@@ -102,3 +102,40 @@ for verify_status in 0 19; do
 done
 
 printf 'PASS: Loom pre-push bypasses compiler caches without suppressing failures\n'
+
+cat >"$TEST_TMP/bin/nix" <<EOF
+#!$BASH_BIN
+set -euo pipefail
+if [[ "\$#" -ne 2 || "\$1" != flake || "\$2" != check ]]; then
+  echo "nix shim: unexpected args: \$*" >&2
+  exit 2
+fi
+printf 'nix\\n' >>"$CALL_LOG"
+exit "\${NIX_STATUS:-0}"
+EOF
+chmod +x "$TEST_TMP/bin/nix"
+
+for nix_status in 0 100; do
+  : >"$CALL_LOG"
+  status=0
+  (
+    cd "$WORK"
+    PATH="$TEST_TMP/bin:$PATH" PREK_COLOR=never NIX_STATUS="$nix_status" \
+      "$PREK_BIN" run --stage pre-push --all-files --no-progress
+  ) || status=$?
+  expected=nix
+  if [[ "$nix_status" -eq 0 ]]; then
+    expected=$'nix\nverify'
+  fi
+  if [[ "$(<"$CALL_LOG")" != "$expected" ]]; then
+    echo "FAIL: Nix failure did not stop the pre-push chain before Loom" >&2
+    exit 1
+  fi
+  if [[ "$nix_status" -eq 0 && "$status" -ne 0 ]] ||
+    [[ "$nix_status" -ne 0 && "$status" -eq 0 ]]; then
+    echo "FAIL: pre-push did not preserve the Nix verdict" >&2
+    exit 1
+  fi
+done
+
+printf 'PASS: Nix failure stops pre-push before Loom verification\n'

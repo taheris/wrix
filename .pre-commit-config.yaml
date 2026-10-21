@@ -30,6 +30,7 @@ repos:
       # Slow tests use loom markers
       - id: nix-flake-check
         name: nix flake check
+        fail_fast: true
         entry: >-
           bin/pre-push-checks --hook-id nix-flake-check
           --hook-entry 'nix flake check' -- nix flake check
