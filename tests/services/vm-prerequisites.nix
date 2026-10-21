@@ -8,6 +8,7 @@ let
     set -euo pipefail
     [[ "$#" -eq 2 && "$1" == -o && -d "$2" && "$PWD" == "$2" ]]
     [[ "$PWD" != "$WRIX_TEST_VM_ROOT" ]]
+    [[ "$TMPDIR" == "$PWD" && "$XDG_RUNTIME_DIR" == "$PWD" ]]
     printf '%s\n' "$PWD" >>"$WRIX_TEST_VM_CALLS"
     case "$WRIX_TEST_VM_STATUS" in
       pass) touch "$2/guest-result" ;;

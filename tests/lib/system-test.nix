@@ -28,6 +28,8 @@ pkgs.writeShellScriptBin name ''
   fi
   directory=$(mktemp -d -t wrix-system-test.XXXXXX)
   trap 'rm -rf "$directory"' EXIT
+  export TMPDIR="$directory"
+  export XDG_RUNTIME_DIR="$directory"
   cd "$directory"
   if ! "$driver/bin/nixos-test-driver" -o "$directory"; then
     exit 1

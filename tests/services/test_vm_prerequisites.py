@@ -35,7 +35,7 @@ class VmPrerequisites(unittest.TestCase):
             WRIX_TEST_VM_CALLS=str(self.calls), WRIX_TEST_VM_BUILDS=str(self.builds),
             WRIX_TEST_VM_STATUS="pass", WRIX_TEST_VM_BUILD_STATUS="pass",
             GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
-            TMPDIR="/tmp",
+            TMPDIR="/tmp", XDG_RUNTIME_DIR=str(self.root / "ambient-runtime"),
         )
         for name in subprocess.check_output(["git", "rev-parse", "--local-env-vars"], text=True).splitlines():
             self.env.pop(name, None)

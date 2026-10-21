@@ -36,9 +36,13 @@ passing transport results.
 
 The Linux `test-services-devshell-start-independent` and
 `test-services-limit-mode-cache-endpoint` CI apps build the fixtures' packaged
-NixOS test drivers, then execute their real guest assertions in an isolated
-temporary directory. Runner preparation does not realize VM test results. The
-ordinary `systemTests` derivations remain available for direct Nix builds.
+NixOS test drivers, then execute their real guest assertions in private working,
+scratch and runtime directories. Both `TMPDIR` and `XDG_RUNTIME_DIR` are scoped
+to each invocation: the upstream driver otherwise places VM state and VLAN
+sockets in shared ambient directories, regardless of its output directory.
+Runner preparation does not realize VM test results. The ordinary `systemTests`
+derivations remain available for direct Nix builds. Run the heavy service guests
+sequentially in memory-constrained agent sandboxes.
 
 Service fixtures select the pinned upstream QEMU module's standard 9p transport
 instead of root virtiofsd. This test-only selection needs no host capabilities,
