@@ -75,6 +75,7 @@ pkgs.testers.runNixOSTest {
   };
 
   testScript = ''
+    from datetime import timedelta
     ${builtins.readFile ../lib/guest-store.py}
 
     def as_alice(command: str) -> str:
@@ -83,6 +84,21 @@ pkgs.testers.runNixOSTest {
             "export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus; "
         )
         return f"su alice -l -c {shlex.quote(environment + command)}"
+
+    def owner_pid() -> str:
+        pid = machine.succeed(as_alice(
+            "podman inspect --format '{{.State.Pid}}' devshell-repo-service"
+        )).strip()
+        assert pid.isdigit() and int(pid) > 0
+        return pid
+
+    def owner_key_identity() -> str:
+        return machine.succeed(as_alice(
+            "set -euo pipefail; cd /home/alice/devshell-repo; "
+            "state=$(${wrix.rustPackage.wrix}/bin/wrix service endpoints | ${pkgs.jq}/bin/jq -er .state_root); "
+            "stat -c '%i:%s' \"$state/keys/cache.pub\"; "
+            "sha256sum \"$state/keys/cache.pub\""
+        ))
 
     machine.start()
     machine.wait_for_unit("multi-user.target")
@@ -104,7 +120,18 @@ pkgs.testers.runNixOSTest {
                 "--property=Type=exec --property=TimeoutStopSec=8s ${defaultParent}"
             )
         )
-        machine.wait_until_succeeds("test -e /home/alice/default-hook.ready", timeout=60)
+        try:
+            machine.wait_until_succeeds(
+                "test -e /home/alice/default-hook.ready || "
+                + as_alice("systemctl --user is-failed --quiet wrix-devshell-parent.service"),
+                timeout=timedelta(minutes=15),
+            )
+            machine.succeed("test -e /home/alice/default-hook.ready")
+        except Exception:
+            print(machine.execute(as_alice(
+                "journalctl --user -u wrix-devshell-parent.service --no-pager -n 80"
+            ), timeout=timedelta(seconds=15))[1])
+            raise
         machine.succeed(
             as_alice(
                 "podman inspect --format '{{.State.Running}}' devshell-repo-service | grep true"
@@ -116,6 +143,9 @@ pkgs.testers.runNixOSTest {
                 "'run-*.scope' | grep 'run-.*[.]scope'"
             )
         )
+
+    serving_pid = owner_pid()
+    serving_key = owner_key_identity()
 
     with subtest("stopping the caller is prompt and leaves the container running"):
         machine.succeed(
@@ -140,12 +170,27 @@ pkgs.testers.runNixOSTest {
             "cd /home/alice/devshell-repo && ${wrix.rustPackage.wrix}/bin/wrix service stop"
         )
     )
-    machine.fail(as_alice("podman container exists devshell-repo-service"))
+    assert owner_pid() == serving_pid
+    assert owner_key_identity() == serving_key
+    machine.succeed(as_alice(
+        "cd /home/alice/devshell-repo && "
+        "${wrix.rustPackage.wrix}/bin/wrix service status | grep -Fx 'runtime: Stopped'"
+    ))
+    machine.succeed(as_alice(
+        "cd /home/alice/devshell-repo && ${wrix.rustPackage.wrix}/bin/wrix service start"
+    ))
+    assert owner_pid() == serving_pid
+    assert owner_key_identity() == serving_key
+    machine.succeed(as_alice(
+        "cd /home/alice/devshell-repo && ${wrix.rustPackage.wrix}/bin/wrix service stop"
+    ))
     machine.succeed(
         as_alice(
             "cd /home/alice/disabled-repo && ${wrix.rustPackage.wrix}/bin/wrix service stop --no-cache"
         )
     )
     machine.fail(as_alice("podman container exists disabled-repo-service"))
+    assert owner_pid() == serving_pid
+    assert owner_key_identity() == serving_key
   '';
 }

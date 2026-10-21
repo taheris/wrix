@@ -28,6 +28,15 @@ transport contracts to `test-ci` apps. Dry-run ENV/MOUNT output and a simulated
 Apple inventory are command-planning evidence, not container exposure or guest
 SQL evidence.
 
+The real Linux devshell lifecycle fixture starts the packaged Celler owner,
+checks that stopping its caller leaves it running, retires and reopens namespace
+admission, and requires the same live owner PID and signing-key bytes/inode
+throughout. Cache opt-out still starts and stops a separate Dolt-only borrower
+without replacing that owner. Readiness observes its hook marker or failed unit
+with a bounded cold-image deadline; unit failure is not a successful readiness
+signal. This is guest lifecycle evidence, not native worker substitution or
+shared installed-store acceptance.
+
 The retained launcher table below includes legacy static-cache probes. Those
 probes still need conversion before they can accept the Celler backend; do not
 count their old payload assertions as native Celler transport evidence.
