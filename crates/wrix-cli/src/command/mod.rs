@@ -1,4 +1,5 @@
 use std::{
+    ffi::{OsStr, OsString},
     io::{self, Write},
     path::PathBuf,
     process::ExitCode,
@@ -12,6 +13,15 @@ const PROFILE_CONFIG: &str = "profile-config";
 
 pub fn run(
     args: &[String],
+    stdout: &mut impl Write,
+    stderr: &mut impl Write,
+) -> io::Result<ExitCode> {
+    let args = args.iter().map(OsString::from).collect::<Vec<_>>();
+    run_os(&args, stdout, stderr)
+}
+
+pub fn run_os(
+    args: &[OsString],
     stdout: &mut impl Write,
     stderr: &mut impl Write,
 ) -> io::Result<ExitCode> {
@@ -42,6 +52,7 @@ pub fn run(
         Some(Invocation::Notify(args)) => run_notify(&args, stdout, stderr),
         Some(Invocation::Service(args)) => run_service(&args, stdout, stderr),
         Some(Invocation::Beads(args)) => run_beads(&args, stdout, stderr),
+        Some(Invocation::Workspace(args)) => crate::workspace::run(&args, stdout, stderr),
         Some(Invocation::Init(args)) => {
             crate::init::run(profile_config.as_deref(), &args, stdout, stderr)
         }
@@ -64,24 +75,38 @@ enum Invocation {
     Notify(Vec<String>),
     Service(Vec<String>),
     Beads(Vec<String>),
+    Workspace(Vec<OsString>),
     Init(Vec<String>),
     Help(Vec<String>),
 }
 
-fn parse_root(args: &[String]) -> Result<RootInvocation, clap::Error> {
+fn parse_root(args: &[OsString]) -> Result<RootInvocation, clap::Error> {
     let (root_args, run_args) = split_run_arguments(args);
     let matches = root_command().try_get_matches_from(
-        std::iter::once("wrix").chain(root_args.iter().map(String::as_str)),
+        std::iter::once(OsStr::new("wrix")).chain(root_args.iter().map(OsString::as_os_str)),
     )?;
-    let profile_config = matches.get_one::<String>(PROFILE_CONFIG).map(PathBuf::from);
+    let profile_config = matches.get_one::<PathBuf>(PROFILE_CONFIG).cloned();
     let invocation = match matches.subcommand() {
-        Some(("run", _matches)) => Some(Invocation::Run(run_args.to_vec())),
-        Some(("spawn", matches)) => Some(Invocation::Spawn(passthrough_values(matches))),
-        Some(("notify", matches)) => Some(Invocation::Notify(passthrough_values(matches))),
-        Some(("service", matches)) => Some(Invocation::Service(passthrough_values(matches))),
-        Some(("beads", matches)) => Some(Invocation::Beads(passthrough_values(matches))),
-        Some(("init", matches)) => Some(Invocation::Init(passthrough_values(matches))),
-        Some(("help", matches)) => Some(Invocation::Help(passthrough_values(matches))),
+        Some(("run", _matches)) => Some(Invocation::Run(utf8_arguments(run_args)?)),
+        Some(("spawn", matches)) => Some(Invocation::Spawn(utf8_arguments(&passthrough_values(
+            matches,
+        ))?)),
+        Some(("notify", matches)) => Some(Invocation::Notify(utf8_arguments(
+            &passthrough_values(matches),
+        )?)),
+        Some(("service", matches)) => Some(Invocation::Service(utf8_arguments(
+            &passthrough_values(matches),
+        )?)),
+        Some(("beads", matches)) => Some(Invocation::Beads(utf8_arguments(&passthrough_values(
+            matches,
+        ))?)),
+        Some(("init", matches)) => Some(Invocation::Init(utf8_arguments(&passthrough_values(
+            matches,
+        ))?)),
+        Some(("workspace", matches)) => Some(Invocation::Workspace(passthrough_values(matches))),
+        Some(("help", matches)) => Some(Invocation::Help(utf8_arguments(&passthrough_values(
+            matches,
+        ))?)),
         Some(_) | None => None,
     };
     if profile_config.is_some()
@@ -99,14 +124,14 @@ fn parse_root(args: &[String]) -> Result<RootInvocation, clap::Error> {
 }
 
 /// Root parsing ends at `run`; its entire tail belongs to the sandbox parser.
-fn split_run_arguments(args: &[String]) -> (&[String], &[String]) {
+fn split_run_arguments(args: &[OsString]) -> (&[OsString], &[OsString]) {
     let mut index = 0;
     while let Some(arg) = args.get(index) {
-        match arg.as_str() {
-            "--profile-config" => index += 2,
-            "--" => break,
-            option if option.starts_with('-') => index += 1,
-            _ => break,
+        match arg.to_str() {
+            Some("--profile-config") => index += 2,
+            Some("--") => break,
+            Some(option) if option.starts_with('-') => index += 1,
+            Some(_) | None => break,
         }
     }
     if args.get(index).is_some_and(|arg| arg == "run") {
@@ -114,6 +139,19 @@ fn split_run_arguments(args: &[String]) -> (&[String], &[String]) {
     } else {
         (args, &[])
     }
+}
+
+fn utf8_arguments(args: &[OsString]) -> Result<Vec<String>, clap::Error> {
+    args.iter()
+        .map(|value| {
+            value.clone().into_string().map_err(|_| {
+                root_command().error(
+                    ErrorKind::InvalidUtf8,
+                    "this command requires UTF-8 arguments",
+                )
+            })
+        })
+        .collect()
 }
 
 fn render_clap_error(
@@ -132,9 +170,9 @@ fn render_clap_error(
     Ok(ExitCode::FAILURE)
 }
 
-fn passthrough_values(matches: &ArgMatches) -> Vec<String> {
+fn passthrough_values(matches: &ArgMatches) -> Vec<OsString> {
     matches
-        .get_many::<String>(PASSTHROUGH_ARGS)
+        .get_many::<OsString>(PASSTHROUGH_ARGS)
         .map_or_else(Vec::new, |values| values.cloned().collect())
 }
 
@@ -278,6 +316,7 @@ fn write_delegated_help(
         "service" => write_service_topic_help(&args[1..], stdout)?,
         "beads" => wrix_beads::command::write_help(stdout).map_err(io::Error::other)?,
         "init" => crate::init::write_help(stdout)?,
+        "workspace" => write!(stdout, "{}", crate::workspace::HELP)?,
         unknown => {
             writeln!(stderr, "unknown help topic: {unknown}")?;
             write_help(stderr)?;
@@ -322,6 +361,7 @@ fn root_command() -> ClapCommand {
         .arg(
             Arg::new(PROFILE_CONFIG)
                 .long(PROFILE_CONFIG)
+                .value_parser(clap::value_parser!(PathBuf))
                 .value_name("file")
                 .num_args(1)
                 .help("Override generated project launch data for run and spawn."),
@@ -355,6 +395,11 @@ fn root_command() -> ClapCommand {
             crate::init::HELP,
         ))
         .subcommand(passthrough_command(
+            "workspace",
+            "Manage workspace namespace admission.",
+            crate::workspace::HELP,
+        ))
+        .subcommand(passthrough_command(
             "help",
             "Print command help.",
             "Print command help.\n\nUsage: wrix help [command]\n\nOptions:\n  -h, --help  Print help.\n",
@@ -369,6 +414,7 @@ fn passthrough_command(name: &'static str, about: &'static str, help: &'static s
         .disable_help_subcommand(true)
         .arg(
             Arg::new(PASSTHROUGH_ARGS)
+                .value_parser(clap::value_parser!(OsString))
                 .num_args(0..)
                 .allow_hyphen_values(true)
                 .trailing_var_arg(true),
@@ -406,6 +452,10 @@ mod test {
                 "",
             ];
             args.extend(tail.iter().map(|arg| (*arg).to_owned()));
+            let args = args
+                .iter()
+                .map(std::ffi::OsString::from)
+                .collect::<Vec<_>>();
             let parsed = parse_root(&args).unwrap();
             assert_eq!(parsed.profile_config, Some(std::path::PathBuf::from("run")));
             let Some(Invocation::Run(agent_args)) = parsed.invocation else {
@@ -418,6 +468,10 @@ mod test {
     #[test]
     fn root_parser_still_validates_options_before_run() {
         let args = ["--unknown", "run", "/workspace", "--help"].map(String::from);
+        let args = args
+            .iter()
+            .map(std::ffi::OsString::from)
+            .collect::<Vec<_>>();
         assert!(parse_root(&args).is_err());
     }
 

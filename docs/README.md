@@ -50,6 +50,7 @@ keep it current when specs land or retire.
 | [proxy](../specs/proxy.md)                   | `crates/wrix-service/`, `lib/services/`                                              | —        | Rama-backed HTTP/CONNECT admission for restricted egress                 |
 | [sandbox](../specs/sandbox.md)               | [`lib/sandbox/default.nix`](../lib/sandbox/default.nix)                              | wx-fzop9 | Container isolation, launch preflight and explicit image GC              |
 | [security](../specs/security.md)             | [`crates/wrix-sandbox/`](../crates/wrix-sandbox/), [`lib/sandbox/`](../lib/sandbox/) | wx-1dhkm | Explicit credential grants, network isolation, and execution evidence    |
+| [workspaces](../specs/workspaces.md)         | `crates/wrix-state/`, `crates/wrix-core/`                                            | wx-23x0i | Explicit host workspace admission and native control metadata            |
 | [services](../specs/services.md)             | `crates/wrix-service/`                                                               | wx-fvr1x | Host-user control, shared service roles and draining updates             |
 | [tmux](../specs/tmux.md)                     | [`lib/sandbox/profiles.nix`](../lib/sandbox/profiles.nix)                            | wx-4f3g  | Native tmux CLI debugging and caller-owned session lifecycle             |
 
@@ -88,5 +89,9 @@ optional, consumer-provided OmniWM CLI integration and desktop shortcuts.
 | **tool cache**                    | Wrix-managed sandbox-only Cargo registry/git, sccache or uv data; shared among workers or private to one launch, distinct from the project Nix cache                              |
 | **verify target**                 | Logical verifier ID of the form `verify:<domain>.<check-id>`; `.#verify --list` is the authoritative ID inventory and runner config batches selected IDs through `.#verify`       |
 | **virtio-fs**                     | Shared filesystem for macOS container VMs                                                                                                                                         |
+| **membership**                    | Opaque external member identifier within a host-selected integration slot; an attestation, not admission                                                                          |
+| **native namespace key**          | Stable host storage identity chosen by explicit admission, separate from checkout location                                                                                        |
+| **primary service scope**         | Checked checkout supplying shared service/cache policy, distinct from caller-specific Git operations                                                                              |
+| **workspace admission**           | Explicit host authorization associating verified external participants with a native namespace                                                                                    |
 | **wrix init**                     | Repo-local init namespace: bare verification, deploy-key provisioning, and explicit repo setup for Git/signing/hooks                                                              |
 | **wrix.toml**                     | Optional repo-root Wrix policy override file; absent when defaults are sufficient                                                                                                 |

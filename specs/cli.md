@@ -96,6 +96,15 @@ flake targets are not compatibility APIs. Their retirement does not remove
 image/configuration outputs, programmatic `spawn`, or explicit invocation of the
 host Wrix package through Nix.
 
+### Workspace Admission
+
+[Workspace Admission](workspaces.md#commands-and-authorizations) owns the
+`wrix workspace` command surface and independent host authorizations. Service,
+cache, init and sandbox operations consume checked selections rather than
+turning a resolver reply, checkout location or configuration file into
+admission. Caller Git operations remain caller-scoped even when shared
+service/cache policy comes from an admitted primary.
+
 ### CLI Command Shape
 
 Acceptance: [CLI Shape Acceptance](#cli-shape-acceptance).

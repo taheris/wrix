@@ -102,6 +102,7 @@ let
       ":"
       "${makeBinPath [
         pkgs.coreutils
+        pkgs.git
         pkgs.dolt
       ]}"
     ]
@@ -134,14 +135,20 @@ let
   };
 
   mkBinaryPackage =
-    name:
+    name: runtime:
     pkgs.runCommand name
       {
         meta = binaryMeta name;
+        nativeBuildInputs = [ pkgs.makeWrapper ];
       }
       ''
         mkdir -p "$out/bin"
-        ln -s "${workspace.bin}/bin/${name}" "$out/bin/${name}"
+        ${
+          if runtime == [ ] then
+            ''ln -s "${workspace.bin}/bin/${name}" "$out/bin/${name}"''
+          else
+            ''makeWrapper "${workspace.bin}/bin/${name}" "$out/bin/${name}" --prefix PATH : "${makeBinPath runtime}"''
+        }
       '';
 
   mkWrappedBinaryPackage =
@@ -193,8 +200,11 @@ in
   wrix = wrixPackage;
   binding = serviceBinding;
   inherit controllerBinding controllerPackage;
-  focusNotification = mkBinaryPackage "wrix-focus-notification";
-  cacheHook = mkBinaryPackage "wrix-cache-hook";
-  cachePublish = mkBinaryPackage "wrix-cache-publish";
-  cacheServe = mkBinaryPackage "wrix-cache-serve";
+  focusNotification = mkBinaryPackage "wrix-focus-notification" [ ];
+  cacheHook = mkBinaryPackage "wrix-cache-hook" [ ];
+  cachePublish = mkBinaryPackage "wrix-cache-publish" [
+    pkgs.git
+    pkgs.nix
+  ];
+  cacheServe = mkBinaryPackage "wrix-cache-serve" [ ];
 }

@@ -7,6 +7,7 @@ members = [
   "crates/wrix-notify",
   "crates/wrix-sandbox",
   "crates/wrix-service",
+  "crates/wrix-state",
 ]
 resolver = "3"
 
@@ -30,8 +31,9 @@ libc = "0.2.186"
 rama-core = { version = "=0.4.0", default-features = false, features = ["std"] }
 rama-net = { version = "=0.4.0", default-features = false, features = ["std"] }
 rama-tcp = { version = "=0.4.0", default-features = false }
-tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "net", "sync", "time", "io-util", "signal"] }
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "net", "sync", "time", "io-util", "signal", "process"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
+rustix = { version = "1.1.5", features = ["process", "fs"] }
 wait-timeout = "0.2.1"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
@@ -50,6 +52,7 @@ wrix-core = { path = "crates/wrix-core" }
 wrix-notify = { path = "crates/wrix-notify" }
 wrix-sandbox = { path = "crates/wrix-sandbox" }
 wrix-service = { path = "crates/wrix-service" }
+wrix-state = { path = "crates/wrix-state" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

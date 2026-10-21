@@ -67,6 +67,10 @@ alias [system](test-ci:test-beads-live-system).
 
 Acceptance: [Managed Storage Acceptance](#managed-storage-acceptance).
 
+[Workspace Admission](workspaces.md) selects managed service lookup scope; it
+does not change caller checkout/common-directory ownership for Git execution.
+The host control database is not the native Dolt database or sync history.
+
 The repository's main `.beads/` retains tracked ignore policy, `config.yaml` and
 `metadata.json`, plus non-authoritative backup/runtime artifacts. Live Dolt
 state belongs to the workspace namespace beneath the service-visible data root

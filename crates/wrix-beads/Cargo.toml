@@ -8,6 +8,7 @@ version.workspace = true
 displaydoc = { workspace = true }
 thiserror = { workspace = true }
 wrix-core = { workspace = true }
+wrix-state = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

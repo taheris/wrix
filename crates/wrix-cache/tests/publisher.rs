@@ -802,6 +802,8 @@ fn repository_pending_ttl_expires_records_without_direnv() -> TestResult {
 #[test]
 fn status_reads_repository_soft_limit_without_direnv() -> TestResult {
     let fixture = Fixture::new("status-policy")?;
+    fs::create_dir_all(&fixture.cache_root)?;
+    fs::write(fixture.cache_root.join("existing-payload"), b"cache data")?;
     fs::write(
         fixture.workspace.canonical_path().join("wrix.toml"),
         "cache.warn_size = 0",

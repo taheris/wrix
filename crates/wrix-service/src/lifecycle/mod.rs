@@ -50,6 +50,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, Display, ThisError)]
 pub enum Error {
+    /// workspace admission failed: {0}
+    Admission(#[from] wrix_state::store::Error),
     /// host package service-image binding failed: {0}
     Binding(#[from] binding::Error),
     /// service lifecycle I/O failed
@@ -149,6 +151,7 @@ pub enum CacheMode {
 
 #[derive(Clone, Debug)]
 pub struct Plan {
+    selection: Option<wrix_state::context::Selection>,
     workspace: Workspace,
     beads_sync_branch: Branch,
     paths: Paths,
@@ -210,11 +213,14 @@ pub struct Status {
 
 impl Plan {
     pub fn for_current_dir(cache_mode: CacheMode) -> Result<Self> {
-        let settings = wrix_cache::config::Settings::current()?;
-        let workspace = Workspace::from_service_current_dir()?;
+        let selection = wrix_state::context::Selection::inspect(&env::current_dir()?)?;
+        let workspace = selection.workspace().clone();
+        let settings = wrix_cache::config::Settings::for_workspace(&workspace)?;
         let paths = Paths::for_workspace(workspace.hash())?;
         let branch = read_sync_branch(workspace.canonical_path())?;
-        Self::from_parsed(workspace, cache_mode, paths, branch, settings)
+        let mut plan = Self::from_parsed(workspace, cache_mode, paths, branch, settings)?;
+        plan.selection = Some(selection);
+        Ok(plan)
     }
 
     pub fn for_workspace(workspace: Workspace, cache_mode: CacheMode) -> Result<Self> {
@@ -274,6 +280,7 @@ impl Plan {
             None
         };
         Ok(Self {
+            selection: None,
             workspace,
             beads_sync_branch,
             paths,
@@ -327,7 +334,26 @@ impl Plan {
         ports
     }
 
+    fn authorize(&self) -> Result<()> {
+        if let Some(selection) = &self.selection {
+            return Ok(selection.authorize_effects()?);
+        }
+        if wrix_state::namespace::is_host_root(self.paths.state_root())? {
+            let selection =
+                wrix_state::context::Selection::inspect(self.workspace.canonical_path())?;
+            if selection.workspace().hash() != self.workspace.hash()
+                || selection.workspace().canonical_path().as_os_str()
+                    != self.workspace.canonical_path().as_os_str()
+            {
+                return Err(wrix_state::store::Error::Conflict.into());
+            }
+            selection.authorize_effects()?;
+        }
+        Ok(())
+    }
+
     pub fn ensure_layout(&self) -> Result<()> {
+        self.authorize()?;
         fs::create_dir_all(self.paths.state_root())?;
         if self.cache_enabled() {
             fs::create_dir_all(self.paths.cache_root())?;
@@ -371,7 +397,10 @@ impl Plan {
     }
 
     fn write_services(&self) -> Result<()> {
-        managed::atomic_write(&self.paths.services_path(), self.services_json().as_bytes())?;
+        self.authorize()?;
+        let bytes = self.services_json();
+        wrix_state::namespace::write_at(&self.paths.services_path(), bytes.as_bytes())?;
+        managed::atomic_write(&self.paths.services_path(), bytes.as_bytes())?;
         Ok(())
     }
 
@@ -507,27 +536,9 @@ impl Paths {
     }
 
     fn for_workspace(hash: &WorkspaceHash) -> Result<Self> {
-        let home = home_dir()?;
-        let state_root = if cfg!(target_os = "macos") {
-            home.join("Library/Application Support/wrix/workspaces")
-                .join(hash.as_str())
-        } else {
-            env::var_os("XDG_STATE_HOME")
-                .map_or_else(|| home.join(".local/state"), PathBuf::from)
-                .join("wrix/workspaces")
-                .join(hash.as_str())
-        };
-        let cache_root = if cfg!(target_os = "macos") {
-            home.join("Library/Caches/wrix/workspaces")
-                .join(hash.as_str())
-                .join("binary-cache")
-        } else {
-            env::var_os("XDG_CACHE_HOME")
-                .map_or_else(|| home.join(".cache"), PathBuf::from)
-                .join("wrix/workspaces")
-                .join(hash.as_str())
-                .join("binary-cache")
-        };
+        let roots = wrix_core::host_path::Roots::discover()?;
+        let state_root = roots.workspace_state(hash);
+        let cache_root = roots.workspace_cache(hash);
         Ok(Self {
             state_root,
             cache_root,
@@ -616,6 +627,7 @@ impl Status {
 pub fn start(cache_mode: CacheMode) -> Result<Status> {
     let (mut plan, _lock) = locked_plan(cache_mode)?;
     if plan.dolt().is_some() {
+        plan.authorize()?;
         managed::configure(plan.workspace().canonical_path())?;
     }
     let runtime = Runtime::from_env()?;
@@ -634,10 +646,12 @@ pub fn start(cache_mode: CacheMode) -> Result<Status> {
 }
 
 fn locked_plan(cache_mode: CacheMode) -> Result<(Plan, fs::File)> {
-    let settings = wrix_cache::config::Settings::current()?;
-    let workspace = Workspace::from_service_current_dir()?;
+    let selection = wrix_state::context::Selection::inspect(&env::current_dir()?)?;
+    let workspace = selection.workspace().clone();
+    let settings = wrix_cache::config::Settings::for_workspace(&workspace)?;
     let paths = Paths::for_workspace(workspace.hash())?;
     let branch = read_sync_branch(workspace.canonical_path())?;
+    selection.authorize_effects()?;
     fs::create_dir_all(paths.state_root())?;
     let lock = fs::OpenOptions::new()
         .create(true)
@@ -646,15 +660,16 @@ fn locked_plan(cache_mode: CacheMode) -> Result<(Plan, fs::File)> {
         .write(true)
         .open(paths.state_root().join("service.lock"))?;
     lock.lock_exclusive()?;
-    Ok((
-        Plan::from_parsed(workspace, cache_mode, paths, branch, settings)?,
-        lock,
-    ))
+    selection.authorize_effects()?;
+    let mut plan = Plan::from_parsed(workspace, cache_mode, paths, branch, settings)?;
+    plan.selection = Some(selection);
+    Ok((plan, lock))
 }
 
 pub fn stop(cache_mode: CacheMode) -> Result<Status> {
     let (plan, _lock) = locked_plan(cache_mode)?;
     let runtime = Runtime::from_env()?;
+    plan.authorize()?;
     runtime.remove(&plan.container_name())?;
     status_for_plan(plan)
 }
@@ -852,11 +867,16 @@ where
 }
 
 fn read_persisted_services(path: &Path) -> Result<Option<PersistedServices>> {
-    if !path.is_file() {
-        return Ok(None);
-    }
-    let content = fs::read_to_string(path)?;
-    serde_json::from_str(&content)
+    let content = match wrix_state::namespace::read_at(path)? {
+        wrix_state::namespace::Source::Host(Some(content)) => content,
+        wrix_state::namespace::Source::Host(None) => return Ok(None),
+        wrix_state::namespace::Source::Observer => match fs::read(path) {
+            Ok(content) => content,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        },
+    };
+    serde_json::from_slice(&content)
         .map(Some)
         .map_err(|source| Error::PersistedServicesJson {
             path: path.display().to_string(),
@@ -897,6 +917,15 @@ fn container_name_collides(
     candidate: &ContainerName,
     workspace_hash: &WorkspaceHash,
 ) -> Result<bool> {
+    if let Some(entries) = wrix_state::namespace::services_at(paths.state_root())? {
+        for entry in entries {
+            let services: PersistedServices = serde_json::from_slice(&entry.bytes)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+            if &entry.key != workspace_hash && &services.container_name == candidate {
+                return Ok(true);
+            }
+        }
+    }
     let Some(state_base) = paths.state_base() else {
         return Ok(false);
     };
@@ -1028,6 +1057,7 @@ impl Runtime {
     }
 
     fn ensure_running(&self, plan: &Plan) -> Result<()> {
+        plan.authorize()?;
         let name = plan.container_name();
         match self.status(&name)? {
             RuntimeStatus::Running => {
@@ -1198,6 +1228,7 @@ impl Runtime {
     }
 
     fn reconcile_legacy_containers(&self, plan: &Plan) -> Result<bool> {
+        plan.authorize()?;
         let planned_name = plan.container_name();
         let selected_ports = plan.selected_host_ports();
         let mut removed = false;
@@ -1884,19 +1915,18 @@ fn nix_cache_info() -> String {
     String::from("StoreDir: /nix/store\nWantMassQuery: 1\nPriority: 40\n")
 }
 
-fn home_dir() -> Result<PathBuf> {
-    env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or_else(|| Error::Operation {
-            message: String::from("HOME is required to resolve wrix service state roots"),
-        })
-}
-
 fn write_if_missing(path: &Path, content: impl AsRef<[u8]>) -> Result<()> {
-    if path.exists() {
-        return Ok(());
+    match wrix_state::namespace::ensure_at(path, content.as_ref())? {
+        wrix_state::namespace::Source::Host(Some(bytes)) => fs::write(path, bytes)?,
+        wrix_state::namespace::Source::Host(None) => {
+            return Err(wrix_state::store::Error::Unsupported.into());
+        }
+        wrix_state::namespace::Source::Observer => {
+            if !path.exists() {
+                fs::write(path, content)?;
+            }
+        }
     }
-    fs::write(path, content)?;
     Ok(())
 }
 

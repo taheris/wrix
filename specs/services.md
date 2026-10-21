@@ -206,13 +206,16 @@ Workspace-private state roots remain platform-native:
 | Linux    | `${XDG_STATE_HOME:-$HOME/.local/state}/wrix/workspaces/<workspace-hash>/` |
 | Darwin   | `$HOME/Library/Application Support/wrix/workspaces/<workspace-hash>/`     |
 
-`<state-root>/services.json` records namespace references to shared role
-endpoints and its metadata schema version. Host-managed deployment state also
-records selected generation/version, serving/draining roles and ownership
-transitions; it is not an agent-controlled selection or a durable store of live
-traffic grants. Stopping a generation retains its selection and version.
-`cache.md` owns host-private namespace publication/pending/status state,
-public-key metadata and the separately managed Celler signing/archive data.
+`<state-root>/services.json` exports namespace references to shared role
+endpoints and its metadata schema version. Host metadata authority and explicit
+native import follow
+[Workspace Control Storage](workspaces.md#native-control-storage). Host-managed
+deployment state also records selected generation/version, serving/draining
+roles and ownership transitions; it is not an agent-controlled selection or a
+durable store of live traffic grants. Stopping a generation retains its
+selection and version. `cache.md` owns host-private namespace
+publication/pending/status state, public-key metadata and the separately managed
+Celler signing/archive data.
 
 Service-visible workspace data roots are:
 
@@ -288,11 +291,11 @@ permission to retire the last selected generation. Stopping an in-use gateway is
 disruptive shutdown, not transparent resource saving.
 
 Cache-only registration remains suppressed for temporary scratch workspaces.
-Loom clones share their outer repository namespace without creating separate
-containers. A requested restricted launch may still use shared proxy
-infrastructure in a scratch workspace. Proxy startup/registration failure
-prevents restricted agent launch; later proxy failure never enables direct
-egress.
+External clones share a native namespace only through
+[explicit workspace admission](workspaces.md), not directory naming. A requested
+restricted launch may still use shared proxy infrastructure in a scratch
+workspace. Proxy startup/registration failure prevents restricted agent launch;
+later proxy failure never enables direct egress.
 
 ### Compatibility and Replacement
 
@@ -936,13 +939,13 @@ tenant or component compromise/fault isolation.
   for scratch cache use
   [test](../crates/wrix-cli/tests/service_cache.rs::temp_cache_only_start_never_creates_a_service_container)
 
-- Loom bead clone paths under `.loom/beads/<id>` select the outer repository
-  identity rather than a bead-specific workspace identity
-  [test](../crates/wrix-service/tests/lifecycle.rs::loom_bead_workspace_uses_repo_service_identity)
+- Independent nested bead clones have independent standalone service identity;
+  membership sharing follows [Workspace Admission](workspaces.md).
+  [test](../crates/wrix-service/tests/lifecycle.rs::nested_bead_clone_has_an_independent_service_identity)
 
-- Loom's independent clone under `.loom/integration` selects the outer
-  repository identity rather than an integration-specific workspace identity
-  [test](../crates/wrix-service/tests/lifecycle.rs::loom_integration_workspace_uses_repo_service_identity)
+- Independent nested integration clones have independent standalone service
+  identity regardless of `.loom` naming.
+  [test](../crates/wrix-service/tests/lifecycle.rs::nested_integration_clone_has_an_independent_service_identity)
 
 - Linux beads clients reach Dolt through the workspace Unix socket, while Darwin
   beads clients receive the service container's TCP host/port endpoint

@@ -59,6 +59,8 @@ impl fmt::Display for IssueId {
 
 #[derive(Debug, Display, ThisError)]
 pub enum Error {
+    /// workspace admission failed: {0}
+    Admission(#[from] wrix_state::store::Error),
     /// beads workflow I/O failed: {source}
     Io { source: io::Error },
     /// invalid beads sync branch: {source}
@@ -149,11 +151,12 @@ fn push(stdout: &mut impl Write, stderr: &mut impl Write) -> Result<ExitCode> {
         return Ok(ExitCode::FAILURE);
     };
 
+    context.selection.recheck()?;
     env::set_current_dir(&context.root)?;
     disable_auto_export()?;
     restore_staged_dolt_remote(&context)?;
     let remote_override = prepare_dolt_origin_remote(&context, stderr)?;
-    let sync_result = sync_dolt_remote(stderr);
+    let sync_result = sync_dolt_remote(&context, stderr);
     let restore_result = remote_override.restore();
     let sync_status = sync_result?;
     restore_result?;
@@ -164,6 +167,7 @@ fn push(stdout: &mut impl Write, stderr: &mut impl Write) -> Result<ExitCode> {
 }
 
 struct Context {
+    selection: wrix_state::context::Selection,
     root: PathBuf,
     branch: Branch,
     worktree: PathBuf,
@@ -173,6 +177,7 @@ struct Context {
 
 impl Context {
     fn load(current_dir: &Path) -> Result<Option<Self>> {
+        let selection = wrix_state::context::Selection::inspect(current_dir)?;
         let output = ProcessCommand::new("git")
             .arg("rev-parse")
             .arg("--show-toplevel")
@@ -191,6 +196,7 @@ impl Context {
         let worktree_remote_dir = worktree.join(".beads/dolt-remote");
         let recovery_remote_dir = root.join(".git/wrix-beads-dolt-remote-recovery");
         let context = Self {
+            selection,
             root,
             branch,
             worktree,
@@ -202,6 +208,7 @@ impl Context {
     }
 
     fn check_worktree_paths(&self) -> Result<()> {
+        self.selection.recheck()?;
         let git_dir = self.root.join(".git");
         check_managed_directory(&git_dir, &self.worktree_remote_dir)?;
         check_managed_directory(&git_dir, &self.recovery_remote_dir)
@@ -259,6 +266,7 @@ fn prepare_dolt_origin_remote(
     }
 
     let remote = format!("file://{}", context.worktree_remote_dir.display());
+    context.selection.recheck()?;
     let list = run_output("bd", &["dolt", "remote", "list"])?;
     if !list.status.success() {
         return Err(Error::CommandFailed {
@@ -273,6 +281,7 @@ fn prepare_dolt_origin_remote(
     }
 
     if env::var_os("IS_SANDBOX").is_some() || context.root.starts_with("/workspace") {
+        context.selection.recheck()?;
         return DoltRemoteOverride::install_temporary(origin, &remote, stderr);
     }
 
@@ -280,6 +289,7 @@ fn prepare_dolt_origin_remote(
         stderr,
         "wrix beads push: repairing Dolt origin remote -> {remote}"
     )?;
+    context.selection.recheck()?;
     replace_dolt_origin(origin.as_deref(), &remote)?;
     Ok(DoltRemoteOverride::inactive())
 }
@@ -353,11 +363,14 @@ fn disable_auto_export() -> Result<()> {
     run_required("bd", &["config", "set", "export.auto", "false"])
 }
 
-fn sync_dolt_remote(stderr: &mut impl Write) -> Result<ExitCode> {
+fn sync_dolt_remote(context: &Context, stderr: &mut impl Write) -> Result<ExitCode> {
+    context.selection.recheck()?;
     let commit = run_output("bd", &["dolt", "commit"])?;
     if !commit.status.success() && !commit.stderr.is_empty() {
         stderr.write_all(&commit.stderr)?;
     }
+
+    context.selection.recheck()?;
 
     let push = run_output("bd", &["dolt", "push"])?;
     if !push.stderr.is_empty() {
@@ -369,7 +382,7 @@ fn sync_dolt_remote(stderr: &mut impl Write) -> Result<ExitCode> {
     if !is_fast_forward_rejection(&push.stderr) && !is_fast_forward_rejection(&push.stdout) {
         return Ok(ExitCode::FAILURE);
     }
-    pull_with_intent_protection(stderr)
+    pull_with_intent_protection(context, stderr)
 }
 
 fn is_fast_forward_rejection(stderr: &[u8]) -> bool {
@@ -388,16 +401,19 @@ fn is_fast_forward_rejection(stderr: &[u8]) -> bool {
     .any(|needle| text.contains(needle))
 }
 
-fn pull_with_intent_protection(stderr: &mut impl Write) -> Result<ExitCode> {
+fn pull_with_intent_protection(context: &Context, stderr: &mut impl Write) -> Result<ExitCode> {
     let affected_ids = query_affected_ids()?;
     if affected_ids.is_empty() {
+        context.selection.recheck()?;
         run_required("bd", &["dolt", "pull"])?;
+        context.selection.recheck()?;
         let push = run_output("bd", &["dolt", "push"])?;
         return Ok(status_to_exit(&push));
     }
 
     let snapshot_query = snapshot_query_for_ids(&affected_ids);
     let intent = run_required_output("bd", &["sql", "--csv", &snapshot_query])?;
+    context.selection.recheck()?;
     run_required("bd", &["dolt", "pull"])?;
     let post = run_required_output("bd", &["sql", "--csv", &snapshot_query])?;
     if intent.stdout != post.stdout {
@@ -416,6 +432,7 @@ fn pull_with_intent_protection(stderr: &mut impl Write) -> Result<ExitCode> {
         )?;
         return Ok(ExitCode::FAILURE);
     }
+    context.selection.recheck()?;
     let push = run_output("bd", &["dolt", "push"])?;
     Ok(status_to_exit(&push))
 }
@@ -458,10 +475,14 @@ fn sync_beads_git_branch(
     }
     context.check_worktree_paths()?;
     repair_worktree_pointers(context)?;
+    context.selection.recheck()?;
     commit_dirty_worktree(&context.worktree)?;
+    context.selection.recheck()?;
     run_git_required_in(&context.worktree, &["pull", "--rebase", "--quiet"])?;
 
+    context.selection.recheck()?;
     commit_dirty_worktree(&context.worktree)?;
+    context.selection.recheck()?;
     run_git_required_in(
         &context.worktree,
         &["push", "-u", "origin", context.branch.as_str(), "--quiet"],
@@ -578,6 +599,7 @@ impl Context {
 }
 
 fn repair_worktree_pointers(context: &Context) -> Result<()> {
+    context.check_worktree_paths()?;
     let dotgit = context.worktree.join(".git");
     let admin = context
         .root

@@ -50,18 +50,18 @@ clients. Shared compiler execution is a separate, broader service trust
 capability under [Security](security.md#shared-service-trust-boundary), not
 confidentiality isolation supplied by these read grants:
 
-| View                       | Read audience                                       | Content boundary                                                       |
-| -------------------------- | --------------------------------------------------- | ---------------------------------------------------------------------- |
-| Common public dependencies | Wrix workspaces using this host-user cache          | Explicitly approved public dependencies, not arbitrary project outputs |
-| Repository-private         | The canonical repository, including its Loom clones | That repository's private cache contents                               |
+| View                       | Read audience                               | Content boundary                                                       |
+| -------------------------- | ------------------------------------------- | ---------------------------------------------------------------------- |
+| Common public dependencies | Wrix workspaces using this host-user cache  | Explicitly approved public dependencies, not arbitrary project outputs |
+| Repository-private         | The explicitly selected workspace namespace | That repository's private cache contents                               |
 
-Private-view identity follows [Services Architecture](services.md#architecture),
-including canonical-path namespaces for non-repository workspaces. A workspace's
-read set is the authenticated common view and its own private view, with exact
-endpoints, public keys and pull credentials. Existing grants follow
-[Native Pull Credentials](#native-pull-credentials), not immediate revocation
-when host authorization changes. Public reuse is across Wrix workspaces, not
-unauthenticated Internet/LAN serving.
+Private-view identity follows [Workspace Admission](workspaces.md),
+independently of caller checkout location or external-manager directory naming.
+A workspace's read set is the authenticated common view and its own private
+view, with exact endpoints, public keys and pull credentials. Existing grants
+follow [Native Pull Credentials](#native-pull-credentials), not immediate
+revocation when host authorization changes. Public reuse is across Wrix
+workspaces, not unauthenticated Internet/LAN serving.
 
 Host management controls view provisioning and publication audiences. Agent
 requests, repository edits, supplied cache names and opaque configuration cannot
@@ -169,17 +169,21 @@ Acceptance: [Celler Backend Acceptance](#celler-backend-acceptance) and
 [Cache Acceptance](#cache-acceptance).
 
 Host-private workspace control state uses the platform-native state root defined
-by [Services State Layout](services.md#state-layout):
+by [Services State Layout](services.md#state-layout). Control metadata authority
+and explicit import follow
+[Workspace Control Storage](workspaces.md#native-control-storage); the JSON and
+closure-marker files below are exports, not host fallback authority:
 
 ```text
 <state-root>/
 ├── cache.lock              # namespace publication/rotation lock
-├── cache-status.json       # publication/pending status and last error
+├── cache-status.json       # exported publication/pending status and last error
 ├── keys/cache.pub          # repository-private view's public key
-├── pending/                # deferred post-build candidates
+├── pending/                # exported deferred post-build candidates
 │   └── <timestamp>-<pid>-<drv-hash>.json
-├── publish-roots.json      # derived build-graph and configured-root registry
-└── services.json           # service-owned endpoint metadata and schema
+├── gcroots/                # exported closure metadata, not actual Nix retention roots
+├── publish-roots.json      # exported build-graph and configured-root registry
+└── services.json           # exported service endpoint metadata and schema
 ```
 
 Host publishing credentials, credential-issuer/management authority and
@@ -838,8 +842,8 @@ valid unchanged key through the Celler publication/signing path.
 - Two unrelated repositories can substitute an approved common dependency
   through authenticated native Nix without duplicate backing archives solely
   because the repositories differ. [system?](test-ci:test-cache-celler-sharing)
-- Private views follow canonical workspace identity, including shared identity
-  across Loom clones of the same repository.
+- Private views follow the explicitly selected namespace under
+  [Workspace Admission](workspaces.md), not implicit grouping of nested clones.
   [test?](../crates/wrix-cache/tests/celler_sharing.rs::private_views_follow_canonical_workspace_identity)
 - Ordinary cache requests from unrelated repositories cannot read private-only
   metadata or archives, even using known paths, hashes or direct archive URLs.
@@ -1088,8 +1092,8 @@ valid unchanged key through the Celler publication/signing path.
   duration and default/override source without creating or mutating
   policy/cache/services.
   [test?](../crates/wrix-cache/tests/celler_retention.rs::retention_information_reports_selected_scope_without_mutation)
-- Private information/set/reset use canonical workspace identity, including Loom
-  clones and non-repository fallback, without changing peers or common policy.
+- Private information/set/reset use [Workspace Admission](workspaces.md) scope,
+  without changing peers or common policy.
   [test?](../crates/wrix-cache/tests/celler_retention.rs::private_retention_uses_canonical_workspace_scope)
 - Host information/set/reset select common policy without repository dependence,
   private-view inheritance or a bulk private-policy update.

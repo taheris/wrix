@@ -22,8 +22,11 @@ wrix-cache = { workspace = true }
 wrix-core = { workspace = true }
 wrix-sandbox = { workspace = true }
 wrix-service = { workspace = true }
+wrix-state = { workspace = true }
 
 [dev-dependencies]
+rusqlite = { workspace = true }
+rustix = { workspace = true }
 libc = { workspace = true }
 
 [lints]

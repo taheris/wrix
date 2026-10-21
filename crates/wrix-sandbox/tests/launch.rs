@@ -873,6 +873,8 @@ fn pi_default_auth_survives_new_repository_launch() -> TestResult {
 #[test]
 fn missing_pi_auth_override_fails_without_initializing_it() -> TestResult {
     let root = tempfile::tempdir()?;
+    let workspace = root.path().join("workspace");
+    fs::create_dir(&workspace)?;
     let profile = root.path().join("profile.json");
     common::write_profile_config(
         &profile,
@@ -886,7 +888,7 @@ fn missing_pi_auth_override_fails_without_initializing_it() -> TestResult {
         root.path(),
         "missing",
         &profile,
-        root.path(),
+        &workspace,
         vec![(
             String::from("WRIX_PI_AUTH_FILE"),
             auth.clone().into_os_string(),
@@ -901,6 +903,8 @@ fn missing_pi_auth_override_fails_without_initializing_it() -> TestResult {
 #[test]
 fn pi_spawn_requires_existing_credentials() -> TestResult {
     let root = tempfile::tempdir()?;
+    let workspace = root.path().join("workspace");
+    fs::create_dir(&workspace)?;
     let profile = root.path().join("profile.json");
     let config = root.path().join("spawn.json");
     let key = root.path().join("deploy-key");
@@ -912,7 +916,7 @@ fn pi_spawn_requires_existing_credentials() -> TestResult {
             ..ProfileFixture::default()
         },
     )?;
-    write_spawn_config(&config, root.path())?;
+    write_spawn_config(&config, &workspace)?;
     let run = run_spawn_launch(
         root.path(),
         "spawn",
@@ -932,6 +936,8 @@ fn pi_spawn_requires_existing_credentials() -> TestResult {
 #[test]
 fn non_pi_launch_does_not_prepare_or_mount_pi_credentials() -> TestResult {
     let root = tempfile::tempdir()?;
+    let workspace = root.path().join("workspace");
+    fs::create_dir(&workspace)?;
     let profile = root.path().join("profile.json");
     common::write_profile_config(&profile, &ProfileFixture::default())?;
     let auth = root.path().join("selected.json");
@@ -940,7 +946,7 @@ fn non_pi_launch_does_not_prepare_or_mount_pi_credentials() -> TestResult {
         root.path(),
         "direct",
         &profile,
-        root.path(),
+        &workspace,
         vec![(
             String::from("WRIX_PI_AUTH_FILE"),
             auth.clone().into_os_string(),
@@ -986,11 +992,15 @@ fn profile_mounts_expand_only_home_and_user_variables() -> TestResult {
     let (root, profile_config, workspace) = podman_socket_fixture("mount-expansion")?;
     let home = root.path().join("home");
     let repeated_home = PathBuf::from(format!("{}/{}", home.display(), home.display()));
-    for path in [&home, &home.join("test-user/config"), &repeated_home] {
+    for path in [
+        &home.join("public"),
+        &home.join("test-user/config"),
+        &repeated_home,
+    ] {
         fs::create_dir_all(path)?;
     }
     let mounts = [
-        "~",
+        "~/public",
         "~/test-user/config",
         "$HOME/$USER/config",
         "$HOME/$HOME",

@@ -5,6 +5,7 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
+rustix = { workspace = true }
 displaydoc = { workspace = true }
 fs2 = { workspace = true }
 libc = { workspace = true }
@@ -15,6 +16,7 @@ thiserror = { workspace = true }
 time = { workspace = true }
 tracing = { workspace = true }
 wrix-core = { workspace = true }
+wrix-state = { workspace = true }
 wrix-notify = { workspace = true }
 
 [lints]

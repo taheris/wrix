@@ -46,7 +46,8 @@ hatch.
 
 ```
 crates/
-├── wrix-core/           # Shared Rust types: paths, workspace identity, config schemas, errors
+├── wrix-core/           # Shared Rust types: paths, workspace descriptions, config schemas, errors
+├── wrix-state/          # Host control metadata, workspace admission and checked scope
 ├── wrix-notify/         # Host attention queue, focus checks, and terminal navigation
 ├── wrix-cli/            # Human-facing `wrix` binary: run, spawn, service, beads
 ├── wrix-sandbox/        # Rust host orchestration for container launch
@@ -188,11 +189,14 @@ use native scoped authorization rather than one TCP port per workspace. Separate
 container generations may overlap during
 [generation handoff](../specs/services.md#generation-handoff); backend roles
 retain single ownership while they transfer independently. Canonical workspace
-namespaces preserve scoped database, file-remote and cache API access; Loom
-clones use their outer repository identity. Logical namespaces and update colors
-are not new tenant compromise boundaries. Compatible selected infrastructure is
-reused or resumed at its recorded version; information and maintenance do not
-implicitly start or repair it, and direnv reload does not implicitly upgrade it.
+namespaces preserve scoped database, file-remote and cache API access.
+[Workspace admission](../specs/workspaces.md) selects a host-authorized native
+namespace independently of caller checkout and primary service scope. Nested
+clones do not share identity by location; external membership needs explicit
+host selection and admission. Logical namespaces and update colors are not new
+tenant compromise boundaries. Compatible selected infrastructure is reused or
+resumed at its recorded version; information and maintenance do not implicitly
+start or repair it, and direnv reload does not implicitly upgrade it.
 [CLI scope](../specs/cli.md#service-scope) defines workspace defaults, supported
 `--host` selection and explicit host shutdown.
 [`wrix service update`](../specs/cli.md#service-update-command) explicitly
@@ -476,6 +480,16 @@ checkout. Callers select a private socket and own session cleanup; no MCP
 server, pane registry, or automatic conversation cleanup is involved.
 
 ## State Layout
+
+The native-root private `state.db` owns host workspace associations and service,
+cache-status, publication, pending and closure control metadata. Filesystem
+copies are exports, not host authority. `wrix-state` supplies checked contexts
+whose evidence survives selection through effects; pure core workspace values
+are descriptions, not capabilities.
+[Workspace admission](../specs/workspaces.md) owns independent initialization,
+scope acknowledgment, integration selection, explicit import and admission.
+Native secrets, databases, locks and payloads keep their existing owners and
+formats; they are not folded into this control store.
 
 Workspace-local `.wrix/` holds only workspace-visible, non-secret runtime
 artefacts:

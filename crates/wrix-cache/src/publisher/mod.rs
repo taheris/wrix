@@ -11,7 +11,7 @@ use std::{
 
 use displaydoc::Display;
 use fs2::FileExt;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use thiserror::Error as ThisError;
 use wrix_core::{
     cache_key,
@@ -24,6 +24,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, Display, ThisError)]
 pub enum Error {
+    /// workspace admission failed: {0}
+    Admission(#[from] wrix_state::store::Error),
     /// project cache I/O failed: {source}
     Io { source: io::Error },
     /// invalid project cache JSON at {path}: {source}
@@ -80,47 +82,13 @@ pub struct Report {
     lines: Vec<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-struct Root {
-    name: String,
-    installable: String,
-    #[serde(alias = "drvPath")]
-    drv_path: String,
-    #[serde(default, alias = "outPaths")]
-    out_paths: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct RootManifest {
-    #[serde(default)]
-    schema_version: Option<u8>,
-    #[serde(default)]
-    workspace_hash: Option<String>,
-    roots: Vec<Root>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct PendingRecord {
-    #[serde(default)]
-    created_at_epoch: Option<u64>,
-    #[serde(alias = "drvPath")]
-    drv_path: String,
-    #[serde(default, alias = "outPaths")]
-    out_paths: Vec<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct CacheStatus {
-    dirty: bool,
-    last_publish: Option<String>,
-    last_prune: Option<String>,
-    last_error: Option<String>,
-    #[serde(default)]
-    last_prune_epoch: Option<u64>,
-}
+use wrix_state::namespace::document::cache::{
+    Manifest as RootManifest, Pending as PendingRecord, Root, Status as CacheStatus,
+};
 
 #[derive(Clone, Debug)]
 struct Paths {
+    scope: Option<wrix_state::context::Context>,
     state_root: PathBuf,
     cache_root: PathBuf,
     settings: Settings,
@@ -129,6 +97,7 @@ struct Paths {
 #[derive(Clone, Debug)]
 struct Pending {
     path: PathBuf,
+    created_at_epoch: u64,
     drv_path: String,
     out_paths: Vec<String>,
 }
@@ -140,9 +109,13 @@ impl Report {
 }
 
 pub fn run_current_workspace(mode: Mode) -> Result<Report> {
-    let workspace = Workspace::from_service_current_dir()?;
-    let paths = Paths::for_workspace(workspace.hash(), Settings::current()?)?;
-    run_at(&workspace, &paths, mode)
+    let selection = wrix_state::context::Selection::inspect(&env::current_dir()?)?;
+    let workspace = selection.workspace();
+    let settings = Settings::for_workspace(workspace)?;
+    selection.authorize_effects()?;
+    let mut paths = Paths::for_workspace(workspace.hash(), settings)?;
+    paths.scope = selection.context().cloned();
+    run_at(workspace, &paths, mode)
 }
 
 pub fn run_workspace_at(
@@ -152,6 +125,7 @@ pub fn run_workspace_at(
     mode: Mode,
 ) -> Result<Report> {
     let paths = Paths {
+        scope: scope_for_workspace(workspace, state_root)?,
         state_root: state_root.to_path_buf(),
         cache_root: cache_root.to_path_buf(),
         settings: Settings::for_workspace(workspace)?,
@@ -159,14 +133,37 @@ pub fn run_workspace_at(
     run_at(workspace, &paths, mode)
 }
 
+fn scope_for_workspace(
+    workspace: &Workspace,
+    state_root: &Path,
+) -> Result<Option<wrix_state::context::Context>> {
+    if !wrix_state::namespace::is_host_root(state_root)? {
+        return Ok(None);
+    }
+    let roots = wrix_core::host_path::Roots::discover()?;
+    if roots.workspace_state(workspace.hash()).as_os_str() != state_root.as_os_str() {
+        return Err(wrix_state::store::Error::Conflict.into());
+    }
+    let selection = wrix_state::context::Selection::inspect(workspace.canonical_path())?;
+    if selection.workspace().hash() != workspace.hash()
+        || selection.workspace().canonical_path().as_os_str()
+            != workspace.canonical_path().as_os_str()
+    {
+        return Err(wrix_state::store::Error::Conflict.into());
+    }
+    selection.authorize_effects()?;
+    Ok(selection.context().cloned())
+}
+
 pub fn status_current_workspace() -> Result<Report> {
-    let workspace = Workspace::from_service_current_dir()?;
-    let paths = Paths::for_workspace(workspace.hash(), Settings::current()?)?;
+    let workspace = wrix_state::context::service_workspace(&env::current_dir()?, false)?;
+    let paths = Paths::for_workspace(workspace.hash(), Settings::for_workspace(&workspace)?)?;
     status_at_paths(&paths)
 }
 
 pub fn status_at(state_root: &Path, cache_root: &Path, settings: Settings) -> Result<Report> {
     let paths = Paths {
+        scope: None,
         state_root: state_root.to_path_buf(),
         cache_root: cache_root.to_path_buf(),
         settings,
@@ -180,12 +177,12 @@ fn run_at(workspace: &Workspace, paths: &Paths, mode: Mode) -> Result<Report> {
 }
 
 fn status_at_paths(paths: &Paths) -> Result<Report> {
-    paths.ensure()?;
     status_report(paths)
 }
 
 pub fn prune_stale_dirty(state_root: &Path, cache_root: &Path, settings: Settings) -> Result<bool> {
     let paths = Paths {
+        scope: wrix_state::namespace::context_at(state_root)?,
         state_root: state_root.to_path_buf(),
         cache_root: cache_root.to_path_buf(),
         settings,
@@ -219,11 +216,21 @@ pub fn run_hook_record(record: HookRecord<'_>, settings: Settings) -> Result<Rep
     } = record;
     tracing::debug!(%workspace_hash, "processing automatic cache publish");
     let paths = Paths {
+        scope: wrix_state::namespace::context_at(state_root)?,
         state_root: state_root.to_path_buf(),
         cache_root: cache_root.to_path_buf(),
         settings,
     };
-    paths.ensure()?;
+    if paths
+        .scope
+        .as_ref()
+        .is_some_and(|context| context.key() != workspace_hash)
+    {
+        return Err(wrix_state::store::Error::Conflict.into());
+    }
+    if paths.scope.is_some() && manifest != paths.publish_roots_path() {
+        return Err(wrix_state::store::Error::Conflict.into());
+    }
     let roots = read_manifest_roots(manifest)?;
     let matching = roots
         .into_iter()
@@ -237,26 +244,30 @@ pub fn run_hook_record(record: HookRecord<'_>, settings: Settings) -> Result<Rep
             lines: vec![format!("skipped non-project derivation {drv_path}")],
         });
     };
+    paths.ensure()?;
     run_automatic_publish(&paths, root)
 }
 
 fn run(workspace: &Workspace, paths: &Paths, mode: Mode) -> Result<Report> {
+    let cwd = workspace.canonical_path();
     match mode {
         Mode::Publish => with_explicit_lock(paths, || {
-            let roots = discover_roots(RootSet::Publish, &paths.settings)?;
+            let roots = discover_roots(RootSet::Publish, &paths.settings, cwd)?;
+            paths.authorize()?;
             write_manifest(&paths.publish_roots_path(), workspace.hash(), &roots)?;
-            let realized = realized_roots(roots.clone())?;
+            let realized = realized_roots(roots.clone(), cwd)?;
             let pending = read_pending(paths)?;
-            publish_roots(paths, &realized.roots, pending, Some(&roots)).map(|mut report| {
+            publish_roots(paths, &realized.roots, &pending, Some(&roots)).map(|mut report| {
                 report.lines.extend(realized.unrealized);
                 report
             })
         }),
         Mode::Warm { checks } => with_explicit_lock(paths, || {
-            let configured = discover_roots(RootSet::Publish, &paths.settings)?;
-            let warm = discover_roots(RootSet::Warm { checks }, &paths.settings)?;
+            let configured = discover_roots(RootSet::Publish, &paths.settings, cwd)?;
+            let warm = discover_roots(RootSet::Warm { checks }, &paths.settings, cwd)?;
+            paths.authorize()?;
             write_manifest(&paths.publish_roots_path(), workspace.hash(), &configured)?;
-            build_roots(&warm)?;
+            build_roots(&warm, cwd)?;
             let selected = warm
                 .iter()
                 .map(|root| root.installable.as_str())
@@ -266,9 +277,9 @@ fn run(workspace: &Workspace, paths: &Paths, mode: Mode) -> Result<Report> {
                 .filter(|root| selected.contains(root.installable.as_str()))
                 .cloned()
                 .collect();
-            let realized = realized_roots(roots)?;
+            let realized = realized_roots(roots, cwd)?;
             let pending = read_pending(paths)?;
-            publish_roots(paths, &realized.roots, pending, Some(&configured))
+            publish_roots(paths, &realized.roots, &pending, Some(&configured))
         }),
         Mode::Prune => with_explicit_lock(paths, || {
             prune(paths)?;
@@ -290,7 +301,7 @@ fn run_automatic_publish(paths: &Paths, root: Root) -> Result<Report> {
         ));
         return Ok(Report { lines });
     };
-    let result = publish_roots(paths, &[root], Vec::new(), None);
+    let result = publish_roots(paths, &[root], &[], None);
     let release = lock.release();
     match (result, release) {
         (Ok(mut report), Ok(())) => lines.append(&mut report.lines),
@@ -305,6 +316,7 @@ fn run_automatic_publish(paths: &Paths, root: Root) -> Result<Report> {
 }
 
 fn with_explicit_lock<T>(paths: &Paths, operation: impl FnOnce() -> Result<T>) -> Result<T> {
+    paths.authorize()?;
     let mut lines = Vec::new();
     let timeout = Duration::from_millis(paths.settings.explicit_lock_timeout_ms);
     let Some(lock) = OperationLock::acquire(paths, Some(timeout), &mut lines)? else {
@@ -374,7 +386,7 @@ enum RootSet {
     Warm { checks: bool },
 }
 
-fn discover_roots(root_set: RootSet, settings: &Settings) -> Result<Vec<Root>> {
+fn discover_roots(root_set: RootSet, settings: &Settings, cwd: &Path) -> Result<Vec<Root>> {
     let mut config = match root_set {
         RootSet::Publish => settings.publish.clone(),
         RootSet::Warm { .. } => settings.warm.clone(),
@@ -389,16 +401,16 @@ fn discover_roots(root_set: RootSet, settings: &Settings) -> Result<Vec<Root>> {
     let system = current_system()?;
     let mut installables = Vec::new();
     if config.packages {
-        installables.extend(attr_installables("packages", &system)?);
+        installables.extend(attr_installables("packages", &system, cwd)?);
     }
     if config.checks {
-        installables.extend(attr_installables("checks", &system)?);
+        installables.extend(attr_installables("checks", &system, cwd)?);
     }
     if config.dev_shell
         && let Some(shell) = selected_dev_shell()?
     {
         let installable = format!(".#devShells.{system}.{shell}");
-        if drv_path(&installable).is_ok() {
+        if drv_path(&installable, cwd).is_ok() {
             installables.push((format!("devShells.{system}.{shell}"), installable));
         }
     }
@@ -407,7 +419,7 @@ fn discover_roots(root_set: RootSet, settings: &Settings) -> Result<Vec<Root>> {
     }
     let mut roots = Vec::new();
     for (name, installable) in installables {
-        let drv_path = drv_path(&installable)?;
+        let drv_path = drv_path(&installable, cwd)?;
         roots.push(Root {
             name,
             installable,
@@ -443,9 +455,9 @@ fn root_category_enabled(root: &Root, config: &Roots) -> bool {
 }
 
 fn roots_from_file(path: &Path) -> Result<Vec<Root>> {
-    let content = fs::read_to_string(path)?;
+    let content = read_document(path)?.ok_or_else(|| io::Error::from(ErrorKind::NotFound))?;
     let manifest =
-        serde_json::from_str::<RootManifest>(&content).map_err(|source| Error::Json {
+        serde_json::from_slice::<RootManifest>(&content).map_err(|source| Error::Json {
             path: path.display().to_string(),
             source,
         })?;
@@ -457,9 +469,10 @@ fn roots_from_file(path: &Path) -> Result<Vec<Root>> {
         .collect())
 }
 
-fn attr_installables(kind: &str, system: &str) -> Result<Vec<(String, String)>> {
+fn attr_installables(kind: &str, system: &str, cwd: &Path) -> Result<Vec<(String, String)>> {
     let attr = format!(".#{}.{system}", kind);
     let output = Command::new(nix_bin()?)
+        .current_dir(cwd)
         .arg("eval")
         .arg("--json")
         .arg(&attr)
@@ -518,8 +531,9 @@ fn current_system() -> Result<String> {
     ))
 }
 
-fn drv_path(installable: &str) -> Result<String> {
+fn drv_path(installable: &str, cwd: &Path) -> Result<String> {
     let output = Command::new(nix_bin()?)
+        .current_dir(cwd)
         .arg("path-info")
         .arg("--derivation")
         .arg(installable)
@@ -537,12 +551,12 @@ struct RealizedRoots {
     unrealized: Vec<String>,
 }
 
-fn realized_roots(roots: Vec<Root>) -> Result<RealizedRoots> {
+fn realized_roots(roots: Vec<Root>, cwd: &Path) -> Result<RealizedRoots> {
     let mut realized = Vec::new();
     let mut unrealized = Vec::new();
     for mut root in roots {
         if root.out_paths.is_empty() {
-            if let Some(paths) = output_paths(&root.installable)? {
+            if let Some(paths) = output_paths(&root.installable, cwd)? {
                 root.out_paths = paths;
             } else {
                 unrealized.push(format!("unrealized root: {}", root.installable));
@@ -578,8 +592,9 @@ fn store_paths_valid(paths: &[String]) -> Result<bool> {
     Ok(output.stdout.is_empty())
 }
 
-fn output_paths(installable: &str) -> Result<Option<Vec<String>>> {
+fn output_paths(installable: &str, cwd: &Path) -> Result<Option<Vec<String>>> {
     let output = Command::new(nix_bin()?)
+        .current_dir(cwd)
         .arg("path-info")
         .arg("--json")
         .arg(installable)
@@ -615,12 +630,12 @@ fn parse_path_info_paths(input: &str) -> Result<Vec<String>> {
     Ok(paths)
 }
 
-fn build_roots(roots: &[Root]) -> Result<()> {
+fn build_roots(roots: &[Root], cwd: &Path) -> Result<()> {
     if roots.is_empty() {
         return Ok(());
     }
     let mut command = Command::new(nix_bin()?);
-    command.arg("build").arg("--no-link");
+    command.current_dir(cwd).arg("build").arg("--no-link");
     for root in roots {
         command.arg(&root.installable);
     }
@@ -638,9 +653,10 @@ fn build_roots(roots: &[Root]) -> Result<()> {
 fn publish_roots(
     paths: &Paths,
     roots: &[Root],
-    pending: Vec<Pending>,
+    pending: &[Pending],
     configured: Option<&[Root]>,
 ) -> Result<Report> {
+    paths.authorize()?;
     let root_drvs = roots
         .iter()
         .map(|root| root.drv_path.as_str())
@@ -658,12 +674,17 @@ fn publish_roots(
             for path in closure_paths(&record.out_paths)? {
                 publishable.insert(path);
             }
-            fs::remove_file(&record.path)?;
             lines.push(format!("drained pending: {}", record.path.display()));
         }
     }
     let filtered = subtract_upstream(paths, publishable)?;
     copy_to_cache(paths, &filtered)?;
+    paths.authorize()?;
+    for record in pending {
+        if root_drvs.contains(record.drv_path.as_str()) {
+            remove_pending(&record.path)?;
+        }
+    }
     write_cache_status(paths, true, Some("ok"), None, None)?;
     if let Some(configured) = configured {
         reconcile_gc_markers(paths, configured)?;
@@ -757,6 +778,7 @@ fn substitutable_paths(substituter: &str, paths: &[String]) -> Result<Vec<String
 }
 
 fn copy_to_cache(paths: &Paths, store_paths: &[String]) -> Result<()> {
+    paths.authorize()?;
     if store_paths.is_empty() {
         return Ok(());
     }
@@ -783,6 +805,7 @@ fn copy_to_cache(paths: &Paths, store_paths: &[String]) -> Result<()> {
 }
 
 fn prune(paths: &Paths) -> Result<()> {
+    paths.authorize()?;
     purge_expired_pending(paths)?;
     let reachable = marker_store_basenames(paths)?;
     if paths.cache_root.exists() {
@@ -923,31 +946,46 @@ fn remove_cache_payload(path: &Path) -> Result<()> {
 }
 
 fn reconcile_gc_markers(paths: &Paths, configured: &[Root]) -> Result<()> {
+    paths.authorize()?;
     let configured = configured
         .iter()
         .map(|root| safe_marker_name(&root.name))
         .collect::<HashSet<_>>();
-    for entry in fs::read_dir(paths.gcroots_dir())? {
-        let entry = entry?;
-        if !entry
+    for (path, _) in marker_records(paths)? {
+        if !path
             .file_name()
-            .to_str()
+            .and_then(|name| name.to_str())
             .is_some_and(|name| configured.contains(name))
         {
-            fs::remove_file(entry.path())?;
+            wrix_state::namespace::remove_at(&path)?;
+            remove_cache_payload(&path)?;
         }
     }
     Ok(())
 }
 
+fn marker_records(paths: &Paths) -> Result<Vec<(PathBuf, Vec<u8>)>> {
+    match wrix_state::namespace::closures_at(&paths.gcroots_dir())? {
+        wrix_state::namespace::Listing::Host(rows) => Ok(rows),
+        wrix_state::namespace::Listing::Observer => {
+            let mut rows = Vec::new();
+            if paths.gcroots_dir().try_exists()? {
+                for entry in fs::read_dir(paths.gcroots_dir())? {
+                    let path = entry?.path();
+                    rows.push((path.clone(), fs::read(path)?));
+                }
+            }
+            Ok(rows)
+        }
+    }
+}
+
 fn marker_store_basenames(paths: &Paths) -> Result<Vec<String>> {
     let mut basenames = Vec::new();
-    if !paths.gcroots_dir().exists() {
-        return Ok(basenames);
-    }
-    for entry in fs::read_dir(paths.gcroots_dir())? {
-        let content = fs::read_to_string(entry?.path())?;
-        for store_path in split_paths(&content) {
+    for (_, bytes) in marker_records(paths)? {
+        let content = std::str::from_utf8(&bytes)
+            .map_err(|error| io::Error::new(ErrorKind::InvalidData, error))?;
+        for store_path in split_paths(content) {
             if let Some(name) = Path::new(&store_path)
                 .file_name()
                 .and_then(|value| value.to_str())
@@ -960,28 +998,66 @@ fn marker_store_basenames(paths: &Paths) -> Result<Vec<String>> {
 }
 
 fn update_gc_marker(paths: &Paths, root: &Root, closure: &[String]) -> Result<()> {
+    paths.authorize()?;
     let marker = paths.gcroots_dir().join(safe_marker_name(&root.name));
-    fs::write(marker, format!("{}\n", closure.join("\n")))?;
+    let content = format!("{}\n", closure.join("\n"));
+    wrix_state::namespace::write_at(&marker, content.as_bytes())?;
+    fs::write(marker, content)?;
     Ok(())
+}
+
+fn pending_records(paths: &Paths) -> Result<(Vec<(PathBuf, PendingRecord)>, bool)> {
+    match wrix_state::namespace::pending_at(&paths.pending_dir())? {
+        wrix_state::namespace::Listing::Host(rows) => {
+            let records = rows
+                .into_iter()
+                .map(|(path, bytes)| {
+                    serde_json::from_slice(&bytes)
+                        .map(|record| (path.clone(), record))
+                        .map_err(|source| Error::Json {
+                            path: path.display().to_string(),
+                            source,
+                        })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok((records, false))
+        }
+        wrix_state::namespace::Listing::Observer => {
+            if !paths.pending_dir().exists() {
+                return Ok((Vec::new(), true));
+            }
+            let mut records = Vec::new();
+            for entry in fs::read_dir(paths.pending_dir())? {
+                let path = entry?.path();
+                if path.extension().is_none_or(|extension| extension != "json") {
+                    continue;
+                }
+                let bytes = fs::read(&path)?;
+                let record = serde_json::from_slice(&bytes).map_err(|source| Error::Json {
+                    path: path.display().to_string(),
+                    source,
+                })?;
+                records.push((path, record));
+            }
+            Ok((records, true))
+        }
+    }
 }
 
 fn read_pending(paths: &Paths) -> Result<Vec<Pending>> {
     let mut pending = Vec::new();
-    if !paths.pending_dir().exists() {
-        return Ok(pending);
-    }
-    for entry in fs::read_dir(paths.pending_dir())? {
-        let path = entry?.path();
-        if path.extension().and_then(|value| value.to_str()) != Some("json") {
-            continue;
-        }
-        let record = read_pending_record(&path)?;
+    let (records, observer) = pending_records(paths)?;
+    for (path, record) in records {
         if pending_expired(&path, &record, paths.settings.pending_retention_secs)? {
-            fs::remove_file(path)?;
+            if observer {
+                remove_pending(&path)?;
+            }
             continue;
         }
+        let created_at_epoch = pending_created_at(&path, &record)?;
         pending.push(Pending {
             path,
+            created_at_epoch,
             drv_path: record.drv_path,
             out_paths: record.out_paths,
         });
@@ -989,15 +1065,8 @@ fn read_pending(paths: &Paths) -> Result<Vec<Pending>> {
     Ok(pending)
 }
 
-fn read_pending_record(path: &Path) -> Result<PendingRecord> {
-    let content = fs::read_to_string(path)?;
-    serde_json::from_str(&content).map_err(|source| Error::Json {
-        path: path.display().to_string(),
-        source,
-    })
-}
-
 fn record_pending(paths: &Paths, drv_path: &str, out_paths: &[String]) -> Result<PathBuf> {
+    paths.authorize()?;
     fs::create_dir_all(paths.pending_dir())?;
     let created_at_epoch = now_epoch()?;
     let filename = format!(
@@ -1016,18 +1085,21 @@ fn record_pending(paths: &Paths, drv_path: &str, out_paths: &[String]) -> Result
     Ok(path)
 }
 
-fn purge_expired_pending(paths: &Paths) -> Result<()> {
-    if !paths.pending_dir().exists() {
-        return Ok(());
+fn remove_pending(path: &Path) -> Result<()> {
+    wrix_state::namespace::remove_at(path)?;
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
     }
-    for entry in fs::read_dir(paths.pending_dir())? {
-        let path = entry?.path();
-        if path.extension().and_then(|value| value.to_str()) != Some("json") {
-            continue;
-        }
-        let record = read_pending_record(&path)?;
+}
+
+fn purge_expired_pending(paths: &Paths) -> Result<()> {
+    paths.authorize()?;
+    let (records, _) = pending_records(paths)?;
+    for (path, record) in records {
         if pending_expired(&path, &record, paths.settings.pending_retention_secs)? {
-            fs::remove_file(path)?;
+            remove_pending(&path)?;
         }
     }
     Ok(())
@@ -1063,7 +1135,9 @@ fn status_report(paths: &Paths) -> Result<Report> {
     let pending = read_pending(paths)?;
     let mut ages = Vec::new();
     for record in &pending {
-        ages.push(pending_file_age(&record.path)?);
+        ages.push(Duration::from_secs(
+            now_epoch()?.saturating_sub(record.created_at_epoch),
+        ));
     }
     let pending_age = ages
         .into_iter()
@@ -1101,6 +1175,7 @@ fn status_report(paths: &Paths) -> Result<Report> {
 }
 
 fn rotate_key(paths: &Paths) -> Result<Report> {
+    paths.authorize()?;
     wipe_cache(paths)?;
     generate_project_keypair(paths)?;
     write_cache_status(paths, false, None, Some("key-rotated"), None)?;
@@ -1135,29 +1210,20 @@ fn generate_project_keypair(paths: &Paths) -> Result<()> {
 }
 
 impl Paths {
+    fn authorize(&self) -> Result<()> {
+        if let Some(context) = &self.scope {
+            context.authorize_effects(
+                &wrix_state::host::Host::discover().map_err(wrix_state::store::Error::from)?,
+            )?;
+        }
+        Ok(())
+    }
     fn for_workspace(hash: &WorkspaceHash, settings: Settings) -> Result<Self> {
-        let home = home_dir()?;
-        let state_root = if cfg!(target_os = "macos") {
-            home.join("Library/Application Support/wrix/workspaces")
-                .join(hash.as_str())
-        } else {
-            env::var_os("XDG_STATE_HOME")
-                .map_or_else(|| home.join(".local/state"), PathBuf::from)
-                .join("wrix/workspaces")
-                .join(hash.as_str())
-        };
-        let cache_root = if cfg!(target_os = "macos") {
-            home.join("Library/Caches/wrix/workspaces")
-                .join(hash.as_str())
-                .join("binary-cache")
-        } else {
-            env::var_os("XDG_CACHE_HOME")
-                .map_or_else(|| home.join(".cache"), PathBuf::from)
-                .join("wrix/workspaces")
-                .join(hash.as_str())
-                .join("binary-cache")
-        };
+        let roots = wrix_core::host_path::Roots::discover()?;
+        let state_root = roots.workspace_state(hash);
+        let cache_root = roots.workspace_cache(hash);
         Ok(Self {
+            scope: None,
             state_root,
             cache_root,
             settings,
@@ -1165,6 +1231,7 @@ impl Paths {
     }
 
     fn ensure(&self) -> Result<()> {
+        self.authorize()?;
         fs::create_dir_all(&self.state_root)?;
         fs::create_dir_all(&self.cache_root)?;
         fs::create_dir_all(self.gcroots_dir())?;
@@ -1233,12 +1300,6 @@ impl Paths {
     }
 }
 
-fn home_dir() -> Result<PathBuf> {
-    env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or(Error::HomeMissing)
-}
-
 fn nix_bin() -> Result<String> {
     executable_from_env("WRIX_NIX_BIN", "nix")
 }
@@ -1280,6 +1341,7 @@ fn write_cache_status(
     prune_status: Option<&str>,
     error: Option<&str>,
 ) -> Result<()> {
+    paths.authorize()?;
     let prior = read_cache_status(paths)?;
     let status = CacheStatus {
         dirty,
@@ -1303,12 +1365,10 @@ fn write_cache_status(
 
 fn read_cache_status(paths: &Paths) -> Result<CacheStatus> {
     let path = paths.cache_status_path();
-    let content = match fs::read_to_string(&path) {
-        Ok(content) => content,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(cache_status(false)),
-        Err(error) => return Err(error.into()),
+    let Some(content) = read_document(&path)? else {
+        return Ok(cache_status(false));
     };
-    serde_json::from_str(&content).map_err(|source| Error::Json {
+    serde_json::from_slice(&content).map_err(|source| Error::Json {
         path: path.display().to_string(),
         source,
     })
@@ -1339,15 +1399,28 @@ fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
         source,
     })?;
     content.push('\n');
+    wrix_state::namespace::write_at(path, content.as_bytes())?;
     fs::write(path, content)?;
     Ok(())
 }
 
 fn write_json_if_missing(path: &Path, value: &impl Serialize) -> Result<()> {
-    if path.exists() {
-        return Ok(());
+    let content = serde_json::to_vec_pretty(value).map_err(|source| Error::Json {
+        path: path.display().to_string(),
+        source,
+    })?;
+    match wrix_state::namespace::ensure_at(path, &content)? {
+        wrix_state::namespace::Source::Host(Some(bytes)) => fs::write(path, bytes)?,
+        wrix_state::namespace::Source::Host(None) => {
+            return Err(wrix_state::store::Error::Unsupported.into());
+        }
+        wrix_state::namespace::Source::Observer => {
+            if !path.exists() {
+                write_json(path, value)?;
+            }
+        }
     }
-    write_json(path, value)
+    Ok(())
 }
 
 fn split_paths(input: &str) -> Vec<String> {
@@ -1386,10 +1459,6 @@ fn system_time_epoch(time: SystemTime) -> Result<u64> {
     Ok(time.duration_since(UNIX_EPOCH)?.as_secs())
 }
 
-fn pending_file_age(path: &Path) -> Result<Duration> {
-    Ok(fs::metadata(path)?.modified()?.elapsed()?)
-}
-
 fn directory_size(path: &Path) -> Result<u64> {
     if !path.exists() {
         return Ok(0);
@@ -1408,10 +1477,20 @@ fn directory_size(path: &Path) -> Result<u64> {
 }
 
 fn read_endpoints_text(paths: &Paths) -> Result<String> {
-    match fs::read_to_string(paths.services_path()) {
-        Ok(content) => Ok(content),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(String::from("unavailable")),
-        Err(error) => Err(error.into()),
+    Ok(read_document(&paths.services_path())?.map_or_else(
+        || String::from("unavailable"),
+        |bytes| String::from_utf8_lossy(&bytes).into_owned(),
+    ))
+}
+
+fn read_document(path: &Path) -> Result<Option<Vec<u8>>> {
+    match wrix_state::namespace::read_at(path)? {
+        wrix_state::namespace::Source::Host(content) => Ok(content),
+        wrix_state::namespace::Source::Observer => match fs::read(path) {
+            Ok(content) => Ok(Some(content)),
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error.into()),
+        },
     }
 }
 

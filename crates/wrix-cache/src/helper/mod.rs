@@ -20,6 +20,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, Display, ThisError)]
 pub enum Error {
+    /// workspace admission failed: {0}
+    Admission(#[from] wrix_state::store::Error),
     /// cache helper I/O failed: {source}
     Io { source: io::Error },
     /// {source}
@@ -218,8 +220,9 @@ fn run_hook(args: &[String], stdout: &mut impl Write) -> Result<ExitCode> {
     config.validate()?;
     let drv_path = required_environment("DRV_PATH")?;
     let out_paths = required_environment("OUT_PATHS")?;
-    let manifest = fs::read_to_string(&config.manifest)?;
-    if !manifest_allows_drv(&manifest, &drv_path)? {
+    if !wrix_state::namespace::is_host_root(&config.state_root)?
+        && !manifest_allows_drv(&fs::read_to_string(&config.manifest)?, &drv_path)?
+    {
         writeln!(
             stdout,
             "wrix-cache-hook: skipping non-project derivation {drv_path}"
@@ -250,7 +253,7 @@ fn run_publish(args: &[String], stdout: &mut impl Write) -> Result<ExitCode> {
 }
 
 fn exec_publisher(config: HookConfig, drv_path: String, out_paths: String) -> Result<ExitCode> {
-    let current_uid = current_uid()?;
+    let current_uid = rustix::process::geteuid().as_raw();
     if current_uid != 0 && current_uid != config.owner_uid {
         return Err(Error::UnexpectedUser {
             actual: current_uid,
@@ -298,24 +301,6 @@ fn exec_command(mut command: Command) -> Result<ExitCode> {
     }
 }
 
-fn current_uid() -> Result<u32> {
-    let output = Command::new("id")
-        .arg("-u")
-        .stdin(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()?;
-    if !output.status.success() {
-        return Err(Error::ProcessFailed {
-            program: "id -u",
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        });
-    }
-    parse_u32(
-        String::from_utf8_lossy(&output.stdout).trim(),
-        "current uid",
-    )
-}
-
 impl HookConfig {
     fn parse(args: &[String]) -> Result<Self> {
         let mut parser = FlagParser::new(args);
@@ -343,7 +328,13 @@ impl HookConfig {
     fn validate(&self) -> Result<()> {
         require_absolute_dir("state root", &self.state_root)?;
         require_absolute_dir("cache root", &self.cache_root)?;
-        require_absolute_file("publish manifest", &self.manifest)?;
+        if wrix_state::namespace::is_host_root(&self.state_root)? {
+            if self.manifest != self.state_root.join("publish-roots.json") {
+                return Err(wrix_state::store::Error::RootMismatch.into());
+            }
+        } else {
+            require_absolute_file("publish manifest", &self.manifest)?;
+        }
         require_absolute_file("cache configuration snapshot", &self.settings)?;
         require_executable_file("publisher helper", &self.publisher_helper)
     }

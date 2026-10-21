@@ -1902,6 +1902,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "wrix-core",
+ "wrix-state",
 ]
 
 [[package]]
@@ -1911,6 +1912,7 @@ dependencies = [
  "displaydoc",
  "fs2",
  "httparse",
+ "rustix",
  "serde",
  "serde_json",
  "socket2",
@@ -1919,6 +1921,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "wrix-core",
+ "wrix-state",
 ]
 
 [[package]]
@@ -1928,6 +1931,8 @@ dependencies = [
  "clap",
  "displaydoc",
  "libc",
+ "rusqlite",
+ "rustix",
  "serde",
  "serde_json",
  "tempfile",
@@ -1939,6 +1944,7 @@ dependencies = [
  "wrix-core",
  "wrix-sandbox",
  "wrix-service",
+ "wrix-state",
 ]
 
 [[package]]
@@ -1948,6 +1954,7 @@ dependencies = [
  "base64 0.22.1",
  "displaydoc",
  "humantime",
+ "rustix",
  "serde",
  "serde_json",
  "serde_yaml_ng",
@@ -1981,6 +1988,7 @@ dependencies = [
  "displaydoc",
  "fs2",
  "libc",
+ "rustix",
  "serde",
  "serde_json",
  "tempfile",
@@ -1989,6 +1997,7 @@ dependencies = [
  "tracing",
  "wrix-core",
  "wrix-notify",
+ "wrix-state",
 ]
 
 [[package]]
@@ -2012,6 +2021,26 @@ dependencies = [
  "wrix-cli",
  "wrix-core",
  "wrix-sandbox",
+ "wrix-state",
+]
+
+[[package]]
+name = "wrix-state"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "displaydoc",
+ "fs2",
+ "rusqlite",
+ "rustix",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "wrix-core",
 ]
 
 [[package]]

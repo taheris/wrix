@@ -383,14 +383,18 @@ enum RemoteKeyPlan {
 
 impl Plan {
     fn execute(&self) -> Result<(), Error> {
+        let selection = wrix_state::context::Selection::inspect(&self.root)?;
+        selection.recheck()?;
         if self.workflow.provisions() {
             self.provision_deploy()?;
         }
+        selection.recheck()?;
         match self.workflow {
             Workflow::Deploy => Ok(()),
             Workflow::Verify => self.verify(),
             Workflow::Repo { .. } => {
                 self.apply()?;
+                selection.recheck()?;
                 self.verify()
             }
         }
@@ -2267,6 +2271,8 @@ fn path_string(path: &Path) -> String {
 )]
 #[derive(Debug, displaydoc::Display, thiserror::Error)]
 enum Error {
+    /// workspace admission failed: {0}
+    Admission(#[from] wrix_state::store::Error),
     /// {flag} requires {value_name}
     MissingFlagValue {
         flag: &'static str,

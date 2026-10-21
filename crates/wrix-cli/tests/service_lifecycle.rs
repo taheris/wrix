@@ -78,7 +78,14 @@ impl Fixture {
     }
 
     fn from_root(root: tempfile::TempDir) -> TestResult<Self> {
-        let workspace = root.path().join("workspace");
+        Self::from_root_at(root, "")
+    }
+
+    fn from_root_at(root: tempfile::TempDir, layout: &str) -> TestResult<Self> {
+        let outer = root.path().join("workspace");
+        fs::create_dir_all(&outer)?;
+        initialize_repository(&outer)?;
+        let workspace = outer.join(layout);
         let runtime = root.path().join("container");
         fs::create_dir_all(workspace.join(".beads/dolt"))?;
         initialize_repository(&workspace)?;
@@ -698,13 +705,9 @@ fn sandbox_cache_endpoint_respects_the_selected_runtime() -> TestResult {
 fn cache_guest_endpoint_and_key_reach_both_launch_commands() -> TestResult {
     for mode in [LaunchCommand::Run, LaunchCommand::Spawn] {
         for layout in ["", ".loom/beads/cache-route", ".loom/integration"] {
-            let mut fixture = Fixture::new()?;
+            let mut fixture = Fixture::from_root_at(tempfile::tempdir_in("/tmp")?, layout)?;
             fixture.disable_dolt()?;
-            let workspace = fixture.workspace.join(layout);
-            fs::create_dir_all(&workspace)?;
-            if !layout.is_empty() {
-                initialize_repository(&workspace)?;
-            }
+            let workspace = fixture.workspace.clone();
             let output = run_command(&mut fixture.launch_command(mode, &workspace)?)?;
             assert!(
                 output.status.success(),

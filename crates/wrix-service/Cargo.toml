@@ -20,6 +20,7 @@ tempfile = { workspace = true }
 thiserror = { workspace = true }
 wrix-cache = { workspace = true }
 wrix-core = { workspace = true }
+wrix-state = { workspace = true }
 wrix-sandbox = { workspace = true }
 
 [dev-dependencies]

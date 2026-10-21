@@ -1,7 +1,7 @@
 use std::{
     ffi::OsStr,
     fmt, io,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
 };
 
 use displaydoc::Display;
@@ -70,6 +70,13 @@ impl Workspace {
         self.canonical_path.file_name()
     }
 
+    /// Substitute an explicitly selected native namespace; this shape grants no authority.
+    #[must_use]
+    pub fn in_namespace(mut self, key: WorkspaceHash) -> Self {
+        self.hash = key;
+        self
+    }
+
     pub const fn hash(&self) -> &WorkspaceHash {
         &self.hash
     }
@@ -98,7 +105,8 @@ impl Workspace {
 impl WorkspaceHash {
     pub const HEX_LEN: usize = 64;
 
-    fn from_path(path: &Path) -> Self {
+    /// Hash an already canonical identity observation, not an authorization decision.
+    pub fn from_path(path: &Path) -> Self {
         let identity = path.as_os_str().to_string_lossy();
         let digest = Sha256::digest(identity.as_bytes());
         let mut hash = String::with_capacity(Self::HEX_LEN);
@@ -209,26 +217,7 @@ fn sanitize_container_component(input: &str) -> String {
 }
 
 fn service_workspace_path(path: &Path) -> PathBuf {
-    loom_control_root(path)
-        .or_else(|| repository_root(path))
-        .unwrap_or_else(|| path.to_path_buf())
-}
-
-fn loom_control_root(path: &Path) -> Option<PathBuf> {
-    let components = path.components().collect::<Vec<_>>();
-    for (index, component) in components.iter().enumerate() {
-        if component.as_os_str() != OsStr::new(".loom") {
-            continue;
-        }
-        let prefix = path_from_components(&components[..index]);
-        if prefix.as_os_str().is_empty() {
-            return None;
-        }
-        if let Some(root) = repository_root(&prefix) {
-            return Some(root);
-        }
-    }
-    None
+    repository_root(path).unwrap_or_else(|| path.to_path_buf())
 }
 
 fn repository_root(path: &Path) -> Option<PathBuf> {
@@ -240,14 +229,6 @@ fn repository_root(path: &Path) -> Option<PathBuf> {
 fn has_repository_marker(path: &Path) -> bool {
     let marker = path.join(".git");
     marker.is_dir() || marker.is_file()
-}
-
-fn path_from_components(components: &[Component<'_>]) -> PathBuf {
-    let mut path = PathBuf::new();
-    for component in components {
-        path.push(component.as_os_str());
-    }
-    path
 }
 
 #[cfg(test)]
@@ -278,7 +259,7 @@ mod test {
             Workspace::from_service_path(&subdirectory)
                 .unwrap()
                 .canonical_path(),
-            root.path().canonicalize().unwrap()
+            nested.canonicalize().unwrap()
         );
     }
 
@@ -349,46 +330,29 @@ mod test {
     }
 
     #[test]
-    fn service_workspace_uses_outer_repository_for_loom_clone() {
-        let root = tempfile_root("loom-service-repo");
-        let bead = root.join(".loom/beads/lm-gzgw.3");
-        fs::create_dir(root.join(".git")).unwrap();
-        fs::create_dir_all(bead.join(".git")).unwrap();
-        let workspace = Workspace::from_service_path(&bead).unwrap();
-        let clone_workspace = Workspace::from_path(bead).unwrap();
-        assert_eq!(workspace.canonical_path(), root.canonicalize().unwrap());
-        assert_eq!(
-            workspace.container_name().as_str(),
-            "loom-service-repo-service"
-        );
-        assert_eq!(
+    fn nested_clone_uses_its_own_service_scope() {
+        let root = tempfile::tempdir().unwrap();
+        let clone = root.path().join(".loom/beads/independent");
+        fs::create_dir(root.path().join(".git")).unwrap();
+        fs::create_dir_all(clone.join(".git")).unwrap();
+        let workspace = Workspace::from_service_path(&clone).unwrap();
+        assert_eq!(workspace.canonical_path(), clone.canonicalize().unwrap());
+        assert_ne!(
             workspace.hash(),
-            Workspace::from_path(&root).unwrap().hash()
-        );
-        assert_ne!(workspace.hash(), clone_workspace.hash());
-        assert_eq!(
-            clone_workspace.container_name().as_str(),
-            "lm-gzgw.3-service"
+            Workspace::from_path(root.path()).unwrap().hash()
         );
     }
 
     #[test]
-    fn service_workspace_uses_outer_repository_for_loom_integration() {
-        let root = tempfile_root("loom-integration-repo");
-        let integration = root.join(".loom/integration");
-        fs::create_dir(root.join(".git")).unwrap();
-        fs::create_dir_all(&integration).unwrap();
-        let workspace = Workspace::from_service_path(&integration).unwrap();
-        let integration_workspace = Workspace::from_path(integration).unwrap();
-        assert_eq!(workspace.canonical_path(), root.canonicalize().unwrap());
+    fn nested_directory_without_git_uses_its_actual_repository() {
+        let root = tempfile::tempdir().unwrap();
+        let child = root.path().join(".loom/integration");
+        fs::create_dir(root.path().join(".git")).unwrap();
+        fs::create_dir_all(&child).unwrap();
+        let workspace = Workspace::from_service_path(&child).unwrap();
         assert_eq!(
-            workspace.hash(),
-            Workspace::from_path(&root).unwrap().hash()
-        );
-        assert_ne!(workspace.hash(), integration_workspace.hash());
-        assert_eq!(
-            workspace.container_name().as_str(),
-            "loom-integration-repo-service"
+            workspace.canonical_path(),
+            root.path().canonicalize().unwrap()
         );
     }
 

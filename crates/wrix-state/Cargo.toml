@@ -1,0 +1,25 @@
+[package]
+name = "wrix-state"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+base64 = { workspace = true }
+displaydoc = { workspace = true }
+fs2 = { workspace = true }
+rusqlite = { workspace = true }
+rustix = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+wrix-core = { workspace = true }
+
+[dev-dependencies]
+
+[lints]
+workspace = true

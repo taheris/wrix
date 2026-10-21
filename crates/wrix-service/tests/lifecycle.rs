@@ -108,58 +108,39 @@ fn temp_cache_only_plan_has_no_services() -> TestResult {
 }
 
 #[test]
-fn loom_bead_workspace_uses_repo_service_identity() -> TestResult {
+fn nested_bead_clone_has_an_independent_service_identity() -> TestResult {
     let root = repo("loom-bead-repo")?;
     let bead = root.join(".loom/beads/wx-cy0iz.19");
     fs::create_dir_all(bead.join(".git"))?;
-
     let repo_plan = plan_for_service_path(&root, CacheMode::Disabled)?;
     let bead_plan = plan_for_service_path(&bead, CacheMode::Disabled)?;
-    let raw_bead = Plan::for_workspace(Workspace::from_path(&bead)?, CacheMode::Disabled)?;
-
-    assert_eq!(
-        bead_plan.workspace().canonical_path(),
-        repo_plan.workspace().canonical_path()
-    );
-    assert_eq!(bead_plan.workspace().hash(), repo_plan.workspace().hash());
-    assert_eq!(bead_plan.container_name(), repo_plan.container_name());
-    assert_ne!(raw_bead.workspace().hash(), repo_plan.workspace().hash());
-    assert_ne!(raw_bead.container_name(), repo_plan.container_name());
-    assert_cache_command_uses_workspace(&bead, repo_plan.workspace().hash())?;
-
+    assert_eq!(bead_plan.workspace().canonical_path(), bead.canonicalize()?);
+    assert_ne!(bead_plan.workspace().hash(), repo_plan.workspace().hash());
+    assert_ne!(bead_plan.container_name(), repo_plan.container_name());
+    assert_cache_command_uses_workspace(&bead, bead_plan.workspace().hash())?;
     Ok(())
 }
 
 #[test]
-fn loom_integration_workspace_uses_repo_service_identity() -> TestResult {
+fn nested_integration_clone_has_an_independent_service_identity() -> TestResult {
     let root = repo("loom-integration-repo")?;
     let integration = root.join(".loom/integration");
-    fs::create_dir_all(&integration)?;
-
+    fs::create_dir_all(integration.join(".git"))?;
     let repo_plan = plan_for_service_path(&root, CacheMode::Disabled)?;
     let integration_plan = plan_for_service_path(&integration, CacheMode::Disabled)?;
-    let raw_integration =
-        Plan::for_workspace(Workspace::from_path(&integration)?, CacheMode::Disabled)?;
-
     assert_eq!(
         integration_plan.workspace().canonical_path(),
-        repo_plan.workspace().canonical_path()
+        integration.canonicalize()?
     );
-    assert_eq!(
+    assert_ne!(
         integration_plan.workspace().hash(),
         repo_plan.workspace().hash()
     );
-    assert_eq!(
+    assert_ne!(
         integration_plan.container_name(),
         repo_plan.container_name()
     );
-    assert_ne!(
-        raw_integration.workspace().hash(),
-        repo_plan.workspace().hash()
-    );
-    assert_ne!(raw_integration.container_name(), repo_plan.container_name());
-    assert_cache_command_uses_workspace(&integration, repo_plan.workspace().hash())?;
-
+    assert_cache_command_uses_workspace(&integration, integration_plan.workspace().hash())?;
     Ok(())
 }
 

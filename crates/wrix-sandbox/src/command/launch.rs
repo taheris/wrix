@@ -2,7 +2,9 @@ mod execution_metadata;
 mod linux_terminal;
 mod pi_auth;
 pub(super) mod preview;
+mod snapshot;
 mod tool_cache;
+use snapshot::copy_dir;
 
 use pi_auth::Storage as PiAuth;
 
@@ -76,6 +78,8 @@ pub struct Spawn {
 )]
 #[derive(Debug, Display, Error)]
 pub enum LaunchError {
+    /// workspace admission failed: {0}
+    Admission(#[from] wrix_state::store::Error),
     /// WRIX_NETWORK must be 'open' or 'limit' (got: {value})
     InvalidNetworkMode { value: String },
     /// restricted Rust requires fresh private local tool caches; use run --no-cache, repository tool_caches.shared = false, or SpawnConfig.tool_caches.shared = false (Nix/Celler policy is unchanged)
@@ -223,6 +227,8 @@ pub fn execute(
         Kind::Run(run) => run.workspace.as_path(),
         Kind::Spawn(spawn) => Path::new(&spawn.config.workspace),
     };
+    // Membership is checked before credential staging, journals or runtime preparation.
+    let selection = wrix_state::context::Selection::inspect(workspace)?;
     let repository_root = Workspace::from_path(workspace)?.repository_root();
     let policy = repository_root
         .as_deref()
@@ -240,7 +246,14 @@ pub fn execute(
     } else {
         CredentialSources::resolve(request, repository_root.as_deref(), &policy)?
     };
-    let plan = Plan::new(request, network_mode, credential_sources, tool_cache_mode)?;
+    let plan = Plan::new(
+        request,
+        network_mode,
+        credential_sources,
+        tool_cache_mode,
+        selection,
+    )?;
+    plan.recheck()?;
     if preview.dry_run {
         return preview::Report::resolved(&plan, &policy, repository_root.as_deref(), conflict)?
             .write(stdout, preview.json)
@@ -270,6 +283,7 @@ pub fn execute(
 }
 
 struct Plan<'a> {
+    selection: wrix_state::context::Selection,
     request: &'a Request,
     workspace: PathBuf,
     image_ref: ImageRef,
@@ -330,7 +344,7 @@ struct DarwinMounts {
 }
 
 struct DarwinFileSync {
-    source: PathBuf,
+    source: fs::File,
     staged: PathBuf,
 }
 
@@ -850,11 +864,17 @@ struct GitIdentity {
 }
 
 impl<'a> Plan<'a> {
+    fn recheck(&self) -> Result<(), LaunchError> {
+        self.selection.recheck()?;
+        protect_host_state(self)
+    }
+
     fn new(
         request: &'a Request,
         network_mode: NetworkMode,
         credential_sources: Option<CredentialSources>,
         tool_cache_mode: wrix_core::tool_cache::Mode,
+        selection: wrix_state::context::Selection,
     ) -> Result<Self, LaunchError> {
         let profile = &request.profile_config;
         let source = match &request.kind {
@@ -952,6 +972,7 @@ impl<'a> Plan<'a> {
             .and_then(|_| capture_darwin_launch(host_tmux_target.as_ref()));
 
         Ok(Self {
+            selection,
             request,
             workspace,
             image_ref: source.ref_name,
@@ -979,6 +1000,7 @@ impl<'a> Plan<'a> {
         services: &ServicesState,
         observed_status: &mut Option<ExitStatus>,
     ) -> Result<ExitCode, LaunchError> {
+        self.recheck()?;
         let registration = FocusRegistration::create(
             self.focus_target.as_ref(),
             self.host_tmux_target.as_ref(),
@@ -999,6 +1021,7 @@ impl<'a> Plan<'a> {
     ) -> Result<ExitCode, LaunchError> {
         self.install_image(Runtime::Podman)?;
         Staging::with(|staging| {
+            self.recheck()?;
             let mut volumes = self.linux_volumes(staging, services)?;
             let credentials = self.credentials(staging)?;
             if let Some(credentials) = &credentials {
@@ -1099,6 +1122,7 @@ impl<'a> Plan<'a> {
                 .stdin(Stdio::inherit())
                 .stdout(Stdio::inherit())
                 .stderr(Stdio::inherit());
+            self.recheck()?;
             let status = command.status()?;
             *observed_status = Some(status);
             status_to_exit(status)
@@ -1174,6 +1198,7 @@ impl<'a> Plan<'a> {
                 .stdin(Stdio::inherit())
                 .stdout(Stdio::inherit())
                 .stderr(Stdio::inherit());
+            self.recheck()?;
             let status = command.status()?;
             *observed_status = Some(status);
             darwin_mounts.sync_files()?;
@@ -1655,7 +1680,18 @@ impl DarwinMounts {
         let host = staging_root.join(format!("file{index}"));
         fs::create_dir_all(&host)?;
         let staged = host.join(&file_name);
-        fs::copy(&source, &staged)?;
+        let access = if mount.mode == MountMode::Rw {
+            wrix_core::host_path::MountAccess::ReadWrite
+        } else {
+            wrix_core::host_path::MountAccess::Read
+        };
+        let mut source_file =
+            wrix_core::host_path::Roots::discover()?.open_mount(&source, access)?;
+        if !source_file.metadata()?.is_file() {
+            return Err(io::Error::other("mount file changed type").into());
+        }
+        io::copy(&mut source_file, &mut fs::File::create(&staged)?)?;
+        fs::set_permissions(&staged, source_file.metadata()?.permissions())?;
         let container = format!("/mnt/wrix/file{index}");
         self.mounts.push(RenderedMount {
             host: host.display().to_string(),
@@ -1666,7 +1702,10 @@ impl DarwinMounts {
         self.file_mappings
             .push((format!("{container}/{file_name}"), mount.container.clone()));
         if mount.mode == MountMode::Rw {
-            self.file_syncs.push(DarwinFileSync { source, staged });
+            self.file_syncs.push(DarwinFileSync {
+                source: source_file,
+                staged,
+            });
         }
         Ok(())
     }
@@ -1692,7 +1731,16 @@ impl DarwinMounts {
 
     fn sync_files(&self) -> Result<(), LaunchError> {
         for sync in &self.file_syncs {
-            fs::copy(&sync.staged, &sync.source)?;
+            use std::io::{Seek, SeekFrom};
+            let mut staged = wrix_core::host_path::Roots::discover()?
+                .open_mount(&sync.staged, wrix_core::host_path::MountAccess::Read)?;
+            if !staged.metadata()?.is_file() {
+                return Err(io::Error::other("staged mount file changed type").into());
+            }
+            let mut original = sync.source.try_clone()?;
+            original.seek(SeekFrom::Start(0))?;
+            let size = io::copy(&mut staged, &mut original)?;
+            original.set_len(size)?;
         }
         Ok(())
     }
@@ -1903,6 +1951,31 @@ impl Staging {
     }
 }
 
+fn protect_host_state(plan: &Plan<'_>) -> Result<(), LaunchError> {
+    let roots = wrix_core::host_path::Roots::discover()?;
+    let check = |source: &Path| -> Result<(), LaunchError> {
+        roots.protect_mount(source)?;
+        if let Some(context) = plan.selection.context() {
+            context.check_mount(source)?;
+        }
+        Ok(())
+    };
+    check(&plan.workspace)?;
+    for mount in &plan.request.profile_config.profile.mounts {
+        let source = expand_path(&mount.source)?;
+        if source.try_exists()? {
+            check(&source)?;
+        }
+    }
+    for mount in &plan.spawn_mounts {
+        let source = expand_path(&mount.host)?;
+        if source.try_exists()? {
+            check(&source)?;
+        }
+    }
+    Ok(())
+}
+
 fn render_profile_mount(
     mount: &ProfileMount,
     staging: &Staging,
@@ -1916,6 +1989,7 @@ fn render_profile_mount(
             path: source.display().to_string(),
         });
     }
+    wrix_core::host_path::Roots::discover()?.protect_mount(&source)?;
     if source.is_dir() && mount.mode == MountMode::Ro {
         let target = staging
             .root
@@ -1961,23 +2035,6 @@ fn copy_if_exists(source: &Path, target: &Path) -> Result<(), LaunchError> {
     Ok(())
 }
 
-fn copy_dir(source: &Path, target: &Path) -> Result<(), LaunchError> {
-    if target.exists() {
-        fs::remove_dir_all(target)?;
-    }
-    fs::create_dir_all(target)?;
-    for entry in fs::read_dir(source)? {
-        let entry = entry?;
-        let target_path = target.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            copy_dir(&entry.path(), &target_path)?;
-        } else {
-            fs::copy(entry.path(), target_path)?;
-        }
-    }
-    Ok(())
-}
-
 #[cfg(unix)]
 fn file_type_is_socket(path: &Path) -> Result<bool, LaunchError> {
     use std::os::unix::fs::FileTypeExt;
@@ -1991,7 +2048,7 @@ fn file_type_is_socket(_path: &Path) -> Result<bool, LaunchError> {
 }
 
 fn service_workspace_has_dolt(workspace: &Path) -> Result<bool, LaunchError> {
-    let identity = Workspace::from_service_path(workspace)?;
+    let identity = wrix_state::context::service_workspace(workspace, false)?;
     Ok(identity.canonical_path().join(".beads/dolt").is_dir())
 }
 

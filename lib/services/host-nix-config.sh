@@ -123,12 +123,19 @@ wrix_host_write_hook_source() {
   local cache_root="$8"
   local manifest_path="$9"
   local cache_config="${10}"
+  local home_word state_home_word cache_home_word
+  printf -v home_word '%q' "$HOME"
+  printf -v state_home_word '%q' "${XDG_STATE_HOME:-$HOME/.local/state}"
+  printf -v cache_home_word '%q' "${XDG_CACHE_HOME:-$HOME/.cache}"
   mkdir -p "$hook_dir/bin"
   printf '%s\n' "$cache_config" >"$hook_dir/cache-config.json"
   chmod 0444 "$hook_dir/cache-config.json"
   cat >"$hook_dir/bin/wrix-cache-post-build-hook" <<EOF
 #!${WRIX_BASH_BIN:-/usr/bin/env bash}
 set -euo pipefail
+export HOME=$home_word
+export XDG_STATE_HOME=$state_home_word
+export XDG_CACHE_HOME=$cache_home_word
 exec "$hook_bin" \\
   --workspace-hash "$workspace_hash" \\
   --owner-uid "$owner_uid" \\

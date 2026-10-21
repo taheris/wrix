@@ -7,6 +7,7 @@ type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 struct Fixture {
     root: tempfile::TempDir,
+    workspace: PathBuf,
     profile: PathBuf,
     spawn: PathBuf,
 }
@@ -14,6 +15,8 @@ struct Fixture {
 impl Fixture {
     fn new() -> Result<Self, Box<dyn std::error::Error>> {
         let root = tempfile::tempdir()?;
+        let workspace = root.path().join("workspace");
+        fs::create_dir(&workspace)?;
         let profile = root.path().join("profile.json");
         let spawn = root.path().join("spawn.json");
         fs::write(
@@ -34,11 +37,12 @@ impl Fixture {
         fs::write(
             &spawn,
             serde_json::to_vec(&json!({
-                "workspace": root.path(), "env": [], "agent_args": []
+                "workspace": workspace, "env": [], "agent_args": []
             }))?,
         )?;
         Ok(Self {
             root,
+            workspace,
             profile,
             spawn,
         })
@@ -57,7 +61,7 @@ impl Fixture {
         if mode == "spawn" {
             command.arg("--spawn-config").arg(&self.spawn);
         } else {
-            command.arg(self.root.path());
+            command.arg(&self.workspace);
         }
     }
 
@@ -149,7 +153,7 @@ fn inspection_and_launch_share_project_configuration_resolution() -> TestResult 
             if mode == "spawn" {
                 command.arg("--spawn-config").arg(&fixture.spawn);
             } else {
-                command.arg(fixture.root.path());
+                command.arg(&fixture.workspace);
             }
             let preview = command.output()?;
             assert!(

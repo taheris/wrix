@@ -44,6 +44,15 @@ not adversarial_ — one that does not deliberately hide its actions from the
 transcript. An adversarial-agent model (agent attempts to evade its own logging)
 is a different problem class and out of scope.
 
+### Host Workspace Authority
+
+[Workspace Admission](workspaces.md) owns host-only association and
+control-store access. Repository metadata and worker-visible exports are
+observations, not host authorization. The worker mount boundary excludes native
+control state, including ancestor and alias exposure, under that spec's
+production launch verifier. External attestations neither issue credentials nor
+authorize resource removal; operation-specific guards remain independent.
+
 ### Shared Service Trust Boundary
 
 Acceptance:

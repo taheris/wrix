@@ -19,10 +19,10 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let args = env::args().skip(1).collect::<Vec<_>>();
+    let args = env::args_os().skip(1).collect::<Vec<_>>();
     let mut stdout = io::stdout().lock();
     let mut stderr = io::stderr();
-    match wrix_cli::command::run(&args, &mut stdout, &mut stderr) {
+    match wrix_cli::command::run_os(&args, &mut stdout, &mut stderr) {
         Ok(code) => code,
         Err(error) => {
             if writeln!(stderr, "wrix: {error}").is_err() {
