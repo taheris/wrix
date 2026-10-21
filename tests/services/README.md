@@ -27,9 +27,29 @@ serializable or included in diagnostic types. Launcher delivery/renewal and
 deployed multi-view routing remain separate integration requirements.
 
 These are component integration tests, not deployed worker, container mount,
-production build sandbox, shared installed-store or performance acceptance.
-Canonical-daemon/native-lock tests retain their isolated-store prerequisite;
-platform transport and installed end-to-end gates remain separate.
+production build sandbox, shared installed-store or performance acceptance. The
+native backend VM runs the complete backend suite with ignored cases enabled,
+then a real host-policy-withdrawal/fresh-Nix-import suite. This includes the
+seven canonical-daemon/native-lock cases: production backend ownership
+exclusion, native Rust store access and admitted-hook publication. Run:
+
+```sh
+nix run .#legacyPackages.x86_64-linux.ciApps.test-cache-celler-native-system
+```
+
+The Nix-built test executable and scripts are self-contained guest fixtures.
+Each isolated-daemon case receives a private overlaid store, database and real
+disposable Nix daemon; the executor's daemon/database are never mounted or
+modified. Daemon readiness uses a bounded native `nix store ping`, not a fixed
+pause. The tests run sequentially and fail on any unsuccessful case. The
+isolated-daemon cases deliberately disable build sandboxing in their disposable
+stores; they do not accept production build-user isolation. Platform transport
+and installed end-to-end gates remain separate. Heavy service-image packaging
+inspection is CI-only:
+
+```sh
+nix run .#legacyPackages.x86_64-linux.ciApps.test-cache-celler-packaging
+```
 
 ## Verifier boundaries
 

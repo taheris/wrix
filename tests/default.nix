@@ -212,6 +212,7 @@ let
 
   systemTests = optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
     services-userspace-vm-smoke = import ./services/userspace-vm.nix { inherit pkgs; };
+    cache-celler-native-system = import ./services/cache-backend-system.nix { inherit pkgs wrix; };
     beads-live-system = import ./services/beads-system.nix {
       inherit pkgs wrix;
       beadsImage = testImages.baseBeads;
@@ -239,6 +240,7 @@ let
   ciChecks =
     rustChecks
     // {
+      cache-celler-packaging = import ./services/celler-packaging.nix { inherit pkgs wrix; };
       profile-config-parser-agreement = profileConfigParserAgreement;
       host-service-package-binding = import ./services/package-binding.nix { inherit pkgs wrix; };
     }
@@ -275,7 +277,6 @@ let
     // (import ./sandbox/pi-settings.nix { inherit pkgs wrix; })
     // piMcpTests.checks
     // {
-      cache-celler-packaging = import ./services/celler-packaging.nix { inherit pkgs wrix; };
       builder-vmnet-route = builderRouteTest;
       rust-source-fixtures = import ./services/rust-source.nix {
         inherit pkgs;
@@ -477,6 +478,10 @@ let
     (mkDefinedCiApp testPlaywrightMandatoryFlags "test-playwright-mandatory-flags")
     (mkDefinedCiApp testPlaywrightUserOptionsConfig "test-playwright-user-options-config")
     (mkCiApp testBeadsLiveSystem "test-beads-live-system")
+    (mkCiApp (writeShellScriptBin "test-cache-celler-packaging" ''
+      set -euo pipefail
+      test -e ${ciChecks.cache-celler-packaging}
+    '') "test-cache-celler-packaging")
     (mkServiceCiApp testServicesDevshellStartIndependent "test-services-devshell-start-independent")
     (mkServiceCiApp testServicesLimitModeCacheEndpoint "test-services-limit-mode-cache-endpoint")
     (mkServiceCiApp testServicesDoltPlatformTransport "test-services-dolt-platform-transport")
@@ -493,6 +498,10 @@ let
       // {
         platforms = linux;
       }
+    )
+    (
+      (mkCiApp (mkSystemTestCiApp "test-cache-celler-native-system" "cache-celler-native-system") "test-cache-celler-native-system")
+      // nixosVm
     )
   ];
 
@@ -521,6 +530,7 @@ let
           wrix-rust-nextest
           profile-config-parser-agreement
           host-service-package-binding
+          cache-celler-packaging
           image-builds
           ${if ciChecks ? private-nix-artifacts then "private-nix-artifacts" else ""}
           linux-pasta-port-forwarding-disabled

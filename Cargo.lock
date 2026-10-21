@@ -3313,12 +3313,15 @@ dependencies = [
 name = "wrix-service"
 version = "0.1.0"
 dependencies = [
+ "attic",
+ "base64 0.22.1",
  "displaydoc",
  "fs2",
  "libc",
  "rama-core",
  "rama-net",
  "rama-tcp",
+ "reqwest",
  "serde",
  "serde_json",
  "serde_yaml_ng",

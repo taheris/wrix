@@ -207,6 +207,34 @@ in
     // fixtures.environment
   );
 
+  cacheBackendTests = workspace.nextest.overrideAttrs {
+    pname = "wrix-celler-backend-tests";
+    doCheck = false;
+    doInstallCargoArtifacts = false;
+    buildPhase = ''
+      runHook preBuild
+      cargo test --offline --locked --no-run -p wrix-cache --test celler_backend \
+        ''${CARGO_PROFILE:+--profile "$CARGO_PROFILE"} --message-format json > compiled-tests.json
+      cargo test --offline --locked --no-run -p wrix-service --test celler_auth \
+        ''${CARGO_PROFILE:+--profile "$CARGO_PROFILE"} --message-format json >> compiled-tests.json
+      runHook postBuild
+    '';
+    installPhase = ''
+      for target in celler_backend celler_auth; do
+        executable=$(${pkgs.jq}/bin/jq -r --arg target "$target" \
+          'select(.reason == "compiler-artifact" and .target.name == $target and .profile.test) | .executable' \
+          compiled-tests.json)
+        test -n "$executable"
+        install -Dm755 "$executable" "$out/bin/''${target//_/-}-tests"
+      done
+      "$out/bin/celler-backend-tests" --list --ignored > "$out/ignored-tests"
+      grep -Fx 'publisher_reuses_rust_store_client: test' "$out/ignored-tests"
+      grep -Fx 'production_runtime_excludes_competing_owners_until_process_exit: test' "$out/ignored-tests"
+      "$out/bin/celler-auth-tests" --list | grep -Fx \
+        'withdrawn_private_policy_denies_renewal_but_old_native_grants_read_new_publications: test'
+    '';
+  };
+
   testFixtures = fixtures.bundle;
   package = workspace.bin;
   wrix = wrixPackage;

@@ -20,13 +20,27 @@ pub mod unsigned;
 
 const SECRET: &str = "disposable-celler-test-credential-32-bytes";
 
+pub fn isolated_store_script() -> PathBuf {
+    std::env::var_os("WRIX_TEST_ISOLATED_STORE_SCRIPT").map_or_else(
+        || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/cache/isolated-store.sh"),
+        PathBuf::from,
+    )
+}
+
+pub fn runtime_layout_script() -> PathBuf {
+    std::env::var_os("WRIX_TEST_RUNTIME_LAYOUT_SCRIPT").map_or_else(
+        || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/cache/runtime-layout.sh"),
+        PathBuf::from,
+    )
+}
+
 pub fn in_isolated_store(test: &str) -> bool {
     if let Some(root) = std::env::var_os("WRIX_TEST_STORE_ROOT") {
         let marker = fs::read_to_string("/nix/var/nix/wrix-test-isolated-store").unwrap();
         assert_eq!(Path::new(&root), Path::new(&marker));
         return true;
     }
-    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/cache/isolated-store.sh");
+    let script = isolated_store_script();
     let status = Command::new("unshare")
         .args(["-Urm", "bash"])
         .arg(script)

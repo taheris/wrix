@@ -30,12 +30,17 @@ mkdir -p /nix/var/nix/daemon-socket
 printf '%s' "$root" > /nix/var/nix/wrix-test-isolated-store
 nix-daemon --store local >"$root/daemon.log" 2>&1 &
 daemon_pid="$!"
-for _attempt in {1..100}; do
-  if [[ -S "$NIX_DAEMON_SOCKET_PATH" ]]; then
+deadline=$((SECONDS + 30))
+while true; do
+  remaining=$((deadline - SECONDS))
+  if (( remaining <= 0 )); then
+    printf '%s\n' 'disposable Nix daemon did not become ready' >&2
+    cat "$root/daemon.log" >&2
+    exit 1
+  fi
+  if timeout "${remaining}s" nix store ping --store daemon >"$root/probe.log" 2>&1; then
     "$@"
     exit "$?"
   fi
-  sleep 0.05
+  kill -0 "$daemon_pid"
 done
-printf '%s\n' 'disposable Nix daemon did not become ready' >&2
-exit 1

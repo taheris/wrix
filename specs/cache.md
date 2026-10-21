@@ -815,7 +815,7 @@ valid unchanged key through the Celler publication/signing path.
   [system?](test-ci:test-cache-celler-system)
 - Host publication reuses Celler's pure-Rust store client for metadata queries
   and NAR streaming; Nix CLI root discovery and flake evaluation remain allowed.
-  [test?](../crates/wrix-cache/tests/celler_backend.rs::publisher_reuses_rust_store_client)
+  [system](test-ci:test-cache-celler-native-system)
 - Host integration publishes through authenticated Celler HTTP without adding
   shared-cache substituters, signing-key trust or pull credentials to host Nix.
   [system?](verify:cache.celler-host-integration)
@@ -841,21 +841,19 @@ valid unchanged key through the Celler publication/signing path.
   [system?](test-ci:test-cache-celler-credential-isolation)
 - Each authorized destination receives only its explicitly selected candidate
   paths under scoped host publishing authority; the backend does not recursively
-  expand that set.
-  [test?](../crates/wrix-cache/tests/celler_backend.rs::publication_is_scoped_without_recursive_expansion)
+  expand that set. [system](test-ci:test-cache-celler-native-system)
 - Celler integration works with the existing sandbox runtime contracts without
   requiring containerd/nix-snapshotter, shared worker execution or a host-store
-  mount.
-  [test?](../crates/wrix-cache/tests/celler_backend.rs::integration_does_not_require_shared_worker_runtime)
+  mount. [system](test-ci:test-cache-celler-native-system)
 
 ### Visibility Acceptance
 
 - Two unrelated repositories can substitute an approved common dependency
   through authenticated native Nix without duplicate backing archives solely
   because the repositories differ. [system?](test-ci:test-cache-celler-sharing)
-- Private views follow the explicitly selected namespace under
-  [Workspace Admission](workspaces.md), not implicit grouping of nested clones.
-  [test?](../crates/wrix-cache/tests/celler_sharing.rs::private_views_follow_canonical_workspace_identity)
+- Private views follow canonical workspace identity, including shared identity
+  across Loom clones of the same repository.
+  [test](../crates/wrix-cache/src/backend/issuer/test/pull/mod.rs::canonical_loom_clones_share_views_but_unrelated_and_nonrepository_paths_do_not)
 - Ordinary cache requests from unrelated repositories cannot read private-only
   metadata or archives, even using known paths, hashes or direct archive URLs.
   [system?](test-ci:test-cache-celler-sharing)
@@ -883,21 +881,20 @@ valid unchanged key through the Celler publication/signing path.
 
 - Sandbox pull tokens have a one-day nominal lifetime from issuance, rather than
   adopting an unbounded or silently extended validity period.
-  [test?](../crates/wrix-cache/tests/celler_auth.rs::sandbox_pull_tokens_have_one_day_lifetime)
+  [test](../crates/wrix-cache/src/backend/issuer/test/pull/mod.rs::sandbox_pull_credentials_are_exact_read_only_and_expire_after_one_day)
 - Issued credentials grant only exact named views and pull access; views remain
   authenticated and JWT issuer private authority stays host-side, distinct from
-  backend Nix signing state.
-  [test?](../crates/wrix-cache/tests/celler_auth.rs::native_auth_uses_host_issuer_and_exact_pull_grants)
+  backend Nix signing state. [system](test-ci:test-cache-celler-native-system)
 - Renewal supplies credentials from current host authorization, not stale token
   grants or agent/repository input after authorization withdrawal.
-  [test?](../crates/wrix-cache/tests/celler_auth.rs::renewal_uses_current_host_policy_not_prior_claims)
+  [test](../crates/wrix-service/src/control/cache/test/mod.rs::renewal_uses_current_host_policy_and_never_replays_withdrawn_audiences)
 - Production Celler accepts a valid scoped native token and rejects expired or
   tampered credentials under its native verification rules.
-  [system?](test-ci:test-cache-celler-auth)
+  [system](test-ci:test-cache-celler-native-system)
 - Withdrawal of view authorization does not revoke an already-valid token: newly
   published contents remain readable until native expiry, while renewed
   credentials omit withdrawn access and preserve remaining authorized views.
-  [system?](test-ci:test-cache-celler-auth)
+  [system](test-ci:test-cache-celler-native-system)
 - The documented authorization model uses native expiry rather than custom
   membership lookups/denylists or active-download cancellation, acknowledges
   bearer reuse and native verification timing, and distinguishes JWT
@@ -1211,16 +1208,16 @@ valid unchanged key through the Celler publication/signing path.
 
 - Namespace registration preserves valid Celler keys; invalid-key repair does
   not replace valid peer keys, and failed key generation preserves prior state.
-  [test?](../crates/wrix-cache/tests/celler_backend.rs::key_registration_and_failed_repair_preserve_valid_state)
+  [test](../crates/wrix-cache/tests/celler_backend.rs::key_registration_and_failed_repair_preserve_valid_state)
 
 - Nix packaging exposes Wrix hook/publisher entry points and the service's
   Celler backend/read admission, without requiring the retired static-server
-  helper. [check?](verify:cache.celler-packaging)
+  helper. [check](test-ci:test-cache-celler-packaging)
 
 - Enabled cache integration separates Linux XDG/Darwin Library host-private
   workspace control state from managed Celler metadata/signing/archive data
   outside worktrees; opt-out creates no state solely for cache use.
-  [test?](../crates/wrix-cli/tests/service_cache.rs::celler_layout_separates_managed_cache_data_from_host_authority)
+  [test](../crates/wrix-cli/tests/service_cache.rs::celler_layout_separates_managed_cache_data_from_host_authority)
 
 - Host devshell Nix installs the immutable publication hook without shared-cache
   substitution/key trust and fails loudly when required publication settings are
@@ -1323,7 +1320,7 @@ valid unchanged key through the Celler publication/signing path.
 - Key rotation invalidates only the selected Celler view, replaces its key and
   metadata, and requires republishing without old/new trust overlap or peer
   loss.
-  [test?](../crates/wrix-cache/tests/celler_backend.rs::rotation_invalidates_only_the_selected_view)
+  [test](../crates/wrix-cache/tests/celler_backend.rs::rotation_invalidates_only_the_selected_view)
 
 - `wrix service cache status` reports cache size and warns above the default 50
   GiB soft threshold without deleting reachable entries solely to satisfy that
@@ -1379,7 +1376,7 @@ valid unchanged key through the Celler publication/signing path.
 
 - Publication selects the authorized Celler namespace and server signing,
   without granting clients private keys or using a flat-file destination.
-  [test?](../crates/wrix-cache/tests/celler_backend.rs::publication_uses_namespace_server_signing)
+  [system](test-ci:test-cache-celler-native-system)
 - A newly published input-addressed output substitutes through the production
   Celler read endpoint into a fresh isolated sandbox-client store under its
   project public key and `require-sigs=true`, with no fallback or

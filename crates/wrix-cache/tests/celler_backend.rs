@@ -809,8 +809,7 @@ async fn integration_does_not_require_shared_worker_runtime() {
         return;
     }
     if std::env::var_os("WRIX_TEST_RUNTIME_NAMESPACE").is_none() {
-        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../tests/cache/runtime-layout.sh");
+        let script = native::runtime_layout_script();
         let status = std::process::Command::new("unshare")
             .args(["-n", "bash"])
             .arg(script)
@@ -889,7 +888,7 @@ async fn integration_does_not_require_shared_worker_runtime() {
             server.endpoint,
             native::hash(&selected)
         ))
-        .bearer_auth(token)
+        .bearer_auth(&token)
         .send()
         .await
         .unwrap();
@@ -898,7 +897,13 @@ async fn integration_does_not_require_shared_worker_runtime() {
         "Sig: {}:",
         key.as_str().split_once(':').unwrap().0
     )));
-    assert!(server.client("peer").register(RETENTION).await.is_err());
+    let denied_peer = Client::new(
+        &server.endpoint,
+        CacheName::new("peer".into()).unwrap(),
+        &token,
+    )
+    .unwrap();
+    assert!(denied_peer.register(RETENTION).await.is_err());
     let denied = reqwest::Client::new()
         .get(format!("{}private/nix-cache-info", server.endpoint))
         .bearer_auth(native::pull_token())
@@ -925,8 +930,7 @@ async fn production_runtime_excludes_competing_owners_until_process_exit() {
         return;
     }
     if std::env::var_os("WRIX_TEST_RUNTIME_NAMESPACE").is_none() {
-        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../tests/cache/runtime-layout.sh");
+        let script = native::runtime_layout_script();
         let status = std::process::Command::new("unshare")
             .args(["-n", "bash"])
             .arg(script)

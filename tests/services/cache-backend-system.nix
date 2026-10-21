@@ -1,0 +1,47 @@
+{ pkgs, wrix }:
+
+pkgs.testers.runNixOSTest {
+  name = "cache-celler-native-system";
+  requiredFeatures.kvm = false;
+  nodes.machine = {
+    imports = [ (import ../lib/userspace-vm.nix { inherit pkgs; }) ];
+    virtualisation = {
+      memorySize = 2048;
+      diskSize = 4096;
+    };
+    environment.systemPackages = [
+      pkgs.bash
+      pkgs.coreutils
+      pkgs.iproute2
+      pkgs.nix
+      pkgs.openssl
+      pkgs.python3
+      pkgs.util-linux
+      wrix.rustPackage.celler
+    ];
+  };
+  testScript = ''
+    from datetime import timedelta
+
+    machine.start()
+    machine.wait_for_unit("multi-user.target")
+    listing = machine.succeed("${wrix.rustPackage.cacheBackendTests}/bin/celler-backend-tests --list --ignored")
+    assert "publisher_reuses_rust_store_client: test" in listing
+    assert "production_runtime_excludes_competing_owners_until_process_exit: test" in listing
+    environment = (
+        "WRIX_TEST_CELLERD=${wrix.rustPackage.celler}/bin/cellerd "
+        "WRIX_TEST_ISOLATED_STORE_SCRIPT=${../cache/isolated-store.sh} "
+        "WRIX_TEST_RUNTIME_LAYOUT_SCRIPT=${../cache/runtime-layout.sh} "
+    )
+    print(machine.succeed(
+        environment + "${wrix.rustPackage.cacheBackendTests}/bin/celler-backend-tests "
+        "--include-ignored --test-threads=1 --nocapture",
+        timeout=timedelta(minutes=15),
+    ))
+    print(machine.succeed(
+        environment + "${wrix.rustPackage.cacheBackendTests}/bin/celler-auth-tests "
+        "--test-threads=1 --nocapture",
+        timeout=timedelta(minutes=5),
+    ))
+  '';
+}
