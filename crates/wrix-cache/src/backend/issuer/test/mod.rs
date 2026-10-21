@@ -2,6 +2,8 @@ use std::os::unix::fs::{PermissionsExt, symlink};
 
 use super::*;
 
+mod pull;
+
 fn directories() -> (tempfile::TempDir, PathBuf, PathBuf) {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().join("host-authority");

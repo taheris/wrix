@@ -16,6 +16,16 @@ import signed archives over real HTTP with signature enforcement enabled;
 wrong-key and reachable unsigned controls must fail. No physical-host store,
 daemon, configuration or trusted-key list is changed.
 
+Native pull-grant tests use the production RSA issuer and real Celler. They
+check exact common/private read sets, one-day expiry, expired/tampered denial,
+known-peer narinfo and direct-NAR denial, native worker-upload/management
+denial, and fresh Nix imports of publications made after issuance. Readable
+native cache metadata contains only the public signing key. The host-controller
+issuance API holds its current-policy guard through signing; withdrawal narrows
+subsequent credentials without changing old bearers. No credential is
+serializable or included in diagnostic types. Launcher delivery/renewal and
+deployed multi-view routing remain separate integration requirements.
+
 These are component integration tests, not deployed worker, container mount,
 production build sandbox, shared installed-store or performance acceptance.
 Canonical-daemon/native-lock tests retain their isolated-store prerequisite;

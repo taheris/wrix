@@ -12,6 +12,8 @@ use futures::StreamExt as _;
 use serde_json::{Value, json};
 use wrix_cache::backend::{Client, Error};
 
+#[path = "common/auth/mod.rs"]
+mod auth;
 #[path = "common/celler/mod.rs"]
 mod native;
 #[path = "common/registration/mod.rs"]

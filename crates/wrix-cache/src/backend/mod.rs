@@ -3,6 +3,7 @@
 pub mod issuer;
 pub mod layout;
 pub mod publication;
+pub mod pull;
 
 use std::{collections::HashSet, path::PathBuf, time::Duration};
 

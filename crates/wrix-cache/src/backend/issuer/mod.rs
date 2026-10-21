@@ -33,8 +33,10 @@ pub enum Error {
     VerifierMismatch,
     /// OpenSSL could not generate, parse or sign with Celler issuer authority
     Crypto,
-    /// host clock cannot represent the publication credential lifetime
+    /// host clock cannot represent the credential lifetime
     Clock,
+    /// cannot issue exact sandbox read authority: {0}
+    Pull(#[from] super::pull::Error),
 }
 
 /// No private key or credential has a diagnostic or serialization representation.
@@ -140,6 +142,47 @@ impl Authority {
                 (namespace.as_str()): {"r": 1, "w": 1, "cc": 1, "cr": 1, "cq": 1, "cd": 1}
             }}
         });
+        self.sign(&claims)
+    }
+
+    /// Issues one-day pull-only grants after the host controller authorizes this canonical workspace.
+    pub fn pull_credential(
+        &self,
+        workspace: &wrix_core::path::WorkspaceHash,
+    ) -> Result<super::pull::Credential, Error> {
+        self.restricted_pull_credential(workspace, super::pull::Audience::CommonAndPrivate)
+    }
+
+    /// Signs only the subset selected from current host-controlled authorization.
+    pub fn restricted_pull_credential(
+        &self,
+        workspace: &wrix_core::path::WorkspaceHash,
+        audience: super::pull::Audience,
+    ) -> Result<super::pull::Credential, Error> {
+        let views = super::pull::ReadSet::admit(workspace, audience)?;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| Error::Clock)?
+            .as_secs();
+        let expires = now
+            .checked_add(super::pull::LIFETIME_SECONDS)
+            .ok_or(Error::Clock)?;
+        let grants: serde_json::Map<_, _> = views
+            .granted()
+            .map(|view| (view.as_str().to_owned(), serde_json::json!({"r": 1})))
+            .collect();
+        let claims = serde_json::json!({
+            "sub": "wrix-sandbox-pull", "iat": now, "exp": expires,
+            "https://jwt.attic.rs/v1": {"caches": grants}
+        });
+        Ok(super::pull::Credential::new(
+            self.sign(&claims)?,
+            expires,
+            views,
+        )?)
+    }
+
+    fn sign(&self, claims: &serde_json::Value) -> Result<String, Error> {
         let message = format!(
             "{}.{}",
             URL_SAFE_NO_PAD.encode(br#"{"alg":"RS256","typ":"JWT"}"#),
