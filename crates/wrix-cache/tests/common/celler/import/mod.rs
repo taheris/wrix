@@ -27,6 +27,11 @@ impl Store {
             .open(&netrc)
             .unwrap();
         writeln!(file, "machine 127.0.0.1 login fixture password {token}").unwrap();
+        self.copy_with_netrc(endpoint, &netrc, key, path)
+    }
+
+    pub fn copy_with_netrc(&self, endpoint: &str, netrc: &Path, key: &str, path: &Path) -> Output {
+        let root = self.root.path();
         Command::new("nix")
             .args([
                 "--extra-experimental-features",

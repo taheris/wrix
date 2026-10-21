@@ -899,7 +899,7 @@ valid unchanged key through the Celler publication/signing path.
   membership lookups/denylists or active-download cancellation, acknowledges
   bearer reuse and native verification timing, and distinguishes JWT
   verification rotation from Nix signing-key rotation.
-  [judge?](../tests/judges/cache-auth-lifecycle.md#native-expiry)
+  [judge](../tests/judges/cache-auth-lifecycle.md#native-expiry)
 
 ### Host Consumption Exclusion Acceptance
 
