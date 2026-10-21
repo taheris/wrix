@@ -66,6 +66,7 @@ pub enum Error {
 pub struct Store {
     pub(super) connection: Connection,
     _lock: Option<File>,
+    _root_lock: Option<File>,
 }
 
 impl Store {
@@ -93,6 +94,7 @@ impl Store {
         Ok(Some(Self {
             connection,
             _lock: None,
+            _root_lock: None,
         }))
     }
 
@@ -103,6 +105,17 @@ impl Store {
         if !create && !exists(&path)? {
             return Err(Error::Uninitialized);
         }
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let root_lock = OpenOptions::new()
+            .read(true)
+            .custom_flags(
+                i32::try_from(
+                    (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::DIRECTORY).bits(),
+                )
+                .map_err(|_| Error::PrivateState)?,
+            )
+            .open(host.roots().state())?;
+        acquire(&root_lock, deadline)?;
         let existed = exists(&lock_path)?;
         let lock = OpenOptions::new()
             .read(true)
@@ -116,19 +129,7 @@ impl Store {
             )
             .open(&lock_path)?;
         private_file(&lock_path)?;
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        loop {
-            match lock.try_lock_exclusive() {
-                Ok(()) => break,
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                    if std::time::Instant::now() >= deadline {
-                        return Err(Error::Busy);
-                    }
-                    std::thread::sleep(Duration::from_millis(10));
-                }
-                Err(error) => return Err(error.into()),
-            }
-        }
+        acquire(&lock, deadline)?;
         if !exists(&path)? {
             if !create || existed {
                 return Err(Error::Unsupported);
@@ -150,6 +151,7 @@ impl Store {
         Ok(Self {
             connection,
             _lock: Some(lock),
+            _root_lock: Some(root_lock),
         })
     }
 
@@ -297,6 +299,21 @@ impl Store {
         tx.execute("DELETE FROM integration", [])?;
         tx.commit()?;
         Ok(())
+    }
+}
+
+fn acquire(file: &File, deadline: std::time::Instant) -> Result<(), Error> {
+    loop {
+        match file.try_lock_exclusive() {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(Error::Busy);
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => return Err(error.into()),
+        }
     }
 }
 
