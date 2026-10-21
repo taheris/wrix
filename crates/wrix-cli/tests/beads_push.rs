@@ -293,7 +293,7 @@ impl Fixture {
                 "@REAL_GIT@",
                 &common::shell_single_quote(&find_program("git")?.display().to_string()),
             );
-        write_executable(&self.fake_bin.join("git"), &script)
+        common::write_git_fixture(&self.fake_bin.join("git"), &script)
     }
 
     fn bd_lines(&self) -> TestResult<Vec<String>> {

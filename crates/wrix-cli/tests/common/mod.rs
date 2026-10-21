@@ -191,6 +191,16 @@ pub fn write_prek_hooks(path: &Path) -> TestResult<PathBuf> {
     Ok(path.canonicalize()?)
 }
 
+// Admission runs Git with a controlled PATH, which need not contain Bash on Nix hosts.
+pub fn write_git_fixture(path: &Path, script: &str) -> TestResult {
+    let bash = command_path("bash")?.canonicalize()?;
+    let body = script
+        .strip_prefix("#!/usr/bin/env bash\n")
+        .ok_or("Git fixture must start with the Bash shebang")?;
+    fs::write(path, format!("#!{}\n{body}", bash.display()))?;
+    set_mode(path, 0o700)
+}
+
 pub fn write_online_success_git(path: &Path) -> TestResult<PathBuf> {
     fs::create_dir_all(path)?;
     let real_git = command_path("git")?;
@@ -199,8 +209,7 @@ pub fn write_online_success_git(path: &Path) -> TestResult<PathBuf> {
         shell_single_quote(&real_git.display().to_string()),
     );
     let git = path.join("git");
-    fs::write(&git, script)?;
-    set_mode(&git, 0o700)?;
+    write_git_fixture(&git, &script)?;
     Ok(path.to_path_buf())
 }
 
@@ -228,8 +237,7 @@ exec @REAL_GIT@ "$@"
         &shell_single_quote(&real_git.display().to_string()),
     );
     let git = path.join("git");
-    fs::write(&git, script)?;
-    set_mode(&git, 0o700)?;
+    write_git_fixture(&git, &script)?;
     Ok(path.to_path_buf())
 }
 
@@ -291,8 +299,7 @@ exec @REAL_GIT@ "$@"
         &shell_single_quote(&real_git.display().to_string()),
     );
     let git = path.join("git");
-    fs::write(&git, script)?;
-    set_mode(&git, 0o700)?;
+    write_git_fixture(&git, &script)?;
     Ok(path.to_path_buf())
 }
 
