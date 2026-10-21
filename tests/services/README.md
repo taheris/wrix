@@ -51,6 +51,27 @@ inspection is CI-only:
 nix run .#legacyPackages.x86_64-linux.ciApps.test-cache-celler-packaging
 ```
 
+## Publication-only host configuration
+
+The host bootstrap adds only its retained immutable publication hook. It does
+not add shared substituters, signing-key trust, pull tokens,
+builder-substitution settings or negative-cache TTL overrides. Existing operator
+settings and credential files remain untouched; hooks still require their normal
+Nix privilege support. A passive native helper checks effective inherited
+settings against retained current/peer key material, native view names, and
+known file/loopback endpoint aliases. Unknown metadata fails rather than being
+repaired or treated as empty. The helper parses the actual service endpoint
+schema; a real CLI conformance test checks the producer/consumer boundary.
+
+The native VM also runs host bootstrap and adversarial signed-artifact tests.
+Production Celler serves the signed sandbox positive control. A disposable file
+mirror is an adversarial fixture, never a production transport fallback:
+deliberately trusting it imports the same malicious bytes, while the generated
+production host configuration does not. This proves configuration/signature
+exclusion, not correct build execution or a complete first/cached direnv
+publication pipeline. The real devshell lifecycle separately inspects effective
+Nix configuration inside the guest.
+
 ## Verifier boundaries
 
 `specs/services.md` binds Rust-owned contracts to native tests and assembled

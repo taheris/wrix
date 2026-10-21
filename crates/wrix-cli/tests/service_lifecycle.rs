@@ -840,6 +840,21 @@ fn sandbox_cache_endpoint_respects_the_selected_runtime() -> TestResult {
 }
 
 #[test]
+fn host_policy_decoder_consumes_real_service_endpoint_metadata() -> TestResult {
+    let fixture = Fixture::new()?;
+    let output = fixture.run("endpoints")?;
+    assert!(output.status.success(), "{}", output.stderr);
+    let endpoint =
+        wrix_cache::host_policy::cache_endpoint(&output.stdout)?.ok_or("cache endpoint missing")?;
+    assert_eq!(
+        endpoint.ip(),
+        std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+    );
+    assert_eq!(endpoint.port(), fixture.port("cache_http")?);
+    Ok(())
+}
+
+#[test]
 fn cache_guest_endpoint_and_key_reach_both_launch_commands() -> TestResult {
     for mode in [LaunchCommand::Run, LaunchCommand::Spawn] {
         for layout in ["", ".loom/beads/cache-route", ".loom/integration"] {

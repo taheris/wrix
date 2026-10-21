@@ -29,6 +29,7 @@ let
       ".config/nextest.toml" = ../../.config/nextest.toml;
       "tests/prepare-native-fixtures.sh" = ../../tests/prepare-native-fixtures.sh;
       "lib/util/git-ssh-setup.sh" = ../util/git-ssh-setup.sh;
+      "lib/services/host-nix-config.sh" = ./host-nix-config.sh;
       "lib/sandbox/network-bootstrap.sh" = ../sandbox/network-bootstrap.sh;
       "tests/standalone/notify-runtime.sh" = ../../tests/standalone/notify-runtime.sh;
     };
@@ -213,14 +214,17 @@ in
     doInstallCargoArtifacts = false;
     buildPhase = ''
       runHook preBuild
-      cargo test --offline --locked --no-run -p wrix-cache --test celler_backend \
-        ''${CARGO_PROFILE:+--profile "$CARGO_PROFILE"} --message-format json > compiled-tests.json
+      : > compiled-tests.json
+      for target in celler_backend host_publication_only host_signed_exclusion; do
+        cargo test --offline --locked --no-run -p wrix-cache --test "$target" \
+          ''${CARGO_PROFILE:+--profile "$CARGO_PROFILE"} --message-format json >> compiled-tests.json
+      done
       cargo test --offline --locked --no-run -p wrix-service --test celler_auth \
         ''${CARGO_PROFILE:+--profile "$CARGO_PROFILE"} --message-format json >> compiled-tests.json
       runHook postBuild
     '';
     installPhase = ''
-      for target in celler_backend celler_auth; do
+      for target in celler_backend celler_auth host_publication_only host_signed_exclusion; do
         executable=$(${pkgs.jq}/bin/jq -r --arg target "$target" \
           'select(.reason == "compiler-artifact" and .target.name == $target and .profile.test) | .executable' \
           compiled-tests.json)
@@ -247,6 +251,7 @@ in
       ''
         install -Dm755 "${workspace.bin}/bin/wrix-service-supervisor" "$out/bin/wrix-service-supervisor"
       '';
+  hostCachePolicy = mkBinaryPackage "wrix-host-cache-policy";
   cacheHook = mkBinaryPackage "wrix-cache-hook";
   cachePublish = mkBinaryPackage "wrix-cache-publish";
 }

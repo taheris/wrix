@@ -877,7 +877,7 @@ valid unchanged key through the Celler publication/signing path.
 
 - Host-generated Nix configuration excludes every shared-service cache view and
   signing key, independent of repository identity or server signatures.
-  [test?](../crates/wrix-cache/tests/celler_auth.rs::host_trust_excludes_all_shared_service_views_and_keys)
+  [test](../crates/wrix-cache/tests/host_publication_only.rs::host_configuration_is_publication_only_and_preserves_operator_settings)
 
 - Sandbox pull tokens have a one-day nominal lifetime from issuance, rather than
   adopting an unbounded or silently extended validity period.
@@ -912,7 +912,7 @@ valid unchanged key through the Celler publication/signing path.
 - Known effective inherited shared-cache substituters/keys block enabled host
   integration with actionable guidance, without rewriting operator settings,
   deleting imported outputs or claiming their recall.
-  [test?](../crates/wrix-cache/tests/host_publication_only.rs::inherited_shared_cache_trust_requires_explicit_remediation)
+  [test](../crates/wrix-cache/tests/host_publication_only.rs::inherited_shared_cache_trust_requires_remediation_before_hook_mutation)
 - Publication responses cannot authorize host substitution, public
   classification, code execution or build/check success.
   [test?](../crates/wrix-cache/tests/host_publication_only.rs::backend_responses_do_not_grant_host_trust)

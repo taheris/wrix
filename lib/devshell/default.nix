@@ -169,6 +169,7 @@ in
               WRIX_SERVICE_BIN="$_wrix_service_bin" \
                 WRIX_CACHE_HOOK_BIN="${rustCli.cacheHook}/bin/wrix-cache-hook" \
                 WRIX_CACHE_PUBLISH_BIN="${rustCli.cachePublish}/bin/wrix-cache-publish" \
+                WRIX_HOST_CACHE_POLICY_BIN="${rustCli.hostCachePolicy}/bin/wrix-host-cache-policy" \
                 WRIX_BASH_BIN="${pkgs.bash}/bin/bash" \
                 WRIX_HOST_NIX_CONFIG_PRINT=1 \
                 ${pkgs.bash}/bin/bash ${hostNixConfig}

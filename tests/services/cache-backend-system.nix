@@ -32,6 +32,8 @@ pkgs.testers.runNixOSTest {
         "WRIX_TEST_CELLERD=${wrix.rustPackage.celler}/bin/cellerd "
         "WRIX_TEST_ISOLATED_STORE_SCRIPT=${../cache/isolated-store.sh} "
         "WRIX_TEST_RUNTIME_LAYOUT_SCRIPT=${../cache/runtime-layout.sh} "
+        "WRIX_TEST_HOST_BOOTSTRAP_SCRIPT=${../../lib/services/host-nix-config.sh} "
+        "WRIX_TEST_HOST_CACHE_POLICY_BIN=${wrix.rustPackage.hostCachePolicy}/bin/wrix-host-cache-policy "
     )
     print(machine.succeed(
         environment + "${wrix.rustPackage.cacheBackendTests}/bin/celler-backend-tests "
@@ -43,5 +45,11 @@ pkgs.testers.runNixOSTest {
         "--test-threads=1 --nocapture",
         timeout=timedelta(minutes=5),
     ))
+    for binary in ["host-publication-only-tests", "host-signed-exclusion-tests"]:
+        print(machine.succeed(
+            environment + "${wrix.rustPackage.cacheBackendTests}/bin/" + binary
+            + " --test-threads=1 --nocapture",
+            timeout=timedelta(minutes=5),
+        ))
   '';
 }

@@ -43,6 +43,7 @@ let
     export WRIX_SERVICE_IMAGE_DIGEST=${escapeShellArg defaultShell.WRIX_SERVICE_IMAGE_DIGEST}
     cd /home/alice/devshell-repo
     source ${defaultHook}
+    ${pkgs.nix}/bin/nix config show --json > /home/alice/default-host-nix-config.json
     mkfifo -m 600 /home/alice/devshell-parent.lifetime
     exec 3<>/home/alice/devshell-parent.lifetime
     touch /home/alice/default-hook.ready
@@ -76,6 +77,7 @@ pkgs.testers.runNixOSTest {
 
   testScript = ''
     from datetime import timedelta
+    import json
     ${builtins.readFile ../lib/guest-store.py}
 
     def as_alice(command: str) -> str:
@@ -132,6 +134,16 @@ pkgs.testers.runNixOSTest {
                 "journalctl --user -u wrix-devshell-parent.service --no-pager -n 80"
             ), timeout=timedelta(seconds=15))[1])
             raise
+        config = json.loads(machine.succeed("cat /home/alice/default-host-nix-config.json"))
+        endpoints = json.loads(machine.succeed(as_alice(
+            "cd /home/alice/devshell-repo; ${wrix.rustPackage.wrix}/bin/wrix service endpoints"
+        )))
+        public_key = machine.succeed("cat " + shlex.quote(endpoints["state_root"] + "/keys/cache.pub")).strip()
+        assert public_key not in config["trusted-public-keys"]["value"]
+        for substituter in config["substituters"]["value"]:
+            assert endpoints["cache_root"] not in substituter
+            assert ":" + str(endpoints["endpoints"]["cache_http"]["port"]) not in substituter
+        assert config["post-build-hook"]["value"].endswith("/bin/wrix-cache-post-build-hook")
         machine.succeed(
             as_alice(
                 "podman inspect --format '{{.State.Running}}' devshell-repo-service | grep true"
