@@ -5,7 +5,7 @@
 }:
 
 let
-  inherit (pkgs.lib) escapeShellArg makeBinPath mkForce;
+  inherit (pkgs.lib) escapeShellArg makeBinPath;
 
   syncBranch = "team-beads";
   serviceImage = import ../../lib/services/image.nix {
@@ -132,15 +132,19 @@ let
       wait "$server_pid" || [[ "$?" -eq 143 ]]
     }
     trap stop_bootstrap EXIT
-    for _ in {1..200}; do
-      [[ ! -S "$socket" ]] || break
+    deadline=$((SECONDS + 30))
+    while true; do
+      remaining=$((deadline - SECONDS))
+      if (( remaining <= 0 )); then
+        cat "$HOME/beads-init.log" "$HOME/beads-init-probe.log" >&2
+        exit 1
+      fi
+      if timeout "''${remaining}s" dolt --host 127.0.0.1 --port 13307 --user root --password "" --no-tls \
+        sql -q 'SELECT 1' >"$HOME/beads-init-probe.log" 2>&1 && [[ -S "$socket" ]]; then
+        break
+      fi
       kill -0 "$server_pid"
-      sleep 0.1
     done
-    if [[ ! -S "$socket" ]]; then
-      cat "$HOME/beads-init.log" >&2
-      exit 1
-    fi
     export BEADS_DOLT_SERVER_SOCKET="$socket"
     export BEADS_DOLT_AUTO_START=0
 
@@ -329,7 +333,19 @@ let
     ${commonEnvironment}
 
     repo="$HOME/beads-repo"
-    command='[[ "''${BEADS_DOLT_AUTO_START:-}" == "0" ]] && [[ "''${BEADS_DOLT_SERVER_SOCKET:-}" == /run/wrix/dolt/dolt.sock ]] && [[ -S "$BEADS_DOLT_SERVER_SOCKET" ]] && [[ ! -e .beads/issues.jsonl ]] && bd --readonly sql "SELECT 1" >/dev/null && bd dolt pull && bd dolt push && touch /workspace/dolt-probe-passed'
+    socket=$(cd "$repo" && wrix service dolt socket)
+    [[ "$socket" == "$repo/.wrix/dolt.sock" ]]
+    command=$(cat <<'PROBE'
+    [[ "''${BEADS_DOLT_AUTO_START:-}" == 0 ]] || { echo 'probe: Dolt auto-start was not disabled' >&2; exit 1; }
+    [[ "''${BEADS_DOLT_SERVER_SOCKET:-}" == /workspace/.wrix/dolt.sock ]] || { echo 'probe: Dolt socket endpoint was not delivered' >&2; exit 1; }
+    [[ -S "$BEADS_DOLT_SERVER_SOCKET" ]] || { echo 'probe: Dolt socket is unavailable' >&2; exit 1; }
+    [[ ! -e .beads/issues.jsonl ]] || { echo 'probe: legacy JSONL workspace state is present' >&2; exit 1; }
+    bd --readonly sql 'SELECT 1' >/dev/null
+    bd dolt pull
+    bd dolt push
+    touch /workspace/dolt-probe-passed
+    PROBE
+    )
     jq -n \
       --arg workspace "$repo" \
       --arg command "$command" \
@@ -428,22 +444,12 @@ pkgs.testers.runNixOSTest {
   requiredFeatures.kvm = false;
 
   nodes.machine = {
+    imports = [ (import ../lib/userspace-vm.nix { inherit pkgs; }) ];
     users.users.alice = {
       isNormalUser = true;
       uid = 1000;
     };
     virtualisation = {
-      # VM shares need ordinary file I/O, not file handles or device-node creation.
-      host.pkgs = mkForce (
-        pkgs
-        // {
-          virtiofsd = pkgs.writeShellScriptBin "virtiofsd" ''
-            set -euo pipefail
-            exec ${pkgs.virtiofsd}/bin/virtiofsd \
-              --inode-file-handles=never --modcaps=-mknod "$@"
-          '';
-        }
-      );
       cores = 2;
       diskSize = 8192;
       memorySize = 4096;
@@ -452,7 +458,7 @@ pkgs.testers.runNixOSTest {
   };
 
   testScript = ''
-    import shlex
+    ${builtins.readFile ../lib/guest-store.py}
 
     def as_alice(command: str) -> str:
         environment = (
@@ -463,6 +469,7 @@ pkgs.testers.runNixOSTest {
 
     machine.start()
     machine.wait_for_unit("multi-user.target")
+    register_guest_store(machine, "${pkgs.nix}/bin/nix-store", ["${fixtureSetup}"])
     machine.succeed("loginctl enable-linger alice")
     machine.wait_for_unit("user@1000.service")
     machine.succeed(as_alice("systemctl --user show-environment"))

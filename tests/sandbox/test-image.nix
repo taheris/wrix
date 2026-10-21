@@ -28,6 +28,7 @@
   shipNix ? false,
   agent ? "claude",
   agentPkg ? null,
+  packages ? null,
 }:
 
 let
@@ -36,15 +37,16 @@ let
     pkgs = testPkgs;
     inherit treefmt;
   };
+  selectedProfile = profiles.base // pkgs.lib.optionalAttrs (packages != null) { inherit packages; };
   baseProfile =
     if shipNix then
-      profiles.base
+      selectedProfile
       // {
         name = "nix";
-        packages = (profiles.base.packages or [ ]) ++ [ testPkgs.nix ];
+        packages = selectedProfile.packages ++ [ testPkgs.nix ];
       }
     else
-      profiles.base;
+      selectedProfile;
   selectedAgentPkg =
     if agentPkg != null then
       agentPkg

@@ -43,8 +43,10 @@ let
     export WRIX_SERVICE_IMAGE_DIGEST=${escapeShellArg defaultShell.WRIX_SERVICE_IMAGE_DIGEST}
     cd /home/alice/devshell-repo
     source ${defaultHook}
+    mkfifo -m 600 /home/alice/devshell-parent.lifetime
+    exec 3<>/home/alice/devshell-parent.lifetime
     touch /home/alice/default-hook.ready
-    exec ${pkgs.coreutils}/bin/sleep infinity
+    exec ${pkgs.coreutils}/bin/cat <&3
   '';
   disabledProbe = pkgs.writeShellScript "wrix-disabled-cache-devshell-probe" ''
     set -euo pipefail
@@ -60,6 +62,7 @@ pkgs.testers.runNixOSTest {
   requiredFeatures.kvm = false;
 
   nodes.machine = {
+    imports = [ (import ../lib/userspace-vm.nix { inherit pkgs; }) ];
     users.users.alice = {
       isNormalUser = true;
       uid = 1000;
@@ -72,7 +75,7 @@ pkgs.testers.runNixOSTest {
   };
 
   testScript = ''
-    import shlex
+    ${builtins.readFile ../lib/guest-store.py}
 
     def as_alice(command: str) -> str:
         environment = (
@@ -83,6 +86,7 @@ pkgs.testers.runNixOSTest {
 
     machine.start()
     machine.wait_for_unit("multi-user.target")
+    register_guest_store(machine, "${pkgs.nix}/bin/nix-store", ["${defaultParent}", "${disabledProbe}"])
     machine.succeed("loginctl enable-linger alice")
     machine.succeed(as_alice("whoami"))
     machine.wait_for_unit("user@1000.service")
@@ -119,7 +123,7 @@ pkgs.testers.runNixOSTest {
                 "timeout 3s systemctl --user stop wrix-devshell-parent.service"
             )
         )
-        machine.sleep(1)
+        machine.fail(as_alice("systemctl --user is-active --quiet wrix-devshell-parent.service"))
         machine.succeed(
             as_alice(
                 "podman inspect --format '{{.State.Running}}' devshell-repo-service | grep true"

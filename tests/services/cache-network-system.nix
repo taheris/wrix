@@ -102,7 +102,9 @@ let
     repo="$HOME/cache-network-repo"
     cd "$repo"
     wrix service start
+    printf 'cache probe: service started\n'
     wrix service endpoints > "$HOME/endpoints.json"
+    printf 'cache probe: endpoints loaded\n'
     state_root=$(jq -r .state_root "$HOME/endpoints.json")
     cache_root=$(jq -r .cache_root "$HOME/endpoints.json")
     cache_port=$(jq -r .endpoints.cache_http.port "$HOME/endpoints.json")
@@ -114,7 +116,9 @@ let
     printf '%s\n' "$cache_root" > "$repo/cache-root"
     printf 'service cache payload\n' > "$cache_root/nar/probe.nar"
     printf 'host-only store sentinel\n' > "$HOME/host-sentinel"
+    printf 'cache probe: importing host-only sentinel\n'
     nix-store --add "$HOME/host-sentinel" > "$repo/host-store-path"
+    printf 'cache probe: sentinel imported\n'
     podman inspect cache-network-repo-service | jq -e --arg cache "$cache_root" '
       .[0].Mounts | any(.Source == $cache and .Destination == "/cache" and .RW == false)
     ' >/dev/null
@@ -154,12 +158,16 @@ let
       > "$HOME/spawn.json"
 
     export WRIX_NETWORK=limit
+    printf 'cache probe: launching spawn\n'
     ${wrix.rustPackage.wrix}/bin/wrix \
       --profile-config ${profileConfig} \
       spawn --spawn-config "$HOME/spawn.json"
+    printf 'cache probe: spawn completed\n'
     [[ -f "$repo/probe-passed" ]]
     rm "$repo/probe-passed"
+    printf 'cache probe: launching run\n'
     script -qefc "${wrix.rustPackage.wrix}/bin/wrix --profile-config ${profileConfig} run '$repo' bash /workspace/probe.sh" /dev/null
+    printf 'cache probe: run completed\n'
     [[ -f "$repo/probe-passed" ]]
     wrix service endpoints > "$HOME/endpoints-after.json"
     cmp "$HOME/endpoints.json" "$HOME/endpoints-after.json"
@@ -176,6 +184,7 @@ pkgs.testers.runNixOSTest {
   requiredFeatures.kvm = false;
 
   nodes.machine = {
+    imports = [ (import ../lib/userspace-vm.nix { inherit pkgs; }) ];
     users.users.alice = {
       isNormalUser = true;
       uid = 1000;
@@ -189,7 +198,8 @@ pkgs.testers.runNixOSTest {
   };
 
   testScript = ''
-    import shlex
+    ${builtins.readFile ../lib/guest-store.py}
+    from datetime import timedelta
 
     def as_alice(command: str) -> str:
         environment = (
@@ -200,6 +210,7 @@ pkgs.testers.runNixOSTest {
 
     machine.start()
     machine.wait_for_unit("multi-user.target")
+    register_guest_store(machine, "${pkgs.nix}/bin/nix-store", ["${fixtureSetup}", "${sandboxProbe}", "${stopService}"])
     machine.succeed("loginctl enable-linger alice")
     machine.wait_for_unit("user@1000.service")
     machine.succeed(as_alice("systemctl --user show-environment"))
@@ -215,7 +226,7 @@ pkgs.testers.runNixOSTest {
     machine.wait_until_succeeds("curl -fsS http://127.0.0.1:29999 >/dev/null")
 
     with subtest("limit mode reaches only the assembled project cache endpoint"):
-        machine.succeed(as_alice("${sandboxProbe}"), timeout=300)
+        machine.succeed(as_alice("${sandboxProbe}"), timeout=timedelta(minutes=15))
         machine.succeed(
             as_alice(
                 "podman inspect --format '{{.State.Running}}' "

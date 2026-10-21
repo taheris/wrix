@@ -7,11 +7,12 @@ import tempfile
 import unittest
 
 
-LIFECYCLE, CACHE, LIBRARY, SYSTEM, BASH, SETPRIV = sys.argv[1:]
+LIFECYCLE, CACHE, LIBRARY, SYSTEM, BASH = sys.argv[1:]
 REQUIREMENTS = {
     "platforms": ["aarch64-linux", "x86_64-linux"],
-    "capabilities": ["virtiofsd-capabilities"],
+    "capabilities": [],
 }
+VIRTIOFS_REQUIREMENTS = dict(REQUIREMENTS, capabilities=["virtiofsd-capabilities"])
 CAPABILITIES = {
     "CAP_CHOWN": 0, "CAP_DAC_OVERRIDE": 1, "CAP_DAC_READ_SEARCH": 2,
     "CAP_FOWNER": 3, "CAP_FSETID": 4, "CAP_SETGID": 6, "CAP_SETUID": 7,
@@ -25,12 +26,10 @@ class VmPrerequisites(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="wrix-vm-prerequisite-", dir="/tmp")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.root.chmod(0o777)
         self.calls = self.root / "calls"
         self.builds = self.root / "builds"
         for path in (self.calls, self.builds):
-            path.touch(mode=0o666)
-            path.chmod(0o666)
+            path.touch()
         self.env = dict(
             os.environ, WRIX_TEST_VM_ROOT=str(self.root),
             WRIX_TEST_VM_CALLS=str(self.calls), WRIX_TEST_VM_BUILDS=str(self.builds),
@@ -91,7 +90,7 @@ class VmPrerequisites(unittest.TestCase):
     def test_kernel_preflight_retains_metadata_and_never_executes_when_unavailable(self):
         result = subprocess.run(
             [BASH + "/bin/bash", "-c", 'source "$1"; verifier_run fixture "$2" touch "$3"',
-             "fixture", LIBRARY, json.dumps(REQUIREMENTS), str(self.root / "executed")],
+             "fixture", LIBRARY, json.dumps(VIRTIOFS_REQUIREMENTS), str(self.root / "executed")],
             env=self.env, capture_output=True, text=True, check=False,
         )
         masks = {line.split()[0]: int(line.split()[1], 16)
@@ -101,7 +100,7 @@ class VmPrerequisites(unittest.TestCase):
         available = os.geteuid() != 0 or available_bits & REQUIRED_BITS == REQUIRED_BITS
         self.assertEqual(result.returncode, 0 if available else 77, result.stderr)
         record = json.loads(result.stdout)
-        self.assertEqual(record["execution"], dict(REQUIREMENTS, platform=SYSTEM))
+        self.assertEqual(record["execution"], dict(VIRTIOFS_REQUIREMENTS, platform=SYSTEM))
         self.assertEqual(record["outcome"], "passed" if available else "skipped")
         self.assertEqual((self.root / "executed").exists(), available)
         if not available:
@@ -131,10 +130,9 @@ class VmPrerequisites(unittest.TestCase):
                     self.assertEqual(json.loads(result.stderr), json.loads(probe.stdout))
 
     def execute_wrapper(self, package, guest="pass", build="pass"):
-        prefix = [] if os.geteuid() != 0 else [SETPRIV, "--reuid=65534", "--regid=65534", "--clear-groups"]
         env = dict(self.env, WRIX_TEST_VM_STATUS=guest, WRIX_TEST_VM_BUILD_STATUS=build)
         return subprocess.run(
-            [*prefix, BASH + "/bin/bash", "-c", 'source "$1"; verifier_run fixture "$2" "$3"',
+            [BASH + "/bin/bash", "-c", 'source "$1"; verifier_run fixture "$2" "$3"',
              "fixture", LIBRARY, json.dumps(REQUIREMENTS),
              package + "/bin/" + Path(package).name.split("-", 1)[1]],
             cwd=self.root, env=env, capture_output=True, text=True, check=False,
@@ -148,7 +146,9 @@ class VmPrerequisites(unittest.TestCase):
                 self.builds.write_text("")
                 result = self.execute_wrapper(package)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(json.loads(result.stdout)["outcome"], "passed")
+                record = json.loads(result.stdout)
+                self.assertEqual(record["outcome"], "passed")
+                self.assertEqual(record["execution"], dict(REQUIREMENTS, platform=SYSTEM))
                 self.assertEqual(self.builds.read_text().splitlines(),
                                  [f"{self.root}#legacyPackages.{SYSTEM}.systemTests.{test}.driver"])
                 directories = self.calls.read_text().splitlines()

@@ -91,6 +91,28 @@ let
     baseDirect = mkTestImage {
       agent = "direct";
       agentPkg = import ./sandbox/fixtures/command-runner.nix { pkgs = linuxPkgs; };
+      packages = with linuxPkgs; [
+        bash
+        coreutils
+        curl
+        findutils
+        gawk
+        getent.provider
+        git
+        gnugrep
+        gnused
+        iproute2
+        iptables
+        iputils
+        jq
+        libcap
+        netcat
+        nftables
+        nix
+        openssh
+        procps
+        util-linux
+      ];
     };
     basePi = mkTestImage {
       agent = "pi";
@@ -189,6 +211,7 @@ let
   };
 
   systemTests = optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+    services-userspace-vm-smoke = import ./services/userspace-vm.nix { inherit pkgs; };
     beads-live-system = import ./services/beads-system.nix {
       inherit pkgs wrix;
       beadsImage = testImages.baseBeads;

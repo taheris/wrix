@@ -56,7 +56,6 @@ pkgs.runCommandLocal "system-test-prerequisites"
   ''
     set -euo pipefail
     python3 ${./test_vm_prerequisites.py} \
-      ${lifecycle} ${cache} ${../lib/verifier.sh} ${system} ${pkgs.bash} \
-      ${pkgs.util-linux}/bin/setpriv
+      ${lifecycle} ${cache} ${../lib/verifier.sh} ${system} ${pkgs.bash}
     touch "$out"
   ''

@@ -36,24 +36,34 @@ passing transport results.
 
 The Linux `test-services-devshell-start-independent` and
 `test-services-limit-mode-cache-endpoint` CI apps build the fixtures' packaged
-NixOS test drivers, then execute their unchanged guest assertions in an isolated
+NixOS test drivers, then execute their real guest assertions in an isolated
 temporary directory. Runner preparation does not realize VM test results. The
 ordinary `systemTests` derivations remain available for direct Nix builds.
 
-The `virtiofsd-capabilities` prerequisite checks the VM executor, not a Nix
-daemon or remote builder. The pinned virtiofsd, with the NixOS driver's
-`--sandbox=none` and default inode handles, installs CHOWN, DAC_OVERRIDE,
-DAC_READ_SEARCH, FOWNER, FSETID, SETGID, SETUID, MKNOD and SETFCAP when run as
-root. A capability absent from the Linux bounding, permitted and inheritable
-sets cannot be acquired by the executor. A dropped bounding bit alone is not
-sufficient evidence when the capability is already permitted or inheritable.
-Unprivileged virtiofsd does not install this root capability set. Malformed
-capability data is a preflight failure, not an exemption.
+Service fixtures select the pinned upstream QEMU module's standard 9p transport
+instead of root virtiofsd. This test-only selection needs no host capabilities,
+FUSE, TUN, mount operations or KVM. Production container transports and
+isolation are unchanged. `services-userspace-vm-smoke` boots a real guest,
+verifies both 9p exports, rejects a write to the read-only store export and
+exercises the writable shared directory. The generic virtiofsd capability guard
+remains tested for executors that actually require it; these 9p drivers do not
+declare it.
 
-Both fixtures permit TCG (`requiredFeatures.kvm = false`); missing KVM and
-container nesting are not reasons to skip them. Successful preflight does not
-guarantee a passing VM: driver preparation, invocation and guest failures,
-including exit 77, remain failures. No log text is used to classify a skip.
+Guest setup imports exact native registration records for the selected fixture
+roots from the executor's private Nix store, then checks the guest's recursive
+closure and root hashes. This makes immutable package recipes and already-built
+artifacts usable without downloading or building their unrelated build outputs.
+It does not mount an executor daemon or database into production containers.
+
+Readiness checks observe units, SQL responses, socket presence and guest-written
+markers with bounded deadlines. Caller lifetime uses a blocking FIFO rather than
+a sleep. The cache probe uses a smaller package set through the real image and
+entrypoint constructors and allows a bounded cold-image TCG execution budget.
+
+Fixtures permit TCG (`requiredFeatures.kvm = false`); missing KVM and container
+nesting are not reasons to skip them. Driver preparation, invocation and guest
+failures, including exit 77, remain failures. No log text is used to classify a
+skip.
 
 A genuine prerequisite gap produces exit 77 and structured skipped metadata.
 Loom's declared test-ci capability policy permits that gap for worker-stage
