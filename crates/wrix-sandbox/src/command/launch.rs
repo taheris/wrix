@@ -832,15 +832,25 @@ impl KrunPlan {
         }
     }
 
-    fn env_pairs(&self) -> Vec<(String, String)> {
-        let mut pairs = vec![
-            (String::from("WRIX_TERM_ROWS"), self.rows.to_string()),
-            (String::from("WRIX_TERM_COLS"), self.columns.to_string()),
-        ];
-        if let Some(command) = &self.command {
-            pairs.push((String::from("WRIX_KRUN_CMD"), command.clone()));
+    fn configure(&self, command: &mut ProcessCommand, interactive: bool) {
+        command
+            .arg("--runtime")
+            .arg("krun")
+            .arg("--userns=keep-id:uid=0,gid=0")
+            .arg("--user=0:0")
+            .arg("--entrypoint")
+            .arg(if interactive {
+                "/krun-relay"
+            } else {
+                "/krun-init.sh"
+            })
+            .arg("-e")
+            .arg(format!("WRIX_TERM_ROWS={}", self.rows))
+            .arg("-e")
+            .arg(format!("WRIX_TERM_COLS={}", self.columns));
+        if let Some(args) = &self.command {
+            command.arg("-e").arg(format!("WRIX_KRUN_CMD={args}"));
         }
-        pairs
     }
 }
 
@@ -1063,14 +1073,6 @@ impl<'a> Plan<'a> {
                 command.arg("-i").arg("-t");
             }
             command.arg("--cap-add=NET_ADMIN");
-            if krun.is_some() {
-                command
-                    .arg("--runtime")
-                    .arg("krun")
-                    .arg("--userns=keep-id")
-                    .arg("--entrypoint")
-                    .arg("/krun-relay");
-            }
             command
                 .arg(format!(
                     "--memory={}m",
@@ -1107,9 +1109,7 @@ impl<'a> Plan<'a> {
                 command.arg("-e").arg(format!("{key}={value}"));
             }
             if let Some(krun) = &krun {
-                for (key, value) in krun.env_pairs() {
-                    command.arg("-e").arg(format!("{key}={value}"));
-                }
+                krun.configure(&mut command, !self.spawn());
             }
             command
                 .arg("-w")
@@ -2835,6 +2835,45 @@ mod test {
         vmnet_interface,
     };
     use crate::command::config::{MountMode, Platform, ProfileMount, SpawnMount};
+
+    #[test]
+    fn krun_configuration_maps_host_identity_to_managed_guest_root() {
+        for (interactive, entrypoint) in [(true, "/krun-relay"), (false, "/krun-init.sh")] {
+            for args in [None, Some(String::from("'/bin/bash' 'two words'"))] {
+                let plan = super::KrunPlan {
+                    rows: 31,
+                    columns: 97,
+                    command: args.clone(),
+                };
+                let mut command = std::process::Command::new("podman");
+                plan.configure(&mut command, interactive);
+                let actual: Vec<_> = command
+                    .get_args()
+                    .map(|arg| arg.to_str().unwrap())
+                    .collect();
+                let mut expected = vec![
+                    "--runtime",
+                    "krun",
+                    "--userns=keep-id:uid=0,gid=0",
+                    "--user=0:0",
+                    "--entrypoint",
+                    entrypoint,
+                    "-e",
+                    "WRIX_TERM_ROWS=31",
+                    "-e",
+                    "WRIX_TERM_COLS=97",
+                ]
+                .into_iter()
+                .map(String::from)
+                .collect::<Vec<_>>();
+                if let Some(args) = &args {
+                    expected.extend([String::from("-e"), format!("WRIX_KRUN_CMD={args}")]);
+                }
+                assert_eq!(actual, expected);
+                assert_eq!(command.get_envs().count(), 0);
+            }
+        }
+    }
 
     #[test]
     fn launcher_cache_key_reader_rejects_malformed_encoding_and_config_injection() {

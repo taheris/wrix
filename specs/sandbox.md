@@ -801,9 +801,10 @@ success. Actual launch rechecks prerequisites against current state.
   which maps to the invoking host user. Nix sees real root-owned protected
   ancestors, store-mutating operations succeed, and workspace writes carry host
   UID/GID. Every image sets `IS_SANDBOX=1` so Claude accepts root execution. No
-  UID-spoofing preload is used. The microVM path keeps `--userns=keep-id` (krun
-  maps host user→root inside the VM) and enters the same trusted bootstrap
-  through `krun-init.sh`; argv decoding occurs only after the capability drop.
+  UID-spoofing preload is used. The microVM path uses
+  `--userns=keep-id:uid=0,gid=0 --user=0:0` (mapping the invoking host
+  user/group to guest root) and enters the same trusted bootstrap through
+  `krun-init.sh`; argv decoding occurs only after the capability drop.
 - `--pids-limit 4096` fork-bomb guard
 - `WRIX_MICROVM=1` selects `podman --runtime krun`; requested KVM must be
   present and usable, not merely an existing device path
@@ -977,11 +978,13 @@ separate from network metadata and remains required.
   publication authority.
   [test?](../crates/wrix-sandbox/tests/cache_freshness.rs::both_launch_modes_inject_cache_freshness)
 
-- `WRIX_MICROVM=1` selects `podman --runtime krun --userns=keep-id` on Linux
-  when `/dev/kvm` is available, enters through the relay, serializes the
-  requested command through `WRIX_KRUN_CMD`, passes terminal dimensions for PTY
-  setup, and reaches the krun-only init with real guest-root identity and
-  working private Nix evaluation [system](verify:sandbox.linux-microvm-runtime)
+- `WRIX_MICROVM=1` selects
+  `podman --runtime krun --userns=keep-id:uid=0,gid=0 --user=0:0` on Linux when
+  `/dev/kvm` is available, uses the relay for interactive `run` and enters
+  `krun-init.sh` directly for non-TTY `spawn`, serializes the requested command
+  through `WRIX_KRUN_CMD`, passes terminal dimensions for interactive PTY setup,
+  and reaches the krun-only init with real guest-root identity and working
+  private Nix evaluation [system](verify:sandbox.linux-microvm-runtime)
 - MicroVM opt-in fails with the typed missing-KVM error before Podman runtime
   dispatch when the KVM device is absent
   [system](verify:sandbox.linux-microvm-missing-kvm)
@@ -1287,7 +1290,7 @@ separate from network metadata and remains required.
   [system](verify:sandbox.mount-controls-podman)
 - Live krun workloads satisfy the same mount controls through the production
   microVM launch path, with their own KVM/runtime prerequisites and results.
-  [system?](verify:sandbox.mount-controls-krun)
+  [system](verify:sandbox.mount-controls-krun)
 - Live Apple Container workloads satisfy the same mount controls without
   claiming new directory write-back persistence, with their own host
   prerequisites and results. [system?](verify:sandbox.mount-controls-apple)

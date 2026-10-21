@@ -7,8 +7,12 @@ REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 source "$REPO_ROOT/tests/lib/live-sandbox.sh"
 
 TEST_TMP="$(mktemp -d -t wrix-microvm-runtime.XXXXXX)"
+IMAGE_REF=""
 
 cleanup() {
+  if [[ -n "$IMAGE_REF" ]]; then
+    wrix_remove_image_ref "$IMAGE_REF" >/dev/null 2>&1 || true # best-effort: cleanup must not mask the verifier result.
+  fi
   rm -rf "$TEST_TMP"
 }
 trap cleanup EXIT
@@ -44,13 +48,18 @@ test_microvm_probe_reports_launch_failure() {
 }
 
 test_linux_microvm_runtime() {
-  local command_line output sandbox workspace
+  local command_line output sandbox workspace image_source profile_config spawn_config status
   local -a command
   wrix_require_live_sandbox_linux
-  [[ -e /dev/kvm ]] || wrix_live_skip "KVM device is required for the live microVM verifier"
+  [[ -c /dev/kvm && -r /dev/kvm && -w /dev/kvm ]] || wrix_live_skip "accessible KVM is required for the live microVM verifier"
+  command -v krun >/dev/null || wrix_live_skip "krun is not on PATH"
   cd "$REPO_ROOT"
 
-  sandbox=$(wrix_build_packaged_live_sandbox)
+  sandbox=$(nix build --no-link --print-out-paths --no-warn-dirty .#wrix)
+  image_source=$(nix build --no-link --print-out-paths --no-warn-dirty .#test-image-git-credentials.source)
+  IMAGE_REF=$(wrix_live_image_ref "test-microvm-runtime-$$")
+  profile_config="$TEST_TMP/profile.json"
+  wrix_write_profile_config "$profile_config" "$IMAGE_REF" "$image_source" direct
   workspace="$TEST_TMP/workspace"
   mkdir -p "$workspace"
 
@@ -70,13 +79,18 @@ nix --offline eval --expr '1 + 1' | grep -qx 2
 [[ "${WRIX_TERM_COLS:-}" =~ ^[0-9]+$ ]]
 [[ "${1:-}" == "alpha" ]]
 [[ "${2:-}" == "two words" ]]
+if [[ "${WRIX_STDIO:-}" == 1 ]]; then
+  IFS= read -r line
+  [[ "$line" == 'microvm stdin' ]]
+  printf 'MICROVM_STDIN_OK\n'
+fi
 printf 'MICROVM_BOUNDARY_OK=%s|%s\n' "$1" "$2"
 INNER
   chmod +x "$workspace/assert-microvm.sh"
 
   command=(
-    "$sandbox/bin/wrix" run "$workspace"
-    /workspace/assert-microvm.sh alpha "two words"
+    "$sandbox/bin/wrix" --profile-config "$profile_config" run "$workspace" --
+    /bin/bash /workspace/assert-microvm.sh alpha "two words"
   )
   printf -v command_line '%q ' "${command[@]}"
   output=$(run_microvm_probe "$command_line") || return
@@ -85,7 +99,18 @@ INNER
     fail "live krun microVM did not preserve the private Nix execution contract: $output"
     return 1
   fi
-  printf 'PASS: live krun launcher preserves real identity and private Nix evaluation\n'
+  spawn_config="$TEST_TMP/spawn.json"
+  wrix_write_spawn_config "$spawn_config" "$workspace" /bin/bash /workspace/assert-microvm.sh alpha "two words"
+  output=$(printf 'microvm stdin\n' | WRIX_MICROVM=1 wrix_run_spawn "$sandbox" "$profile_config" "$spawn_config" --stdio)
+  [[ "$output" == *MICROVM_STDIN_OK* && "$output" == *'MICROVM_BOUNDARY_OK=alpha|two words'* ]] \
+    || fail "microVM spawn lost stdin or arguments: $output"
+
+  wrix_write_spawn_config "$spawn_config" "$workspace" /bin/bash -c 'printf "MICROVM_FAILURE\n"; exit 37'
+  status=0
+  output=$(WRIX_MICROVM=1 wrix_run_spawn "$sandbox" "$profile_config" "$spawn_config") || status=$?
+  [[ "$status" == 37 && "$output" == *MICROVM_FAILURE* ]] \
+    || fail "microVM spawn lost guest failure status/output: $status $output"
+  printf 'PASS: live krun run/spawn preserve identity, private Nix, stdin, arguments and exit status\n'
 }
 
 case "${1:-}" in

@@ -75,7 +75,11 @@ for launch in run spawn; do
   # shellcheck disable=SC2016 # Positional arguments and mount paths are evaluated in the guest.
   probe='
     set -euo pipefail
+    [[ "$(id -u):$(id -g)" == 0:0 ]]
+    [[ "$(stat -c %u:%g:%a /nix/var/nix)" == 0:0:755 ]]
+    [[ "$(nix --offline eval --expr "1 + 1")" == 2 ]]
     [[ "$(< /workspace/testfile.txt)" == workspace-content ]]
+    printf "created\n" > /workspace/created
     [[ ! -e "$1" && ! -e /tmp/wrix-absent-optional ]]
     if [[ -d /mnt/wrix ]]; then
       [[ -z "$(find /mnt/wrix -name undeclared-sibling-secret -print -quit)" ]]
@@ -132,6 +136,9 @@ for launch in run spawn; do
     fi
   fi
   [[ "$result" == *FILESYSTEM-ISOLATED* ]] || fail "$launch workload did not complete: $result"
+  if [[ "$(uname -s)" == Linux ]]; then
+    [[ "$(stat -c %u:%g "$workspace/created")" == "$(id -u):$(id -g)" ]] || fail "$launch workspace file host ownership"
+  fi
   for declaration in profile spawn; do
     for mode in ro rw; do
       name="$declaration-$mode"
@@ -142,6 +149,9 @@ for launch in run spawn; do
       [[ "$(<"$root/sources/$name-file")" == "$expected" ]] || fail "$launch $name file host content"
       if [[ "$(uname -s)" == Linux ]]; then
         [[ "$(<"$root/sources/$name-dir/sentinel")" == "$expected" ]] || fail "$launch $name directory host content"
+        if [[ "$expected" == changed ]]; then
+          [[ "$(stat -c %u:%g "$root/sources/$name-dir/new")" == "$(id -u):$(id -g)" ]] || fail "$launch $name new file host ownership"
+        fi
       elif [[ "$mode" == ro ]]; then
         [[ "$(<"$root/sources/$name-dir/sentinel")" == original ]] || fail "$launch $name read-only directory changed"
       fi
