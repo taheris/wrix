@@ -124,6 +124,110 @@ async fn withdrawn_private_policy_denies_renewal_but_old_native_grants_read_new_
 }
 
 #[tokio::test]
+async fn authenticated_private_control_issues_native_grants_and_denies_unknown_or_withdrawn_views()
+{
+    use std::net::{IpAddr, Ipv4Addr};
+    use wrix_sandbox::cache_credentials::{Error, Grant, Issuer, NativeClock, Session};
+
+    struct Once(Option<Grant>);
+    impl Issuer for Once {
+        fn issue(&mut self) -> Result<Grant, Error> {
+            self.0.take().ok_or(Error::Unavailable)
+        }
+    }
+
+    let server = native::Server::start_with_issuer();
+    let root = tempfile::tempdir().unwrap();
+    let controller = Controller::bind(&root.path().join("control"))
+        .unwrap()
+        .with_cache_issuer(&server.issuer_root())
+        .unwrap();
+    let client = Client::open(&root.path().join("control")).unwrap();
+    let workspace = WorkspaceHash::parse(&"a".repeat(64)).unwrap();
+    let namespace = Namespace::from(&workspace);
+    let mut policy = Policy {
+        dolt: Access::Denied,
+        private_cache_read: Access::Allowed,
+        common_cache_read: Access::Denied,
+        egress: Access::Denied,
+        compiler: Access::Denied,
+    };
+    apply(
+        &controller,
+        &client,
+        Operation::Register {
+            namespace: namespace.clone(),
+            policy,
+        },
+    )
+    .await;
+    let (handled, grant) = tokio::join!(
+        controller.serve_one(),
+        client.cache_credential(namespace.clone())
+    );
+    handled.unwrap();
+    let session = Session::create(
+        Once(Some(grant.unwrap())),
+        NativeClock::default(),
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+    )
+    .unwrap();
+    let remaining = session
+        .expires_at()
+        .duration_since(std::time::SystemTime::now())
+        .unwrap();
+    assert!(remaining > Duration::from_hours(23) && remaining <= Duration::from_hours(24));
+    let views = wrix_cache::backend::pull::ReadSet::for_workspace(&workspace).unwrap();
+    let view = views.private().as_str();
+    let key = server
+        .client(view)
+        .register(Duration::from_hours(720))
+        .await
+        .unwrap();
+    let archive = native::archive::Archive::file("private IPC grant", "private-control-grant");
+    server.upload(view, &archive).await;
+    let store = native::import::Store::new();
+    let imported = store.copy_with_netrc(
+        &format!("{}{view}", server.endpoint),
+        &session.netrc(),
+        key.as_str(),
+        &archive.path,
+    );
+    assert!(
+        imported.status.success(),
+        "{}",
+        String::from_utf8_lossy(&imported.stderr)
+    );
+    assert_eq!(store.read(&archive.path).unwrap(), b"private IPC grant");
+
+    let unknown = Namespace::from(&WorkspaceHash::parse(&"b".repeat(64)).unwrap());
+    let (handled, grant) = tokio::join!(controller.serve_one(), client.cache_credential(unknown));
+    assert!(handled.is_err() && grant.is_err());
+    apply(
+        &controller,
+        &client,
+        Operation::Retire {
+            namespace: namespace.clone(),
+        },
+    )
+    .await;
+    policy.private_cache_read = Access::Denied;
+    apply(
+        &controller,
+        &client,
+        Operation::Register {
+            namespace: namespace.clone(),
+            policy,
+        },
+    )
+    .await;
+    let (handled, grant) = tokio::join!(controller.serve_one(), client.cache_credential(namespace));
+    assert!(handled.is_err() && grant.is_err());
+    drop(session);
+    controller.close().unwrap();
+}
+
+#[tokio::test]
 async fn native_nix_reloads_atomic_session_netrc_using_current_controller_policy() {
     use std::{
         fs,

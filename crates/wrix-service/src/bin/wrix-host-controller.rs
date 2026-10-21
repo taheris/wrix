@@ -35,7 +35,11 @@ async fn run() -> Result<(), Error> {
         return Ok(());
     }
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
-    let controller = Controller::bind(&root.join("authority"))?;
+    let issuer = root
+        .parent()
+        .ok_or(Error::Arguments)?
+        .join("host-control/celler-issuer");
+    let controller = Controller::bind(&root.join("authority"))?.with_cache_issuer(&issuer)?;
     let host = Host::bind(controller, CONNECTION_CAPACITY).await?;
     host.serve(async move {
         terminate.recv().await;

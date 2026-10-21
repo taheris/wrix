@@ -61,6 +61,8 @@ pub enum Error {
     UnknownNamespace,
     /// workspace policy denies the requested permission
     PermissionDenied,
+    /// host cache credential issuance is unavailable; inspect host authorization and retained issuer state
+    CacheUnavailable,
 }
 
 /// An independent host-management credential, never a cache/proxy traffic token.
@@ -177,6 +179,9 @@ pub enum Operation {
     Retire {
         namespace: Namespace,
     },
+    IssueCache {
+        namespace: Namespace,
+    },
 }
 
 /// Canonical workspace identity, not a path or authority-bearing workspace pointer.
@@ -220,6 +225,9 @@ pub enum Reply {
         namespaces: BTreeMap<Namespace, Policy>,
     },
     Applied,
+    CacheIssued {
+        expires_at: u64,
+    },
     Conflict,
     Capacity,
     Incompatible,
@@ -236,6 +244,7 @@ pub struct Controller {
     endpoints: endpoint::Store,
     deployment: crate::deployment::Id,
     assignments: assignment::Store,
+    cache_issuer: Option<PathBuf>,
 }
 
 impl Controller {
@@ -297,6 +306,7 @@ impl Controller {
             endpoints,
             deployment,
             assignments,
+            cache_issuer: None,
         })
     }
 
@@ -345,12 +355,15 @@ impl Controller {
             if !constant_time_equal(&request.management, &self.credential.0) {
                 return Err(Error::Unauthorized);
             }
-            let reply = if request.version == VERSION {
-                self.apply(request.operation)?
-            } else {
-                Reply::Incompatible
-            };
-            send(&mut stream, &reply).await
+            if request.version != VERSION {
+                return send(&mut stream, &Reply::Incompatible).await;
+            }
+            match request.operation {
+                Operation::IssueCache { namespace } => {
+                    self.serve_cache_credential(&mut stream, &namespace).await
+                }
+                operation => send(&mut stream, &self.apply(operation)?).await,
+            }
         })
         .await
         .map_err(|_| Error::Timeout)?
@@ -377,6 +390,7 @@ impl Controller {
     fn apply(&self, operation: Operation) -> Result<Reply, Error> {
         let mut namespaces = self.namespaces.lock().map_err(|_| Error::LockPoisoned)?;
         Ok(match operation {
+            Operation::IssueCache { .. } => return Err(Error::PermissionDenied),
             Operation::Inspect {} => Reply::Snapshot {
                 version: VERSION,
                 namespaces: namespaces.clone(),
@@ -467,21 +481,26 @@ impl Client {
 
     pub async fn request(&self, operation: Operation) -> Result<Reply, Error> {
         timeout(IO_BUDGET, async {
-            let mut stream = UnixStream::connect(&self.socket).await?;
-            authorize_peer(stream.peer_cred()?.uid(), self.uid)?;
-            send(
-                &mut stream,
-                &Request {
-                    version: VERSION,
-                    management: self.credential.0,
-                    operation,
-                },
-            )
-            .await?;
-            receive(&mut stream).await
+            self.exchange(operation).await.map(|(_, reply)| reply)
         })
         .await
         .map_err(|_| Error::Timeout)?
+    }
+
+    async fn exchange(&self, operation: Operation) -> Result<(UnixStream, Reply), Error> {
+        let mut stream = UnixStream::connect(&self.socket).await?;
+        authorize_peer(stream.peer_cred()?.uid(), self.uid)?;
+        send(
+            &mut stream,
+            &Request {
+                version: VERSION,
+                management: self.credential.0,
+                operation,
+            },
+        )
+        .await?;
+        let reply = receive(&mut stream).await?;
+        Ok((stream, reply))
     }
 }
 
