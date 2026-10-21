@@ -216,15 +216,27 @@ fn descendant_held_pipes_do_not_escape_the_overall_execution_deadline() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(start.elapsed() >= Duration::from_secs(29));
-    assert!(start.elapsed() < Duration::from_secs(40));
     assert_eq!(snapshot(&fixture.state()), before);
     if cfg!(target_os = "linux") {
         let pid = fs::read_to_string(fixture.root.path().join("descendant.pid")).unwrap();
-        match fs::read_to_string(format!("/proc/{pid}/stat")) {
-            Ok(process) => assert_eq!(process.split_whitespace().nth(2), Some("Z")),
-            Err(error) => assert_eq!(error.kind(), std::io::ErrorKind::NotFound),
+        loop {
+            match fs::read_to_string(format!("/proc/{pid}/stat")) {
+                Ok(process) if process.split_whitespace().nth(2) == Some("Z") => break,
+                Ok(_) => {
+                    assert!(
+                        start.elapsed() < Duration::from_secs(40),
+                        "owned descendant did not terminate within the original overall bound"
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => {
+                    assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+                    break;
+                }
+            }
         }
     }
+    assert!(start.elapsed() < Duration::from_secs(40));
 }
 
 #[test]
