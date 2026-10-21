@@ -109,7 +109,13 @@ for launch in run spawn; do
   args=(/bin/bash -c "$probe" probe "$root/sources/undeclared-sibling-secret" "$launch")
   if [[ "$launch" == run ]]; then
     printf -v command_line '%q ' "$launcher/bin/wrix" --profile-config "$profile_config" run "$workspace" -- "${args[@]}"
-    result=$(wrix_run_with_pty "$command_line")
+    if result=$(wrix_run_with_pty "$command_line"); then
+      :
+    else
+      status=$?
+      printf '%s\n' "$result" >&2
+      exit "$status"
+    fi
   else
     wrix_write_spawn_config "$spawn_config" "$workspace" "${args[@]}"
     jq --argjson mounts "$mounts" \
@@ -117,7 +123,13 @@ for launch in run spawn; do
         {host_path:.source,container_path:.dest,read_only:(.mode == "ro")}))' \
       "$spawn_config" >"$spawn_config.tmp"
     mv "$spawn_config.tmp" "$spawn_config"
-    result=$(wrix_run_spawn "$launcher" "$profile_config" "$spawn_config")
+    if result=$(wrix_run_spawn "$launcher" "$profile_config" "$spawn_config"); then
+      :
+    else
+      status=$?
+      printf '%s\n' "$result" >&2
+      exit "$status"
+    fi
   fi
   [[ "$result" == *FILESYSTEM-ISOLATED* ]] || fail "$launch workload did not complete: $result"
   for declaration in profile spawn; do

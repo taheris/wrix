@@ -1284,7 +1284,7 @@ separate from network metadata and remains required.
 - Live rootless Podman workloads reject writes through read-only profile and
   spawn file/directory declarations, preserve read-only host sources, and permit
   corresponding writable controls.
-  [system?](verify:sandbox.mount-controls-podman)
+  [system](verify:sandbox.mount-controls-podman)
 - Live krun workloads satisfy the same mount controls through the production
   microVM launch path, with their own KVM/runtime prerequisites and results.
   [system?](verify:sandbox.mount-controls-krun)

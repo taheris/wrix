@@ -59,6 +59,8 @@ in
   "sandbox.entrypoint-workspace-bin-prepend".script =
     entrypoint "test_workspace_bin_path_prepend_both";
 
+  "sandbox.live-profile-config".script = sandboxScriptAll "live-profile-config";
+
   "sandbox.filesystem-isolation" = live (sandboxScriptAll "filesystem-isolation");
 
   "sandbox.mount-controls-podman" = linuxLive (sandboxScript "filesystem-isolation" "podman");

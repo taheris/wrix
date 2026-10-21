@@ -60,6 +60,21 @@ wrix_live_source_kind() {
   esac
 }
 
+wrix_live_system() {
+  local host
+
+  host=$(uname -sm)
+  case "$host" in
+    'Linux x86_64') printf '%s\n' x86_64-linux ;;
+    'Linux aarch64') printf '%s\n' aarch64-linux ;;
+    'Darwin arm64') printf '%s\n' aarch64-darwin ;;
+    *)
+      printf 'unsupported live sandbox host: %s\n' "$host" >&2
+      return 64
+      ;;
+  esac
+}
+
 wrix_live_image_ref() {
   local name="$1"
   local uname_s
@@ -121,8 +136,9 @@ wrix_write_profile_config() {
   local agent="$4"
   local allowlist_json="${5:-[]}"
   local source_kind="${6:-}"
-  local digest
+  local digest system
 
+  system=$(wrix_live_system) || return "$?"
   [[ -n "$source_kind" ]] || source_kind=$(wrix_live_source_kind)
   case "$source_kind" in
     nix-descriptor) digest=$(jq -er '.digest | strings | select(test("^sha256:[0-9a-f]{64}$"))' "$image_source") ;;
@@ -139,10 +155,11 @@ wrix_write_profile_config() {
     --arg source_kind "$source_kind" \
     --arg digest "$digest" \
     --arg agent "$agent" \
+    --arg system "$system" \
     --argjson allowlist "$allowlist_json" \
     '{
       schema: 1,
-      system: "test",
+      system: $system,
       profile: {
         name: "base",
         env: {},
