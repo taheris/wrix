@@ -599,6 +599,36 @@ for orchestrators), but it may not change the selected agent independently of
 the image/profile config. `wrix run` errors when no valid `ProfileConfig` is
 supplied; there is no implicit default image baked in.
 
+### Trusted execution tickets
+
+Host callers may reserve a one-shot execution ticket with
+`wrix execution reserve <workspace>` and pass it to Linux spawn using
+`--execution-ticket <ticket>`. The ticket and runtime binding live only in the
+host-private control database, not SpawnConfig or the workspace audit index.
+Podman creates the container without starting it; Wrix durably binds its full
+immutable ID before attaching/starting that exact object. Existing resource,
+network, mount and credential construction is unchanged. Ticketed launches
+refuse the unsafe host Podman socket and are unavailable on Darwin.
+
+`wrix execution reconcile <workspace> <ticket>` reports protected or retired.
+Only one exact bound object in an unambiguously exited state may be removed,
+without force. Retirement requires successful removal returning that exact ID
+and a durable host state transition. Missing objects, unavailable/malformed
+runtime observations, active/created/paused/restarting objects, conflicting IDs,
+setup failures and interrupted removal retain protection. A crash after removal
+but before recording retirement remains unknown. Launcher completion, free
+leases, PID absence/reuse, worker-written completion and age never authorize
+retirement. Tickets cannot be reused. This is explicit host reconciliation, not
+a background supervisor or source/output collector. It does not cover delegated
+service-side compiler lifetimes or trusted-native processes.
+
+Acceptance:
+[test](../crates/wrix-sandbox/tests/execution_lifetime.rs::execution_restart_retains_unbound_launch_and_ignores_workspace_completion)
+[test](../crates/wrix-sandbox/tests/execution_lifetime.rs::execution_unavailable_ambiguous_and_failed_removal_observations_retain_binding)
+[system](cargo test -p wrix-sandbox --test execution_lifetime
+execution_actual_podman_survives_launcher_death_and_reconciles_exact_teardown --
+--ignored --nocapture)
+
 ### Project Configuration Handoff
 
 Acceptance:

@@ -70,6 +70,7 @@ pub struct Spawn {
     pub config_path: PathBuf,
     pub config: SpawnConfig,
     pub stdio: bool,
+    pub execution_ticket: Option<wrix_state::execution::Ticket>,
 }
 
 #[expect(
@@ -1123,7 +1124,14 @@ impl<'a> Plan<'a> {
                 .stdout(Stdio::inherit())
                 .stderr(Stdio::inherit());
             self.recheck()?;
-            let status = command.status()?;
+            let status = if let Kind::Spawn(spawn) = &self.request.kind
+                && let Some(ticket) = &spawn.execution_ticket
+            {
+                crate::execution::launch(&self.workspace, ticket, &command, self.stdio)
+                    .map_err(io::Error::other)?
+            } else {
+                command.status()?
+            };
             *observed_status = Some(status);
             status_to_exit(status)
         })
@@ -1134,6 +1142,11 @@ impl<'a> Plan<'a> {
         services: &ServicesState,
         observed_status: &mut Option<ExitStatus>,
     ) -> Result<ExitCode, LaunchError> {
+        if let Kind::Spawn(spawn) = &self.request.kind
+            && spawn.execution_ticket.is_some()
+        {
+            return Err(io::Error::other("trusted execution tickets require Linux Podman containment; Darwin observations remain unavailable").into());
+        }
         let vpn_conflict = fix_darwin_vmnet_route()?;
         self.install_image(Runtime::Container)?;
         Staging::with(|staging| {

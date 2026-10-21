@@ -458,6 +458,11 @@ leave it incomplete permanently; Wrix does not fabricate an exit status, claim a
 shell trap handles every failure, or automatically recover that work. No
 independent environment lifecycle or environment identity is introduced.
 
+Optional [trusted execution tickets](sandbox.md#trusted-execution-tickets) are a
+separate host-only containment protocol. They do not promote this worker-visible
+audit index into lifecycle or disposal authority. Their explicit reconciliation
+is not automatic recovery of incomplete audit records.
+
 The index is the **audit anchor** and a runtime transcript is the available
 **audit content**. Neither is an exhaustive audit: codemode may expose only a
 selected summary while intermediate tool results and side effects remain outside

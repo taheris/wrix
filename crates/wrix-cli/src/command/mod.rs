@@ -49,6 +49,7 @@ pub fn run_os(
             stdout,
             stderr,
         ),
+        Some(Invocation::Execution(args)) => run_execution(&args, stdout, stderr),
         Some(Invocation::Notify(args)) => run_notify(&args, stdout, stderr),
         Some(Invocation::Service(args)) => run_service(&args, stdout, stderr),
         Some(Invocation::Beads(args)) => run_beads(&args, stdout, stderr),
@@ -72,6 +73,7 @@ struct RootInvocation {
 enum Invocation {
     Run(Vec<String>),
     Spawn(Vec<String>),
+    Execution(Vec<String>),
     Notify(Vec<String>),
     Service(Vec<String>),
     Beads(Vec<String>),
@@ -91,6 +93,9 @@ fn parse_root(args: &[OsString]) -> Result<RootInvocation, clap::Error> {
         Some(("spawn", matches)) => Some(Invocation::Spawn(utf8_arguments(&passthrough_values(
             matches,
         ))?)),
+        Some(("execution", matches)) => Some(Invocation::Execution(utf8_arguments(
+            &passthrough_values(matches),
+        )?)),
         Some(("notify", matches)) => Some(Invocation::Notify(utf8_arguments(
             &passthrough_values(matches),
         )?)),
@@ -310,6 +315,7 @@ fn write_delegated_help(
         return Ok(ExitCode::SUCCESS);
     };
     match topic.as_str() {
+        "execution" => write!(stdout, "{EXECUTION_HELP}")?,
         "notify" => write!(stdout, "{NOTIFY_HELP}")?,
         "run" => wrix_sandbox::command::write_run_help(stdout)?,
         "spawn" => wrix_sandbox::command::write_spawn_help(stdout)?,
@@ -373,6 +379,7 @@ fn root_command() -> ClapCommand {
                 .disable_help_flag(true)
                 .disable_help_subcommand(true),
         )
+        .subcommand(passthrough_command("execution", "Reconcile trusted execution lifetimes.", EXECUTION_HELP))
         .subcommand(passthrough_command("notify", "Run a native command with notification routing.", NOTIFY_HELP))
         .subcommand(passthrough_command(
             "spawn",
@@ -404,6 +411,50 @@ fn root_command() -> ClapCommand {
             "Print command help.",
             "Print command help.\n\nUsage: wrix help [command]\n\nOptions:\n  -h, --help  Print help.\n",
         ).arg(help_arg()))
+}
+
+const EXECUTION_HELP: &str = "Reconcile trusted execution lifetimes.\n\nUsage: wrix execution reserve <workspace>\n       wrix execution reconcile <workspace> <ticket>\n\nTickets are host-only and supplied to spawn through --execution-ticket, never SpawnConfig. Missing or ambiguous runtime observations retain output.\n";
+
+fn run_execution(
+    args: &[String],
+    stdout: &mut impl Write,
+    stderr: &mut impl Write,
+) -> io::Result<ExitCode> {
+    if requests_help(args) {
+        stdout.write_all(EXECUTION_HELP.as_bytes())?;
+        return Ok(ExitCode::SUCCESS);
+    }
+    let result = match args {
+        [command, workspace] if command == "reserve" => {
+            wrix_sandbox::execution::reserve(std::path::Path::new(workspace))
+                .map(|ticket| ticket.as_str().to_owned())
+        }
+        [command, workspace, ticket] if command == "reconcile" => {
+            wrix_state::execution::Ticket::parse(ticket)
+                .map_err(wrix_sandbox::execution::Error::from)
+                .and_then(|ticket| {
+                    wrix_sandbox::execution::reconcile(std::path::Path::new(workspace), &ticket)
+                })
+                .and_then(|observation| {
+                    serde_json::to_string(&observation)
+                        .map_err(wrix_sandbox::execution::Error::from)
+                })
+        }
+        _ => {
+            stdout.write_all(EXECUTION_HELP.as_bytes())?;
+            return Ok(ExitCode::FAILURE);
+        }
+    };
+    match result {
+        Ok(value) => {
+            writeln!(stdout, "{value}")?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(error) => {
+            writeln!(stderr, "wrix execution: {error}")?;
+            Ok(ExitCode::FAILURE)
+        }
+    }
 }
 
 fn passthrough_command(name: &'static str, about: &'static str, help: &'static str) -> ClapCommand {

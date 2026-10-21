@@ -44,7 +44,7 @@ impl Command {
 }
 
 pub const RUN_HELP: &str = "Run an interactive sandbox.\n\nUsage: wrix [--profile-config <file>] run [LAUNCH_OPTIONS] [DIR] [--] [AGENT_ARGS ...]\n\nDIR defaults to CWD; without DIR, use -- before agent arguments.\nLauncher options stop at DIR or --; after DIR, one optional -- is consumed.\nRemaining arguments are passed unchanged to the agent, including --help.\nOmitted Git options inherit repository policy, defaulting independently to false.\nTool caches: explicit launch choice > repository tool_caches.shared > shared default.\nPrivate mode does not disable caching or separate Nix/Celler policy.\nRestricted Rust requires private mode; use --no-cache with WRIX_NETWORK=limit.\n\nOptions:\n  --profile-config <file>  Override generated project launch data with <file>.\n  --dry-run                Inspect without preparing or executing a launch.\n  --json                   Render the dry-run report as versioned JSON.\n  --cache                  Reuse shared worker tool caches for this launch.\n  --no-cache               Use fresh private writable local tool caches for this launch.\n  --git-deploy             Grant the deploy key for this launch; conflicts with --no-git-deploy.\n  --no-git-deploy          Deny the deploy key for this launch; conflicts with --git-deploy.\n  --git-sign               Grant the signing key for this launch; conflicts with --no-git-sign.\n  --no-git-sign            Deny the signing key for this launch; conflicts with --git-sign.\n  -h, --help               Print launcher help before DIR or --.\n";
-pub const SPAWN_HELP: &str = "Spawn a programmatic sandbox.\n\nSpawnConfig.tool_caches.shared is an optional boolean: false uses fresh private writable local tool caches; true reuses shared worker tool caches.\nPrecedence: explicit launch choice > repository tool_caches.shared > shared default.\nOmission inherits; this does not disable caching or separate Nix/Celler policy.\nRestricted Rust requires private mode with WRIX_NETWORK=limit.\n\nUsage: wrix [--profile-config <file>] spawn --spawn-config <file> [--stdio]\n\nOptions:\n  --profile-config <file>  Override generated project launch data with <file>.\n  --spawn-config <file>    Read per-launch settings from <file> (required).\n  --dry-run                Inspect without preparing or executing a launch.\n  --json                   Render the dry-run report as versioned JSON.\n  --stdio                  Enable the selected agent's JSONL protocol on standard I/O (default: off).\n  -h, --help               Print help.\n";
+pub const SPAWN_HELP: &str = "Spawn a programmatic sandbox.\n\nSpawnConfig.tool_caches.shared is an optional boolean: false uses fresh private writable local tool caches; true reuses shared worker tool caches.\nPrecedence: explicit launch choice > repository tool_caches.shared > shared default.\nOmission inherits; this does not disable caching or separate Nix/Celler policy.\nRestricted Rust requires private mode with WRIX_NETWORK=limit.\n\nUsage: wrix [--profile-config <file>] spawn --spawn-config <file> [--stdio]\n\nOptions:\n  --profile-config <file>  Override generated project launch data with <file>.\n  --spawn-config <file>    Read per-launch settings from <file> (required).\n  --dry-run                Inspect without preparing or executing a launch.\n  --json                   Render the dry-run report as versioned JSON.\n  --stdio                  Enable the selected agent's JSONL protocol on standard I/O (default: off).\n  --execution-ticket <id>  Bind a reserved host-only Linux execution ticket.\n  -h, --help               Print help.\n";
 
 pub fn write_run_help(stdout: &mut impl Write) -> io::Result<()> {
     stdout.write_all(RUN_HELP.as_bytes())?;
@@ -197,6 +197,7 @@ fn parse_run(args: &[String]) -> Result<Option<Run>, CliError> {
 fn parse_spawn(args: &[String]) -> Result<Spawn, CliError> {
     let mut preview = launch::preview::Options::default();
     let mut spawn_config_path = None;
+    let mut execution_ticket = None;
     let mut stdio = false;
     let mut index = 0;
     while index < args.len() {
@@ -216,6 +217,17 @@ fn parse_spawn(args: &[String]) -> Result<Spawn, CliError> {
                 spawn_config_path = Some(PathBuf::from(value));
                 index += 2;
             }
+            "--execution-ticket" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or(CliError::SpawnConfigFlagRequiresValue)?;
+                execution_ticket = Some(wrix_state::execution::Ticket::parse(value).map_err(
+                    |source| CliError::Io {
+                        source: io::Error::other(source),
+                    },
+                )?);
+                index += 2;
+            }
             "--stdio" => {
                 stdio = true;
                 index += 1;
@@ -229,6 +241,16 @@ fn parse_spawn(args: &[String]) -> Result<Spawn, CliError> {
         }
     }
     preview.validate()?;
+    if execution_ticket.is_some()
+        && (Platform::CURRENT != Platform::Linux
+            || std::env::var_os("WRIX_UNSAFE_PODMAN_SOCKET").is_some())
+    {
+        return Err(CliError::Io {
+            source: io::Error::other(
+                "trusted execution tickets require Linux Podman without host-runtime access",
+            ),
+        });
+    }
     let config_path = spawn_config_path.ok_or(CliError::MissingSpawnConfigFlag)?;
     let config = load_spawn_config(&config_path, Platform::CURRENT)?;
     Ok(Spawn {
@@ -236,6 +258,7 @@ fn parse_spawn(args: &[String]) -> Result<Spawn, CliError> {
         config_path,
         config,
         stdio,
+        execution_ticket,
     })
 }
 

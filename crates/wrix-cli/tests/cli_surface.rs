@@ -133,6 +133,7 @@ fn public_flags_have_descriptions() -> TestResult {
                 "--dry-run",
                 "--json",
                 "--stdio",
+                "--execution-ticket <id>",
                 "-h, --help",
             ],
         ),
