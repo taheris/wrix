@@ -227,8 +227,6 @@ pub fn execute(
         Kind::Run(run) => run.workspace.as_path(),
         Kind::Spawn(spawn) => Path::new(&spawn.config.workspace),
     };
-    // Membership is checked before credential staging, journals or runtime preparation.
-    let selection = wrix_state::context::Selection::inspect(workspace)?;
     let repository_root = Workspace::from_path(workspace)?.repository_root();
     let policy = repository_root
         .as_deref()
@@ -236,6 +234,8 @@ pub fn execute(
         .transpose()
         .map_err(|source| LaunchError::RepositoryPolicy { source })?
         .unwrap_or_default();
+    // Static policy errors precede subprocesses; membership still precedes effects.
+    let selection = wrix_state::context::Selection::inspect(workspace)?;
     let tool_cache_mode = tool_cache::resolve(request, &policy);
     let conflict = tool_cache::restricted_conflict(request, network_mode, tool_cache_mode);
     if conflict && !preview.dry_run {

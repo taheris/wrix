@@ -174,8 +174,8 @@ exit 64
 const GIT_WRAPPER: &str = r#"#!/usr/bin/env bash
 set -euo pipefail
 
-log="${WRIX_BEADS_GIT_LOG:?}"
-real_git="${WRIX_BEADS_REAL_GIT:?}"
+log=@LOG@
+real_git=@REAL_GIT@
 
 log_invocation() {
   local arg
@@ -284,7 +284,16 @@ impl Fixture {
     }
 
     fn write_git_wrapper(&self) -> TestResult {
-        write_executable(&self.fake_bin.join("git"), GIT_WRAPPER)
+        let script = GIT_WRAPPER
+            .replace(
+                "@LOG@",
+                &common::shell_single_quote(&self.git_log.display().to_string()),
+            )
+            .replace(
+                "@REAL_GIT@",
+                &common::shell_single_quote(&find_program("git")?.display().to_string()),
+            );
+        write_executable(&self.fake_bin.join("git"), &script)
     }
 
     fn bd_lines(&self) -> TestResult<Vec<String>> {
@@ -420,11 +429,10 @@ fn bd_fake_models_diff_snapshot_state_across_pull() -> TestResult {
 fn git_wrapper_records_prek_environment_and_delegates() -> TestResult {
     let fixture = Fixture::new("git-wrapper-contract")?;
     fixture.write_git_wrapper()?;
-    let real_git = find_program("git")?;
     let output = ProcessCommand::new(fixture.fake_bin().join("git"))
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
         .arg("--version")
-        .env("WRIX_BEADS_GIT_LOG", &fixture.git_log)
-        .env("WRIX_BEADS_REAL_GIT", real_git)
         .env("PREK_ALLOW_NO_CONFIG", "1")
         .output()?;
     assert!(
@@ -641,14 +649,11 @@ fn restores_sandbox_dolt_origin_after_temporary_override() -> TestResult {
 fn loom_inside_is_noop() -> TestResult {
     let fixture = Fixture::new("loom-inside")?;
     fixture.write_git_wrapper()?;
-    let real_git = find_program("git")?;
     let not_repo = fixture.repo().join("not-repo");
     fs::create_dir_all(&not_repo)?;
 
     let output = invoke_push(&not_repo, &[fixture.fake_bin()], |command| {
         configure_bd(command, &fixture, "success");
-        command.env("WRIX_BEADS_GIT_LOG", &fixture.git_log);
-        command.env("WRIX_BEADS_REAL_GIT", real_git);
         command.env("LOOM_INSIDE", "1");
     })?;
 
@@ -768,7 +773,11 @@ fn symlinked_managed_directories_are_rejected_before_mutation() -> TestResult {
 
         assert_ne!(output.code, 0, "accepted {relative}: {}", output.stderr);
         assert!(
-            output.stderr.contains("unsafe beads worktree path"),
+            output.stderr.contains("unsafe beads worktree path")
+                || (relative == ".git"
+                    && output
+                        .stderr
+                        .contains("unsupported Git administrative routing file")),
             "{}",
             output.stderr
         );
@@ -1100,12 +1109,9 @@ fn git_sync_invocations_skip_prek() -> TestResult {
         ],
     )?;
     fixture.write_git_wrapper()?;
-    let real_git = find_program("git")?;
 
     let output = invoke_push(fixture.repo(), &[fixture.fake_bin()], |command| {
         configure_bd(command, &fixture, "success");
-        command.env("WRIX_BEADS_GIT_LOG", &fixture.git_log);
-        command.env("WRIX_BEADS_REAL_GIT", real_git);
     })?;
 
     assert_eq!(output.code, 0, "stderr:\n{}", output.stderr);
@@ -1115,7 +1121,21 @@ fn git_sync_invocations_skip_prek() -> TestResult {
         .iter()
         .position(|line| line.contains("\tgit\trev-parse\t--verify\tbeads"))
         .ok_or_else(|| io::Error::other("git sync did not probe the beads branch"))?;
-    let sync_lines = lines[sync_start..].iter().collect::<Vec<_>>();
+    let sync_lines = lines[sync_start..]
+        .iter()
+        .filter(|line| {
+            !line
+                .strip_prefix(
+                    "PREK_ALLOW_NO_CONFIG=<unset>\tgit\trev-parse\t--path-format=absolute\t",
+                )
+                .is_some_and(|query| {
+                    matches!(
+                        query,
+                        "--show-toplevel" | "--absolute-git-dir" | "--git-common-dir"
+                    )
+                })
+        })
+        .collect::<Vec<_>>();
     assert_ne!(sync_lines, Vec::<&String>::new());
     assert!(
         sync_lines
@@ -1217,6 +1237,7 @@ fn invoke_push(
 
 fn configure_bd(command: &mut ProcessCommand, fixture: &Fixture, scenario: &str) {
     common::set_isolated_git_env(command);
+    common::set_isolated_host_roots(command);
     command
         .env("WRIX_BEADS_BD_LOG", &fixture.bd_log)
         .env("WRIX_BEADS_STATE_DIR", &fixture.state_dir)

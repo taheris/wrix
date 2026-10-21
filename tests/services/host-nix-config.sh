@@ -4,6 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
+REAL_NIX_STORE="$(command -v nix-store)"
 
 TEST_TMP="$(mktemp -d -t wrix-services-host-nix.XXXXXX)"
 SOCKET_PIDS=()
@@ -35,8 +36,9 @@ build_wrix() {
     printf '%s\n' "$WRIX_TEST_WRIX_BIN"
     return 0
   fi
-  cargo build --quiet -p wrix-cli --bin wrix
-  printf '%s\n' "$REPO_ROOT/target/debug/wrix"
+  local package
+  package="$(nix build --no-link --print-out-paths "$REPO_ROOT#wrix")"
+  printf '%s/bin/wrix\n' "$package"
 }
 
 resolve_system() {
@@ -159,6 +161,23 @@ case "${1:-}" in
     exit 1
     ;;
   ps)
+    ;;
+  image)
+    if [[ "$#" == 3 && "$2" == exists ]]; then
+      grep -Fxq -- "$3" "$STATE_DIR/images"
+      exit $?
+    fi
+    [[ "$#" == 5 && "$2" == inspect && "$3" == --format ]]
+    grep -Fxq -- "$5" "$STATE_DIR/images" || exit 1
+    case "$4" in
+      '{{.Id}}' | '{{.Digest}}') cat "$STATE_DIR/image-digest" ;;
+      *) printf 'unsupported image format: %s\n' "$4" >&2; exit 64 ;;
+    esac
+    ;;
+  tag)
+    [[ "$#" == 3 && "$3" == localhost/wrix-service:* ]]
+    grep -Fxq -- "$2" "$STATE_DIR/images" || exit 1
+    printf '%s\n' "$3" >>"$STATE_DIR/images"
     ;;
   run)
     name=""
@@ -297,6 +316,26 @@ EOF
 with_fake_tools() {
   local bin_dir="$TEST_TMP/bin"
   mkdir -p "$bin_dir" "$TEST_TMP/runtime-state" "$TEST_TMP/fake-store"
+  : >"$TEST_TMP/runtime-state/images"
+  if [[ -n "${wrix_bin:-}" ]]; then
+    local reference binding="" digest_path digest_derivation digest image
+    while IFS= read -r reference; do
+      if [[ "$reference" == *-wrix-service-binding.json ]]; then
+        [[ -z "$binding" ]] || fail "multiple service bindings"
+        binding="$reference"
+      fi
+    done < <("$REAL_NIX_STORE" --query --references "${wrix_bin%/bin/wrix}")
+    [[ -n "$binding" ]] || fail "packaged wrix has no service binding"
+    digest_path="$(json_get "$binding" digest.path)"
+    digest_derivation="$(json_get "$binding" digest.derivation)"
+    if [[ ! -f "$digest_path" ]]; then
+      "$REAL_NIX_STORE" --realise "$digest_derivation" >/dev/null
+    fi
+    digest="$(<"$digest_path")"
+    image="$(json_get "$binding" image)"
+    printf '%s\n' "$digest" "$image" >"$TEST_TMP/runtime-state/images"
+    printf '%s\n' "$digest" >"$TEST_TMP/runtime-state/image-digest"
+  fi
   write_fake_runtime "$bin_dir/podman"
   write_fake_nix_store "$bin_dir/nix-store"
   write_fake_nix "$bin_dir/nix"
@@ -312,6 +351,37 @@ with_fake_tools() {
   export WRIX_CACHE_HOOK_BIN="$REPO_ROOT/target/debug/wrix-cache-hook"
   export WRIX_CACHE_PUBLISH_BIN="$REPO_ROOT/target/debug/wrix-cache-publish"
   unset NIX_CONFIG WRIX_FAKE_NIX_IGNORE WRIX_SERVICE_IMAGE WRIX_SERVICE_IMAGE_SOURCE
+}
+
+test_runtime_image_inspection_and_tagging_are_stateful() {
+  local wrix_bin image digest alias="localhost/wrix-service:fixture-contract"
+  wrix_bin="$(build_wrix)"
+  with_fake_tools
+  digest="$(<"$WRIX_FAKE_RUNTIME_STATE/image-digest")"
+  image="$(tail -n 1 "$WRIX_FAKE_RUNTIME_STATE/images")"
+  "$WRIX_CONTAINER_RUNTIME" image exists "$image"
+  [[ "$("$WRIX_CONTAINER_RUNTIME" image inspect --format '{{.Id}}' "$image")" == "$digest" ]]
+  if "$WRIX_CONTAINER_RUNTIME" image exists "$alias"; then
+    fail "unknown image exists"
+  fi
+  if "$WRIX_CONTAINER_RUNTIME" tag "$alias" "$alias"; then
+    fail "tag accepted a missing source"
+  fi
+  "$WRIX_CONTAINER_RUNTIME" tag "$image" "$alias"
+  "$WRIX_CONTAINER_RUNTIME" image exists "$alias"
+  [[ "$("$WRIX_CONTAINER_RUNTIME" image inspect --format '{{.Id}}' "$alias")" == "$digest" ]]
+}
+
+initialize_host_scope() {
+  if [[ ! -f /etc/wrix/image-agent ]]; then
+    "$1" workspace initialize
+    "$1" workspace acknowledge-scope --version 1
+  fi
+}
+
+prepare_repository() {
+  mkdir -p "$1"
+  GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C "$1" init -q
 }
 
 assert_contains() {
@@ -503,10 +573,11 @@ test_mkdevshell_nix_cache() {
   export HOME="$TEST_TMP/home-mkdevshell"
   export XDG_STATE_HOME="$TEST_TMP/state-mkdevshell"
   export XDG_CACHE_HOME="$TEST_TMP/cache-mkdevshell"
+  initialize_host_scope "$wrix_bin"
   mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
   workspace="$TEST_TMP/mkdevshell-cache-workspace"
   stderr_file="$TEST_TMP/mkdevshell-cache.err"
-  mkdir -p "$workspace/.git"
+  prepare_repository "$workspace"
 
   if ! output="$(
     (
@@ -548,7 +619,8 @@ test_mkdevshell_nix_cache() {
   args_log="$TEST_TMP/fake-wrix-beads.args"
   disabled_stderr="$TEST_TMP/mkdevshell-disabled.err"
   : > "$args_log"
-  mkdir -p "$disabled_workspace/.git" "$disabled_workspace/.beads/dolt"
+  prepare_repository "$disabled_workspace"
+  mkdir -p "$disabled_workspace/.beads/dolt"
   start_unix_socket "$socket_path"
   cat >"$fake_wrix" <<SCRIPT
 #!/usr/bin/env bash
@@ -625,6 +697,7 @@ SCRIPT
   export HOME="$TEST_TMP/home-mkdevshell-beads-cache"
   export XDG_STATE_HOME="$TEST_TMP/state-mkdevshell-beads-cache"
   export XDG_CACHE_HOME="$TEST_TMP/cache-mkdevshell-beads-cache"
+  initialize_host_scope "$wrix_bin"
   mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
   workspace="$TEST_TMP/mkdevshell-beads-cache-workspace"
   stderr_file="$TEST_TMP/mkdevshell-beads-cache.err"
@@ -678,12 +751,14 @@ test_mkdevshell_loom_internal_worktree_uses_repo_service() {
   printf '%s\n' "$result" >"$result_file"
   hook="$(json_get "$result_file" hook)"
   printf '%s\n' "$hook" >"$hook_file"
-  mkdir -p "$repo/.git" "$workspace"
+  prepare_repository "$repo"
+  mkdir -p "$workspace"
   wrix_bin="$(build_wrix)"
   with_fake_tools
   export HOME="$TEST_TMP/home-loom-integration"
   export XDG_STATE_HOME="$TEST_TMP/state-loom-integration"
   export XDG_CACHE_HOME="$TEST_TMP/cache-loom-integration"
+  initialize_host_scope "$wrix_bin"
   mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
 
   if ! output="$(
@@ -759,9 +834,10 @@ test_host_nix_configures_cache_and_hook() {
   export HOME="$TEST_TMP/home"
   export XDG_STATE_HOME="$TEST_TMP/state"
   export XDG_CACHE_HOME="$TEST_TMP/cache"
+  initialize_host_scope "$wrix_bin"
   mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
   workspace="$TEST_TMP/workspace"
-  mkdir -p "$workspace/.git"
+  prepare_repository "$workspace"
   printf 'cache.pending_ttl = "3d"\n' >"$workspace/wrix.toml"
   (cd "$workspace" && "$wrix_bin" service start >"$TEST_TMP/start.txt")
   (cd "$workspace" && "$wrix_bin" service endpoints >"$TEST_TMP/endpoints.json")
@@ -828,9 +904,10 @@ test_host_nix_config_fails_when_trusted_setting_ignored() {
   export HOME="$TEST_TMP/home-ignored"
   export XDG_STATE_HOME="$TEST_TMP/state-ignored"
   export XDG_CACHE_HOME="$TEST_TMP/cache-ignored"
+  initialize_host_scope "$wrix_bin"
   mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
   workspace="$TEST_TMP/workspace-ignored"
-  mkdir -p "$workspace/.git"
+  prepare_repository "$workspace"
   (cd "$workspace" && "$wrix_bin" service start >"$TEST_TMP/start-ignored.txt")
   for ignored in substituter key builders hook; do
     case "$ignored" in
@@ -863,10 +940,11 @@ test_host_nix_config_rejects_non_wrix_hook() {
   export HOME="$TEST_TMP/home-conflict"
   export XDG_STATE_HOME="$TEST_TMP/state-conflict"
   export XDG_CACHE_HOME="$TEST_TMP/cache-conflict"
+  initialize_host_scope "$wrix_bin"
   export NIX_CONFIG="post-build-hook = /tmp/other-hook"
   mkdir -p "$HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
   workspace="$TEST_TMP/workspace-conflict"
-  mkdir -p "$workspace/.git"
+  prepare_repository "$workspace"
   (cd "$workspace" && "$wrix_bin" service start >"$TEST_TMP/start-conflict.txt")
   if (
     cd "$workspace"
@@ -885,9 +963,10 @@ test_host_cache_opt_out_preserves_existing_nix_config() {
   export HOME="$TEST_TMP/home-opt-out"
   export XDG_STATE_HOME="$TEST_TMP/state-opt-out"
   export XDG_CACHE_HOME="$TEST_TMP/cache-opt-out"
+  initialize_host_scope "$wrix_bin"
   export NIX_CONFIG="post-build-hook = /tmp/other-hook"
   workspace="$TEST_TMP/workspace-opt-out"
-  mkdir -p "$workspace/.git" "$HOME"
+  prepare_repository "$workspace" "$HOME"
   printf 'cache.enable = false\n' >"$workspace/wrix.toml"
   (cd "$workspace" && "$wrix_bin" service start >"$TEST_TMP/opt-out-start")
   output="$(
@@ -905,8 +984,9 @@ test_host_trust_validation_resolves_repository_and_environment_overrides() {
   export HOME="$TEST_TMP/home-policy-trust"
   export XDG_STATE_HOME="$TEST_TMP/state-policy-trust"
   export XDG_CACHE_HOME="$TEST_TMP/cache-policy-trust"
+  initialize_host_scope "$wrix_bin"
   workspace="$TEST_TMP/workspace-policy-trust"
-  mkdir -p "$workspace/.git" "$HOME"
+  prepare_repository "$workspace" "$HOME"
   printf 'cache.require_trusted_nix = false\n' >"$workspace/wrix.toml"
   (cd "$workspace" && "$wrix_bin" service start >"$TEST_TMP/policy-trust-start")
   (
@@ -934,6 +1014,7 @@ ALL_TESTS=(
   test_mkdevshell_beads_workspace_does_not_run_raw_dolt
   test_mkdevshell_loom_internal_worktree_uses_repo_service
   test_fake_nix_config_show_matches_real_nix
+  test_runtime_image_inspection_and_tagging_are_stateful
   test_host_nix_configures_cache_and_hook
   test_host_nix_config_fails_when_trusted_setting_ignored
   test_host_nix_config_rejects_non_wrix_hook
@@ -944,7 +1025,7 @@ run_all() {
   local fn
   for fn in "${ALL_TESTS[@]}"; do
     printf '=== %s ===\n' "$fn"
-    if "$fn"; then
+    if ("$fn"); then
       printf 'PASS: %s\n' "$fn"
     else
       printf 'FAIL: %s\n' "$fn" >&2

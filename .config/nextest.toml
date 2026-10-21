@@ -1,5 +1,12 @@
 experimental = ["setup-scripts"]
 
+[scripts.setup.isolated-host-roots]
+command = ["bash", "tests/prepare-isolated-host-roots.sh"]
+
+[[profile.default.scripts]]
+filter = "all()"
+setup = "isolated-host-roots"
+
 [scripts.setup.packaging-fixtures]
 command = ["bash", "tests/prepare-native-fixtures.sh"]
 

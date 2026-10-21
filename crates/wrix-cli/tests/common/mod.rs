@@ -584,8 +584,99 @@ pub fn set_mode(path: &Path, mode: u32) -> TestResult {
     Ok(())
 }
 
+pub fn initialize_host_scope(root: &Path) -> TestResult {
+    for args in [
+        vec!["initialize"],
+        vec!["acknowledge-scope", "--version", "1"],
+    ] {
+        host_workspace_command(root, &args)?;
+    }
+    Ok(())
+}
+
+pub fn import_host_namespace(root: &Path, key: &str) -> TestResult {
+    host_workspace_command(root, &["import-native", "--native-key", key])
+}
+
+fn host_workspace_command(root: &Path, args: &[&str]) -> TestResult {
+    if Path::new("/etc/wrix/image-agent").exists() {
+        return Ok(());
+    }
+    fs::create_dir_all(root.join("home"))?;
+    let result = run_command(
+        wrix_command(root)?
+            .env("HOME", root.join("home"))
+            .env("XDG_STATE_HOME", root.join("state"))
+            .env("XDG_CACHE_HOME", root.join("cache"))
+            .arg("workspace")
+            .args(args),
+    )?;
+    assert!(result.status.success(), "{}", result.stderr);
+    Ok(())
+}
+
+fn namespace_connection(
+    path: &Path,
+    flags: rusqlite::OpenFlags,
+) -> TestResult<(rusqlite::Connection, String, &str)> {
+    let root = path.parent().ok_or("missing namespace directory")?;
+    let key = root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or("invalid key")?
+        .to_owned();
+    let state = root
+        .parent()
+        .and_then(Path::parent)
+        .ok_or("missing native root")?;
+    let owner = match path.file_name().and_then(|name| name.to_str()) {
+        Some("services.json") => "services",
+        Some("cache-status.json") => "cache-status",
+        _ => return Err("unsupported fixture document".into()),
+    };
+    Ok((
+        rusqlite::Connection::open_with_flags(state.join("state.db"), flags)?,
+        key,
+        owner,
+    ))
+}
+
+pub fn read_namespace_document(path: &Path) -> TestResult<Vec<u8>> {
+    if Path::new("/etc/wrix/image-agent").exists() {
+        return Ok(fs::read(path)?);
+    }
+    let (db, key, owner) = namespace_connection(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    Ok(db.query_row(
+        "SELECT value FROM namespace_metadata WHERE native_key = ?1 AND owner = ?2",
+        [key.as_str(), owner],
+        |row| row.get(0),
+    )?)
+}
+
+pub fn write_namespace_document(path: &Path, bytes: &[u8]) -> TestResult {
+    if Path::new("/etc/wrix/image-agent").exists() {
+        return Ok(fs::write(path, bytes)?);
+    }
+    let (db, key, owner) = namespace_connection(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+    assert_eq!(
+        db.execute(
+            "UPDATE namespace_metadata SET value = ?3 WHERE native_key = ?1 AND owner = ?2",
+            rusqlite::params![key, owner, bytes],
+        )?,
+        1
+    );
+    Ok(())
+}
+
+pub fn set_isolated_host_roots(command: &mut Command) {
+    command
+        .env_remove("XDG_STATE_HOME")
+        .env_remove("XDG_CACHE_HOME");
+}
+
 fn set_isolated_env(command: &mut Command, extra_paths: &[&Path]) -> TestResult {
     set_isolated_git_env(command);
+    set_isolated_host_roots(command);
     for (name, _) in env::vars_os() {
         if name.to_str().is_some_and(|name| {
             name.starts_with("WRIX_CACHE_") || name.starts_with("WRIX_NIX_CACHE_")
@@ -655,7 +746,7 @@ fn is_executable_file(path: &Path) -> bool {
         .is_ok_and(|metadata| metadata.is_file() && (metadata.permissions().mode() & 0o111) != 0)
 }
 
-fn shell_single_quote(value: &str) -> String {
+pub fn shell_single_quote(value: &str) -> String {
     let mut quoted = String::from("'");
     for character in value.chars() {
         if character == '\'' {

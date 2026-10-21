@@ -22,6 +22,7 @@ in
 
   "services.host-nix-config".script = ''
     ${hostNix "test_fake_nix_config_show_matches_real_nix"}
+    ${hostNix "test_runtime_image_inspection_and_tagging_are_stateful"}
     ${hostNix "test_host_nix_configures_cache_and_hook"}
     ${hostNix "test_host_nix_config_fails_when_trusted_setting_ignored"}
     ${hostNix "test_host_nix_config_rejects_non_wrix_hook"}

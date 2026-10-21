@@ -30,6 +30,7 @@ impl Fixture {
         }
         service_binding::create(root.path(), &bin, "nix-descriptor")?;
         fs::write(root.path().join("image"), "installed")?;
+        common::initialize_host_scope(root.path())?;
         Ok(Self {
             root,
             workspace,
@@ -270,18 +271,16 @@ fn cache_layout_uses_exact_platform_roots_and_opt_out_creates_no_cache() -> Test
         assert_eq!(metadata["cache_root"].as_str(), cache_root.to_str());
         assert!(!state_root.starts_with(&fixture.workspace));
         assert!(!cache_root.starts_with(&fixture.workspace));
-        assert!(state_root.join("services.json").is_file());
-        for file in [
-            "cache.lock",
-            "cache-status.json",
-            "keys/cache.secret",
-            "keys/cache.pub",
-            "publish-roots.json",
-        ] {
+        let observer = std::path::Path::new("/etc/wrix/image-agent").exists();
+        assert_eq!(state_root.join("services.json").is_file(), observer);
+        for file in ["cache-status.json", "publish-roots.json"] {
+            assert_eq!(state_root.join(file).is_file(), cache && observer, "{file}");
+        }
+        for file in ["cache.lock", "keys/cache.secret", "keys/cache.pub"] {
             assert_eq!(state_root.join(file).is_file(), cache, "{file}");
         }
         for dir in ["gcroots", "pending"] {
-            assert_eq!(state_root.join(dir).is_dir(), cache, "{dir}");
+            assert_eq!(state_root.join(dir).is_dir(), cache && observer, "{dir}");
         }
         assert_eq!(cache_root.join("nix-cache-info").is_file(), cache);
         assert_eq!(cache_root.join("nar").is_dir(), cache);
@@ -289,8 +288,9 @@ fn cache_layout_uses_exact_platform_roots_and_opt_out_creates_no_cache() -> Test
         if cache {
             let key = fs::read_to_string(state_root.join("keys/cache.pub"))?;
             wrix_core::cache_key::CachePublicKey::parse(key.trim())?;
-            let persisted: Value =
-                serde_json::from_slice(&fs::read(state_root.join("services.json"))?)?;
+            let persisted: Value = serde_json::from_slice(&common::read_namespace_document(
+                &state_root.join("services.json"),
+            )?)?;
             assert_eq!(persisted, metadata);
             let args = fs::read(fixture.root.path().join("run.argv"))?;
             let mount = format!("{}:/cache:ro", cache_root.display());
@@ -324,9 +324,9 @@ fn service_startup_uses_builtin_legacy_pruning_interval() -> TestResult {
             .duration_since(std::time::UNIX_EPOCH)?
             .as_secs()
             .saturating_sub(elapsed);
-        fs::write(
-            state_root.join("cache-status.json"),
-            serde_json::to_vec(&json!({
+        common::write_namespace_document(
+            &state_root.join("cache-status.json"),
+            &serde_json::to_vec(&json!({
                 "dirty": true, "last_publish": null, "last_prune": null,
                 "last_error": null, "last_prune_epoch": last_prune,
             }))?,

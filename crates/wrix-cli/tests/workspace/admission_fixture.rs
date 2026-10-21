@@ -187,6 +187,4 @@ fn executable(name: &str) -> PathBuf {
         .map(|directory| directory.join(name))
         .find(|path| path.is_file())
         .unwrap()
-        .canonicalize()
-        .unwrap()
 }

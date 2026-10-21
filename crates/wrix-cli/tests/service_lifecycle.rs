@@ -41,7 +41,7 @@ cat "${WRIX_TEST_RUNTIME_JSON:?}"
 fn malformed_sync_branch_fails_before_service_runtime_or_layout() -> TestResult {
     let fixture = Fixture::new()?;
     let state_root = fixture.state_root()?;
-    let before = fs::read(state_root.join("services.json"))?;
+    let before = common::read_namespace_document(&state_root.join("services.json"))?;
     fs::write(
         fixture.workspace.join(".beads/config.yaml"),
         "sync-branch: [\n",
@@ -56,7 +56,10 @@ fn malformed_sync_branch_fails_before_service_runtime_or_layout() -> TestResult 
     assert!(!fixture.root.path().join("runtime.log").exists());
     assert!(!state_root.join("service.lock").exists());
     assert!(!state_root.join("gcroots").exists());
-    assert_eq!(fs::read(state_root.join("services.json"))?, before);
+    assert_eq!(
+        common::read_namespace_document(&state_root.join("services.json"))?,
+        before
+    );
     Ok(())
 }
 
@@ -147,6 +150,13 @@ impl Fixture {
         fs::write(
             state_root.join("keys/cache.pub"),
             "wrix-cache:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n",
+        )?;
+        common::initialize_host_scope(fixture.root.path())?;
+        common::import_host_namespace(
+            fixture.root.path(),
+            fixture.metadata["workspace_hash"]
+                .as_str()
+                .ok_or("missing workspace hash")?,
         )?;
         Ok(fixture)
     }
@@ -395,8 +405,9 @@ fn repeated_apple_service_start_preserves_busy_owned_endpoints() -> TestResult {
             "{}",
             output.stdout
         );
-        let persisted: Value =
-            serde_json::from_slice(&fs::read(fixture.state_root()?.join("services.json"))?)?;
+        let persisted: Value = serde_json::from_slice(&common::read_namespace_document(
+            &fixture.state_root()?.join("services.json"),
+        )?)?;
         assert_eq!(persisted["endpoints"], fixture.metadata["endpoints"]);
         let exported: Value = serde_json::from_str(&fixture.run("endpoints")?.stdout)?;
         assert_eq!(exported["endpoints"], fixture.metadata["endpoints"]);
@@ -551,7 +562,7 @@ fn apple_cache_endpoint_uses_service_vm_without_dolt_or_host_metadata_changes() 
     let mut fixture = Fixture::new()?;
     fixture.disable_dolt()?;
     let persisted = fixture.state_root()?.join("services.json");
-    let before = fs::read(&persisted)?;
+    let before = common::read_namespace_document(&persisted)?;
     let output = run_command(
         fixture
             .command()?
@@ -564,7 +575,7 @@ fn apple_cache_endpoint_uses_service_vm_without_dolt_or_host_metadata_changes() 
         json!({"host": "192.168.64.12", "port": 8080})
     );
     assert_eq!(metadata["endpoints"]["dolt"], Value::Null);
-    assert_eq!(fs::read(persisted)?, before);
+    assert_eq!(common::read_namespace_document(&persisted)?, before);
     let host: Value = serde_json::from_str(&fixture.run("endpoints")?.stdout)?;
     assert_eq!(
         host["endpoints"]["cache_http"],
@@ -767,8 +778,9 @@ fn cache_guest_endpoint_and_key_reach_both_launch_commands() -> TestResult {
                         || arg.contains(":/nix/store")
                         || arg.contains("daemon-socket"))
             );
-            let persisted: Value =
-                serde_json::from_slice(&fs::read(state_root.join("services.json"))?)?;
+            let persisted: Value = serde_json::from_slice(&common::read_namespace_document(
+                &state_root.join("services.json"),
+            )?)?;
             assert_eq!(
                 persisted["endpoints"]["cache_http"],
                 fixture.metadata["endpoints"]["cache_http"]
@@ -1038,7 +1050,7 @@ fn apple_empty_inspect_is_missing_not_stopped() -> TestResult {
 fn malformed_apple_inventory_fails_without_rewriting_endpoints() -> TestResult {
     let fixture = Fixture::new()?;
     fs::write(fixture.root.path().join("runtime.json"), "not json\n")?;
-    let before = fs::read(fixture.state_root()?.join("services.json"))?;
+    let before = common::read_namespace_document(&fixture.state_root()?.join("services.json"))?;
     let output = fixture.run("start")?;
     assert!(!output.status.success());
     assert!(
@@ -1047,7 +1059,7 @@ fn malformed_apple_inventory_fails_without_rewriting_endpoints() -> TestResult {
         output.stderr
     );
     assert_eq!(
-        fs::read(fixture.state_root()?.join("services.json"))?,
+        common::read_namespace_document(&fixture.state_root()?.join("services.json"))?,
         before
     );
     Ok(())
