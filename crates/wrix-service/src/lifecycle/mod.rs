@@ -2094,9 +2094,17 @@ mod test {
 
     #[test]
     fn plan_uses_workspace_identity_for_ports() {
+        let root = tempfile::tempdir().unwrap();
         let workspace = Workspace::from_current_dir().unwrap();
-        let plan = Plan::for_workspace(workspace.clone(), super::CacheMode::Enabled).unwrap();
-        let second = Plan::for_workspace(workspace, super::CacheMode::Enabled).unwrap();
+        let paths = super::Paths::new(root.path().join("state"), root.path().join("cache"));
+        let plan = Plan::for_workspace_with_paths(
+            workspace.clone(),
+            super::CacheMode::Enabled,
+            paths.clone(),
+        )
+        .unwrap();
+        let second =
+            Plan::for_workspace_with_paths(workspace, super::CacheMode::Enabled, paths).unwrap();
         assert_eq!(plan.cache_port(), second.cache_port());
         assert_eq!(plan.paths().state_root(), second.paths().state_root());
     }

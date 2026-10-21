@@ -2,6 +2,7 @@ use std::{
     env,
     ffi::OsStr,
     fs, io,
+    os::unix::fs::PermissionsExt,
     path::{Component, Path, PathBuf},
     process::Command,
 };
@@ -11,9 +12,11 @@ use wrix_service::lifecycle::{CacheMode, DoltEndpoint, DoltTransport, Paths, Pla
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
+const ISOLATED_ROOTS_CHILD: &str = "WRIX_SERVICE_LIFECYCLE_TEST_CHILD";
+
 #[test]
 fn workspace_identity_is_stable_and_collision_resistant() -> TestResult {
-    if rerun_with_temp_cache_enabled("workspace_identity_is_stable_and_collision_resistant")? {
+    if rerun_with_isolated_roots("workspace_identity_is_stable_and_collision_resistant", true)? {
         return Ok(());
     }
     let root = repo_with_dolt("identity-primary")?;
@@ -94,6 +97,9 @@ fn legacy_workspace_hash_metadata_uses_collision_safe_plan() -> TestResult {
 
 #[test]
 fn temp_cache_only_plan_has_no_services() -> TestResult {
+    if rerun_with_isolated_roots("temp_cache_only_plan_has_no_services", false)? {
+        return Ok(());
+    }
     let root = temp_workspace("temp-cache-only")?;
     let workspace = Workspace::from_service_path(&root)?;
     let plan = Plan::for_workspace(workspace, CacheMode::Enabled)?;
@@ -109,6 +115,12 @@ fn temp_cache_only_plan_has_no_services() -> TestResult {
 
 #[test]
 fn nested_bead_clone_has_an_independent_service_identity() -> TestResult {
+    if rerun_with_isolated_roots(
+        "nested_bead_clone_has_an_independent_service_identity",
+        false,
+    )? {
+        return Ok(());
+    }
     let root = repo("loom-bead-repo")?;
     let bead = root.join(".loom/beads/wx-cy0iz.19");
     fs::create_dir_all(bead.join(".git"))?;
@@ -123,6 +135,12 @@ fn nested_bead_clone_has_an_independent_service_identity() -> TestResult {
 
 #[test]
 fn nested_integration_clone_has_an_independent_service_identity() -> TestResult {
+    if rerun_with_isolated_roots(
+        "nested_integration_clone_has_an_independent_service_identity",
+        false,
+    )? {
+        return Ok(());
+    }
     let root = repo("loom-integration-repo")?;
     let integration = root.join(".loom/integration");
     fs::create_dir_all(integration.join(".git"))?;
@@ -146,6 +164,9 @@ fn nested_integration_clone_has_an_independent_service_identity() -> TestResult 
 
 #[test]
 fn default_dolt_transport_matches_current_platform() -> TestResult {
+    if rerun_with_isolated_roots("default_dolt_transport_matches_current_platform", false)? {
+        return Ok(());
+    }
     let root = repo_with_dolt("dolt-transport")?;
     let plan = plan_for_service_path(&root, CacheMode::Disabled)?;
     let endpoint = dolt_endpoint(&plan)?;
@@ -173,26 +194,73 @@ fn default_dolt_transport_matches_current_platform() -> TestResult {
     Ok(())
 }
 
-fn rerun_with_temp_cache_enabled(test_name: &str) -> TestResult<bool> {
-    const CHILD_MARKER: &str = "WRIX_SERVICE_TEMP_CACHE_TEST_CHILD";
-    if env::var_os(CHILD_MARKER).is_some() {
+#[test]
+fn native_plan_fixture_does_not_read_or_repair_ambient_host_state() -> TestResult {
+    let fixture = tempfile::tempdir()?;
+    let home = fixture.path().join("home");
+    let state = fixture.path().join("state");
+    let native_root = if cfg!(target_os = "macos") {
+        home.join("Library/Application Support/wrix")
+    } else {
+        state.join("wrix")
+    };
+    fs::create_dir_all(&native_root)?;
+    fs::set_permissions(&native_root, fs::Permissions::from_mode(0o755))?;
+    let database = native_root.join("state.db");
+    fs::write(&database, "ambient state must not be opened or repaired\n")?;
+    let output = Command::new(env::current_exe()?)
+        .args([
+            "temp_cache_only_plan_has_no_services",
+            "--exact",
+            "--nocapture",
+        ])
+        .env("HOME", &home)
+        .env("XDG_STATE_HOME", &state)
+        .env("XDG_CACHE_HOME", fixture.path().join("cache"))
+        .env("WRIX_SERVICE_ALLOW_TEMP_CACHE", "1")
+        .env_remove(ISOLATED_ROOTS_CHILD)
+        .output()?;
+    assert!(
+        output.status.success(),
+        "child failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(
+        fs::read_to_string(&database)?,
+        "ambient state must not be opened or repaired\n"
+    );
+    assert_eq!(
+        fs::metadata(&native_root)?.permissions().mode() & 0o777,
+        0o755
+    );
+    assert_eq!(fs::read_dir(&native_root)?.count(), 1);
+    Ok(())
+}
+
+fn rerun_with_isolated_roots(test_name: &str, allow_temp_cache: bool) -> TestResult<bool> {
+    if env::var_os(ISOLATED_ROOTS_CHILD).is_some() {
         return Ok(false);
     }
     let fixture = tempfile::Builder::new()
-        .prefix("service-temp-cache-child")
+        .prefix("service-lifecycle-child")
         .tempdir()?;
     let home = fixture.path().join("home");
     fs::create_dir_all(&home)?;
-    let output = Command::new(env::current_exe()?)
+    let mut command = Command::new(env::current_exe()?);
+    command
         .arg(test_name)
         .arg("--exact")
         .arg("--nocapture")
         .env("HOME", home)
         .env("XDG_STATE_HOME", fixture.path().join("state"))
         .env("XDG_CACHE_HOME", fixture.path().join("cache"))
-        .env("WRIX_SERVICE_ALLOW_TEMP_CACHE", "1")
-        .env(CHILD_MARKER, "1")
-        .output()?;
+        .env_remove("WRIX_SERVICE_ALLOW_TEMP_CACHE")
+        .env(ISOLATED_ROOTS_CHILD, "1");
+    if allow_temp_cache {
+        command.env("WRIX_SERVICE_ALLOW_TEMP_CACHE", "1");
+    }
+    let output = command.output()?;
     assert!(
         output.status.success(),
         "child failed\nstdout:\n{}\nstderr:\n{}",

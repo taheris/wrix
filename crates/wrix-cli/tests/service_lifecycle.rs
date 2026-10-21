@@ -5,6 +5,7 @@ mod service_binding;
 use std::{
     fs,
     net::TcpListener,
+    os::unix::fs::DirBuilderExt,
     path::{Path, PathBuf},
     process::Command,
     time::{Duration, Instant},
@@ -36,6 +37,26 @@ case "$*" in
 esac
 cat "${WRIX_TEST_RUNTIME_JSON:?}"
 "#;
+
+#[test]
+fn service_fixture_keeps_native_host_state_private() -> TestResult {
+    let fixture = Fixture::new()?;
+    let state_root = fixture.state_root()?;
+    let native_root = state_root
+        .parent()
+        .and_then(Path::parent)
+        .ok_or("missing native root")?;
+    assert_eq!(common::mode(native_root)?, 0o700);
+    assert_eq!(common::mode(&state_root.join("keys"))?, 0o700);
+    if !Path::new("/etc/wrix/image-agent").exists() {
+        assert_eq!(common::mode(&native_root.join("state.db"))?, 0o600);
+    }
+    let imported: Value = serde_json::from_slice(&common::read_namespace_document(
+        &state_root.join("services.json"),
+    )?)?;
+    assert_eq!(imported, fixture.metadata);
+    Ok(())
+}
 
 #[test]
 fn malformed_sync_branch_fails_before_service_runtime_or_layout() -> TestResult {
@@ -141,7 +162,10 @@ impl Fixture {
             serde_json::to_vec_pretty(&fixture.snapshot)?,
         )?;
         let state_root = fixture.state_root()?;
-        fs::create_dir_all(state_root.join("keys"))?;
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(state_root.join("keys"))?;
         fs::write(
             state_root.join("services.json"),
             serde_json::to_vec_pretty(&fixture.metadata)?,
