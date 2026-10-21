@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     io::{Read, Write},
-    net::{TcpListener, TcpStream},
+    net::{SocketAddr, TcpListener, TcpStream},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -13,6 +13,7 @@ use std::{
 pub struct Server {
     pub endpoint: String,
     stop: Arc<AtomicBool>,
+    address: SocketAddr,
     worker: Option<thread::JoinHandle<()>>,
 }
 
@@ -39,24 +40,23 @@ impl Server {
             (format!("/{url}"), nar.to_vec()),
         ]);
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.set_nonblocking(true).unwrap();
-        let endpoint = format!("http://{}/", listener.local_addr().unwrap());
+        let address = listener.local_addr().unwrap();
+        let endpoint = format!("http://{address}/");
         let stop = Arc::new(AtomicBool::new(false));
         let done = Arc::clone(&stop);
         let worker = thread::spawn(move || {
-            while !done.load(Ordering::Acquire) {
-                match listener.accept() {
-                    Ok((stream, _)) => respond(stream, &assets),
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(5));
-                    }
-                    Err(error) => panic!("unsigned control accept failed: {error}"),
+            loop {
+                let (stream, _) = listener.accept().unwrap();
+                if done.load(Ordering::Acquire) {
+                    break;
                 }
+                respond(stream, &assets);
             }
         });
         Self {
             endpoint,
             stop,
+            address,
             worker: Some(worker),
         }
     }
@@ -99,6 +99,7 @@ fn respond(mut stream: TcpStream, assets: &HashMap<String, Vec<u8>>) {
 impl Drop for Server {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
+        TcpStream::connect_timeout(&self.address, Duration::from_secs(3)).unwrap();
         self.worker.take().unwrap().join().unwrap();
     }
 }
