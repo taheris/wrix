@@ -64,6 +64,7 @@ let
   rustProfileCtor = function: repoScript "tests/profiles/rust-profile-ctor.sh" function;
 in
 {
+  "devshell.cli-selection" = flakeCheck "devshell-cli-selection";
   "devshell.env-right-merge" = mkDevShell "test_env_right_merge";
   "devshell.flake-module-does-not-own-hooks-path" =
     nixEval "devshell.flake-module-does-not-own-hooks-path";

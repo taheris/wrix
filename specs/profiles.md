@@ -478,9 +478,8 @@ sandbox definition. An explicit consumer `WRIX_BIN` override selects the host
 launcher instead of ambient PATH resolution. Shell entry resolves and retains
 that executable without dereferencing its package wrapper, and exposes the same
 selection as bare `wrix` after successful entry. This explicit override is not a
-project-binary fallback or an implicit host package update. [check](nix build
-.#checks.aarch64-darwin.devshell-cli-selection) [check](nix build
-.#checks.x86_64-linux.devshell-cli-selection)
+project-binary fallback or an implicit host package update.
+[check](verify:devshell.cli-selection)
 
 Actual activation, including first and cached/unchanged direnv activation,
 requires a compatible host `wrix` on PATH before Wrix service, credential,

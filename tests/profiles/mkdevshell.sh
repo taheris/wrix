@@ -153,7 +153,7 @@ source_hook_env() {
     export HOME="$tmp/home"
     export PATH="$bin_dir:$PATH"
     export WRIX_BIN="$bin_dir/wrix"
-    unset SCCACHE_DIR CARGO_INCREMENTAL
+    unset SCCACHE_DIR CARGO_INCREMENTAL WRIX_PROJECT_PROFILE_CONFIG
     apply_env_json "$devshell_env"
     unset NIX_CONFIG
     # shellcheck source=/dev/null
