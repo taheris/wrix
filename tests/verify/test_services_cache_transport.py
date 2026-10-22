@@ -7,7 +7,8 @@ from pathlib import Path
 
 VERIFIER = Path(__file__).with_name("services-cache-transport.py")
 LAUNCHER = "crates/wrix-sandbox/src/command/launch.rs"
-LIFECYCLE = "crates/wrix-service/src/lifecycle/mod.rs"
+OWNER = "crates/wrix-service/src/lifecycle/owner/host.rs"
+SERVER = "crates/wrix-service/src/dolt/server/mod.rs"
 IMAGE = "lib/services/image.nix"
 FIXTURE = {
     LAUNCHER: '''
@@ -20,16 +21,19 @@ FIXTURE = {
     }
     fn load_dolt() {}
 ''',
-    LIFECYCLE: '''
-    fn ensure_running() {
-        format!("127.0.0.1:{port}:8080");
-        wrix_cache::backend::layout::Layout::current()?.mounts();
-    }
-    fn status() {}
-fn container_command() {
-    "wrix_cache::backend::layout::runtime::COMMAND"
+    OWNER: '''
+pub(in crate::lifecycle) fn ensure() {
+        let layout = Layout::current()?;
+        format!("127.0.0.1:{}:8080", selected.port);
+        for mount in layout.mounts() {}
+        .arg("wrix-shared-service")
 }
-fn expected_dolt_transport_label() {}
+fn sql_ready() {}
+''',
+    SERVER: '''
+    let mut celler = tokio::process::Command::new("sh")
+        .args(["-c", wrix_cache::backend::layout::runtime::COMMAND]);
+    let mut terminate = signal();
 ''',
     IMAGE: '''
   contents = [
@@ -78,16 +82,14 @@ class CacheTransportVerifierTests(unittest.TestCase):
             (LAUNCHER, "project-cache launcher path", "public_key.as_str()"),
             (LAUNCHER, "project-cache launcher path", "builders-use-substitutes = true"),
             (
-                LIFECYCLE,
+                OWNER,
                 "service container run path",
-                'format!("127.0.0.1:{port}:8080")',
+                'format!("127.0.0.1:{}:8080", selected.port)',
             ),
-            (
-                LIFECYCLE,
-                "service container run path",
-                'wrix_cache::backend::layout::Layout::current()?.mounts()',
-            ),
-            (LIFECYCLE, "service container command", "wrix_cache::backend::layout::runtime::COMMAND"),
+            (OWNER, "service container run path", "let layout = Layout::current()?"),
+            (OWNER, "service container run path", "for mount in layout.mounts()"),
+            (OWNER, "service container run path", '.arg("wrix-shared-service")'),
+            (SERVER, "service container command", "wrix_cache::backend::layout::runtime::COMMAND"),
             (IMAGE, "service image contents", "celler"),
         ]
         for path, label, needle in required:
@@ -98,8 +100,8 @@ class CacheTransportVerifierTests(unittest.TestCase):
     def test_rejects_forbidden_cache_transports_in_every_checked_region(self):
         regions = [
             (LAUNCHER, "project-cache launcher path", "    fn load_project_cache() {"),
-            (LIFECYCLE, "service container run path", "    fn ensure_running() {"),
-            (LIFECYCLE, "service container command", "fn container_command() {"),
+            (OWNER, "service container run path", "pub(in crate::lifecycle) fn ensure() {"),
+            (SERVER, "service container command", "    let mut celler ="),
             (IMAGE, "service image contents", "  contents = ["),
         ]
         forbidden = [
@@ -129,16 +131,16 @@ class CacheTransportVerifierTests(unittest.TestCase):
                 "    fn load_dolt",
             ),
             (
-                LIFECYCLE,
+                OWNER,
                 "service container run path",
-                "    fn ensure_running",
-                "    fn status",
+                "pub(in crate::lifecycle) fn ensure(",
+                "\nfn sql_ready(",
             ),
             (
-                LIFECYCLE,
+                SERVER,
                 "service container command",
-                "fn container_command",
-                "fn expected_dolt_transport_label",
+                "    let mut celler =",
+                "    let mut terminate =",
             ),
             (IMAGE, "service image contents", "  contents = [", "  ];"),
         ]

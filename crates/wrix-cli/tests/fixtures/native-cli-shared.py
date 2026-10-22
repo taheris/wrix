@@ -28,7 +28,7 @@ env.update(HOME=str(root / 'home'), XDG_STATE_HOME=str(root / 'state'),
 for key in ['GIT_DIR', 'GIT_COMMON_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_CONFIG_PARAMETERS']:
     env.pop(key, None)
 for key in list(env):
-    if key.startswith('BEADS_') or key in ['DOLT_ROOT_HOST', 'DOLT_ROOT_PASSWORD', 'DOLT_CLI_PASSWORD', 'LOOM_INSIDE', 'IS_SANDBOX']:
+    if key.startswith(('BEADS_', 'WRIX_BEADS_', 'WRIX_SERVICE_IMAGE')) or key in ['DOLT_ROOT_HOST', 'DOLT_ROOT_PASSWORD', 'DOLT_CLI_PASSWORD', 'LOOM_INSIDE', 'IS_SANDBOX']:
         env.pop(key)
 
 

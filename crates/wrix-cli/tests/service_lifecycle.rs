@@ -118,7 +118,12 @@ fn public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql() -
         .arg(root.path())
         .arg(env!("CARGO_BIN_EXE_wrix"))
         .env("WRIX_SHARED_BINARY", shared)
-        .env("WRIX_REAL_BD_BIN", native_bd);
+        .env("WRIX_REAL_BD_BIN", native_bd)
+        // The fixture owns its package binding, even in a bound host devshell.
+        .env("WRIX_SERVICE_IMAGE", "wrix-fixture:ambient-conflict")
+        .env("WRIX_SERVICE_IMAGE_SOURCE", "/must-not-read-ambient-image")
+        .env("WRIX_SERVICE_IMAGE_SOURCE_KIND", "invalid-ambient-kind")
+        .env("WRIX_SERVICE_IMAGE_DIGEST", "invalid-ambient-digest");
     common::set_isolated_git_env(&mut command);
     let output = run_command(&mut command)?;
     assert!(

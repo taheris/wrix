@@ -35,7 +35,8 @@ def require_absent(label, text, needle):
 def main():
     root = Path(sys.argv[1])
     launcher = (root / "crates/wrix-sandbox/src/command/launch.rs").read_text()
-    lifecycle = (root / "crates/wrix-service/src/lifecycle/mod.rs").read_text()
+    owner = (root / "crates/wrix-service/src/lifecycle/owner/host.rs").read_text()
+    server = (root / "crates/wrix-service/src/dolt/server/mod.rs").read_text()
     service_image = (root / "lib/services/image.nix").read_text()
 
     cache_load = section(
@@ -45,15 +46,15 @@ def main():
         "project-cache launcher path",
     )
     service_run = section(
-        lifecycle,
-        "    fn ensure_running",
-        "    fn status",
+        owner,
+        "pub(in crate::lifecycle) fn ensure(",
+        "\nfn sql_ready(",
         "service container run path",
     )
     container_command = section(
-        lifecycle,
-        "fn container_command",
-        "fn expected_dolt_transport_label",
+        server,
+        "    let mut celler =",
+        "    let mut terminate =",
         "service container command",
     )
     image_contents = section(
@@ -87,12 +88,16 @@ def main():
     require_contains(
         "service container run path",
         service_run,
-        'format!("127.0.0.1:{port}:8080")',
+        'format!("127.0.0.1:{}:8080", selected.port)' ,
     )
     require_contains(
         "service container run path",
         service_run,
-        'wrix_cache::backend::layout::Layout::current()?.mounts()',
+        "let layout = Layout::current()?",
+    )
+    require_contains("service container run path", service_run, "for mount in layout.mounts()")
+    require_contains(
+        "service container run path", service_run, '.arg("wrix-shared-service")',
     )
     require_contains(
         "service container command",
