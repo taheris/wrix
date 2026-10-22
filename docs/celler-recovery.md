@@ -7,9 +7,9 @@ from any directory:
 wrix service recover
 ```
 
-Startup prints an absolute recovery command selecting the invoked package wrapper
-and recorded runtime. Prefer that command if failed direnv entry leaves an older
-Wrix on PATH. No change to the original owner's workspace is required.
+Startup prints an absolute recovery command selecting the invoked package
+wrapper and recorded runtime. Prefer that command if failed direnv entry leaves
+an older Wrix on PATH. No change to the original owner's workspace is required.
 
 If an inherited Wrix post-build hook prevents realizing the updated package,
 bypass it for that one Nix invocation:
@@ -18,8 +18,8 @@ bypass it for that one Nix invocation:
 nix --option post-build-hook '' shell 'github:taheris/wrix#wrix'
 ```
 
-This bypass does not repair the backend. Recover it explicitly, then re-enter the
-project shell to install its current hook configuration.
+This bypass does not repair the backend. Recover it explicitly, then re-enter
+the project shell to install its current hook configuration.
 
 Recovery is host-user maintenance, independent of repository admission, caller
 cache settings and the original owner's checkout. It selects the recorded
