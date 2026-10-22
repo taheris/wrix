@@ -193,6 +193,8 @@ let
     rustNextest = wrix.rustPackage.nextest;
   };
 
+  devshellCliSelection = import ./profiles/cli-selection.nix { inherit pkgs; };
+
   rustChecks = {
     wrix-rust-clippy = wrix.rustPackage.clippy;
     wrix-rust-nextest = wrix.rustPackage.nextest;
@@ -240,6 +242,7 @@ let
     // {
       cache-celler-packaging = import ./services/celler-packaging.nix { inherit pkgs wrix; };
       profile-config-parser-agreement = profileConfigParserAgreement;
+      devshell-cli-selection = devshellCliSelection;
       host-service-package-binding = import ./services/package-binding.nix { inherit pkgs wrix; };
     }
     // builtins.intersectAttrs { private-nix-artifacts = null; } loomTests.checks
@@ -275,6 +278,7 @@ let
     // (import ./sandbox/pi-settings.nix { inherit pkgs wrix; })
     // piMcpTests.checks
     // {
+      devshell-cli-selection = devshellCliSelection;
       builder-vmnet-route = builderRouteTest;
       rust-source-fixtures = import ./services/rust-source.nix {
         inherit pkgs;

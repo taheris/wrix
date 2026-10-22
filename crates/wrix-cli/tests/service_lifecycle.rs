@@ -1300,7 +1300,7 @@ fn assert_cache_start_preserves_owner(fixture: &Fixture) -> TestResult {
     let output = fixture.run("start")?;
     assert!(!output.status.success());
     assert!(
-        output.stderr.contains("wrix service recover")
+        output.stderr.contains("explicit recovery")
             || output.stderr.contains("explicit host-wide maintenance"),
         "{}",
         output.stderr
@@ -1663,7 +1663,11 @@ fn host_lifecycle_lock_blocks_starts_from_unrelated_workspaces() -> TestResult {
         let state: PathBuf = serde_json::from_value(metadata["state_root"].clone())?;
         assert!(state.join("celler-publisher.json").is_file());
     } else {
-        assert!(String::from_utf8(peer_output.stderr)?.contains("explicit host-wide maintenance"));
+        let stderr = String::from_utf8(peer_output.stderr)?;
+        assert!(
+            stderr.contains("explicit host-wide maintenance"),
+            "{stderr}"
+        );
     }
     assert!(!fixture.root.path().join("run.argv").exists());
     Ok(())
@@ -1991,7 +1995,7 @@ fn recovery_recreates_only_absent_or_stopped_selected_owner_and_preserves_data()
             "{}",
             ordinary.stderr
         );
-        assert!(ordinary.stderr.contains("wrix service recover"));
+        assert!(ordinary.stderr.contains("' service recover"));
         let output = fixture.run("recover")?;
         assert!(output.status.success(), "{}", output.stderr);
         assert_eq!(fs::read_to_string(&persistent)?, "retain data");
@@ -2010,6 +2014,75 @@ fn recovery_recreates_only_absent_or_stopped_selected_owner_and_preserves_data()
         let output = fixture.run("start")?;
         assert!(output.status.success(), "{}", output.stderr);
     }
+    Ok(())
+}
+
+#[test]
+fn recovery_guidance_executes_selected_wrapper_after_failed_entry_with_stale_global() -> TestResult
+{
+    let fixture = selected_inactive_owner(false)?;
+    let wrapper = fixture.root.path().join("selected Wrix's wrapper");
+    fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\nset -eu\nexport WRIX_INVOKED_BIN=\"$0\"\nexport WRIX_SERVICE_PACKAGE_BINDING='{}'\nexec '{}' \"$@\"\n",
+            fixture.root.path().join("binding.json").display(),
+            env!("CARGO_BIN_EXE_wrix"),
+        ),
+    )?;
+    set_mode(&wrapper, 0o755)?;
+    let global = fixture.root.path().join("bin/wrix");
+    fs::write(
+        &global,
+        "#!/bin/sh\nprintf '%s\\n' 'unknown service command: recover' >&2\nexit 2\n",
+    )?;
+    set_mode(&global, 0o755)?;
+    let before = fs::read(owner_selection(&fixture)?)?;
+    let mut entry = fixture.command()?;
+    entry
+        .env("WRIX_INVOKED_BIN", &wrapper)
+        .env("WRIX_BIN", &global)
+        .args(["service", "start"]);
+    let output = run_command(&mut entry)?;
+    assert!(!output.status.success());
+    assert!(
+        output.stderr.contains("original workspace"),
+        "{}",
+        output.stderr
+    );
+    assert!(
+        output
+            .stderr
+            .contains(fixture.workspace.canonicalize()?.to_str().unwrap()),
+        "{}",
+        output.stderr
+    );
+    assert_eq!(fs::read(owner_selection(&fixture)?)?, before);
+    assert!(!fixture.root.path().join("run.argv").exists());
+    let command = output
+        .stderr
+        .split('`')
+        .nth(1)
+        .ok_or("missing recovery command")?;
+    assert!(command.contains("selected Wrix"), "{command}");
+    assert!(!command.starts_with("wrix "));
+    fixture.api()?;
+    let environment = fixture.command()?;
+    let mut recovery = Command::new("sh");
+    recovery
+        .current_dir(&fixture.workspace)
+        .envs(
+            environment
+                .get_envs()
+                .filter_map(|(key, value)| value.map(|value| (key, value))),
+        )
+        .env_remove("WRIX_SERVICE_PACKAGE_BINDING")
+        .env_remove("WRIX_INVOKED_BIN")
+        .env_remove("WRIX_BIN")
+        .args(["-c", command]);
+    let output = run_command(&mut recovery)?;
+    assert!(output.status.success(), "{}", output.stderr);
+    assert!(fixture.root.path().join("run.argv").exists());
     Ok(())
 }
 
@@ -2041,6 +2114,36 @@ fn recovery_rejects_competing_owners_in_either_runtime_without_mutation() -> Tes
         );
         assert!(!fixture.root.path().join("run.argv").exists());
     }
+    Ok(())
+}
+
+#[test]
+fn unavailable_owner_guidance_identifies_foreign_workspace_without_claiming_it() -> TestResult {
+    let fixture = selected_inactive_owner(false)?;
+    let other = fixture.root.path().join("other");
+    fs::create_dir(&other)?;
+    common::run_git(&other, &["init", "-q"])?;
+    let selection = owner_selection(&fixture)?;
+    let before = fs::read(&selection)?;
+    let output = run_command(
+        fixture
+            .command()?
+            .current_dir(&other)
+            .args(["service", "start"]),
+    )?;
+    assert!(!output.status.success());
+    assert!(
+        output.stderr.contains("not this checkout"),
+        "{}",
+        output.stderr
+    );
+    assert!(
+        output
+            .stderr
+            .contains(fixture.metadata["workspace_hash"].as_str().unwrap())
+    );
+    assert_eq!(fs::read(&selection)?, before);
+    assert!(!fixture.root.path().join("run.argv").exists());
     Ok(())
 }
 
@@ -2239,7 +2342,8 @@ fn selected_celler_owner_is_not_replaced_when_its_runtime_identity_is_unconfirme
         let output = fixture.run("start")?;
         assert!(!output.status.success(), "{change}");
         assert!(
-            output.stderr.contains("wrix service recover"),
+            output.stderr.contains("' service recover")
+                || output.stderr.contains("explicit recovery"),
             "{}",
             output.stderr
         );

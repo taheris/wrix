@@ -25,6 +25,11 @@ let
     toShellVars
     ;
 
+  selectCli = pkgs.writeText "wrix-select-cli.sh" (readFile ./select-cli.sh);
+  selectedCli = pkgs.writeShellScriptBin "wrix" ''
+    set -euo pipefail
+    exec "$WRIX_BIN" "$@"
+  '';
   hostNixConfig = pkgs.writeText "wrix-host-nix-config.sh" (readFile ../services/host-nix-config.sh);
   startIndependent = import ../services/start.nix { inherit (pkgs.stdenv.hostPlatform) isDarwin; };
   prekHooksBundle = import ../prek/bundle.nix { inherit pkgs; };
@@ -177,18 +182,19 @@ in
                 WRIX_BASH_BIN="${pkgs.bash}/bin/bash" \
                 WRIX_HOST_NIX_CONFIG_PRINT=1 \
                 ${pkgs.bash}/bin/bash ${hostNixConfig}
-            )
+            ) || { return 1 2>/dev/null || exit 1; }
             export NIX_CONFIG="$_wrix_nix_config"
             unset _wrix_service_bin _wrix_nix_config
           '';
       beadsHook = if nixCacheEnabled then beads.waitAndExport else "";
+      consumerHookEnv = builtins.removeAttrs env [ "WRIX_BIN" ];
       consumerEnvHook =
-        if env == { } then
+        if consumerHookEnv == { } then
           ""
         else
           ''
-            ${toShellVars env}
-            export ${escapeShellArgs (attrNames env)}
+            ${toShellVars consumerHookEnv}
+            export ${escapeShellArgs (attrNames consumerHookEnv)}
           '';
     in
     pkgs.mkShell {
@@ -201,6 +207,15 @@ in
         ];
       env = (resolvedProfile.hostEnv or resolvedProfile.env) // cacheEnv // checkedEnv // projectEnv;
       shellHook = ''
+        _wrix_explicit_cli="''${WRIX_BIN:-}"
+        WRIX_BIN=$(WRIX_BIN="''${WRIX_BIN:-}" WRIX_PROJECT_PROFILE_CONFIG="''${WRIX_PROJECT_PROFILE_CONFIG:-}" \
+          ${pkgs.bash}/bin/bash ${selectCli}) || { return 1 2>/dev/null || exit 1; }
+        export WRIX_BIN
+        if [[ -n "$_wrix_explicit_cli" ]]; then
+          export PATH="${selectedCli}/bin:$PATH"
+        fi
+        unset _wrix_explicit_cli
+
         ${durationHook}
         ${serviceHook}
 

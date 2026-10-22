@@ -177,7 +177,8 @@ let
       }
       ''
         mkdir -p "$out/bin"
-        makeWrapper "${workspace.bin}/bin/${name}" "$out/bin/${name}" ${concatStringsSep " " wrapperArgs}
+        makeWrapper "${workspace.bin}/bin/${name}" "$out/bin/${name}" \
+          --set WRIX_INVOKED_BIN "$out/bin/${name}" ${concatStringsSep " " wrapperArgs}
         ln -s "${workspace.bin}/bin/wrix-git-sign" "$out/bin/wrix-git-sign"
         ln -s "${prekRunner}/bin/wrix-prek" "$out/bin/wrix-prek"
       '';

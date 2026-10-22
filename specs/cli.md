@@ -238,6 +238,10 @@ owners, uncertain runtime observations and foreign-workspace takeovers. Ordinary
 startup reports missing/stopped ownership with this command's recovery guidance
 rather than deleting the selection or claiming a running incompatibility.
 
+- Missing/stopped recovery guidance pins the invoked package wrapper and
+  recorded runtime, identifies the original-owner workspace, and remains
+  executable after failed shell entry leaves an older global Wrix on PATH.
+  [test](../crates/wrix-cli/tests/service_lifecycle.rs::recovery_guidance_executes_selected_wrapper_after_failed_entry_with_stale_global)
 - Missing/stopped recovery preserves physical ownership and persistent data.
   [test](../crates/wrix-cli/tests/service_lifecycle.rs::recovery_recreates_only_absent_or_stopped_selected_owner_and_preserves_data)
 - Recovery rejects competing running owners in either runtime without removing

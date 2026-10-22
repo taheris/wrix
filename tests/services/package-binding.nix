@@ -12,7 +12,9 @@ let
   };
   binary = pkgs.writeShellScriptBin "wrix" ''
     set -euo pipefail
-    if [[ "''${1-}" == controller ]]; then
+    if [[ "''${1-}" == invoked ]]; then
+      printf '%s' "''${WRIX_INVOKED_BIN-}"
+    elif [[ "''${1-}" == controller ]]; then
       printf '%s' "''${WRIX_CONTROLLER_PACKAGE_BINDING-}"
     else
       printf '%s' "''${WRIX_SERVICE_PACKAGE_BINDING-}"
@@ -61,6 +63,8 @@ pkgs.runCommand "host-service-package-binding"
   ''
     set -euo pipefail
     test "$(${host.wrix}/bin/wrix)" = '${host.binding}'
+    test "$(WRIX_INVOKED_BIN=stale ${host.wrix}/bin/wrix invoked)" = '${host.wrix}/bin/wrix'
+    test "$(${guest.wrix}/bin/wrix invoked)" = '${guest.wrix}/bin/wrix'
     test "$(WRIX_SERVICE_PACKAGE_BINDING=project ${host.wrix}/bin/wrix)" = '${host.binding}'
     test -z "$(env -u WRIX_SERVICE_PACKAGE_BINDING ${guest.wrix}/bin/wrix)"
     test "$(WRIX_CONTROLLER_PACKAGE_BINDING=project ${host.wrix}/bin/wrix controller)" = '${host.controllerBinding}'

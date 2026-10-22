@@ -1,13 +1,35 @@
 # Recovering stale Celler ownership
 
-If the selected Celler container is absent or stopped, use the updated host CLI
-from the original owner's repository and with the recorded runtime:
+If the selected Celler container is absent or stopped, startup prints an
+absolute recovery command selecting the invoked host package wrapper and
+recorded runtime. Change to the original owner's workspace named in the
+diagnostic, then copy that command. When another checkout encounters the
+failure, the diagnostic identifies the owner's workspace hash instead; do not
+recover from that other checkout.
+
+Use the printed absolute executable even after failed direnv entry: that failure
+can leave an older global `wrix` on PATH, and the new `WRIX_BIN` export may
+never reach the calling shell. Do not substitute the raw Rust binary for the
+package wrapper: the wrapper retains its service-image and controller bindings.
+
+A stale host that reports `wrix requires --profile-config` on bare `wrix run`
+needs updating, not a hand-copied project configuration. Provide the host
+package using Home Manager, nix-darwin,
+`nix profile add 'github:taheris/wrix#wrix'`, or a temporary
+`nix shell 'github:taheris/wrix#wrix'`, then re-enter `sandbox.devShell`. An
+explicit consumer `WRIX_BIN` launcher is also exposed as bare `wrix` after
+successful shell entry.
+
+If an inherited Wrix post-build hook prevents even realizing the updated
+package, bypass it for that one Nix invocation, for example:
 
 ```bash
-cd /home/shaun/src/github.com/taheris/loom
-wrix service status
-wrix service recover
+nix --option post-build-hook '' shell 'github:taheris/wrix#wrix'
 ```
+
+This bypass does not repair the backend. Resolve its reported failure explicitly
+and re-enter the project shell to install its current hook configuration; do not
+delete cache state or signing keys.
 
 `recover` is explicit maintenance, not an implicit upgrade during `run` or
 `start`. It retains host lifecycle exclusion while checking both container

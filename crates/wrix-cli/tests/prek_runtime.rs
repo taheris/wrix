@@ -427,6 +427,8 @@ fn devshell_entry_repairs_binding_even_when_hook_path_is_current() -> TestResult
     let result = run_command(
         fixture
             .command(&fixture.tools.join("bash"), fixture.repo.path(), "host")
+            .env("WRIX_BIN", env!("CARGO_BIN_EXE_wrix"))
+            .env_remove("WRIX_PROJECT_PROFILE_CONFIG")
             .arg("-c")
             .arg(hook),
     )?;
