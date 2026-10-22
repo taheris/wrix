@@ -66,10 +66,22 @@ override. This choice is independent of archive caching and
 preparing a pool. **Shared execution is unavailable in this version.** Every
 shared launch fails before services, credentials, execution metadata or worker
 startup; it never silently falls back. Image metadata and repository settings
-are not approval. Canonical repository/system approval, native pool ownership,
-strict build isolation, protected exports and installed reuse are not delivered
-by this selection interface. No host approval/collection command is exposed
-until that authority and its operations exist.
+are not approval. `wrix service nix-store` passively reports the selected
+repository's recorded approval. `enable` requires an existing host deployment
+and explicitly binds the checked namespace to a host-created canonical
+repository identity; `disable` withdraws new admission for that repository's
+bound namespaces without deleting data. Linked checkouts or admitted clones
+share that identity only through these host bindings, never from Git paths or
+repository preferences alone. Integrated scope uses the original admitted
+primary checkout, not a `.loom` path heuristic. Pool keys additionally
+distinguish `x86_64-linux` and `aarch64-linux`.
+
+Approval remains metadata, not a serving capability. Native pool ownership,
+strict build isolation, authenticated exports, live protection, installed reuse
+and collection remain unavailable. Unknown/inconsistent approval or replaced
+repository administration requires explicit reconciliation, not repair by
+ordinary enable/start. No new SQLite schema or filesystem-authority fallback is
+introduced.
 
 ## Construction and execution
 

@@ -56,12 +56,17 @@ schema, malformed expected records and a missing expected database fail closed
 rather than initializing replacement authority.
 
 Namespace metadata includes service endpoint documents, cache status,
-publication manifests, pending candidates and closure-marker metadata. Host
-operations store these records only in the database. They do not create or
-recreate `services.json`, `cache-status.json`, `publish-roots.json`, `pending/`
-or closure-list `gcroots/` files. Worker filesystem projections remain
-observations, not alternative host authority. Repository databases are optional
-and non-authorizing; none is required by this protocol.
+publication manifests, pending candidates, closure-marker metadata and explicit
+installed-store repository membership/approval. The latter binds host-created
+repository identities and observations to checked namespaces; it is not a live
+store owner or export capability. Repository-wide approval changes for
+previously bound members are transactional, and unknown/inconsistent records are
+not repaired by ordinary enable. Host operations store these records only in the
+database. They do not create or recreate `services.json`, `cache-status.json`,
+`publish-roots.json`, `pending/` or closure-list `gcroots/` files. Worker
+filesystem projections remain observations, not alternative host authority.
+Repository databases are optional and non-authorizing; none is required by this
+protocol.
 
 Explicit import admits supported existing metadata without rewriting or deleting
 native files. Ordinary host updates and queue/closure retirement leave those

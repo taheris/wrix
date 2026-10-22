@@ -8,6 +8,8 @@ mod admission_fixture;
 mod fixture;
 #[path = "workspace/hardening.rs"]
 mod hardening;
+#[path = "workspace/nix_store.rs"]
+mod nix_store;
 #[path = "workspace/resolver.rs"]
 mod resolver;
 

@@ -70,6 +70,27 @@ pub enum Error {
     CacheUnavailable,
 }
 
+/// Inspect a retained deployment without creating authority, locks or listeners.
+pub(crate) fn existing_deployment(
+    host: &wrix_state::host::Host,
+) -> Result<Option<crate::deployment::Id>, Error> {
+    drop(wrix_state::store::Store::inspect(host).map_err(io::Error::other)?);
+    let root = host.roots().state().join("control/authority");
+    let metadata = match fs::symlink_metadata(&root) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    if !metadata.is_dir()
+        || metadata.mode() & 0o077 != 0
+        || root.canonicalize()? != root
+        || metadata.uid() != fs::metadata(host.roots().state())?.uid()
+    {
+        return Err(Error::PrivateRoot);
+    }
+    deployment::load(&root)
+}
+
 /// An independent host-management credential, never a cache/proxy traffic token.
 struct Credential([u8; 32]);
 

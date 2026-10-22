@@ -3,13 +3,16 @@
 use serde::Serialize;
 use wrix_core::{nix_store::Mode, repository_policy::Policy};
 
-use super::{Kind, NetworkMode, Request};
+use super::{Kind, LaunchError, NetworkMode, Request};
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum Approval {
     NotRequested,
     Unavailable,
+    Unapproved,
+    Disabled,
+    Enabled,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -18,6 +21,8 @@ pub(super) enum Blocker {
     RestrictedNetwork,
     IncompatibleImage,
     ApprovalUnavailable,
+    ApprovalRequired,
+    RepositoryRequired,
     RuntimeUnavailable,
 }
 
@@ -31,7 +36,13 @@ impl Blocker {
                 "Shared installed Nix stores require a compatible versioned image and seed closure."
             }
             Self::ApprovalUnavailable => {
-                "Canonical repository/system pool approval is unavailable in this version; select private mode."
+                "Shared installed Nix stores require checked host workspace authority; select private mode in a worker."
+            }
+            Self::ApprovalRequired => {
+                "Installed-store sharing requires explicit host membership/approval; use wrix service nix-store enable or select private mode."
+            }
+            Self::RepositoryRequired => {
+                "Shared installed Nix stores require an actual canonical Git repository; select private mode for scratch directories."
             }
             Self::RuntimeUnavailable => {
                 "Shared installed Nix execution is unavailable in this version; select private mode until strict build, protection and export acceptance is implemented."
@@ -47,18 +58,23 @@ pub(super) struct Admission {
     pub blockers: Vec<Blocker>,
 }
 
-pub(super) fn resolve(request: &Request, policy: &Policy, network: NetworkMode) -> Admission {
+pub(super) fn resolve(
+    request: &Request,
+    policy: &Policy,
+    network: NetworkMode,
+    selection: &wrix_state::context::Selection,
+) -> Result<Admission, LaunchError> {
     let explicit = match &request.kind {
         Kind::Run(run) => run.nix_store,
         Kind::Spawn(spawn) => spawn.config.nix_store,
     };
     let mode = explicit.resolve(policy.nix_store);
     if mode == Mode::Private {
-        return Admission {
+        return Ok(Admission {
             mode,
             approval: Approval::NotRequested,
             blockers: Vec::new(),
-        };
+        });
     }
     let mut blockers = Vec::new();
     if network != NetworkMode::Open {
@@ -73,12 +89,34 @@ pub(super) fn resolve(request: &Request, policy: &Policy, network: NetworkMode) 
     {
         blockers.push(Blocker::IncompatibleImage);
     }
-    // No namespace identity, image declaration or caller setting is pool authority.
-    blockers.push(Blocker::ApprovalUnavailable);
+    let approval = match wrix_state::nix_store::inspect(selection) {
+        Ok(wrix_state::nix_store::Approval::Unavailable) => {
+            blockers.push(Blocker::ApprovalUnavailable);
+            Approval::Unavailable
+        }
+        Ok(wrix_state::nix_store::Approval::Unapproved) => {
+            blockers.push(Blocker::ApprovalRequired);
+            Approval::Unapproved
+        }
+        Ok(wrix_state::nix_store::Approval::Bound { enabled, .. }) => {
+            if enabled {
+                Approval::Enabled
+            } else {
+                blockers.push(Blocker::ApprovalRequired);
+                Approval::Disabled
+            }
+        }
+        Err(wrix_state::nix_store::Error::RepositoryRequired) => {
+            blockers.push(Blocker::RepositoryRequired);
+            Approval::Unavailable
+        }
+        Err(error) => return Err(error.into()),
+    };
+    // Metadata approval is not build isolation, resource ownership or export protection.
     blockers.push(Blocker::RuntimeUnavailable);
-    Admission {
+    Ok(Admission {
         mode,
-        approval: Approval::Unavailable,
+        approval,
         blockers,
-    }
+    })
 }

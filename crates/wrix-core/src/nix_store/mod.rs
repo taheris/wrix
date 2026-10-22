@@ -1,3 +1,5 @@
+pub mod pool;
+
 use std::{fmt, num::NonZeroU32, path::Path};
 
 use displaydoc::Display;

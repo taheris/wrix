@@ -129,6 +129,14 @@ impl Layout {
         self.state.join("service-data").join(backend.directory())
     }
 
+    /// Pure planning, not authority to mount or open the service-owned installation.
+    pub fn nix_pool(&self, pool: &wrix_core::nix_store::pool::Key) -> PathBuf {
+        self.state
+            .join("service-data/nix")
+            .join(pool.repository.to_string())
+            .join(pool.system.as_str())
+    }
+
     pub fn workspace(&self, namespace: Namespace) -> Workspace {
         let hash = String::from(namespace.clone());
         Workspace {

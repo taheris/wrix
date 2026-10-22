@@ -95,6 +95,13 @@ impl Context {
         Ok(context)
     }
 
+    pub(crate) fn primary_checkout(&self) -> Option<&Checkout> {
+        self.resolution
+            .as_ref()
+            .map(crate::resolver::Resolution::primary)
+            .or(self.checkout.as_ref())
+    }
+
     pub fn caller(&self) -> &Path {
         &self.caller
     }

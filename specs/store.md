@@ -63,6 +63,11 @@ There is no environment-variable selector or profile-controlled sharing grant.
 
 Shared mode additionally requires host approval for the canonical repository,
 compatible versioned image/client/service capabilities and a supported runtime.
+Host-created repository identity and guest system identify a pool; neither is an
+admission capability. Host approval explicitly binds checked native namespace
+members to that repository. A new namespace does not join solely from its Git
+common directory or checkout location. Integrated membership uses the original
+admitted primary checkout rather than rediscovering scope from path names.
 Repository edits, agent arguments and spawn data cannot create host approval or
 broaden pool membership. An unapproved, incompatible or unavailable shared
 request fails before worker startup with actionable guidance, not a silent
@@ -199,6 +204,10 @@ safe reconciliation before readmission.
 
 ### Pool Acceptance
 
+- Explicit host approval binds checked namespaces to stable repository
+  identities without implicitly enrolling linked checkouts, changing peer
+  decisions or provisioning a pool.
+  [test](../crates/wrix-cli/tests/workspace_admission.rs::nix_store::linked_checkouts_share_one_repository_only_after_explicit_membership_and_disable_together)
 - Canonical clones share only their approved repository/system pool; ordinary
   peer-pool reads and host-management requests fail with known-live controls.
   [test?](../crates/wrix-service/tests/nix_store.rs::pool_authorization_is_canonical_and_disjoint)

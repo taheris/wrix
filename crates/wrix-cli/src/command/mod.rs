@@ -240,6 +240,7 @@ fn run_service(
     match args[0].as_str() {
         "dolt" => run_dolt(&args[1..], stdout, stderr),
         "cache" => run_cache(&args[1..], stdout, stderr),
+        "nix-store" => wrix_service::nix_store::run(&args[1..], stdout),
         command => {
             writeln!(stderr, "unknown service command: {command}")?;
             wrix_service::command::write_help(stderr)?;

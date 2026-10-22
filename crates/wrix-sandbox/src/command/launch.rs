@@ -82,6 +82,8 @@ pub struct Spawn {
 )]
 #[derive(Debug, Display, Error)]
 pub enum LaunchError {
+    /// {0}
+    NixApproval(#[from] wrix_state::nix_store::Error),
     /// {reason}
     NixStoreAdmission { reason: &'static str },
     /// workspace admission failed: {0}
@@ -245,7 +247,7 @@ pub fn execute(
         .unwrap_or_default();
     // Static policy errors precede subprocesses; membership still precedes effects.
     let selection = wrix_state::context::Selection::inspect(workspace)?;
-    let nix_store = nix_store::resolve(request, &policy, network_mode);
+    let nix_store = nix_store::resolve(request, &policy, network_mode, &selection)?;
     if !preview.dry_run
         && let Some(blocker) = nix_store.blockers.first()
     {
