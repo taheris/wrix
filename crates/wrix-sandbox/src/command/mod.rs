@@ -241,6 +241,18 @@ fn parse_spawn(args: &[String]) -> Result<Spawn, CliError> {
         }
     }
     preview.validate()?;
+    if execution_ticket.is_none()
+        && let Some(value) = std::env::var_os("WRIX_EXECUTION_TICKET")
+    {
+        let value = value.to_str().ok_or_else(|| CliError::Io {
+            source: io::Error::other("invalid host execution ticket encoding"),
+        })?;
+        execution_ticket = Some(
+            wrix_state::execution::Ticket::parse(value).map_err(|source| CliError::Io {
+                source: io::Error::other(source),
+            })?,
+        );
+    }
     if execution_ticket.is_some()
         && (Platform::CURRENT != Platform::Linux
             || std::env::var_os("WRIX_UNSAFE_PODMAN_SOCKET").is_some())

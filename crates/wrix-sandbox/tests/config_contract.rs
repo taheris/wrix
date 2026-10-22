@@ -50,6 +50,27 @@ fn profile_value(platform: Platform) -> Value {
 }
 
 #[test]
+fn execution_capability_is_typed_profile_metadata_not_worker_authority() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("profile.json");
+    let mut value = profile_value(Platform::Linux);
+    for supported in [true, false] {
+        value["features"]["execution_tickets"] = json!(supported);
+        fs::write(&path, value.to_string()).unwrap();
+        assert!(load_profile_config(&path, Platform::Linux).is_ok());
+    }
+    value["features"]["execution_tickets"] = json!("true");
+    fs::write(&path, value.to_string()).unwrap();
+    assert!(load_profile_config(&path, Platform::Linux).is_err());
+    fs::write(
+        &path,
+        json!({"workspace":"/workspace", "execution_ticket":"worker claim"}).to_string(),
+    )
+    .unwrap();
+    assert!(load_spawn_config(&path, Platform::Linux).is_err());
+}
+
+#[test]
 fn shared_image_metadata_is_optional_and_independent_of_private_profiles() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("profile.json");

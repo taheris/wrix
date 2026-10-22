@@ -523,6 +523,7 @@ let
           };
           features = {
             mcp_runtime = mcpRuntime;
+            execution_tickets = isLinux;
           };
         }
       );

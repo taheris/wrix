@@ -817,6 +817,8 @@ enum System {
 struct Features {
     #[serde(default, rename = "mcp_runtime")]
     _mcp_runtime: bool,
+    #[serde(default, rename = "execution_tickets")]
+    _execution_tickets: bool,
 }
 
 #[derive(Debug, Deserialize)]

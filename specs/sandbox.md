@@ -603,12 +603,16 @@ supplied; there is no implicit default image baked in.
 
 Host callers may reserve a one-shot execution ticket with
 `wrix execution reserve <workspace>` and pass it to Linux spawn using
-`--execution-ticket <ticket>`. The ticket and runtime binding live only in the
-host-private control database, not SpawnConfig or the workspace audit index.
-Podman creates the container without starting it; Wrix durably binds its full
-immutable ID before attaching/starting that exact object. Existing resource,
-network, mount and credential construction is unchanged. Ticketed launches
-refuse the unsafe host Podman socket and are unavailable on Darwin.
+`--execution-ticket <ticket>` or host launcher environment
+`WRIX_EXECUTION_TICKET` (an explicit argument takes precedence). Neither is read
+from worker environment entries in SpawnConfig. Linux profiles advertise typed
+`features.execution_tickets`; this compatibility hint is not lifetime authority.
+The ticket and runtime binding live only in the host-private control database,
+not SpawnConfig or the workspace audit index. Podman creates the container
+without starting it; Wrix durably binds its full immutable ID before
+attaching/starting that exact object. Existing resource, network, mount and
+credential construction is unchanged. Ticketed launches refuse the unsafe host
+Podman socket and are unavailable on Darwin.
 
 `wrix execution reconcile <workspace> <ticket>` reports protected or retired.
 Only one exact bound object in an unambiguously exited state may be removed,
@@ -623,6 +627,7 @@ a background supervisor or source/output collector. It does not cover delegated
 service-side compiler lifetimes or trusted-native processes.
 
 Acceptance:
+[test](../crates/wrix-sandbox/tests/config_contract.rs::execution_capability_is_typed_profile_metadata_not_worker_authority)
 [test](../crates/wrix-sandbox/tests/execution_lifetime.rs::execution_restart_retains_unbound_launch_and_ignores_workspace_completion)
 [test](../crates/wrix-sandbox/tests/execution_lifetime.rs::execution_unavailable_ambiguous_and_failed_removal_observations_retain_binding)
 [system](cargo test -p wrix-sandbox --test execution_lifetime
