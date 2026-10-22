@@ -288,7 +288,7 @@ pub fn execute(
     )
     .map_err(|source| LaunchError::Metadata { source })?;
     let mut observed_status = None;
-    let result = ServicesState::load(request, issuer)
+    let result = ServicesState::load(request, issuer, &plan.selection)
         .and_then(|mut services| plan.launch(&mut services, &mut observed_status));
     if let Err(error) = journal.complete(observed_status) {
         tracing::warn!(workspace = %plan.workspace.display(), %error, "execution metadata remains incomplete");
@@ -1147,6 +1147,13 @@ impl<'a> Plan<'a> {
                 .stdin(Stdio::inherit())
                 .stdout(Stdio::inherit())
                 .stderr(Stdio::inherit());
+            self.recheck()?;
+            if let Kind::Spawn(spawn) = &self.request.kind
+                && let Some(ticket) = &spawn.execution_ticket
+            {
+                command = crate::execution::command(&self.workspace, ticket, &command, self.stdio)
+                    .map_err(io::Error::other)?;
+            }
             let status = services.wait(&mut command)?;
             *observed_status = Some(status);
             status_to_exit(status)
@@ -1230,6 +1237,7 @@ impl<'a> Plan<'a> {
                 .stdin(Stdio::inherit())
                 .stdout(Stdio::inherit())
                 .stderr(Stdio::inherit());
+            self.recheck()?;
             let status = services.wait(&mut command)?;
             *observed_status = Some(status);
             darwin_mounts.sync_files()?;
@@ -1799,7 +1807,12 @@ impl ServicesState {
         }
     }
 
-    fn load(request: &Request, issuer: &dyn Factory) -> Result<Self, LaunchError> {
+    fn load(
+        request: &Request,
+        issuer: &dyn Factory,
+        selection: &wrix_state::context::Selection,
+    ) -> Result<Self, LaunchError> {
+        selection.recheck()?;
         let workspace = match &request.kind {
             Kind::Run(run) => run.workspace.as_path(),
             Kind::Spawn(spawn) => Path::new(&spawn.config.workspace),
@@ -1808,7 +1821,7 @@ impl ServicesState {
         let dolt = service_workspace_has_dolt(workspace)?;
         if request.profile_config.services.nix_cache.enabled {
             run_service(workspace, &["service", "start"])?;
-            state.load_project_cache(workspace, issuer)?;
+            state.load_project_cache(workspace, issuer, selection)?;
         } else if dolt {
             run_service(workspace, &["service", "start", "--no-cache"])?;
         }
@@ -1823,7 +1836,9 @@ impl ServicesState {
         &mut self,
         workspace: &Path,
         issuer: &dyn Factory,
+        selection: &wrix_state::context::Selection,
     ) -> Result<(), LaunchError> {
+        selection.recheck()?;
         let output = run_service(workspace, &["service", "endpoints", "--sandbox-cache"])?;
         let metadata = serde_json::from_slice::<ServiceMetadata>(&output.stdout)
             .map_err(|source| LaunchError::ServiceJson { source })?;
@@ -1843,7 +1858,7 @@ impl ServicesState {
                 host: sandbox_host.to_string(),
             });
         }
-        let canonical = Workspace::from_service_path(workspace)?;
+        let canonical = selection.workspace();
         if metadata
             .state_root
             .file_name()
@@ -1871,10 +1886,11 @@ impl ServicesState {
             cache_credentials::GUEST_NETRC
         );
         let session = Session::create(
-            issuer.open(workspace)?,
+            issuer.open(selection)?,
             NativeClock::default(),
             sandbox_host.into(),
         )?;
+        wrix_core::host_path::Roots::discover()?.protect_mount(&session.directory())?;
         self.project_cache = Some(ProjectCache {
             host: sandbox_host,
             port: endpoint.port,

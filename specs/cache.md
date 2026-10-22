@@ -851,9 +851,9 @@ valid unchanged key through the Celler publication/signing path.
 - Two unrelated repositories can substitute an approved common dependency
   through authenticated native Nix without duplicate backing archives solely
   because the repositories differ. [system?](test-ci:test-cache-celler-sharing)
-- Private views follow canonical workspace identity, including shared identity
-  across Loom clones of the same repository.
-  [test](../crates/wrix-cache/src/backend/issuer/test/pull/mod.rs::canonical_loom_clones_share_views_but_unrelated_and_nonrepository_paths_do_not)
+- Private views follow the explicitly selected namespace under
+  [Workspace Admission](workspaces.md), not implicit grouping of nested clones.
+  [test?](../crates/wrix-cache/tests/celler_sharing.rs::private_views_follow_canonical_workspace_identity)
 - Ordinary cache requests from unrelated repositories cannot read private-only
   metadata or archives, even using known paths, hashes or direct archive URLs.
   [system?](test-ci:test-cache-celler-sharing)

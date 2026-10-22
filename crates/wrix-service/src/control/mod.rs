@@ -1,6 +1,11 @@
 //! Versioned private host authority; never mount this socket or its directory into guests.
 
+mod assignment;
 pub mod cache;
+mod deployment;
+mod endpoint;
+mod registration;
+pub mod serving;
 pub mod supervision;
 
 use std::{

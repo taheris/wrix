@@ -160,6 +160,7 @@ fn execution_fixture_child() {
 }
 
 #[test]
+#[ignore = "requires host capability; run in the disposable native-system guest"]
 fn execution_restart_retains_unbound_launch_and_ignores_workspace_completion() {
     let root = tempfile::tempdir().unwrap();
     run(root.path(), "reserve").unwrap();
@@ -175,6 +176,7 @@ fn execution_restart_retains_unbound_launch_and_ignores_workspace_completion() {
 }
 
 #[test]
+#[ignore = "requires host capability; run in the disposable native-system guest"]
 fn execution_unavailable_ambiguous_and_failed_removal_observations_retain_binding() {
     use std::os::unix::fs::PermissionsExt;
     for (response, action) in [

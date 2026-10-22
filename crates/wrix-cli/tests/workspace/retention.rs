@@ -3,7 +3,7 @@ use std::fs;
 use wrix_core::path::WorkspaceHash;
 
 #[test]
-fn cache_prune_uses_recorded_closures_after_export_deletion_without_rotating_keys() {
+fn unsupported_flat_cache_prune_preserves_imported_closures_and_keys() {
     let fixture = Fixture::new();
     fixture.initialize();
     let checkout = fixture.repository("checkout");
@@ -54,11 +54,8 @@ fn cache_prune_uses_recorded_closures_after_export_deletion_without_rotating_key
     .unwrap();
     fs::write(cache.join("nar/retained.nar"), "retained payload").unwrap();
     let output = fixture.application(&checkout, &["service", "cache", "prune"]);
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("unknown cache command: prune"));
     assert_eq!(
         fs::read_to_string(cache.join("nar/retained.nar")).unwrap(),
         "retained payload"

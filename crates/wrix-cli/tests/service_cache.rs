@@ -34,6 +34,7 @@ impl Fixture {
         service_binding::create(root.path(), &bin, "nix-descriptor")?;
         fs::write(root.path().join("image"), "installed")?;
         let server = celler::Server::watch(root.path(), None);
+        common::initialize_host_scope(root.path())?;
         Ok(Self {
             root,
             workspace,
@@ -456,10 +457,12 @@ fn celler_layout_separates_managed_cache_data_from_host_authority() -> TestResul
         assert_eq!(metadata["cache_root"].as_str(), cache_root.to_str());
         assert!(!state_root.starts_with(&fixture.workspace));
         assert!(!cache_root.starts_with(&fixture.workspace));
-        assert!(state_root.join("services.json").is_file());
-        for file in ["cache.lock", "cache-status.json", "publish-roots.json"] {
-            assert_eq!(state_root.join(file).is_file(), cache, "{file}");
+        let observer = std::path::Path::new("/etc/wrix/image-agent").exists();
+        assert_eq!(state_root.join("services.json").is_file(), observer);
+        for file in ["cache-status.json", "publish-roots.json"] {
+            assert_eq!(state_root.join(file).is_file(), cache && observer, "{file}");
         }
+        assert_eq!(state_root.join("cache.lock").is_file(), cache);
         for dir in ["gcroots", "pending"] {
             assert_eq!(state_root.join(dir).is_dir(), cache && observer, "{dir}");
         }
@@ -467,8 +470,11 @@ fn celler_layout_separates_managed_cache_data_from_host_authority() -> TestResul
         assert!(!state_root.join("keys/cache.secret").exists());
         assert_eq!(state_root.join("keys/cache.pub").exists(), cache);
         if cache {
-            let persisted: Value =
-                serde_json::from_slice(&fs::read(state_root.join("services.json"))?)?;
+            let key = fs::read_to_string(state_root.join("keys/cache.pub"))?;
+            wrix_core::cache_key::CachePublicKey::parse(key.trim())?;
+            let persisted: Value = serde_json::from_slice(&common::read_namespace_document(
+                &state_root.join("services.json"),
+            )?)?;
             assert_eq!(persisted, metadata);
             let args = fs::read(fixture.root.path().join("run.argv"))?;
             let layout = wrix_cache::backend::layout::Layout::resolve(

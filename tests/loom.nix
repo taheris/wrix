@@ -20,6 +20,10 @@ let
   profileManifest = packages.profile-images;
   nativeEntry = profileManifest.manifest.rust.pi;
   nativeSandbox = profileManifest.sandboxes.rust.pi;
+  sharedNixTests = import ./sandbox/shared-nix.nix {
+    inherit pkgs linuxPkgs wrix;
+    profileSandboxes = profileManifest.sandboxes;
+  };
   nativeAgent = builtins.head (
     pkgs.lib.subtractLists nativeSandbox.image.stableProfileImage.lowerTiersContents nativeSandbox.image.agentImage.lowerTiersContents
   );

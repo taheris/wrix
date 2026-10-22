@@ -187,7 +187,6 @@ fn run_at(workspace: &Workspace, paths: &Paths, mode: Mode) -> Result<Report> {
 }
 
 fn status_at_paths(paths: &Paths) -> Result<Report> {
-    paths.ensure_control()?;
     status_report(paths)
 }
 
@@ -217,6 +216,16 @@ pub fn run_hook_record(record: HookRecord<'_>, settings: Settings) -> Result<Rep
         cache_root: cache_root.to_path_buf(),
         settings,
     };
+    if paths
+        .scope
+        .as_ref()
+        .is_some_and(|context| context.key() != workspace_hash)
+    {
+        return Err(wrix_state::store::Error::Conflict.into());
+    }
+    if paths.scope.is_some() && manifest != paths.publish_roots_path() {
+        return Err(wrix_state::store::Error::Conflict.into());
+    }
     let roots = read_manifest_roots(manifest)?;
     let matching = roots
         .into_iter()
@@ -238,10 +247,11 @@ fn run(workspace: &Workspace, paths: &Paths, mode: Mode) -> Result<Report> {
     let cwd = workspace.canonical_path();
     match mode {
         Mode::Publish => with_explicit_lock(paths, || {
+            purge_expired_pending(paths)?;
             let roots = discover_roots(RootSet::Publish, &paths.settings, cwd)?;
             paths.authorize()?;
             write_manifest(&paths.publish_roots_path(), workspace.hash(), &roots)?;
-            let realized = realized_roots(roots)?;
+            let realized = realized_roots(roots, cwd)?;
             let pending = read_pending(paths)?;
             publish_roots(paths, workspace.hash(), &realized.roots, pending).map(|mut report| {
                 report.lines.extend(realized.unrealized);
@@ -281,6 +291,7 @@ fn run_automatic_publish(paths: &Paths, workspace: &WorkspaceHash, root: &Root) 
         ));
         return Ok(Report { lines });
     };
+    purge_expired_pending(paths)?;
     let result = publish_hook_root(paths, workspace, root);
     let release = lock.release();
     match (result, release) {
@@ -664,15 +675,16 @@ fn publish_roots(
             for path in closure_paths(&record.out_paths)? {
                 publishable.insert(path);
             }
-            completed_pending.push(record.path);
+            completed_pending.push(record.path.clone());
         }
     }
     let filtered = subtract_upstream(paths, publishable)?;
     let count = publish_selected(paths, workspace, &filtered)?;
     for path in completed_pending {
-        fs::remove_file(&path)?;
+        remove_pending(&path)?;
         lines.push(format!("drained pending: {}", path.display()));
     }
+    retire_obsolete_closure_metadata(paths)?;
     write_cache_status(paths, true, Some("ok"), None)?;
     lines.push(format!(
         "published {count} project cache paths through Celler"
@@ -752,12 +764,54 @@ fn publish_selected(
     workspace: &WorkspaceHash,
     store_paths: &[String],
 ) -> Result<usize> {
+    paths.authorize()?;
+    if store_paths.is_empty() {
+        return Ok(0);
+    }
     let publisher = crate::backend::publication::Publisher::load(&paths.state_root, workspace)?;
     let selected = store_paths.iter().map(PathBuf::from).collect::<Vec<_>>();
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
     Ok(runtime.block_on(publisher.publish_selected(&selected))?)
+}
+
+fn pending_records(paths: &Paths) -> Result<(Vec<(PathBuf, PendingRecord)>, bool)> {
+    match wrix_state::namespace::pending_at(&paths.pending_dir())? {
+        wrix_state::namespace::Listing::Host(rows) => {
+            let records = rows
+                .into_iter()
+                .map(|(path, bytes)| {
+                    serde_json::from_slice(&bytes)
+                        .map(|record| (path.clone(), record))
+                        .map_err(|source| Error::Json {
+                            path: path.display().to_string(),
+                            source,
+                        })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok((records, false))
+        }
+        wrix_state::namespace::Listing::Observer => {
+            if !paths.pending_dir().exists() {
+                return Ok((Vec::new(), true));
+            }
+            let mut records = Vec::new();
+            for entry in fs::read_dir(paths.pending_dir())? {
+                let path = entry?.path();
+                if path.extension().is_none_or(|extension| extension != "json") {
+                    continue;
+                }
+                let bytes = fs::read(&path)?;
+                let record = serde_json::from_slice(&bytes).map_err(|source| Error::Json {
+                    path: path.display().to_string(),
+                    source,
+                })?;
+                records.push((path, record));
+            }
+            Ok((records, true))
+        }
+    }
 }
 
 fn read_pending(paths: &Paths) -> Result<Vec<Pending>> {
@@ -801,6 +855,45 @@ fn record_pending(paths: &Paths, drv_path: &str, out_paths: &[String]) -> Result
     };
     write_json(&path, &record)?;
     Ok(path)
+}
+
+fn remove_pending(path: &Path) -> Result<()> {
+    if matches!(
+        wrix_state::namespace::remove_at(path)?,
+        wrix_state::namespace::Storage::Database
+    ) {
+        return Ok(());
+    }
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn retire_obsolete_closure_metadata(paths: &Paths) -> Result<()> {
+    paths.authorize()?;
+    // Native Celler does not use imported flat-cache closure lists. Retire only
+    // database documents, never filesystem copies or actual native GC roots.
+    if let wrix_state::namespace::Listing::Host(records) =
+        wrix_state::namespace::closures_at(&paths.state_root.join("gcroots"))?
+    {
+        for (path, _) in records {
+            wrix_state::namespace::remove_at(&path)?;
+        }
+    }
+    Ok(())
+}
+
+fn purge_expired_pending(paths: &Paths) -> Result<()> {
+    paths.authorize()?;
+    let (records, _) = pending_records(paths)?;
+    for (path, record) in records {
+        if pending_expired(&path, &record, paths.settings.pending_retention_secs)? {
+            remove_pending(&path)?;
+        }
+    }
+    Ok(())
 }
 
 fn pending_expired(path: &Path, record: &PendingRecord, retention_secs: u64) -> Result<bool> {
@@ -927,8 +1020,11 @@ impl Paths {
     }
 
     fn ensure_control(&self) -> Result<()> {
+        self.authorize()?;
         wrix_core::private_directory::prepare_with_parents(&self.state_root)?;
-        fs::create_dir_all(self.pending_dir())?;
+        if !wrix_state::namespace::is_host_root(&self.state_root)? {
+            fs::create_dir_all(self.pending_dir())?;
+        }
         write_if_missing(&self.cache_lock_path(), "")?;
         write_json_if_missing(&self.cache_status_path(), &cache_status(false))
     }

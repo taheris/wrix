@@ -45,7 +45,7 @@ fn sandbox_pull_credentials_are_exact_read_only_and_expire_after_one_day() {
 }
 
 #[test]
-fn canonical_loom_clones_share_views_but_unrelated_and_nonrepository_paths_do_not() {
+fn namespace_views_do_not_implicitly_group_nested_clones_or_unrelated_paths() {
     use crate::backend::pull::ReadSet;
     use wrix_core::path::Workspace;
     let temporary = tempfile::tempdir().unwrap();
@@ -57,7 +57,8 @@ fn canonical_loom_clones_share_views_but_unrelated_and_nonrepository_paths_do_no
     let worker = Workspace::from_service_path(&clone).unwrap();
     let original = ReadSet::for_workspace(repository.hash()).unwrap();
     let nested = ReadSet::for_workspace(worker.hash()).unwrap();
-    assert_eq!(original.private(), nested.private());
+    assert_eq!(original.common(), nested.common());
+    assert_ne!(original.private(), nested.private());
     for name in ["unrelated", "non-repository"] {
         let path = temporary.path().join(name);
         fs::create_dir(&path).unwrap();

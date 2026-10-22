@@ -98,6 +98,26 @@ fn running_cache_owner_cannot_bootstrap_replacement_issuer_authority() -> TestRe
 }
 
 #[test]
+fn service_fixture_keeps_native_host_state_private() -> TestResult {
+    let fixture = Fixture::new()?;
+    let state_root = fixture.state_root()?;
+    let native_root = state_root
+        .parent()
+        .and_then(Path::parent)
+        .ok_or("missing native root")?;
+    assert_eq!(common::mode(native_root)?, 0o700);
+    assert_eq!(common::mode(&state_root.join("keys"))?, 0o700);
+    if !Path::new("/etc/wrix/image-agent").exists() {
+        assert_eq!(common::mode(&native_root.join("state.db"))?, 0o600);
+    }
+    let imported: Value = serde_json::from_slice(&common::read_namespace_document(
+        &state_root.join("services.json"),
+    )?)?;
+    assert_eq!(imported, fixture.metadata);
+    Ok(())
+}
+
+#[test]
 fn malformed_sync_branch_fails_before_service_runtime_or_layout() -> TestResult {
     let fixture = Fixture::new()?;
     let state_root = fixture.state_root()?;
@@ -888,6 +908,7 @@ fn cache_launch_admits_the_provided_host_package_before_service_effects() -> Tes
 }
 
 #[test]
+#[ignore = "requires host capability; run in the disposable native-system guest"]
 fn workspace_stop_retires_current_native_read_issuance_without_stopping_controller() -> TestResult {
     use wrix_service::control::{Client, Namespace, Operation, Reply};
     let mut fixture = Fixture::new()?;
@@ -932,6 +953,7 @@ fn workspace_stop_retires_current_native_read_issuance_without_stopping_controll
 }
 
 #[test]
+#[ignore = "requires host capability; run in the disposable native-system guest"]
 fn cache_guest_endpoint_and_key_reach_both_launch_commands() -> TestResult {
     for mode in [LaunchCommand::Run, LaunchCommand::Spawn] {
         for layout in ["", ".loom/beads/cache-route", ".loom/integration"] {
@@ -1037,6 +1059,7 @@ fn cache_guest_endpoint_and_key_reach_both_launch_commands() -> TestResult {
 }
 
 #[test]
+#[ignore = "requires host capability; run in the disposable native-system guest"]
 fn cache_endpoint_generates_only_an_exact_tcp_network_exception() -> TestResult {
     let bootstrap = include_str!("../../../lib/sandbox/network-bootstrap.sh");
     let policy = bootstrap
@@ -1560,6 +1583,7 @@ fn apple_cache_service_preserves_loopback_publication_and_narrow_managed_mounts(
 }
 
 #[test]
+#[ignore = "requires host capability; run in the disposable native-system guest"]
 fn launcher_fails_before_agent_start_without_a_guest_cache_address() -> TestResult {
     for mode in [LaunchCommand::Run, LaunchCommand::Spawn] {
         let mut fixture = Fixture::new()?;

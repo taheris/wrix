@@ -306,7 +306,13 @@ impl HookConfig {
                 path: self.cache_root.display().to_string(),
             });
         }
-        require_absolute_file("publish manifest", &self.manifest)?;
+        if wrix_state::namespace::is_host_root(&self.state_root)? {
+            if self.manifest != self.state_root.join("publish-roots.json") {
+                return Err(wrix_state::store::Error::RootMismatch.into());
+            }
+        } else {
+            require_absolute_file("publish manifest", &self.manifest)?;
+        }
         require_absolute_file("cache configuration snapshot", &self.settings)?;
         require_executable_file("publisher helper", &self.publisher_helper)
     }

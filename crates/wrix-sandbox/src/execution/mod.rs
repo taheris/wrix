@@ -46,6 +46,16 @@ pub fn launch(
     command: &Command,
     interactive: bool,
 ) -> Result<ExitStatus, Error> {
+    Ok(self::command(workspace, ticket, command, interactive)?.status()?)
+}
+
+/// Bind exact containment before starting it; the caller owns waiting/renewal.
+pub fn command(
+    workspace: &Path,
+    ticket: &Ticket,
+    command: &Command,
+    interactive: bool,
+) -> Result<Command, Error> {
     if std::env::var_os("WRIX_UNSAFE_PODMAN_SOCKET").is_some() {
         return Err(Error::Unknown);
     }
@@ -83,12 +93,12 @@ pub fn launch(
     if interactive {
         start.arg("--interactive");
     }
-    Ok(start
+    start
         .arg(id.as_str())
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .status()?)
+        .stderr(Stdio::inherit());
+    Ok(start)
 }
 
 /// Read-only projection of one exact ticket-bound object. Never retirement authority.

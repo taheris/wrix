@@ -201,7 +201,6 @@ fn ordinary_service_cache_and_init_refuse_unknown_membership_before_effects() {
     let git_before = snapshot(&fixture.root.path().join("checkout/.git"));
     for args in [
         vec!["service", "start"],
-        vec!["service", "cache", "prune"],
         vec![
             "init",
             "repo",

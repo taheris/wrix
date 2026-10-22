@@ -96,7 +96,6 @@ fn host_service_and_cache_commands_create_database_records_without_metadata_expo
     let native = fixture.state().join("workspaces").join(key.as_str());
     run(&fixture, &checkout, &["service", "start", "--no-cache"]);
     keys(&native, &key);
-    run(&fixture, &checkout, &["service", "cache", "prune"]);
     let keys_before = snapshot(&native.join("keys"));
     assert_eq!(keys_before.len(), 2);
     run(&fixture, &checkout, &["service", "cache", "publish"]);
@@ -164,7 +163,6 @@ fn host_mutations_preserve_imported_files_while_retiring_database_pending_and_cl
     );
     run(&fixture, &checkout, &["service", "start", "--no-cache"]);
     keys(&native, &key);
-    run(&fixture, &checkout, &["service", "cache", "prune"]);
     run(&fixture, &checkout, &["service", "cache", "publish"]);
     for (path, bytes) in legacy {
         assert_eq!(fs::read(&path).unwrap(), bytes, "{}", path.display());

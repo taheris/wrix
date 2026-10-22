@@ -204,8 +204,9 @@ operations.
   [test](../crates/wrix-cli/tests/workspace_admission.rs::hardening::collision_checks_use_recorded_services_after_export_deletion)
 - Host cache status uses database authority and remains read-only.
   [test](../crates/wrix-cli/tests/workspace_admission.rs::host_cache_status_uses_database_not_export_files_and_is_read_only)
-- Cache pruning uses recorded closures after export deletion, preserving keys.
-  [test](../crates/wrix-cli/tests/workspace_admission.rs::hardening::retention::cache_prune_uses_recorded_closures_after_export_deletion_without_rotating_keys)
+- Removed flat-cache pruning refuses without altering imported closure records,
+  retained archives or keys.
+  [test](../crates/wrix-cli/tests/workspace_admission.rs::hardening::retention::unsupported_flat_cache_prune_preserves_imported_closures_and_keys)
 - Host service and cache commands persist control records without creating
   redundant JSON, pending or closure-list exports; secrets and locks stay
   native.

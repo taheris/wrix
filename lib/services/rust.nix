@@ -221,6 +221,7 @@ in
     doCheck = false;
     doInstallCargoArtifacts = false;
     buildPhase = ''
+      export CARGO_TARGET_DIR="$out/target"
       runHook preBuild
       : > compiled-tests.json
       for target in celler_backend host_publication_only host_signed_exclusion; do
@@ -229,16 +230,32 @@ in
       done
       cargo test --offline --locked --no-run -p wrix-service --test celler_auth \
         ''${CARGO_PROFILE:+--profile "$CARGO_PROFILE"} --message-format json >> compiled-tests.json
+      cargo test --offline --locked --no-run -p wrix-cli --test service_lifecycle \
+        ''${CARGO_PROFILE:+--profile "$CARGO_PROFILE"} --message-format json >> compiled-tests.json
+      cargo test --offline --locked --no-run -p wrix-sandbox --test execution_lifetime \
+        ''${CARGO_PROFILE:+--profile "$CARGO_PROFILE"} --message-format json >> compiled-tests.json
       runHook postBuild
     '';
     installPhase = ''
-      for target in celler_backend celler_auth host_publication_only host_signed_exclusion; do
+      for target in celler_backend celler_auth host_publication_only host_signed_exclusion service_lifecycle execution_lifetime; do
         executable=$(${pkgs.jq}/bin/jq -r --arg target "$target" \
           'select(.reason == "compiler-artifact" and .target.name == $target and .profile.test) | .executable' \
           compiled-tests.json)
         test -n "$executable"
         install -Dm755 "$executable" "$out/bin/''${target//_/-}-tests"
       done
+      # Cargo embeds binary paths into CLI tests. Keep only those executables at
+      # their immutable compilation paths, not dependency/incremental artifacts.
+      mkdir -p "$TMPDIR/native-test-binaries"
+      ${pkgs.jq}/bin/jq -r 'select(.reason == "compiler-artifact" and .profile.test == false and .executable != null) | .executable' compiled-tests.json | sort -u > binaries
+      while IFS= read -r executable; do
+        relative="''${executable#"$CARGO_TARGET_DIR"/}"
+        mkdir -p "$TMPDIR/native-test-binaries/$(dirname "$relative")"
+        cp "$executable" "$TMPDIR/native-test-binaries/$relative"
+      done < binaries
+      rm -rf "$CARGO_TARGET_DIR"
+      mkdir -p "$CARGO_TARGET_DIR"
+      cp -r "$TMPDIR/native-test-binaries/." "$CARGO_TARGET_DIR/"
       "$out/bin/celler-backend-tests" --list --ignored > "$out/ignored-tests"
       grep -Fx 'publisher_reuses_rust_store_client: test' "$out/ignored-tests"
       grep -Fx 'production_runtime_excludes_competing_owners_until_process_exit: test' "$out/ignored-tests"
@@ -252,14 +269,17 @@ in
   wrix = wrixPackage;
   binding = serviceBinding;
   inherit controllerBinding controllerPackage;
-  focusNotification = mkBinaryPackage "wrix-focus-notification";
+  focusNotification = mkBinaryPackage "wrix-focus-notification" [ ];
   celler = cellerPackage;
   supervisor =
     pkgs.runCommand "wrix-service-supervisor" { meta = binaryMeta "wrix-service-supervisor"; }
       ''
         install -Dm755 "${workspace.bin}/bin/wrix-service-supervisor" "$out/bin/wrix-service-supervisor"
       '';
-  hostCachePolicy = mkBinaryPackage "wrix-host-cache-policy";
-  cacheHook = mkBinaryPackage "wrix-cache-hook";
-  cachePublish = mkBinaryPackage "wrix-cache-publish";
+  hostCachePolicy = mkBinaryPackage "wrix-host-cache-policy" [ ];
+  cacheHook = mkBinaryPackage "wrix-cache-hook" [ ];
+  cachePublish = mkBinaryPackage "wrix-cache-publish" [
+    pkgs.git
+    pkgs.nix
+  ];
 }

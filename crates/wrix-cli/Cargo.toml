@@ -27,6 +27,8 @@ wrix-state = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true }
 fs2 = { workspace = true }
+rusqlite = { workspace = true }
+rustix = { workspace = true }
 libc = { workspace = true }
 
 [lints]

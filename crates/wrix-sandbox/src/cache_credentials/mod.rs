@@ -80,7 +80,7 @@ impl<I: Issuer + ?Sized> Issuer for Box<I> {
 /// Host admission creates a source once; renewals never repeat startup or registration.
 pub trait Factory {
     fn admit(&self) -> Result<(), Error>;
-    fn open(&self, workspace: &Path) -> Result<Box<dyn Issuer>, Error>;
+    fn open(&self, selection: &wrix_state::context::Selection) -> Result<Box<dyn Issuer>, Error>;
 }
 
 pub struct Unavailable;
@@ -89,7 +89,7 @@ impl Factory for Unavailable {
     fn admit(&self) -> Result<(), Error> {
         Err(Error::Unavailable)
     }
-    fn open(&self, _workspace: &Path) -> Result<Box<dyn Issuer>, Error> {
+    fn open(&self, _selection: &wrix_state::context::Selection) -> Result<Box<dyn Issuer>, Error> {
         Err(Error::Unavailable)
     }
 }

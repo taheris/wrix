@@ -8,7 +8,6 @@ trap 'rm -rf "$TEST_TMP"' EXIT
 
 CONFIG_LINK="$TEST_TMP/profile-config"
 WRIX_LINK="$TEST_TMP/host-wrix"
-CONFIGURED_LINK="$TEST_TMP/configured-wrix"
 WORKSPACE="$TEST_TMP/workspace"
 OPTIONAL_MOUNT_SOURCE="$TEST_TMP/missing-optional-mount"
 REQUIRED_MOUNT_SOURCE="$TEST_TMP/present-required-mount"
@@ -108,29 +107,29 @@ test_host_cli_uses_generated_launch_data() {
   grep -qF 'Usage: wrix <command>' "$TEST_TMP/help.out"
 }
 
-test_configured_wrapper_keeps_launch_options_out_of_host_commands() {
+test_project_pointer_keeps_the_host_package_unconfigured() {
   prepare
-  nix build --impure --no-warn-dirty --out-link "$CONFIGURED_LINK" --expr "
-    let flake = builtins.getFlake \"git+file://$REPO_ROOT\";
-    in (flake.legacyPackages.\${builtins.currentSystem}.lib.mkSandbox { }).package
-  "
-  local binary command
-  for binary in wrix wrix-run; do
-    for command in service beads init notify help; do
-      "$CONFIGURED_LINK/bin/$binary" "$command" --help >"$TEST_TMP/help.out" 2>"$TEST_TMP/help.err"
-      [[ -s "$TEST_TMP/help.out" && ! -s "$TEST_TMP/help.err" ]]
-    done
+  local command config
+  config=$(readlink -f "$CONFIG_LINK")
+  for command in service beads init notify help; do
+    WRIX_PROJECT_PROFILE_CONFIG="$TEST_TMP/nonexistent-config" \
+      "$WRIX_LINK/bin/wrix" "$command" --help >"$TEST_TMP/help.out" 2>"$TEST_TMP/help.err"
+    [[ -s "$TEST_TMP/help.out" && ! -s "$TEST_TMP/help.err" ]]
   done
-  "$CONFIGURED_LINK/bin/wrix" >"$TEST_TMP/help.out"
-  grep -qF 'Usage: wrix <command>' "$TEST_TMP/help.out"
-  "$CONFIGURED_LINK/bin/wrix" run --dry-run --json "$WORKSPACE" >"$TEST_TMP/plan.out"
-  jq -e '.plan.profile_config | startswith("/nix/store/")' "$TEST_TMP/plan.out" >/dev/null
+  WRIX_PROJECT_PROFILE_CONFIG="$config" \
+    "$WRIX_LINK/bin/wrix" run --dry-run --json "$WORKSPACE" >"$TEST_TMP/plan.out"
+  jq -e --arg config "$config" '.plan.profile_config == $config' "$TEST_TMP/plan.out" >/dev/null
+  jq '.profile.name = "explicit-override"' "$CONFIG_LINK" >"$TEST_TMP/explicit-config.json"
+  WRIX_PROJECT_PROFILE_CONFIG="$config" \
+    "$WRIX_LINK/bin/wrix" --profile-config "$TEST_TMP/explicit-config.json" \
+      run --dry-run --json "$WORKSPACE" >"$TEST_TMP/plan.out"
+  jq -e '.plan.profile == "explicit-override"' "$TEST_TMP/plan.out" >/dev/null
 }
 
 test_profile_config_wrapper_contract() {
   test_profile_config_contains_launcher_contract_fields
   test_host_cli_uses_generated_launch_data
-  test_configured_wrapper_keeps_launch_options_out_of_host_commands
+  test_project_pointer_keeps_the_host_package_unconfigured
 }
 
 if [[ $# -eq 0 ]]; then

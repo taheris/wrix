@@ -48,7 +48,7 @@ test_microvm_probe_reports_launch_failure() {
 }
 
 test_linux_microvm_runtime() {
-  local command_line output sandbox workspace profile_config
+  local command_line output sandbox workspace profile_config spawn_config status
   local -a command
   wrix_require_live_sandbox_linux
   [[ -c /dev/kvm && -r /dev/kvm && -w /dev/kvm ]] || wrix_live_skip "accessible KVM is required for the live microVM verifier"
@@ -86,8 +86,8 @@ INNER
   chmod +x "$workspace/assert-microvm.sh"
 
   command=(
-    "$sandbox/bin/wrix" --profile-config "$profile_config" run "$workspace"
-    /workspace/assert-microvm.sh alpha "two words"
+    "$sandbox/bin/wrix" --profile-config "$profile_config" run "$workspace" --
+    /bin/bash /workspace/assert-microvm.sh alpha "two words"
   )
   printf -v command_line '%q ' "${command[@]}"
   output=$(run_microvm_probe "$command_line") || return

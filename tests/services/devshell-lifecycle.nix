@@ -4,7 +4,7 @@
 }:
 
 let
-  inherit (pkgs.lib) escapeShellArg makeBinPath;
+  inherit (pkgs.lib) makeBinPath;
 
   defaultShell = wrix.mkDevShell {
     profile = wrix.profiles.base;
@@ -37,10 +37,6 @@ let
     export WRIX_CONTAINER_RUNTIME=podman
     export WRIX_NIX_CACHE_REQUIRE_TRUSTED=0
     export WRIX_SERVICE_ALLOW_TEMP_CACHE=1
-    export WRIX_SERVICE_IMAGE=${escapeShellArg defaultShell.WRIX_SERVICE_IMAGE}
-    export WRIX_SERVICE_IMAGE_SOURCE=${escapeShellArg defaultShell.WRIX_SERVICE_IMAGE_SOURCE}
-    export WRIX_SERVICE_IMAGE_SOURCE_KIND=${escapeShellArg defaultShell.WRIX_SERVICE_IMAGE_SOURCE_KIND}
-    export WRIX_SERVICE_IMAGE_DIGEST=${escapeShellArg defaultShell.WRIX_SERVICE_IMAGE_DIGEST}
     cd /home/alice/devshell-repo
     source ${defaultHook}
     ${pkgs.nix}/bin/nix config show --json > /home/alice/default-host-nix-config.json
@@ -104,7 +100,7 @@ pkgs.testers.runNixOSTest {
 
     machine.start()
     machine.wait_for_unit("multi-user.target")
-    register_guest_store(machine, "${pkgs.nix}/bin/nix-store", ["${defaultParent}", "${disabledProbe}"])
+    register_guest_store(machine, "${pkgs.nix}/bin/nix-store", ["${defaultParent}", "${disabledProbe}", "${wrix.serviceImage.source}"])
     machine.succeed("loginctl enable-linger alice")
     machine.succeed(as_alice("whoami"))
     machine.wait_for_unit("user@1000.service")
@@ -114,6 +110,12 @@ pkgs.testers.runNixOSTest {
         "/home/alice/disabled-repo/.beads/dolt /home/alice/.local/state /home/alice/.cache"
     )
     machine.succeed("chown -R alice:users /home/alice")
+    machine.succeed(as_alice(
+        "${pkgs.git}/bin/git -C /home/alice/devshell-repo init -q && "
+        "${pkgs.git}/bin/git -C /home/alice/disabled-repo init -q && "
+        "${wrix.rustPackage.wrix}/bin/wrix workspace initialize && "
+        "${wrix.rustPackage.wrix}/bin/wrix workspace acknowledge-scope --version 1"
+    ))
 
     with subtest("default shell starts in an independent scope"):
         machine.succeed(

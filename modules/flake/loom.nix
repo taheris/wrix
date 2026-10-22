@@ -4,27 +4,40 @@
   perSystem =
     { pkgs, linuxPkgs, ... }:
     let
-      loomSource = pkgs.applyPatches {
-        name = "loom-source";
-        src = inputs.loom-src;
-        patches = [
-          ../../patches/loom-system-input-batching.patch
-          ../../patches/loom-data-only-manifests.patch
-        ];
+      upstreamLib = import "${inputs.loom-src}/nix/lib.nix";
+      loomLib = upstreamLib // {
+        mkProfileManifest = import ../../lib/loom-manifest.nix { upstream = upstreamLib; };
       };
-      loomLib = import "${loomSource}/nix/lib.nix";
-      mkLoom =
+      launchPatches = [
+        ../../patches/loom-data-only-manifests.patch
+        ../../patches/loom-spawn-extensions.patch
+      ];
+      loomWorkspace =
         pkgs:
         loomLib.mkLoom {
           inherit pkgs;
           inherit (inputs) crane fenix;
-          src = loomSource;
-        }).bin.overrideAttrs
-          (old: {
-            postInstall = (old.postInstall or "") + ''
-              find "$out/bin" -type f ! -name loom ! -name loom-walk -delete
-            '';
-          });
+          src = inputs.loom-src;
+        };
+      mkLoom =
+        pkgs:
+        (loomWorkspace pkgs).bin.overrideAttrs (old: {
+          patches = (old.patches or [ ]) ++ launchPatches;
+          postInstall = (old.postInstall or "") + ''
+            find "$out/bin" -type f ! -name loom ! -name loom-walk -delete
+          '';
+        });
+      spawnContract =
+        let
+          workspace = loomWorkspace pkgs;
+        in
+        workspace.craneLib.cargoNextest {
+          src = workspace.stagedSrc;
+          inherit (workspace) cargoArtifacts;
+          patches = launchPatches;
+          nativeBuildInputs = [ pkgs.git ];
+          cargoNextestExtraArgs = "-p loom-driver -E 'test(wrix_launch_) | test(wrix_runner_) | test(profile_manifest) | test(resolve_launcher)'";
+        };
       loomCli = mkLoom pkgs;
       linuxLoomCli = mkLoom linuxPkgs;
     in

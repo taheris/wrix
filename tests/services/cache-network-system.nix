@@ -111,6 +111,8 @@ let
     mkdir -p /home/alice/cache-network-repo
     ${environment}
     git init -q -b main
+    wrix workspace initialize
+    wrix workspace acknowledge-scope --version 1
     printf '%s\n' '${first}' > first-path
     printf '%s\n' '${second}' > second-path
     cp ${agent} probe.sh

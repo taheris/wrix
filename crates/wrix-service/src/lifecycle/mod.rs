@@ -19,7 +19,10 @@ use std::{
 };
 
 #[cfg(unix)]
-use std::os::unix::{fs::FileTypeExt, net::UnixStream};
+use std::os::unix::{
+    fs::{FileTypeExt, MetadataExt, OpenOptionsExt},
+    net::UnixStream,
+};
 
 use displaydoc::Display;
 use fs2::FileExt;
@@ -235,6 +238,11 @@ pub struct Paths {
     component_root: PathBuf,
 }
 
+struct Registration {
+    _host: fs::File,
+    _namespace: fs::File,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeStatus {
     Running,
@@ -281,7 +289,9 @@ impl Plan {
         let settings = wrix_cache::config::Settings::for_workspace(&workspace)?;
         let paths = Paths::for_workspace(workspace.hash())?;
         let branch = read_sync_branch(workspace.canonical_path())?;
-        Self::from_parsed(workspace, cache_mode, paths, branch, &settings)
+        let mut plan = Self::from_parsed(workspace, cache_mode, paths, branch, &settings)?;
+        plan.selection = Some(selection);
+        Ok(plan)
     }
 
     pub fn for_workspace(workspace: Workspace, cache_mode: CacheMode) -> Result<Self> {
@@ -307,7 +317,8 @@ impl Plan {
         cache_settings: &wrix_cache::config::Settings,
     ) -> Result<Self> {
         let container_name = select_container_name(&workspace, &paths)?;
-        let prior_ports = PortLease::read(&paths.services_path())?;
+        let prior_ports = PortLease::read(&paths.services_path(), workspace.hash())?;
+        let peer_ports = peer_port_leases(&paths, workspace.hash())?;
         let selected_owner = paths
             .host_lifecycle
             .as_deref()
@@ -326,6 +337,7 @@ impl Plan {
                         CACHE_PORT_START,
                         CACHE_PORT_WIDTH,
                         workspace.hash(),
+                        &peer_ports,
                     )?,
                 })
             }
@@ -461,6 +473,26 @@ impl Plan {
     }
 
     pub fn ensure_layout(&self) -> Result<()> {
+        self.authorize()?;
+        self.validate_registration()?;
+        let _lock = self.paths.lock_registration()?;
+        self.ensure_layout_locked()
+    }
+
+    fn validate_registration(&self) -> Result<()> {
+        PortLease::read(&self.paths.services_path(), self.workspace.hash())?;
+        let peer_ports = peer_port_leases(&self.paths, self.workspace.hash())?;
+        for port in self.selected_host_ports() {
+            if peer_ports.contains(&port) {
+                return Err(Error::PortLeaseConflict { port });
+            }
+        }
+        Ok(())
+    }
+
+    fn ensure_layout_locked(&self) -> Result<()> {
+        self.authorize()?;
+        self.validate_registration()?;
         wrix_core::private_directory::prepare_with_parents(self.paths.state_root())?;
         if self.cache_enabled() {
             if self.selected_owner.is_none() {
@@ -468,9 +500,11 @@ impl Plan {
                 layout.prepare()?;
                 wrix_cache::backend::layout::runtime::install(layout.metadata())?;
             }
-            fs::create_dir_all(self.paths.gcroots_dir())?;
+            if !wrix_state::namespace::is_host_root(self.paths.state_root())? {
+                fs::create_dir_all(self.paths.gcroots_dir())?;
+                fs::create_dir_all(self.paths.pending_dir())?;
+            }
             fs::create_dir_all(self.paths.keys_dir())?;
-            fs::create_dir_all(self.paths.pending_dir())?;
             write_if_missing(&self.paths.cache_lock_path(), "")?;
             write_if_missing(
                 &self.paths.cache_status_path(),
@@ -631,27 +665,12 @@ impl Paths {
     }
 
     fn for_workspace(hash: &WorkspaceHash) -> Result<Self> {
-        let home = home_dir()?;
-        let state_base = if cfg!(target_os = "macos") {
-            home.join("Library/Application Support")
-        } else {
-            env::var_os("XDG_STATE_HOME").map_or_else(|| home.join(".local/state"), PathBuf::from)
-        };
-        let cache_base = if cfg!(target_os = "macos") {
-            home.join("Library/Caches")
-        } else {
-            env::var_os("XDG_CACHE_HOME").map_or_else(|| home.join(".cache"), PathBuf::from)
-        };
-        let host_lifecycle = state_root
-            .parent()
-            .and_then(Path::parent)
-            .ok_or_else(|| Error::Operation {
-                message: "workspace state has no host coordination root".into(),
-            })?
-            .join("host-lifecycle");
-        let component_root = host_lifecycle
-            .parent()
-            .ok_or(supervisor::Error::Incompatible)?
+        let roots = wrix_core::host_path::Roots::discover()?;
+        let state_root = roots.workspace_state(hash);
+        let cache_root = roots.workspace_cache(hash);
+        let host_lifecycle = roots.state().join("host-lifecycle");
+        let component_root = roots
+            .state()
             .join("service-data/supervisor")
             .join(hash.as_str());
         Ok(Self {
@@ -670,19 +689,18 @@ impl Paths {
         self.state_root.parent()
     }
 
-    fn lock_registration(&self) -> Result<fs::File> {
+    fn lock_registration(&self) -> Result<Registration> {
         let base = self.state_base().ok_or_else(|| Error::Operation {
             message: String::from("workspace state root has no parent"),
         })?;
         fs::create_dir_all(base)?;
-        let lock = fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(base.join("service-registration.lock"))?;
-        lock.lock_exclusive()?;
-        Ok(lock)
+        let host = lock_registration_file(base, "service-registration.lock")?;
+        wrix_core::private_directory::prepare_with_parents(self.state_root())?;
+        let namespace = lock_registration_file(self.state_root(), "service.lock")?;
+        Ok(Registration {
+            _host: host,
+            _namespace: namespace,
+        })
     }
 
     pub fn cache_root(&self) -> &Path {
@@ -722,6 +740,25 @@ impl Paths {
     }
 }
 
+fn lock_registration_file(root: &Path, name: &str) -> Result<fs::File> {
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(root.join(name))?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.nlink() != 1 || metadata.uid() != fs::metadata(root)?.uid() {
+        return Err(Error::Operation {
+            message: "service registration lock is not an owned single-link regular file".into(),
+        });
+    }
+    file.lock_exclusive()?;
+    Ok(file)
+}
+
 impl Status {
     pub fn render(&self) -> String {
         let container_name = self.plan.container_name();
@@ -754,6 +791,7 @@ impl Status {
 
 pub fn start(cache_mode: CacheMode) -> Result<Status> {
     let (mut plan, _lock) = locked_plan(cache_mode)?;
+    plan.authorize()?;
     let host_lock = (plan.has_services() || plan.cache_enabled())
         .then(|| host_lifecycle_lock(plan.paths()))
         .transpose()?;
@@ -784,7 +822,7 @@ pub fn start(cache_mode: CacheMode) -> Result<Status> {
     } else {
         None
     };
-    plan.ensure_layout()?;
+    plan.ensure_layout_locked()?;
     let disposition = plan
         .has_services()
         .then(|| runtime.ensure_running(&plan))
@@ -809,24 +847,25 @@ pub fn start(cache_mode: CacheMode) -> Result<Status> {
     status_for_plan(plan)
 }
 
-fn locked_plan(cache_mode: CacheMode) -> Result<(Plan, fs::File)> {
+fn locked_plan(cache_mode: CacheMode) -> Result<(Plan, Registration)> {
     let selection = wrix_state::context::Selection::inspect(&env::current_dir()?)?;
     let workspace = selection.workspace().clone();
     let settings = wrix_cache::config::Settings::for_workspace(&workspace)?;
     let paths = Paths::for_workspace(workspace.hash())?;
     let branch = read_sync_branch(workspace.canonical_path())?;
-    wrix_core::private_directory::prepare_with_parents(paths.state_root())?;
-    let lock = fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(paths.state_root().join("service.lock"))?;
-    lock.lock_exclusive()?;
-    Ok((
-        Plan::from_parsed(workspace, cache_mode, paths, branch, &settings)?,
-        lock,
-    ))
+    Plan::from_parsed(
+        workspace.clone(),
+        cache_mode,
+        paths.clone(),
+        branch.clone(),
+        &settings,
+    )?;
+    selection.authorize_effects()?;
+    let lock = paths.lock_registration()?;
+    selection.authorize_effects()?;
+    let mut plan = Plan::from_parsed(workspace, cache_mode, paths, branch, &settings)?;
+    plan.selection = Some(selection);
+    Ok((plan, lock))
 }
 
 fn host_lifecycle_lock(paths: &Paths) -> Result<coordination::Guard> {
@@ -845,6 +884,7 @@ pub fn stop(cache_mode: CacheMode) -> Result<Status> {
     plan.reconcile_owner(&host_lock)?;
     supervisor::transition::ensure_clear(plan.paths().state_root(), plan.workspace().hash())?;
     let runtime = Runtime::from_env()?;
+    plan.authorize()?;
     if plan.selected_owner.is_some() && !plan.owns_cache() {
         runtime.ensure_workspace_stop_safe(&plan)?;
         cache::retire(&plan)?;
@@ -1118,25 +1158,31 @@ where
 }
 
 fn read_persisted_services(path: &Path) -> Result<Option<PersistedServices>> {
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error)
-            if matches!(
-                error.kind(),
-                io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
-            ) =>
-        {
-            return Ok(None);
+    let content = match wrix_state::namespace::read_at(path)? {
+        wrix_state::namespace::Source::Host(Some(content)) => content,
+        wrix_state::namespace::Source::Host(None) => return Ok(None),
+        wrix_state::namespace::Source::Observer => {
+            let metadata = match fs::symlink_metadata(path) {
+                Ok(metadata) => metadata,
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+                    ) =>
+                {
+                    return Ok(None);
+                }
+                Err(error) => return Err(error.into()),
+            };
+            if !metadata.is_file() {
+                return Err(Error::InvalidRegistrationPath {
+                    path: path.to_path_buf(),
+                });
+            }
+            fs::read(path)?
         }
-        Err(error) => return Err(error.into()),
     };
-    if !metadata.is_file() {
-        return Err(Error::InvalidRegistrationPath {
-            path: path.to_path_buf(),
-        });
-    }
-    let content = fs::read_to_string(path)?;
-    serde_json::from_str(&content)
+    serde_json::from_slice(&content)
         .map(Some)
         .map_err(|source| Error::PersistedServicesJson {
             path: path.display().to_string(),
@@ -1185,6 +1231,7 @@ fn container_name_collides(
                 return Ok(true);
             }
         }
+        return Ok(false);
     }
     let Some(state_base) = paths.state_base() else {
         return Ok(false);
@@ -1497,6 +1544,7 @@ impl Runtime {
     }
 
     fn ensure_running(&self, plan: &Plan) -> Result<RunDisposition> {
+        plan.authorize()?;
         self.ensure_namespace_compatible(plan)?;
         let name = plan.container_name();
         match self.status(&name)? {
@@ -2361,11 +2409,45 @@ fn peer_port_leases(paths: &Paths, hash: &WorkspaceHash) -> Result<Vec<u16>> {
     let Some(base) = paths.state_base() else {
         return Ok(Vec::new());
     };
+    if let Some(entries) = wrix_state::namespace::services_at(paths.state_root())? {
+        let shared_cache_port = paths
+            .host_lifecycle
+            .as_deref()
+            .map(owner::Selected::read)
+            .transpose()?
+            .flatten()
+            .map(|owner| owner.port.get());
+        let mut ports = Vec::new();
+        for entry in entries {
+            let path = base.join(entry.key.as_str()).join("services.json");
+            let Some(services) = read_persisted_services(&path)? else {
+                continue;
+            };
+            if entry.key == *hash {
+                continue;
+            }
+            let lease = PortLease::from_endpoints(&services.endpoints, &path)?;
+            ports.extend(
+                lease
+                    .cache_http_port
+                    .filter(|port| Some(*port) != shared_cache_port),
+            );
+            ports.extend(lease.dolt_tcp_port);
+        }
+        return Ok(ports);
+    }
     let entries = match fs::read_dir(base) {
         Ok(entries) => entries,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => return Err(error.into()),
     };
+    let shared_cache_port = paths
+        .host_lifecycle
+        .as_deref()
+        .map(owner::Selected::read)
+        .transpose()?
+        .flatten()
+        .map(|owner| owner.port.get());
     let mut ports = Vec::new();
     for entry in entries {
         let path = entry?.path().join("services.json");
@@ -2376,7 +2458,11 @@ fn peer_port_leases(paths: &Paths, hash: &WorkspaceHash) -> Result<Vec<u16>> {
             continue;
         }
         let lease = PortLease::from_endpoints(&services.endpoints, &path)?;
-        ports.extend(lease.cache_http_port);
+        ports.extend(
+            lease
+                .cache_http_port
+                .filter(|port| Some(*port) != shared_cache_port),
+        );
         ports.extend(lease.dolt_tcp_port);
     }
     Ok(ports)
@@ -2584,14 +2670,6 @@ fn default_cache_status() -> String {
     String::from(
         "{\n  \"dirty\": false,\n  \"last_publish\": null,\n  \"last_prune\": null,\n  \"last_error\": null\n}\n",
     )
-}
-
-fn home_dir() -> Result<PathBuf> {
-    env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or_else(|| Error::Operation {
-            message: String::from("HOME is required to resolve wrix service state roots"),
-        })
 }
 
 fn write_if_missing(path: &Path, content: impl AsRef<[u8]>) -> Result<()> {

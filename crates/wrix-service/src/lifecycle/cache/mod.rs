@@ -76,7 +76,7 @@ pub(super) fn prepare(plan: &Plan, status: RuntimeStatus) -> Result<Prepared, Er
             }
             Err(error) => return Err(error.into()),
         };
-    let settings = wrix_cache::config::Settings::current()?;
+    let settings = wrix_cache::config::Settings::for_workspace(plan.workspace())?;
     Ok(Prepared {
         issuer,
         retention,
@@ -136,7 +136,7 @@ pub(super) fn activate(plan: &Plan, prepared: &Prepared) -> Result<(), Error> {
 }
 
 pub(super) fn retire(plan: &Plan) -> Result<(), Error> {
-    let settings = wrix_cache::config::Settings::current()?;
+    let settings = wrix_cache::config::Settings::for_workspace(plan.workspace())?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;

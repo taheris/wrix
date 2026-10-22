@@ -166,7 +166,7 @@ fn namespace_layout_is_generation_independent_and_separates_private_authority() 
     ] {
         let layout = Layout::new(Path::new(state), Path::new(cache))?;
         let selected = layout.workspace(Namespace::from(outer.hash()));
-        assert_eq!(selected, layout.workspace(Namespace::from(bead.hash())));
+        assert_ne!(selected, layout.workspace(Namespace::from(bead.hash())));
         let peer = layout.workspace(Namespace::from(peer.hash()));
         assert_ne!(selected.namespace(), peer.namespace());
         assert_ne!(selected.control_root(), peer.control_root());

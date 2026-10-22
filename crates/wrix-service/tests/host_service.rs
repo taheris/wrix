@@ -278,3 +278,78 @@ fn malformed_peer_registration_is_not_treated_as_absent() -> TestResult {
     assert!(!plan.paths().services_path().exists());
     Ok(())
 }
+
+#[test]
+fn registration_retains_the_existing_namespace_lock_boundary() -> TestResult {
+    use fs2::FileExt;
+    use std::{
+        fs::OpenOptions,
+        time::{Duration, Instant},
+    };
+
+    let fixture = Fixture::new()?;
+    let plan = fixture.plan(fixture.workspace("workspace")?)?;
+    fs::create_dir_all(plan.paths().state_root())?;
+    let namespace = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(plan.paths().state_root().join("service.lock"))?;
+    namespace.lock_exclusive()?;
+    let host_path = fixture.0.path().join("state/service-registration.lock");
+    let worker = thread::spawn(move || plan.ensure_layout());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut serialized = false;
+    while Instant::now() < deadline {
+        match OpenOptions::new().read(true).write(true).open(&host_path) {
+            Ok(host) => match host.try_lock_exclusive() {
+                Ok(()) => FileExt::unlock(&host)?,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    serialized = true;
+                    break;
+                }
+                Err(error) => {
+                    drop(namespace);
+                    worker.join().unwrap()?;
+                    return Err(error.into());
+                }
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+            Err(error) => {
+                drop(namespace);
+                worker.join().unwrap()?;
+                return Err(error.into());
+            }
+        }
+        thread::yield_now();
+    }
+    let blocked = !worker.is_finished();
+    drop(namespace);
+    worker.join().unwrap()?;
+    assert!(serialized && blocked);
+    Ok(())
+}
+
+#[test]
+fn unsafe_registration_lock_aliases_are_rejected_without_rewriting_targets() -> TestResult {
+    use std::os::unix::fs::symlink;
+
+    for hard_link in [false, true] {
+        let fixture = Fixture::new()?;
+        let plan = fixture.plan(fixture.workspace("workspace")?)?;
+        fs::create_dir_all(plan.paths().state_root())?;
+        let target = fixture.0.path().join("operator-state");
+        fs::write(&target, b"untouched")?;
+        let lock = plan.paths().state_root().join("service.lock");
+        if hard_link {
+            fs::hard_link(&target, &lock)?;
+        } else {
+            symlink(&target, &lock)?;
+        }
+        assert!(plan.ensure_layout().is_err());
+        assert_eq!(fs::read(target)?, b"untouched");
+        assert!(!plan.paths().services_path().exists());
+        assert!(!plan.workspace().canonical_path().join(".wrix").exists());
+    }
+    Ok(())
+}

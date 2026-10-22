@@ -29,23 +29,29 @@ separately exercises production launcher delivery and native multi-view reads.
 These are component integration tests, not deployed worker, container mount,
 production build sandbox, shared installed-store or performance acceptance. The
 native backend VM runs the complete backend suite with ignored cases enabled,
-then a real host-policy-withdrawal/fresh-Nix-import suite. This includes the
-seven canonical-daemon/native-lock cases: production backend ownership
-exclusion, native Rust store access and admitted-hook publication. Run:
+then a real host-policy-withdrawal/fresh-Nix-import suite. It also runs all CLI
+service-lifecycle cases and the two simulated containment-lifetime cases that
+require host capability. These six host-only cases are ignored in ordinary
+Nextest: a worker marker must deny the host API, not be bypassed for tests. The
+disposable guest has no worker marker and runs those cases explicitly. This
+includes the seven canonical-daemon/native-lock cases: production backend
+ownership exclusion, native Rust store access and admitted-hook publication.
+Run:
 
 ```sh
 nix run .#legacyPackages.x86_64-linux.ciApps.test-cache-celler-native-system
 ```
 
-The Nix-built test executable and scripts are self-contained guest fixtures.
-Each isolated-daemon case receives a private overlaid store, database and real
-disposable Nix daemon; the executor's daemon/database are never mounted or
-modified. Daemon readiness uses a bounded native `nix store ping`, not a fixed
-pause. The tests run sequentially and fail on any unsuccessful case. The
-isolated-daemon cases deliberately disable build sandboxing in their disposable
-stores; they do not accept production build-user isolation. Platform transport
-and installed end-to-end gates remain separate. Heavy service-image packaging
-inspection is CI-only:
+The Nix-built test executables and scripts are self-contained guest fixtures.
+CLI binaries embedded by Cargo remain at immutable output paths; dependency and
+incremental build artifacts are not retained. Each isolated-daemon case receives
+a private overlaid store, database and real disposable Nix daemon; the
+executor's daemon/database are never mounted or modified. Daemon readiness uses
+a bounded native `nix store ping`, not a fixed pause. The tests run sequentially
+and fail on any unsuccessful case. The isolated-daemon cases deliberately
+disable build sandboxing in their disposable stores; they do not accept
+production build-user isolation. Platform transport and installed end-to-end
+gates remain separate. Heavy service-image packaging inspection is CI-only:
 
 ```sh
 nix run .#legacyPackages.x86_64-linux.ciApps.test-cache-celler-packaging

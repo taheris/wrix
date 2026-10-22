@@ -18,12 +18,13 @@ pub fn provision_celler_authority(root: &Path) -> TestResult {
         Some(&root.join("state")),
         Some(&root.join("cache")),
     )?;
-    layout.prepare()?;
     let host = layout
         .metadata()
         .parent()
         .and_then(Path::parent)
         .ok_or("missing fixture host state root")?;
+    wrix_core::private_directory::prepare_with_parents(host)?;
+    layout.prepare()?;
     wrix_cache::backend::issuer::Authority::provision(
         &host.join("host-control/celler-issuer"),
         layout.metadata(),

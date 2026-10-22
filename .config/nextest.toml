@@ -6,6 +6,12 @@ max-threads = 1
 [[profile.default.overrides]]
 filter = "package(wrix-service) | (package(wrix-cli) & (binary(service_cache) | binary(service_lifecycle)))"
 test-group = "deployment-role-ports"
+[scripts.setup.isolated-host-roots]
+command = ["bash", "tests/prepare-isolated-host-roots.sh"]
+
+[[profile.default.scripts]]
+filter = "all()"
+setup = "isolated-host-roots"
 
 [scripts.setup.packaging-fixtures]
 command = ["bash", "tests/prepare-native-fixtures.sh"]

@@ -336,7 +336,7 @@ fn metadata_child() -> TestResult {
         }
         fn open(
             &self,
-            _workspace: &Path,
+            _selection: &wrix_state::context::Selection,
         ) -> Result<
             Box<dyn wrix_sandbox::cache_credentials::Issuer>,
             wrix_sandbox::cache_credentials::Error,

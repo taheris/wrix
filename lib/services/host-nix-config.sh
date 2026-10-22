@@ -93,7 +93,7 @@ wrix_host_write_hook_source() {
   printf '%s\n' "$cache_config" >"$hook_dir/cache-config.json"
   chmod 0444 "$hook_dir/cache-config.json"
   {
-    printf '#!%s\nset -euo pipefail\nexec ' "${WRIX_BASH_BIN:-/usr/bin/env bash}"
+    printf '#!%s\nset -euo pipefail\nexport HOME=%s\nexport XDG_STATE_HOME=%s\nexport XDG_CACHE_HOME=%s\nexec ' "${WRIX_BASH_BIN:-/usr/bin/env bash}" "$home_word" "$state_home_word" "$cache_home_word"
     printf '%q ' "$hook_bin" \
       --workspace-hash "$workspace_hash" \
       --owner-uid "$owner_uid" \
@@ -165,7 +165,7 @@ wrix_host_nix_config_main() {
   local hook_bin="${WRIX_CACHE_HOOK_BIN:-wrix-cache-hook}"
   local publish_bin="${WRIX_CACHE_PUBLISH_BIN:-wrix-cache-publish}"
   local policy_bin="${WRIX_HOST_CACHE_POLICY_BIN:-wrix-host-cache-policy}"
-  local require_trusted cache_config
+  local require_trusted cache_config cache_status
   local endpoints workspace_hash state_root cache_root cache_http manifest_path hook_build_root hook_store hook_path before_config after_config owner_uid owner_gid
 
   command -v "${WRIX_NIX_BIN:-nix}" >/dev/null 2>&1 || { wrix_host_fail "nix is not on PATH"; return 1; }

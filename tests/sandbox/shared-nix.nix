@@ -73,7 +73,7 @@ let
     sandbox:
     (imageCase sandbox.image)
     // {
-      profile_config = toString sandbox.profileConfig;
+      profile_config = toString sandbox.image.profileConfig;
       digest_file = toString sandbox.image.digest;
     };
   cases =

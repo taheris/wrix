@@ -7,8 +7,8 @@ use tokio::{
     runtime::{Builder, Runtime},
     time::{Instant, timeout},
 };
-use wrix_core::path::Workspace;
 use wrix_sandbox::cache_credentials::{Error, Factory, Grant, Issuer};
+use wrix_state::{context::Selection, host::Host as Capability};
 
 use super::Paths;
 use crate::control::{
@@ -22,18 +22,20 @@ struct Source {
     runtime: Runtime,
     client: Client,
     namespace: Namespace,
+    selection: Selection,
 }
 
 impl Factory for Host {
     fn admit(&self) -> Result<(), Error> {
+        Capability::discover().map_err(|_| Error::Unavailable)?;
         Package::from_env()
             .map(|_| ())
             .map_err(|_| Error::Unavailable)
     }
 
-    fn open(&self, workspace: &Path) -> Result<Box<dyn Issuer>, Error> {
-        open(workspace).map(|source| Box::new(source) as Box<dyn Issuer>).map_err(|error| {
-            tracing::error!(%error, workspace = %workspace.display(), "host cache credential admission failed");
+    fn open(&self, selection: &Selection) -> Result<Box<dyn Issuer>, Error> {
+        open(selection).map(|source| Box::new(source) as Box<dyn Issuer>).map_err(|error| {
+            tracing::error!(%error, workspace = %selection.workspace().canonical_path().display(), "host cache credential admission failed");
             Error::Unavailable
         })
     }
@@ -43,6 +45,10 @@ impl Factory for Host {
 enum OpenError {
     /// {0}
     Io(#[from] io::Error),
+    /// {0}
+    State(#[from] wrix_state::store::Error),
+    /// {0}
+    Capability(#[from] wrix_state::host::Error),
     /// {0}
     Lifecycle(#[from] super::Error),
     /// {0}
@@ -57,9 +63,11 @@ enum OpenError {
     Deadline,
 }
 
-fn open(path: &Path) -> Result<Source, OpenError> {
+fn open(selection: &Selection) -> Result<Source, OpenError> {
+    Capability::discover()?;
     let package = Package::from_env()?;
-    let workspace = Workspace::from_service_path(path)?;
+    selection.authorize_effects()?;
+    let workspace = selection.workspace();
     let namespace = Namespace::from(workspace.hash());
     let paths = Paths::for_workspace(workspace.hash())?;
     // Serialize initial admission with start/stop. Passive loading rejects a
@@ -76,17 +84,18 @@ fn open(path: &Path) -> Result<Source, OpenError> {
         .join("control");
     wrix_core::private_directory::prepare_with_parents(&root).map_err(io::Error::other)?;
     let runtime = Builder::new_current_thread().enable_all().build()?;
-    runtime.block_on(async {
-        let (local, peer) = UnixStream::pair()?;
-        let uid = local.peer_cred()?.uid();
-        drop((local, peer));
+    let uid = runtime.block_on(async {
+        let (local, _peer) = UnixStream::pair()?;
+        Ok::<_, io::Error>(local.peer_cred()?.uid())
+    })?;
+    {
         let lifecycle = Lifecycle::lock(&root)?;
+        selection.recheck()?;
         lifecycle.start(
             &Native::for_package(Platform::current()?, uid, &package),
             &package,
         )?;
-        Ok::<(), OpenError>(())
-    })?;
+    }
     let client = runtime.block_on(async {
         timeout(Duration::from_secs(15), async {
             let deadline = Instant::now() + Duration::from_secs(15);
@@ -119,46 +128,47 @@ fn open(path: &Path) -> Result<Source, OpenError> {
                 }
                 tokio::time::sleep(Duration::from_millis(50)).await;
             };
-            let Reply::Snapshot {
-                version: VERSION,
-                namespaces,
-            } = client.request(Operation::Inspect {}).await?
-            else {
-                return Err(OpenError::Admission);
-            };
-            if !namespaces.contains_key(&namespace) {
-                let policy = Policy {
-                    dolt: Access::Denied,
-                    private_cache_read: Access::Allowed,
-                    common_cache_read: Access::Allowed,
-                    egress: Access::Denied,
-                    compiler: Access::Denied,
-                };
-                if client
-                    .request(Operation::Register {
-                        namespace: namespace.clone(),
-                        policy,
-                    })
-                    .await?
-                    != Reply::Applied
-                {
-                    return Err(OpenError::Admission);
-                }
-            }
             Ok(client)
         })
         .await
         .map_err(|_| OpenError::Deadline)?
     })?;
+    let Reply::Snapshot {
+        version: VERSION,
+        namespaces,
+    } = runtime.block_on(client.request(Operation::Inspect {}))?
+    else {
+        return Err(OpenError::Admission);
+    };
+    if !namespaces.contains_key(&namespace) {
+        // Resolver rechecks are synchronous and own their bounded runtime.
+        selection.recheck()?;
+        let policy = Policy {
+            dolt: Access::Denied,
+            private_cache_read: Access::Allowed,
+            common_cache_read: Access::Allowed,
+            egress: Access::Denied,
+            compiler: Access::Denied,
+        };
+        if runtime.block_on(client.request(Operation::Register {
+            namespace: namespace.clone(),
+            policy,
+        }))? != Reply::Applied
+        {
+            return Err(OpenError::Admission);
+        }
+    }
     Ok(Source {
         runtime,
         client,
         namespace,
+        selection: selection.clone(),
     })
 }
 
 impl Issuer for Source {
     fn issue(&mut self) -> Result<Grant, Error> {
+        self.selection.recheck().map_err(|_| Error::Unavailable)?;
         self.runtime
             .block_on(self.client.cache_credential(self.namespace.clone()))
             .map_err(|_| Error::Unavailable)
