@@ -28,7 +28,7 @@ _:
         packages = [
           config.packages.loom
           config.treefmt.build.wrapper
-          pkgs.flock
+          (if pkgs.stdenv.hostPlatform.isLinux then pkgs.util-linux else pkgs.flock)
           pkgs.podman
           pkgs.skopeo
         ];

@@ -15,8 +15,13 @@ pub enum ParseError {
     ZeroRetention,
 }
 
+/// Parse without losing subsecond precision; callers own their finite deadline checks.
+pub fn parse(input: &str) -> Result<std::time::Duration, ParseError> {
+    Ok(humantime::parse_duration(input)?)
+}
+
 pub fn seconds(input: &str) -> Result<u64, ParseError> {
-    let duration = humantime::parse_duration(input)?;
+    let duration = parse(input)?;
     if duration.subsec_nanos() != 0 {
         return Err(ParseError::Precision("seconds"));
     }
@@ -24,7 +29,7 @@ pub fn seconds(input: &str) -> Result<u64, ParseError> {
 }
 
 pub fn milliseconds(input: &str) -> Result<u64, ParseError> {
-    let duration = humantime::parse_duration(input)?;
+    let duration = parse(input)?;
     if duration.subsec_nanos() % 1_000_000 != 0 {
         return Err(ParseError::Precision("milliseconds"));
     }

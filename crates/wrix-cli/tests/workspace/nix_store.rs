@@ -66,6 +66,62 @@ fn installed_store_information_is_passive_and_enable_never_creates_a_deployment(
 }
 
 #[test]
+fn unavailable_store_collection_never_provisions_or_reports_empty_success() {
+    let (fixture, checkout) = setup();
+    let before = snapshot(&fixture.state());
+    let unbound = invoke(&fixture, &checkout, &["gc", "--wait", "0s"]);
+    assert!(!unbound.status.success());
+    assert!(
+        String::from_utf8_lossy(&unbound.stderr).contains("existing checked repository membership")
+    );
+    assert_eq!(snapshot(&fixture.state()), before);
+    deployment(&fixture);
+    success(&fixture, &checkout, &["enable"]);
+    for enabled in [true, false] {
+        if !enabled {
+            success(&fixture, &checkout, &["disable"]);
+        }
+        let before = snapshot(&fixture.state());
+        for args in [
+            vec!["gc"],
+            vec!["gc", "--wait", "0s"],
+            vec!["gc", "--wait", "1us"],
+        ] {
+            let output = invoke(&fixture, &checkout, &args);
+            assert!(!output.status.success());
+            assert_eq!(output.stdout, b"");
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains("no admitted running pool owner")
+            );
+            assert_eq!(snapshot(&fixture.state()), before);
+        }
+        assert!(!fixture.state().join("service-data/nix").exists());
+    }
+}
+
+#[test]
+fn store_collection_rejects_invalid_scope_and_wait_arguments_before_host_effects() {
+    let (fixture, checkout) = setup();
+    let before = snapshot(&fixture.state());
+    for args in [
+        vec!["gc", "--wait"],
+        vec!["gc", "--wait", "-1s"],
+        vec!["gc", "--wait", "forever"],
+        vec!["gc", "--wait", "18446744073709551615s"],
+        vec!["gc", "--wait", "0s", "--wait", "1s"],
+        vec!["gc", "--host"],
+        vec!["gc", "all"],
+        vec!["gc", "/nix/store"],
+        vec!["enable", "--wait", "0s"],
+    ] {
+        let output = invoke(&fixture, &checkout, &args);
+        assert!(!output.status.success(), "{args:?}");
+        assert_eq!(output.stdout, b"");
+        assert_eq!(snapshot(&fixture.state()), before);
+    }
+}
+
+#[test]
 fn approval_is_database_owned_without_importing_filesystem_claims_or_mutating_payloads() {
     let (fixture, checkout) = setup();
     deployment(&fixture);
@@ -414,7 +470,12 @@ fn worker_marker_cannot_change_repository_approval_with_a_forged_home() {
     fs::create_dir_all(&marker).unwrap();
     fs::write(marker.join("image-agent"), "direct\n").unwrap();
     let before = snapshot(&fixture.state());
-    for args in [vec![], vec!["enable"], vec!["disable"]] {
+    for args in [
+        vec![],
+        vec!["enable"],
+        vec!["disable"],
+        vec!["gc", "--wait", "0s"],
+    ] {
         let output = invoke(&fixture, &checkout, &args);
         assert!(!output.status.success());
         assert!(String::from_utf8_lossy(&output.stderr).contains("host-only"));

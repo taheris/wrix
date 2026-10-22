@@ -1933,25 +1933,34 @@ impl Runtime {
             })
     }
 
-    fn binary_absent(&self) -> io::Result<bool> {
+    fn inventory_binary(&self) -> io::Result<Option<PathBuf>> {
         let binary = Path::new(&self.binary);
-        let candidates = if binary.components().count() > 1 {
+        let candidates = if binary.is_absolute() || binary.components().count() > 1 {
             vec![binary.to_path_buf()]
         } else if let Some(path) = env::var_os("PATH") {
             env::split_paths(&path)
                 .map(|root| root.join(binary))
                 .collect()
         } else {
-            return Ok(false);
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "container runtime search requires PATH",
+            ));
         };
         for path in candidates {
-            match fs::symlink_metadata(path) {
-                Ok(_) => return Ok(false),
+            match fs::symlink_metadata(&path) {
+                Ok(_) => {
+                    return Ok(Some(if path.is_absolute() {
+                        path
+                    } else {
+                        env::current_dir()?.join(path)
+                    }));
+                }
                 Err(source) if source.kind() == io::ErrorKind::NotFound => {}
                 Err(source) => return Err(source),
             }
         }
-        Ok(true)
+        Ok(None)
     }
 
     fn available_container_infos(&self) -> Result<Option<Vec<ContainerInfo>>> {
@@ -1959,17 +1968,13 @@ impl Runtime {
             RuntimeKind::Container => &["list", "--all", "--format", "json"],
             RuntimeKind::Podman => &["ps", "-a", "--format", "{{.Names}}"],
         };
-        let output = match Command::new(&self.binary)
+        let Some(binary) = self.inventory_binary()? else {
+            return Ok(None);
+        };
+        let output = Command::new(binary)
             .args(args)
             .stdin(Stdio::null())
-            .output()
-        {
-            Ok(output) => output,
-            Err(source) if source.kind() == io::ErrorKind::NotFound && self.binary_absent()? => {
-                return Ok(None);
-            }
-            Err(source) => return Err(source.into()),
-        };
+            .output()?;
         if !output.status.success() {
             return Err(Error::Operation {
                 message: format!(

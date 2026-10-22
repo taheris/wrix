@@ -21,7 +21,10 @@ fn private_namespace_encodes_the_complete_workspace_hash_within_native_limits() 
 
 #[tokio::test]
 async fn namespace_lock_timeout_does_not_replace_the_existing_lock() {
-    let root = tempfile::tempdir().unwrap();
+    let root = tempfile::Builder::new()
+        .permissions(fs::Permissions::from_mode(0o700))
+        .tempdir()
+        .unwrap();
     let path = root.path().join("cache.lock");
     fs::write(&path, "").unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
@@ -38,7 +41,10 @@ async fn namespace_lock_timeout_does_not_replace_the_existing_lock() {
 
 #[tokio::test]
 async fn namespace_lock_refuses_symlink_and_hardlink_targets() {
-    let root = tempfile::tempdir().unwrap();
+    let root = tempfile::Builder::new()
+        .permissions(fs::Permissions::from_mode(0o700))
+        .tempdir()
+        .unwrap();
     let other = root.path().join("other");
     fs::write(&other, "preserve").unwrap();
     let path = root.path().join("cache.lock");

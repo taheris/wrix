@@ -181,6 +181,7 @@ impl Fixture {
         set_mode(&runtime, 0o755)?;
         service_binding::create(root.path(), &root.path().join("bin"), "docker-archive")?;
         fs::copy(&runtime, root.path().join("bin/container"))?;
+        peer_runtime::install_empty(&root.path().join("bin"))?;
         let mut fixture = Self {
             controller: std::cell::RefCell::new(None),
             server: std::cell::RefCell::new(None),
@@ -1492,7 +1493,19 @@ fn installed_other_runtime_with_missing_interpreter_is_not_treated_as_absent() -
     let peer = fixture.root.path().join("bin/podman");
     fs::write(&peer, "#!/definitely/missing/interpreter\n")?;
     set_mode(&peer, 0o755)?;
-    let output = fixture.run("start")?;
+    let fallback = fixture.root.path().join("fallback");
+    fs::create_dir(&fallback)?;
+    peer_runtime::install_empty(&fallback)?;
+    let mut command = fixture.command()?;
+    let path = command
+        .get_envs()
+        .find_map(|(name, value)| (name == "PATH").then_some(value).flatten())
+        .ok_or("missing fixture PATH")?;
+    let mut paths: Vec<_> = std::env::split_paths(path).collect();
+    paths.insert(1, fallback);
+    command.env("PATH", std::env::join_paths(paths)?);
+    fixture.api()?;
+    let output = run_command(command.args(["service", "start"]))?;
     assert!(!output.status.success());
     assert!(
         output.stderr.contains("service lifecycle I/O failed"),

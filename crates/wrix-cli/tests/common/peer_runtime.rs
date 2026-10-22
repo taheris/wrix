@@ -34,12 +34,53 @@ case "$*" in
 esac
 "#;
 
+/// The peer engine exists but has no containers; no ambient host engine is consulted.
+pub fn install_empty(bin: &Path) -> TestResult {
+    fs::write(
+        bin.join("podman"),
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$#" == 4 && "$1" == ps && "$2" == -a && "$3" == --format && "$4" == '{{.Names}}' ]]; then
+  exit 0
+fi
+printf 'unexpected empty peer runtime command: %s\n' "$*" >&2
+exit 64
+"#,
+    )?;
+    set_mode(&bin.join("podman"), 0o755)?;
+    Ok(())
+}
+
 pub fn install(bin: &Path, name: &str, backend: &str, state: &str) -> TestResult {
     fs::write(bin.join("peer.name"), name)?;
     fs::write(bin.join("peer.backend"), backend)?;
     fs::write(bin.join("peer.state"), state)?;
     fs::write(bin.join("podman"), PODMAN)?;
     set_mode(&bin.join("podman"), 0o755)?;
+    Ok(())
+}
+
+#[test]
+fn empty_peer_fixture_reports_empty_native_inventory_and_refuses_mutation() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    install_empty(directory.path())?;
+    let binary = directory.path().join("podman");
+    let inventory = Command::new(&binary)
+        .args(["ps", "-a", "--format", "{{.Names}}"])
+        .output()?;
+    assert!(inventory.status.success());
+    assert_eq!(inventory.stdout, b"");
+    for args in [
+        vec!["rm", "peer"],
+        vec!["run", "image"],
+        vec!["inspect", "peer"],
+        vec!["ps"],
+    ] {
+        assert_eq!(
+            Command::new(&binary).args(args).output()?.status.code(),
+            Some(64)
+        );
+    }
     Ok(())
 }
 

@@ -124,6 +124,7 @@ fn service_fixture_removes_ambient_image_metadata() -> TestResult {
 #[test]
 fn retired_cache_prune_fails_without_state_or_runtime_access() -> TestResult {
     let fixture = Fixture::new()?;
+    let before = fixture_snapshot(fixture.root.path())?;
     fs::write(fixture.workspace.join("wrix.toml"), "invalid policy")?;
     for args in [
         vec!["service", "cache", "prune"],
@@ -138,10 +139,38 @@ fn retired_cache_prune_fails_without_state_or_runtime_access() -> TestResult {
         );
         assert!(!output.stderr.contains("invalid policy"));
     }
-    for path in ["state", "cache", "home", "calls", "run.argv"] {
+    assert_eq!(fixture_snapshot(fixture.root.path())?, before);
+    for path in ["cache", "calls", "run.argv"] {
         assert!(!fixture.root.path().join(path).exists(), "{path}");
     }
     Ok(())
+}
+
+fn fixture_snapshot(
+    root: &std::path::Path,
+) -> TestResult<std::collections::BTreeMap<PathBuf, Option<Vec<u8>>>> {
+    fn visit(
+        path: &std::path::Path,
+        files: &mut std::collections::BTreeMap<PathBuf, Option<Vec<u8>>>,
+    ) -> TestResult {
+        if path.is_dir() {
+            files.insert(path.to_path_buf(), None);
+            for entry in fs::read_dir(path)? {
+                visit(&entry?.path(), files)?;
+            }
+        } else {
+            files.insert(path.to_path_buf(), Some(fs::read(path)?));
+        }
+        Ok(())
+    }
+    let mut files = std::collections::BTreeMap::new();
+    for name in ["state", "home"] {
+        let path = root.join(name);
+        if path.exists() {
+            visit(&path, &mut files)?;
+        }
+    }
+    Ok(files)
 }
 
 #[test]
@@ -227,6 +256,11 @@ fn confirmed_startup_reports_failed_local_admission_without_rollback_claims() ->
     let fixture = Fixture::new()?;
     let metadata = fixture.endpoints(true)?;
     let state = PathBuf::from(metadata["state_root"].as_str().unwrap());
+    wrix_core::private_directory::prepare_with_parents(&state)?;
+    common::import_host_namespace(
+        fixture.root.path(),
+        metadata["workspace_hash"].as_str().unwrap(),
+    )?;
     wrix_core::private_directory::prepare_with_parents(&state.join("keys"))?;
     let outside = fixture.root.path().join("outside.pub");
     fs::write(&outside, "preserve external key")?;
@@ -566,7 +600,11 @@ fn service_reentry_tightens_legacy_control_without_losing_runtime_authority() ->
     let fixture = Fixture::new()?;
     let metadata = fixture.endpoints(false)?;
     let state = PathBuf::from(metadata["state_root"].as_str().unwrap());
-    fs::create_dir_all(&state)?;
+    wrix_core::private_directory::prepare_with_parents(&state)?;
+    common::import_host_namespace(
+        fixture.root.path(),
+        metadata["workspace_hash"].as_str().unwrap(),
+    )?;
     set_mode(&state, 0o755)?;
     let binding = json!({
         "schema_version": 1,
@@ -682,8 +720,9 @@ fn service_startup_does_not_collect_dirty_cache_contents() -> TestResult {
             output.stderr
         );
         assert!(stale.exists(), "{elapsed}");
-        let status: Value =
-            serde_json::from_slice(&fs::read(state_root.join("cache-status.json"))?)?;
+        let status: Value = serde_json::from_slice(&common::read_namespace_document(
+            &state_root.join("cache-status.json"),
+        )?)?;
         assert_eq!(status["last_prune_epoch"], last_prune);
         assert_eq!(status["dirty"], true);
     }
