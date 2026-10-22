@@ -22,6 +22,55 @@ mod registration;
 const PUBLIC_KEY: &str = "fixture:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
 const RETENTION: Duration = Duration::from_hours(720);
 
+#[tokio::test]
+async fn native_common_readiness_preserves_retention_key_and_separate_publication_admission() {
+    use std::os::unix::fs::MetadataExt;
+    use wrix_cache::backend::{
+        issuer::Authority, publication::registration::provision_common, pull::ReadSet,
+    };
+    let server = native::Server::start_with_issuer();
+    let root = tempfile::tempdir().unwrap();
+    let common = root.path().join("common");
+    let name = ReadSet::common_name().unwrap();
+    let client = server.client(name.as_str());
+    let expected = client.register(Duration::from_hours(168)).await.unwrap();
+    let mut inode = None;
+    for _ in 0..2 {
+        let actual = provision_common(
+            &common,
+            &server.endpoint,
+            &server.issuer_root(),
+            RETENTION,
+            Duration::from_secs(1),
+        )
+        .await
+        .unwrap();
+        assert_eq!(actual, expected);
+        let current = std::fs::metadata(common.join("keys/cache.pub"))
+            .unwrap()
+            .ino();
+        if let Some(prior) = inode {
+            assert_eq!(current, prior);
+        }
+        inode = Some(current);
+        assert!(!common.join("celler-publisher.json").exists());
+    }
+    let token = Authority::open(&server.issuer_root())
+        .unwrap()
+        .publication_token(&name)
+        .unwrap();
+    let response = reqwest::Client::new()
+        .get(format!("{}_api/v1/cache-config/{name}", server.endpoint))
+        .bearer_auth(token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let metadata: Value = response.json().await.unwrap();
+    assert_eq!(metadata["retention_period"]["Period"], 168 * 60 * 60);
+    assert_eq!(metadata["is_public"], false);
+}
+
 struct Exchange {
     method: &'static str,
     status: u16,

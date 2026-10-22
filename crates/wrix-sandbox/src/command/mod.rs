@@ -63,13 +63,31 @@ pub fn run(
     stdout: &mut impl Write,
     stderr: &mut impl Write,
 ) -> io::Result<ExitCode> {
+    run_with_issuer(
+        command,
+        profile_config_path,
+        args,
+        stdout,
+        stderr,
+        &crate::cache_credentials::Unavailable,
+    )
+}
+
+pub fn run_with_issuer(
+    command: Command,
+    profile_config_path: Option<PathBuf>,
+    args: &[String],
+    stdout: &mut impl Write,
+    stderr: &mut impl Write,
+    issuer: &dyn crate::cache_credentials::Factory,
+) -> io::Result<ExitCode> {
     let preview = launch::preview::Options::from_args(command, args);
     match build_request(command, profile_config_path, args) {
         Ok(None) => {
             write_run_help(stdout)?;
             Ok(ExitCode::SUCCESS)
         }
-        Ok(Some(request)) => match launch::execute(&request, stdout, stderr) {
+        Ok(Some(request)) => match launch::execute(&request, stdout, stderr, issuer) {
             Ok(code) => Ok(code),
             Err(_error) if preview.dry_run => {
                 launch::preview::Report::invalid().write(stdout, preview.json)

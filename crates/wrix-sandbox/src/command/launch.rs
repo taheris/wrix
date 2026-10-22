@@ -29,6 +29,7 @@ use wrix_core::{
     repository_policy,
 };
 
+use crate::cache_credentials::{self, Factory, Issuer, NativeClock, Session};
 use crate::image::{self, CommandStore, Digest, ImageRef, InstallRequest, Runtime, Source};
 
 use super::config::{
@@ -182,6 +183,8 @@ pub enum LaunchError {
     Image { source: image::Error },
     /// {source}
     Metadata { source: execution_metadata::Error },
+    /// {0}
+    Cache(#[from] cache_credentials::Error),
 }
 
 impl From<io::Error> for LaunchError {
@@ -221,6 +224,7 @@ pub fn execute(
     request: &Request,
     stdout: &mut impl Write,
     stderr: &mut impl Write,
+    issuer: &dyn Factory,
 ) -> Result<ExitCode, LaunchError> {
     let network_mode = NetworkMode::from_env(request.profile_config.network.default_mode)?;
     let preview = request.preview();
@@ -260,6 +264,9 @@ pub fn execute(
             .write(stdout, preview.json)
             .map_err(LaunchError::from);
     }
+    if request.profile_config.services.nix_cache.enabled {
+        issuer.admit()?;
+    }
     let journal = execution_metadata::Journal::create(
         &plan.workspace,
         &request.kind,
@@ -268,8 +275,8 @@ pub fn execute(
     )
     .map_err(|source| LaunchError::Metadata { source })?;
     let mut observed_status = None;
-    let result = ServicesState::load(request)
-        .and_then(|services| plan.launch(&services, &mut observed_status));
+    let result = ServicesState::load(request, issuer)
+        .and_then(|mut services| plan.launch(&mut services, &mut observed_status));
     if let Err(error) = journal.complete(observed_status) {
         tracing::warn!(workspace = %plan.workspace.display(), %error, "execution metadata remains incomplete");
         if let Err(report_error) = writeln!(
@@ -360,6 +367,7 @@ struct ProjectCache {
     host: Ipv4Addr,
     port: NonZeroU16,
     nix_config: String,
+    session: Session<Box<dyn Issuer>>,
 }
 
 #[derive(Deserialize)]
@@ -1008,7 +1016,7 @@ impl<'a> Plan<'a> {
 
     fn launch(
         &self,
-        services: &ServicesState,
+        services: &mut ServicesState,
         observed_status: &mut Option<ExitStatus>,
     ) -> Result<ExitCode, LaunchError> {
         self.recheck()?;
@@ -1027,7 +1035,7 @@ impl<'a> Plan<'a> {
 
     fn launch_linux(
         &self,
-        services: &ServicesState,
+        services: &mut ServicesState,
         observed_status: &mut Option<ExitStatus>,
     ) -> Result<ExitCode, LaunchError> {
         self.install_image(Runtime::Podman)?;
@@ -1123,15 +1131,7 @@ impl<'a> Plan<'a> {
                 .stdin(Stdio::inherit())
                 .stdout(Stdio::inherit())
                 .stderr(Stdio::inherit());
-            self.recheck()?;
-            let status = if let Kind::Spawn(spawn) = &self.request.kind
-                && let Some(ticket) = &spawn.execution_ticket
-            {
-                crate::execution::launch(&self.workspace, ticket, &command, self.stdio)
-                    .map_err(io::Error::other)?
-            } else {
-                command.status()?
-            };
+            let status = services.wait(&mut command)?;
             *observed_status = Some(status);
             status_to_exit(status)
         })
@@ -1139,7 +1139,7 @@ impl<'a> Plan<'a> {
 
     fn launch_darwin(
         &self,
-        services: &ServicesState,
+        services: &mut ServicesState,
         observed_status: &mut Option<ExitStatus>,
     ) -> Result<ExitCode, LaunchError> {
         if let Kind::Spawn(spawn) = &self.request.kind
@@ -1152,7 +1152,10 @@ impl<'a> Plan<'a> {
         Staging::with(|staging| {
             let credentials = self.credentials(staging)?;
             let pi_auth = self.pi_auth()?;
-            let darwin_mounts = self.darwin_mounts(staging, pi_auth.as_ref())?;
+            let mut darwin_mounts = self.darwin_mounts(staging, pi_auth.as_ref())?;
+            if let Some(cache) = &services.project_cache {
+                darwin_mounts.mounts.push(cache.mount());
+            }
             let mut command = ProcessCommand::new("container");
             command
                 .arg("run")
@@ -1211,8 +1214,7 @@ impl<'a> Plan<'a> {
                 .stdin(Stdio::inherit())
                 .stdout(Stdio::inherit())
                 .stderr(Stdio::inherit());
-            self.recheck()?;
-            let status = command.status()?;
+            let status = services.wait(&mut command)?;
             *observed_status = Some(status);
             darwin_mounts.sync_files()?;
             status_to_exit(status)
@@ -1242,6 +1244,9 @@ impl<'a> Plan<'a> {
                 mode: MountMode::Rw,
                 optional: false,
             });
+        }
+        if let Some(cache) = &services.project_cache {
+            volumes.push(cache.mount());
         }
         for mount in &self.request.profile_config.profile.mounts {
             if let Some(rendered) = render_profile_mount(mount, staging)? {
@@ -1759,8 +1764,26 @@ impl DarwinMounts {
     }
 }
 
+impl ProjectCache {
+    fn mount(&self) -> RenderedMount {
+        RenderedMount {
+            host: self.session.directory().display().to_string(),
+            container: cache_credentials::GUEST_DIRECTORY.to_owned(),
+            mode: MountMode::Ro,
+            optional: false,
+        }
+    }
+}
+
 impl ServicesState {
-    fn load(request: &Request) -> Result<Self, LaunchError> {
+    fn wait(&mut self, command: &mut ProcessCommand) -> Result<ExitStatus, LaunchError> {
+        match self.project_cache.take() {
+            Some(cache) => Ok(cache.session.wait(&mut command.spawn()?)?),
+            None => Ok(command.status()?),
+        }
+    }
+
+    fn load(request: &Request, issuer: &dyn Factory) -> Result<Self, LaunchError> {
         let workspace = match &request.kind {
             Kind::Run(run) => run.workspace.as_path(),
             Kind::Spawn(spawn) => Path::new(&spawn.config.workspace),
@@ -1769,7 +1792,7 @@ impl ServicesState {
         let dolt = service_workspace_has_dolt(workspace)?;
         if request.profile_config.services.nix_cache.enabled {
             run_service(workspace, &["service", "start"])?;
-            state.load_project_cache(workspace)?;
+            state.load_project_cache(workspace, issuer)?;
         } else if dolt {
             run_service(workspace, &["service", "start", "--no-cache"])?;
         }
@@ -1780,7 +1803,11 @@ impl ServicesState {
         Ok(state)
     }
 
-    fn load_project_cache(&mut self, workspace: &Path) -> Result<(), LaunchError> {
+    fn load_project_cache(
+        &mut self,
+        workspace: &Path,
+        issuer: &dyn Factory,
+    ) -> Result<(), LaunchError> {
         let output = run_service(workspace, &["service", "endpoints", "--sandbox-cache"])?;
         let metadata = serde_json::from_slice::<ServiceMetadata>(&output.stdout)
             .map_err(|source| LaunchError::ServiceJson { source })?;
@@ -1800,15 +1827,43 @@ impl ServicesState {
                 host: sandbox_host.to_string(),
             });
         }
+        let canonical = Workspace::from_service_path(workspace)?;
+        if metadata
+            .state_root
+            .file_name()
+            .and_then(|name| name.to_str())
+            != Some(canonical.hash().as_str())
+        {
+            return Err(cache_credentials::Error::Unavailable.into());
+        }
+        let views = wrix_cache::backend::pull::ReadSet::for_workspace(canonical.hash())
+            .map_err(|_| cache_credentials::Error::Unavailable)?;
+        let common_key = read_cache_public_key(
+            &metadata
+                .state_root
+                .parent()
+                .ok_or(cache_credentials::Error::Unavailable)?
+                .join("common/keys/cache.pub"),
+        )?;
         let url = format!("http://{sandbox_host}:{}", endpoint.port);
         let nix_config = format!(
-            "extra-substituters = {url}\nextra-trusted-public-keys = {}\nbuilders-use-substitutes = true",
-            public_key.as_str()
+            "extra-substituters = {url}/{} {url}/{}\nextra-trusted-public-keys = {} {}\nbuilders-use-substitutes = true\nnetrc-file = {}\nnarinfo-cache-negative-ttl = 0",
+            views.common(),
+            views.private(),
+            common_key.as_str(),
+            public_key.as_str(),
+            cache_credentials::GUEST_NETRC
         );
+        let session = Session::create(
+            issuer.open(workspace)?,
+            NativeClock::default(),
+            sandbox_host.into(),
+        )?;
         self.project_cache = Some(ProjectCache {
             host: sandbox_host,
             port: endpoint.port,
             nix_config,
+            session,
         });
         Ok(())
     }

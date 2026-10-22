@@ -11,7 +11,10 @@ use thiserror::Error as ThisError;
 use wrix_cache::backend::{
     issuer::Authority,
     layout::Layout,
-    publication::{Publisher, registration::provision_private},
+    publication::{
+        Publisher,
+        registration::{provision_common, provision_private},
+    },
 };
 
 use super::{Plan, RuntimeStatus};
@@ -32,6 +35,10 @@ pub enum Error {
     Deadline,
     /// {0}
     Settings(#[from] wrix_cache::config::ReadError),
+    /// cache publication retirement may be committed, but private read-issuance retirement failed: {0}
+    Control(#[from] crate::control::Error),
+    /// cache publication retirement may be committed, but host controller did not confirm read-issuance retirement
+    RetirementUnconfirmed,
 }
 
 const DEFAULT_RETENTION: Duration = Duration::from_hours(720);
@@ -99,7 +106,23 @@ pub(super) fn activate(plan: &Plan, prepared: &Prepared) -> Result<(), Error> {
                 )
                 .await
                 {
-                    Ok(_) => return Ok(()),
+                    Ok(_) => {
+                        let common = plan
+                            .paths()
+                            .state_root()
+                            .parent()
+                            .ok_or(Error::Location)?
+                            .join("common");
+                        provision_common(
+                            &common,
+                            &endpoint,
+                            &prepared.issuer,
+                            DEFAULT_RETENTION,
+                            prepared.lock_timeout,
+                        )
+                        .await?;
+                        return Ok(());
+                    }
                     Err(wrix_cache::backend::publication::Error::Backend(
                         wrix_cache::backend::Error::Transport,
                     )) => tokio::time::sleep(Duration::from_millis(200)).await,
@@ -122,6 +145,18 @@ pub(super) fn retire(plan: &Plan) -> Result<(), Error> {
         plan.workspace().hash(),
         Duration::from_millis(settings.explicit_lock_timeout_ms),
     ))?;
+    if let Some(lifecycle) = &plan.paths().host_lifecycle {
+        let root = lifecycle.parent().ok_or(Error::Location)?.join("control");
+        if root.try_exists()? {
+            let client = crate::control::Client::open(&root.join("authority"))?;
+            let reply = runtime.block_on(client.request(crate::control::Operation::Retire {
+                namespace: crate::control::Namespace::from(plan.workspace().hash()),
+            }))?;
+            if reply != crate::control::Reply::Applied {
+                return Err(Error::RetirementUnconfirmed);
+            }
+        }
+    }
     Ok(())
 }
 

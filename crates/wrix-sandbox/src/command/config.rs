@@ -901,6 +901,7 @@ fn validate_mount_destination(destination: &str) -> Result<(), ConfigError> {
     const PROTECTED: &[&str] = &[
         "/nix",
         "/etc/nix",
+        "/run/wrix/cache-credentials",
         "/etc/wrix/private-nix-version",
         "/etc/wrix/shared-nix-version",
         "/homeless-shelter",
@@ -1323,6 +1324,10 @@ mod test {
             "/etc/wrix",
             "/etc/wrix/private-nix-version",
             "/etc/wrix/shared-nix-version",
+            "/run",
+            "/run/wrix",
+            "/run/wrix/cache-credentials",
+            "/run/wrix/cache-credentials/netrc",
             "/homeless-shelter",
             "/network-bootstrap.sh",
             "/network-ready.sh",

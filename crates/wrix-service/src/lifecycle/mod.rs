@@ -2,6 +2,7 @@ mod apple;
 pub mod binding;
 mod cache;
 mod coordination;
+pub mod credential;
 mod dolt;
 mod managed;
 mod owner;

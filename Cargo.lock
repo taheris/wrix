@@ -3304,6 +3304,7 @@ dependencies = [
  "thiserror",
  "time",
  "tracing",
+ "wrix-cache",
  "wrix-core",
  "wrix-notify",
  "wrix-state",

@@ -329,6 +329,21 @@ fn service_runtime_fixture_child() -> TestResult {
 #[test]
 #[ignore = "isolated launcher process"]
 fn metadata_child() -> TestResult {
+    struct ProvidedHost;
+    impl wrix_sandbox::cache_credentials::Factory for ProvidedHost {
+        fn admit(&self) -> Result<(), wrix_sandbox::cache_credentials::Error> {
+            Ok(())
+        }
+        fn open(
+            &self,
+            _workspace: &Path,
+        ) -> Result<
+            Box<dyn wrix_sandbox::cache_credentials::Issuer>,
+            wrix_sandbox::cache_credentials::Error,
+        > {
+            Err(wrix_sandbox::cache_credentials::Error::Unavailable)
+        }
+    }
     let profile = PathBuf::from(env::var_os("WRIX_TEST_PROFILE_CONFIG").ok_or("profile missing")?);
     let mode = match env::var("WRIX_TEST_MODE") {
         Ok(value) if value == "run" => Mode::Run,
@@ -342,12 +357,13 @@ fn metadata_child() -> TestResult {
             env::var("WRIX_TEST_SPAWN_CONFIG")?,
         ],
     };
-    let code = command::run(
+    let code = command::run_with_issuer(
         mode,
         Some(profile),
         &args,
         &mut io::stdout(),
         &mut io::stderr(),
+        &ProvidedHost,
     )?;
     for value in 0..=u8::MAX {
         if code == ExitCode::from(value) {

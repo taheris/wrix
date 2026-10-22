@@ -23,7 +23,7 @@ const MAX_BEARER: usize = 16 * 1024;
 
 #[derive(Debug, Display, ThisError)]
 pub enum Error {
-    /// host cache credential issuance is unavailable
+    /// host cache credential issuance is unavailable; provide a compatible host wrix and reconcile host authorization/controller state
     Unavailable,
     /// host cache credential is malformed
     Credential,
@@ -69,6 +69,29 @@ impl Grant {
 /// Implementations issue from current host authorization and bound each request's lifetime.
 pub trait Issuer {
     fn issue(&mut self) -> Result<Grant, Error>;
+}
+
+impl<I: Issuer + ?Sized> Issuer for Box<I> {
+    fn issue(&mut self) -> Result<Grant, Error> {
+        (**self).issue()
+    }
+}
+
+/// Host admission creates a source once; renewals never repeat startup or registration.
+pub trait Factory {
+    fn admit(&self) -> Result<(), Error>;
+    fn open(&self, workspace: &Path) -> Result<Box<dyn Issuer>, Error>;
+}
+
+pub struct Unavailable;
+
+impl Factory for Unavailable {
+    fn admit(&self) -> Result<(), Error> {
+        Err(Error::Unavailable)
+    }
+    fn open(&self, _workspace: &Path) -> Result<Box<dyn Issuer>, Error> {
+        Err(Error::Unavailable)
+    }
 }
 
 #[derive(Clone, Copy)]

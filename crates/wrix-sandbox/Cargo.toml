@@ -16,7 +16,7 @@ thiserror = { workspace = true }
 time = { workspace = true }
 tracing = { workspace = true }
 wrix-core = { workspace = true }
-wrix-state = { workspace = true }
+wrix-cache = { workspace = true }
 wrix-notify = { workspace = true }
 
 [lints]

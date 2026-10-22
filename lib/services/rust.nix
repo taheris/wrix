@@ -141,6 +141,8 @@ let
     inherit pkgs;
     celler = cellerPackage;
     packagedWrix = wrixPackage;
+    controller = controllerPackage;
+    inherit serviceImage;
     devshellHook = prekDevShellHook;
   };
 

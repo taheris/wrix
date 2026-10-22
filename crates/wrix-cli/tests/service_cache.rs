@@ -186,7 +186,7 @@ fn cache_start_bootstraps_host_private_issuer_without_static_fallback() -> TestR
     assert_eq!(
         requests,
         format!(
-            "GET /_api/v1/cache-config/{namespace}\nPATCH /_api/v1/cache-config/{namespace}\nGET /_api/v1/cache-config/{namespace}\n"
+            "GET /_api/v1/cache-config/{namespace}\nPATCH /_api/v1/cache-config/{namespace}\nGET /_api/v1/cache-config/{namespace}\nGET /_api/v1/cache-config/wrix-common-v1\nGET /_api/v1/cache-config/wrix-common-v1\nPATCH /_api/v1/cache-config/wrix-common-v1\nGET /_api/v1/cache-config/wrix-common-v1\n"
         )
     );
     Ok(())

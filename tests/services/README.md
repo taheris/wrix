@@ -23,8 +23,8 @@ denial, and fresh Nix imports of publications made after issuance. Readable
 native cache metadata contains only the public signing key. The host-controller
 issuance API holds its current-policy guard through signing; withdrawal narrows
 subsequent credentials without changing old bearers. No credential is
-serializable or included in diagnostic types. Launcher delivery/renewal and
-deployed multi-view routing remain separate integration requirements.
+serializable or included in diagnostic types. The Linux worker verifier below
+separately exercises production launcher delivery and native multi-view reads.
 
 These are component integration tests, not deployed worker, container mount,
 production build sandbox, shared installed-store or performance acceptance. The
@@ -88,30 +88,60 @@ with a bounded cold-image deadline; unit failure is not a successful readiness
 signal. This is guest lifecycle evidence, not native worker substitution or
 shared installed-store acceptance.
 
-The retained launcher table below includes legacy static-cache probes. Those
-probes still need conversion before they can accept the Celler backend; do not
-count their old payload assertions as native Celler transport evidence.
+## Waiting-launcher credentials
 
-| Criterion                   | Production seam                                                                      | Existing proof and bounded correction                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| --------------------------- | ------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Shared image installer      | `wrix-service::lifecycle::Runtime::ensure_image` delegates to `wrix-sandbox::image`  | Native image-install tests already cover source dispatch. `service_cache::service_start_uses_shared_image_digest_preflight_without_pruning` now runs the service CLI for both runtimes, on hits and misses, and asserts copy/load dispatch without pruning or retention writes. Live cache/beads apps also install the packaged service image.                                                                                                                       |
-| Temp cache-only suppression | `Plan::from_parsed`, `start`                                                         | `wrix-service` already tests the suppressed plan. `service_cache::temp_cache_only_start_never_creates_a_service_container` additionally proves the CLI never creates a container, without disabling unrelated runtime status queries.                                                                                                                                                                                                                                |
-| Cache state layout          | `Paths::for_workspace`, `Plan::ensure_layout`                                        | Native CLI coverage asserts exact current-platform XDG/Library roots, every cache artefact, real Nix key generation, and opt-out without cache state. `test-services-devshell-start-independent` and the retained shell-owned host-Nix tests cover default shell enablement and opt-out wiring. Darwin roots are tested on Darwin, not inferred from Linux simulations.                                                                                              |
-| Container pull config       | `ServicesState::load_project_cache`, `Plan::env_pairs`                               | Existing `service_lifecycle::cache_guest_endpoint_and_key_reach_both_launch_commands` asserts actual subprocess argv for both launches and nested Loom paths. `test-services-limit-mode-cache-endpoint` additionally checks exact NIX_CONFIG against the host-generated public key inside both real launch modes.                                                                                                                                                    |
-| Sandbox cache boundary      | Launcher mount construction                                                          | That existing native launch test rejects state/cache/store/daemon/secret mounts. The live cache app checks a host-only store sentinel and cache/state/key/daemon absence inside the guest; the Linux VM also checks mountinfo and the service's read-only cache mount.                                                                                                                                                                                               |
-| Cache HTTP endpoint         | Service port leasing, static helper, launcher numeric endpoint resolution            | `wrix-cache::helper_server::static_server_enforces_binary_cache_path_policy` already proves GET/HEAD-only and path policy through a real helper. Native Apple endpoint/address/firewall tests cover guest resolution separately from persisted host publication. The live cache app proves loopback/ranged publication, numeric guest HTTP access to cache-root payloads (Apple VM:8080 on Darwin), stable endpoints, and isolation from an unrelated host listener. |
-| Dolt platform transport     | Default `DoltTransport`, `ServicesState::load_dolt`, Apple guest endpoint resolution | Native endpoint payload/default-transport/Apple guest-address and SQL authentication tests remain intact. `test-services-dolt-platform-transport` runs the existing beads VM on Linux (real shared Unix socket and guest SQL/sync); on Darwin it runs the live Apple service and authenticates guest SQL through the non-loopback VM address/internal port, also checking host-loopback publication. Host TCP tests are not Darwin guest proof.                      |
+`test-services-limit-mode-cache-endpoint` now uses native Celler rather than
+writing flat cache files. Both real Linux Podman run/spawn paths import signed
+host-published fixtures through exact common/private routing. An unrelated
+loopback listener remains inaccessible in limit mode; unauthenticated cache
+reads fail. The guest cannot create, append or chmod credential files.
+
+The disposable guest advances its own clock to two minutes before the issued
+expiry. Each unchanged running worker observes atomic netrc inode/content
+replacement through its read-only directory mount and imports a newly published
+path after an earlier negative lookup. Native Nix reports negative TTL zero and
+the stable netrc path. Completion removes the actual host staging directory;
+spawn preserves a NUL-containing stdout payload byte-for-byte, with stderr kept
+separate from that protocol stream. The probe exports only public expiry
+metadata; the bearer remains in private IPC/netrc and is not written to logs.
+
+The host factory admits an immutable package before service effects, preserves
+existing registry policy and registers only absent namespaces. Its per-launch
+issuer subsequently calls only authenticated private issuance: refresh does not
+start services or register policy. Explicit workspace stop also retires current
+read issuance, without terminating the host controller or recalling old grants.
+Unit/CLI coverage checks denied refresh, missing package admission, clock
+changes, independent sessions, failure/exit behavior and policy retirement.
+Test-only management wrappers require a live real controller; they are not
+installed systemd/launchd proof. The Linux worker VM uses real packaged
+supervision.
+
+This is Linux archive-substitution/renewal evidence, not installed-store reuse,
+production build-user isolation, public common population, performance, or
+Apple/krun mount acceptance. Those platform gates remain open. The old Darwin
+flat-payload probe is not native Celler acceptance.
+
+| Criterion                   | Production seam                                                                      | Existing proof and bounded correction                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| --------------------------- | ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Shared image installer      | `wrix-service::lifecycle::Runtime::ensure_image` delegates to `wrix-sandbox::image`  | Native image-install tests already cover source dispatch. `service_cache::service_start_uses_shared_image_digest_preflight_without_pruning` now runs the service CLI for both runtimes, on hits and misses, and asserts copy/load dispatch without pruning or retention writes. Live cache/beads apps also install the packaged service image.                                                                                                                                                  |
+| Temp cache-only suppression | `Plan::from_parsed`, `start`                                                         | `wrix-service` already tests the suppressed plan. `service_cache::temp_cache_only_start_never_creates_a_service_container` additionally proves the CLI never creates a container, without disabling unrelated runtime status queries.                                                                                                                                                                                                                                                           |
+| Cache state layout          | `Paths::for_workspace`, `Plan::ensure_layout`                                        | Native CLI coverage asserts exact current-platform XDG/Library roots, every cache artefact, real Nix key generation, and opt-out without cache state. `test-services-devshell-start-independent` and the retained shell-owned host-Nix tests cover default shell enablement and opt-out wiring. Darwin roots are tested on Darwin, not inferred from Linux simulations.                                                                                                                         |
+| Container pull config       | `ServicesState::load_project_cache`, `Plan::env_pairs`                               | Existing `service_lifecycle::cache_guest_endpoint_and_key_reach_both_launch_commands` asserts actual subprocess argv for both launches and nested Loom paths. The Linux `test-services-limit-mode-cache-endpoint` additionally checks effective native Nix settings and signed substitution in both real launch modes.                                                                                                                                                                          |
+| Sandbox cache boundary      | Launcher mount construction                                                          | That existing native launch test rejects state/cache/store/daemon/secret mounts. The Linux native worker app proves host-published paths are initially absent locally, rejects cache/daemon exposure, inspects the real read-only credential directory mount and checks staging cleanup.                                                                                                                                                                                                        |
+| Cache HTTP endpoint         | Service port leasing, native Celler routes, launcher numeric endpoint resolution     | `wrix-cache::helper_server::static_server_enforces_binary_cache_path_policy` already proves GET/HEAD-only and path policy through a real helper. Native Apple endpoint/address/firewall tests cover guest resolution separately from persisted host publication. The Linux native app proves authenticated Celler access, signed imports, live credential replacement, post-miss publication freshness and unrelated-listener isolation. The legacy Darwin flat-file probe remains unconverted. |
+| Dolt platform transport     | Default `DoltTransport`, `ServicesState::load_dolt`, Apple guest endpoint resolution | Native endpoint payload/default-transport/Apple guest-address and SQL authentication tests remain intact. `test-services-dolt-platform-transport` runs the existing beads VM on Linux (real shared Unix socket and guest SQL/sync); on Darwin it runs the live Apple service and authenticates guest SQL through the non-loopback VM address/internal port, also checking host-loopback publication. Host TCP tests are not Darwin guest proof.                                                 |
 
 The seven audited annotations now resolve to native tests or `test-ci` apps;
 their obsolete generic services IDs are absent from `.#verify --list`. The cache
 and Linux beads apps use the declared direct command-runner fixture, whose
 argv/stdio contract is tested by `test_command_runner_package_contract`;
 guest-written success markers are required so an agent that exits without
-executing the probe cannot pass. Native runtime fixtures have conformance tests
-and mock only external container/image commands; key generation and Rust service
-and launcher logic are real. The legacy lifecycle image-source smoke may still
-be run explicitly for its Nix-built source boundary; it is not the authoritative
-native image-delegation binding.
+executing the probe cannot pass. Native runtime fixtures have conformance tests.
+Container/image commands and test management wrappers are external fixtures; the
+owned controller process, private protocol, key generation and Rust
+service/launcher logic are real. The legacy lifecycle image-source smoke may
+still be run explicitly for its Nix-built source boundary; it is not the
+authoritative native image-delegation binding.
 
 Platform/prerequisite skips remain gaps in live execution evidence, not passing
 transport results.

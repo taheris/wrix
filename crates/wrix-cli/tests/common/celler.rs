@@ -164,10 +164,15 @@ fn serve(root: &Path, mut stream: TcpStream) -> io::Result<()> {
     let status = forced
         .as_deref()
         .unwrap_or(if valid { "200" } else { "403" });
+    let policy = root.join(if route.ends_with("/wrix-common-v1") {
+        "celler-common-policy.json"
+    } else {
+        "celler-policy.json"
+    });
     let body = match method {
         "GET" => {
             let period =
-                match fs::read(root.join("celler-policy.json")) {
+                match fs::read(&policy) {
                     Ok(bytes) => serde_json::from_slice::<Value>(&bytes)
                         .map_err(io::Error::other)?["retention_period"]
                         .clone(),
@@ -181,7 +186,7 @@ fn serve(root: &Path, mut stream: TcpStream) -> io::Result<()> {
         "PATCH" => {
             let value: Value =
                 serde_json::from_slice(&bytes[boundary..]).map_err(io::Error::other)?;
-            fs::write(root.join("celler-policy.json"), serde_json::to_vec(&value)?)?;
+            fs::write(&policy, serde_json::to_vec(&value)?)?;
             Value::Null
         }
         _ => Value::Null,

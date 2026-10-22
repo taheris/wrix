@@ -3,6 +3,8 @@
   packagedWrix,
   celler,
   devshellHook ? null,
+  controller ? null,
+  serviceImage ? null,
 }:
 
 let
@@ -14,6 +16,13 @@ let
     WRIX_TEST_PREK_BUILD_SPEC = import ./bundle-build-spec.nix { inherit pkgs; };
     WRIX_TEST_PACKAGED_WRIX = "${packagedWrix}/bin/wrix";
     WRIX_TEST_CELLERD = "${celler}/bin/cellerd";
+  }
+  // optionalAttrs (controller != null && serviceImage != null) {
+    WRIX_TEST_CONTROLLER_BINDING = import ../../lib/services/control-binding.nix {
+      inherit pkgs controller;
+      runtime = import ./controller-runtime.nix { inherit pkgs; };
+      image = serviceImage;
+    };
   }
   // optionalAttrs (devshellHook != null) {
     WRIX_TEST_DEVSHELL_HOOK = pkgs.writeText "wrix-test-devshell-hook" devshellHook;
@@ -46,6 +55,12 @@ in
       {
         name = "cellerd";
         path = environment.WRIX_TEST_CELLERD;
+      }
+    ]
+    ++ optionals (controller != null && serviceImage != null) [
+      {
+        name = "controller-binding";
+        path = environment.WRIX_TEST_CONTROLLER_BINDING;
       }
     ]
     ++ optionals (devshellHook != null) [

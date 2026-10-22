@@ -24,7 +24,7 @@ use tokio::{
 };
 use wrix_core::path::WorkspaceHash;
 
-const VERSION: u16 = 1;
+pub(crate) const VERSION: u16 = 1;
 const MAX_FRAME: usize = 1024 * 1024;
 const MAX_NAMESPACES: usize = 4096;
 const IO_BUDGET: Duration = Duration::from_secs(5);

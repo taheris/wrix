@@ -53,6 +53,38 @@ pub async fn provision_private(
     Ok(key)
 }
 
+/// Confirms an authenticated common read view without granting publication admission.
+pub async fn provision_common(
+    state_root: &Path,
+    endpoint: &str,
+    issuer_root: &Path,
+    retention: Duration,
+    lock_timeout: Duration,
+) -> Result<CachePublicKey> {
+    super::super::retention_seconds(retention)?;
+    let namespace = crate::backend::pull::ReadSet::common_name().map_err(|_| Error::Binding)?;
+    let token = Authority::open(issuer_root)?.publication_token(&namespace)?;
+    let client = Client::new(endpoint, namespace, &token)?;
+    wrix_core::private_directory::prepare_with_parents(state_root)?;
+    let _lock = acquire(state_root, lock_timeout).await?;
+    let retention = match client.configuration().await? {
+        None => retention,
+        Some(config) => match config.retention_period {
+            Some(attic::api::v1::cache_config::RetentionPeriodConfig::Period(seconds))
+                if seconds > 0 =>
+            {
+                Duration::from_secs(u64::from(seconds))
+            }
+            _ => return Err(crate::backend::Error::Retention.into()),
+        },
+    };
+    let key = client.register(retention).await?;
+    record_key(state_root, &key).map_err(|source| Error::RegistrationCommitted {
+        source: Box::new(source),
+    })?;
+    Ok(key)
+}
+
 /// Encodes the entire canonical identity without truncation within Celler's native name limit.
 pub fn private_namespace(workspace: &WorkspaceHash) -> Result<CacheName> {
     let digest = workspace

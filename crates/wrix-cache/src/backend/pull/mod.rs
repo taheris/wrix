@@ -45,13 +45,17 @@ pub struct ReadSet {
 }
 
 impl ReadSet {
+    pub fn common_name() -> Result<CacheName, Error> {
+        CacheName::new(String::from("wrix-common-v1")).map_err(|_| Error::Identity)
+    }
+
     pub fn for_workspace(workspace: &WorkspaceHash) -> Result<Self, Error> {
         Self::admit(workspace, Audience::CommonAndPrivate)
     }
 
     pub fn admit(workspace: &WorkspaceHash, audience: Audience) -> Result<Self, Error> {
         Ok(Self {
-            common: CacheName::new(String::from("wrix-common-v1")).map_err(|_| Error::Identity)?,
+            common: Self::common_name()?,
             private: registration::private_namespace(workspace).map_err(|_| Error::Identity)?,
             audience,
         })

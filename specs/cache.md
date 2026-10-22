@@ -922,31 +922,31 @@ valid unchanged key through the Celler publication/signing path.
   [system?](test-ci:test-cache-host-consumption-exclusion)
 - Sandbox launch issues its own one-day credential independently of host
   publication, without host pull-token inheritance.
-  [test?](../crates/wrix-sandbox/tests/cache_credentials.rs::sandbox_pull_issuance_is_independent_of_host_publication)
+  [system](test-ci:test-services-limit-mode-cache-endpoint)
 
 ### Launcher Renewal Acceptance
 
 - A waiting host launcher renews before expiry across multiple token lifetimes
   without requiring an agent/container restart or a separate renewal daemon.
-  [test?](../crates/wrix-sandbox/tests/cache_credentials.rs::launcher_renews_across_multiple_token_lifetimes)
+  [test](../crates/wrix-sandbox/tests/cache_credentials.rs::renewal_engine_reissues_across_multiple_token_lifetimes)
 - Replacement credentials are complete and isolated per launch, delivered by
   atomic replacement inside a private read-only directory mount via stable
   native `netrc-file`, not a frozen token environment value/file snapshot.
-  [test?](../crates/wrix-sandbox/tests/cache_credentials.rs::credential_refresh_is_atomic_and_per_launch)
+  [system](test-ci:test-services-limit-mode-cache-endpoint)
 - Renewal failures retry/report without secrets, agent-protocol stdout
   pollution, lifecycle disruption, broader grants or artificial extension of old
   validity.
-  [test?](../crates/wrix-sandbox/tests/cache_credentials.rs::renewal_failures_preserve_protocol_lifecycle_and_authority)
+  [test](../crates/wrix-sandbox/tests/cache_credentials.rs::renewal_engine_failures_preserve_protocol_exit_status_and_expiry)
 - Suspension/clock-change recovery rechecks absolute expiry rather than relying
   only on elapsed awake time, without promising zero authentication
   interruption.
-  [test?](../crates/wrix-sandbox/tests/cache_credentials.rs::resume_rechecks_absolute_token_expiry)
+  [test](../crates/wrix-sandbox/tests/cache_credentials.rs::renewal_engine_rechecks_absolute_expiry_after_suspension_and_clock_changes)
 - Normal completion stops renewal and cleans private staging; launcher exit does
   not leave a detached renewer or introduce early revocation of issued tokens.
-  [test?](../crates/wrix-sandbox/tests/cache_credentials.rs::launcher_completion_stops_renewal_and_cleans_credentials)
+  [test](../crates/wrix-sandbox/tests/cache_credentials.rs::waiting_session_completion_stops_renewal_and_cleans_credentials)
 - Real Podman/native Nix clients observe replaced credentials and continue
   authorized substitution without restart; the agent cannot modify the mount.
-  [system?](test-ci:test-cache-renewal-podman)
+  [system](test-ci:test-services-limit-mode-cache-endpoint)
 - Real krun/native Nix clients observe replaced credentials and continue
   authorized substitution without restart; the agent cannot modify the mount.
   [system?](test-ci:test-cache-renewal-krun)

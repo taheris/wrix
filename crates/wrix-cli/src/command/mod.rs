@@ -192,7 +192,14 @@ fn run_sandbox(
         wrix_sandbox::command::write_spawn_help(stdout)?;
         return Ok(ExitCode::SUCCESS);
     }
-    wrix_sandbox::command::run(command, profile_config, args, stdout, stderr)
+    wrix_sandbox::command::run_with_issuer(
+        command,
+        profile_config,
+        args,
+        stdout,
+        stderr,
+        &wrix_service::lifecycle::credential::Host,
+    )
 }
 
 const NOTIFY_HELP: &str = "Run a native command with notification routing.\n\nUsage: wrix notify run -- COMMAND [ARGS ...]\n\nExports WRIX_FOCUS_TARGET to COMMAND and releases registration on exit.\nRegistration failures do not prevent COMMAND from running.\n";

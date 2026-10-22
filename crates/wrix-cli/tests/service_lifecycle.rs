@@ -4,6 +4,8 @@ mod common;
 #[cfg(target_os = "linux")]
 #[path = "common/component.rs"]
 mod component;
+#[path = "common/controller.rs"]
+mod controller;
 #[path = "common/peer_runtime.rs"]
 mod peer_runtime;
 #[path = "common/service_binding.rs"]
@@ -122,6 +124,7 @@ fn malformed_sync_branch_fails_before_service_runtime_or_layout() -> TestResult 
 }
 
 struct Fixture {
+    controller: std::cell::RefCell<Option<controller::Server>>,
     server: std::cell::RefCell<Option<celler::Server>>,
     reservation: std::cell::RefCell<Option<TcpListener>>,
     #[cfg(target_os = "linux")]
@@ -159,6 +162,7 @@ impl Fixture {
         service_binding::create(root.path(), &root.path().join("bin"), "docker-archive")?;
         fs::copy(&runtime, root.path().join("bin/container"))?;
         let mut fixture = Self {
+            controller: std::cell::RefCell::new(None),
             server: std::cell::RefCell::new(None),
             reservation: std::cell::RefCell::new(None),
             #[cfg(target_os = "linux")]
@@ -388,6 +392,9 @@ impl Fixture {
 
     fn launch_command(&self, mode: LaunchCommand, workspace: &Path) -> TestResult<Command> {
         self.api()?;
+        if self.controller.borrow().is_none() {
+            *self.controller.borrow_mut() = Some(controller::Server::start(self.root.path())?);
+        }
         let bin = self.root.path().join("bin");
         fs::create_dir_all(&bin)?;
         for name in ["podman", "container", "route", "skopeo"] {
@@ -414,6 +421,11 @@ impl Fixture {
             }))?,
         )?;
         let mut command = self.command()?;
+        self.controller
+            .borrow()
+            .as_ref()
+            .ok_or("missing fixture controller")?
+            .configure(&mut command)?;
         command
             .env("XDG_RUNTIME_DIR", self.root.path().join("runtime"))
             .env("WRIX_IMAGE_KEEP_FILE", self.root.path().join("mru.json"))
@@ -855,6 +867,71 @@ fn host_policy_decoder_consumes_real_service_endpoint_metadata() -> TestResult {
 }
 
 #[test]
+fn cache_launch_admits_the_provided_host_package_before_service_effects() -> TestResult {
+    for mode in [LaunchCommand::Run, LaunchCommand::Spawn] {
+        let fixture = Fixture::new()?;
+        let mut command = fixture.launch_command(mode, &fixture.workspace)?;
+        command.env_remove("WRIX_CONTROLLER_PACKAGE_BINDING");
+        let before = fs::read(fixture.state_root()?.join("services.json"))?;
+        let output = run_command(&mut command)?;
+        assert!(!output.status.success());
+        assert!(output.stderr.contains("provide a compatible host wrix"));
+        assert!(!fixture.root.path().join("runtime.log").exists());
+        assert!(!fixture.root.path().join("argv").exists());
+        assert!(!fixture.workspace.join(".wrix/log").exists());
+        assert_eq!(
+            fs::read(fixture.state_root()?.join("services.json"))?,
+            before
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn workspace_stop_retires_current_native_read_issuance_without_stopping_controller() -> TestResult {
+    use wrix_service::control::{Client, Namespace, Operation, Reply};
+    let mut fixture = Fixture::new()?;
+    fixture.disable_dolt()?;
+    let output =
+        run_command(&mut fixture.launch_command(LaunchCommand::Spawn, &fixture.workspace)?)?;
+    assert!(output.status.success(), "{}", output.stderr);
+    let state = fixture.state_root()?;
+    let client = Client::open(
+        &state
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("control/authority"),
+    )?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let namespace =
+        Namespace::from(wrix_core::path::Workspace::from_service_path(&fixture.workspace)?.hash());
+    let Reply::Snapshot { namespaces, .. } =
+        runtime.block_on(client.request(Operation::Inspect {}))?
+    else {
+        return Err("missing control snapshot".into());
+    };
+    assert!(namespaces.contains_key(&namespace));
+    let stopped = fixture.run("stop")?;
+    assert!(stopped.status.success(), "{}", stopped.stderr);
+    let Reply::Snapshot { namespaces, .. } =
+        runtime.block_on(client.request(Operation::Inspect {}))?
+    else {
+        return Err("controller stopped with workspace".into());
+    };
+    assert!(!namespaces.contains_key(&namespace));
+    assert!(
+        runtime
+            .block_on(client.cache_credential(namespace))
+            .is_err()
+    );
+    Ok(())
+}
+
+#[test]
 fn cache_guest_endpoint_and_key_reach_both_launch_commands() -> TestResult {
     for mode in [LaunchCommand::Run, LaunchCommand::Spawn] {
         for layout in ["", ".loom/beads/cache-route", ".loom/integration"] {
@@ -890,16 +967,36 @@ fn cache_guest_endpoint_and_key_reach_both_launch_commands() -> TestResult {
                 ]
             );
             let public_key = fs::read_to_string(fixture.state_root()?.join("keys/cache.pub"))?;
+            let canonical = wrix_core::path::Workspace::from_service_path(&workspace)?;
+            let views = wrix_cache::backend::pull::ReadSet::for_workspace(canonical.hash())?;
+            let common_key = fs::read_to_string(
+                fixture
+                    .state_root()?
+                    .parent()
+                    .ok_or("missing namespace parent")?
+                    .join("common/keys/cache.pub"),
+            )?;
             assert_eq!(
                 env.iter()
                     .filter(|value| value.starts_with("NIX_CONFIG="))
                     .copied()
                     .collect::<Vec<_>>(),
                 [format!(
-                    "NIX_CONFIG=extra-substituters = http://192.168.64.12:8080\nextra-trusted-public-keys = {}\nbuilders-use-substitutes = true",
+                    "NIX_CONFIG=extra-substituters = http://192.168.64.12:8080/{} http://192.168.64.12:8080/{}\nextra-trusted-public-keys = {} {}\nbuilders-use-substitutes = true\nnetrc-file = /run/wrix/cache-credentials/netrc\nnarinfo-cache-negative-ttl = 0",
+                    views.common(),
+                    views.private(),
+                    common_key.trim(),
                     public_key.trim()
                 )]
             );
+            let directories = argv
+                .windows(2)
+                .filter(|pair| pair[0] == "-v")
+                .filter_map(|pair| pair[1].strip_suffix(":/run/wrix/cache-credentials:ro"))
+                .collect::<Vec<_>>();
+            assert_eq!(directories.len(), 1);
+            assert!(!Path::new(directories[0]).exists());
+            assert!(!argv.iter().any(|arg| arg.contains("eyJhbGciOiJ")));
             assert!(env.contains(&"WRIX_NETWORK=limit"));
             assert!(
                 !env.iter()

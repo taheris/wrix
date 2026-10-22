@@ -16,6 +16,7 @@ MEMBERS = {
     "WRIX_TEST_PACKAGED_WRIX": "packaged-wrix",
     "WRIX_TEST_DEVSHELL_HOOK": "devshell-hook",
     "WRIX_TEST_CELLERD": "cellerd",
+    "WRIX_TEST_CONTROLLER_BINDING": "controller-binding",
 }
 
 
