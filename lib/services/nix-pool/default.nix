@@ -1,30 +1,27 @@
 { pkgs }:
 
 let
-  inherit (builtins) concatStringsSep genList toString;
   inherit (pkgs)
     runCommand
     writeText
     writeShellScript
     writeShellScriptBin
     ;
-  users = genList (index: {
-    name = "nixbld${toString (index + 1)}";
-    uid = 30001 + index;
-  }) 32;
-  passwd = writeText "nix-pool-passwd" (
-    "root:x:0:0:Pool administrator:/var/empty:/bin/false\n"
-    + "nix-client:x:2000:2000:Native Nix client:/var/empty:/bin/false\n"
-    + concatStringsSep "" (
-      map (user: "${user.name}:x:${toString user.uid}:30000:Nix build user:/var/empty:/bin/false\n") users
-    )
-  );
-  group = writeText "nix-pool-group" (
-    "root:x:0:\nnix-client:x:2000:\n"
-    + "nixbld:x:30000:${concatStringsSep "," (map (user: user.name) users)}\n"
-  );
+  network = import ./network.nix { inherit pkgs; };
+  resources = import ./resources.nix { inherit pkgs; };
+  passwd = writeText "nix-pool-passwd" ''
+    root:x:0:0:Pool administrator:/var/empty:/bin/false
+    nix-client:x:2000:2000:Native Nix client:/var/empty:/bin/false
+    nixbld1:x:30001:30000:Nix build user:/var/empty:/bin/false
+  '';
+  group = writeText "nix-pool-group" ''
+    root:x:0:
+    nix-client:x:2000:
+    nixbld:x:30000:nixbld1
+  '';
   nixConf = writeText "nix-pool.conf" ''
-    experimental-features = nix-command
+    experimental-features = nix-command cgroups
+    use-cgroups = true
     sandbox = true
     sandbox-fallback = false
     build-users-group = nixbld
@@ -33,10 +30,12 @@ let
     require-sigs = true
     substituters = https://cache.nixos.org
     builders =
-    max-jobs = 2
+    max-jobs = 1
     cores = 2
     min-free = 0
     max-free = 0
+    build-dir = /nix/var/nix/builds
+    max-build-log-size = 67108864
   '';
   filesystem = runCommand "nix-pool-filesystem" { } ''
     mkdir -p "$out/etc/nix" "$out/etc/wrix"
@@ -54,6 +53,9 @@ let
       pkgs.nix
       pkgs.util-linux
       pkgs.cacert
+      (pkgs.lib.getBin pkgs.e2fsprogs)
+      network.install
+      resources
     ];
   };
   seedClosure = pkgs.closureInfo {
@@ -90,25 +92,32 @@ let
       printf 'Nix pool ownership is active or uncertain; explicit host reconciliation is required.\n' >&2
       exit 73
     fi
-    printf '1:%s\n' '${pkgs.nix.version}' > "$root/owner-active/version"
+    ${network.install}/bin/wrix-nix-pool-egress
+    printf '2:%s:8589934592\n' '${pkgs.nix.version}' > "$root/owner-active/version"
     sync "$root/owner-active/version" "$root/owner-active" "$root"
 
-    install -d -m 0755 "$root/nix" "$root/nix/var" "$root/nix/var/nix"
-    install -d -m 1775 -o 0 -g 30000 "$root/nix/store"
+    fallocate --length=8589934592 "$root/store.ext4"
+    mkfs.ext4 -q -F -m 0 "$root/store.ext4"
+    install -d -m 0700 "$root/filesystem"
+    device=$(losetup --find --show "$root/store.ext4")
+    mount -t ext4 -o nodev,nosuid "$device" "$root/filesystem"
+    storage="$root/filesystem"
+    install -d -m 0755 "$storage/nix" "$storage/nix/var" "$storage/nix/var/nix"
+    install -d -m 1775 -o 0 -g 30000 "$storage/nix/store"
     mapfile -t roots < ${seedClosure}/store-paths
     entrypoint=$(readlink -e /bin/wrix-nix-pool)
     [[ "$entrypoint" == /nix/store/*/bin/wrix-nix-pool ]]
     tail=''${entrypoint#/nix/store/}
     bootstrap_root=/nix/store/''${tail%%/*}
     roots+=("$bootstrap_root")
-    nix copy --no-check-sigs --from local --to "local?root=$root" "''${roots[@]}"
-    install -d -m 0755 "$root/nix/var/nix/gcroots/bootstrap" "$root/nix/var/nix/daemon-socket"
+    nix copy --no-check-sigs --from local --to "local?root=$storage" "''${roots[@]}"
+    install -d -m 0755 "$storage/nix/var/nix/gcroots/bootstrap" "$storage/nix/var/nix/daemon-socket" "$storage/nix/var/nix/builds"
     for path in "''${roots[@]}"; do
-      ln -s "$path" "$root/nix/var/nix/gcroots/bootstrap/''${path##*/}"
+      ln -s "$path" "$storage/nix/var/nix/gcroots/bootstrap/''${path##*/}"
     done
-    sync "$root/nix/var/nix/gcroots/bootstrap" "$root/nix/var/nix"
-    mount --bind "$root/nix" /nix
-    exec nix-daemon --store local
+    sync "$storage/nix/var/nix/gcroots/bootstrap" "$storage/nix/var/nix"
+    mount --bind "$storage/nix" /nix
+    exec ${resources}/bin/wrix-nix-pool-daemon
   '';
   bootstrap = writeShellScriptBin "wrix-nix-pool" ''
     set -euo pipefail
@@ -140,7 +149,7 @@ in
     seedClosure
     ;
   imageCommands = ''
-    mkdir -p var/empty var/lib/wrix/nix-pool
+    mkdir -p run var/empty var/lib/wrix/nix-pool
     chmod 0700 var/lib/wrix/nix-pool
     chmod 0755 nix/var/nix nix/var/nix/db
   '';
