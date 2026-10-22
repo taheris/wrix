@@ -1,5 +1,6 @@
 //! Explicit host approval and membership; identifiers alone never admit a launch.
 
+pub mod admission;
 mod record;
 
 use crate::{
@@ -34,6 +35,8 @@ pub enum Error {
     Unsupported,
     /// inconsistent canonical repository approval; explicit host reconciliation is required
     Inconsistent,
+    /// installed-store admission requires current explicit checked repository approval
+    ApprovalRequired,
     /// installed-store approval requires an actual Git repository
     RepositoryRequired,
     /// approved repository administration changed; explicit host reconciliation is required

@@ -11,6 +11,7 @@ pkgs.testers.runNixOSTest {
     };
     environment.systemPackages = [
       pkgs.bash
+      pkgs.binutils
       pkgs.beads
       pkgs.coreutils
       pkgs.git
@@ -64,11 +65,23 @@ pkgs.testers.runNixOSTest {
             + "--include-ignored --exact " + test + " --nocapture",
             timeout=timedelta(minutes=2),
         ))
+    print(machine.succeed(
+        "${wrix.rustPackage.cacheBackendTests}/bin/workspace-admission-tests "
+        "nix_store::admission:: --test-threads=1 --nocapture",
+        timeout=timedelta(minutes=3),
+    ))
     for binary in ["host-publication-only-tests", "host-signed-exclusion-tests"]:
         print(machine.succeed(
             environment + "${wrix.rustPackage.cacheBackendTests}/bin/" + binary
             + " --test-threads=1 --nocapture",
             timeout=timedelta(minutes=5),
         ))
+    machine.succeed("mkdir -p /etc/wrix; printf 'direct\\n' > /etc/wrix/image-agent")
+    print(machine.succeed(
+        "${wrix.rustPackage.cacheBackendTests}/bin/workspace-admission-tests "
+        "--include-ignored --exact nix_store::admission::"
+        "worker_pool_issuance_denies_library_access_despite_forged_home_and_existing_approval --nocapture",
+        timeout=timedelta(minutes=3),
+    ))
   '';
 }

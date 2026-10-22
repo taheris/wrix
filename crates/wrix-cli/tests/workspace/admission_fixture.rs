@@ -2,7 +2,10 @@
 
 #![cfg(test)]
 
-use super::fixture::{Fixture, isolation::install_executable};
+use super::fixture::{
+    Fixture,
+    isolation::{chroot_binary, install_executable},
+};
 use std::{
     fs,
     os::unix::fs::PermissionsExt,
@@ -25,7 +28,7 @@ impl Fixture {
     pub fn git(&self, caller: &Path, args: &[&str]) -> Output {
         let binary = self.install("git");
         let mut command = if self.isolated {
-            let mut command = Command::new("chroot");
+            let mut command = Command::new(chroot_binary());
             command.arg(self.root.path()).arg(binary);
             command
         } else {
@@ -63,7 +66,7 @@ impl Fixture {
             )
             .unwrap();
             fs::set_permissions(wrapper, fs::Permissions::from_mode(0o700)).unwrap();
-            let mut command = Command::new("chroot");
+            let mut command = Command::new(chroot_binary());
             command
                 .arg(self.root.path())
                 .arg("/bin/host-run")

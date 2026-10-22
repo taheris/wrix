@@ -230,14 +230,16 @@ in
       done
       cargo test --offline --locked --no-run -p wrix-service --test celler_auth \
         ''${CARGO_PROFILE:+--profile "$CARGO_PROFILE"} --message-format json >> compiled-tests.json
-      cargo test --offline --locked --no-run -p wrix-cli --test service_lifecycle \
-        ''${CARGO_PROFILE:+--profile "$CARGO_PROFILE"} --message-format json >> compiled-tests.json
+      for target in service_lifecycle workspace_admission; do
+        cargo test --offline --locked --no-run -p wrix-cli --test "$target" \
+          ''${CARGO_PROFILE:+--profile "$CARGO_PROFILE"} --message-format json >> compiled-tests.json
+      done
       cargo test --offline --locked --no-run -p wrix-sandbox --test execution_lifetime \
         ''${CARGO_PROFILE:+--profile "$CARGO_PROFILE"} --message-format json >> compiled-tests.json
       runHook postBuild
     '';
     installPhase = ''
-      for target in celler_backend celler_auth host_publication_only host_signed_exclusion service_lifecycle execution_lifetime; do
+      for target in celler_backend celler_auth host_publication_only host_signed_exclusion service_lifecycle workspace_admission execution_lifetime; do
         executable=$(${pkgs.jq}/bin/jq -r --arg target "$target" \
           'select(.reason == "compiler-artifact" and .target.name == $target and .profile.test) | .executable' \
           compiled-tests.json)

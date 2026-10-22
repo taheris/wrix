@@ -68,6 +68,8 @@ pub enum Error {
     PermissionDenied,
     /// host cache credential issuance is unavailable; inspect host authorization and retained issuer state
     CacheUnavailable,
+    /// installed-store admission failed: {0}
+    PoolAdmission(#[from] wrix_state::nix_store::Error),
 }
 
 /// Inspect a retained deployment without creating authority, locks or listeners.
@@ -191,6 +193,26 @@ impl Authorization<'_> {
     }
     pub const fn permission(&self) -> Permission {
         self.permission
+    }
+}
+
+/// Local issuance authority only; this is neither a serializable grant nor native pool readiness.
+pub struct PoolAuthorization<'a> {
+    _registry: MutexGuard<'a, BTreeMap<Namespace, Policy>>,
+    admission: wrix_state::nix_store::admission::Guard,
+}
+
+impl PoolAuthorization<'_> {
+    pub const fn pool(&self) -> &wrix_core::nix_store::pool::Key {
+        self.admission.pool()
+    }
+
+    pub const fn namespace(&self) -> &WorkspaceHash {
+        self.admission.namespace()
+    }
+
+    pub fn recheck(&self) -> Result<(), Error> {
+        Ok(self.admission.recheck()?)
     }
 }
 
@@ -410,6 +432,25 @@ impl Controller {
             _registry: registry,
             namespace: namespace.clone(),
             permission,
+        })
+    }
+
+    /// Synchronous host issuers bind checked approval and registration independently of cache/tool flags.
+    /// Image, runtime, launch and owner/export admission remain separate obligations.
+    pub fn authorize_nix_pool(
+        &self,
+        selection: &wrix_state::context::Selection,
+        system: wrix_core::nix_store::pool::System,
+    ) -> Result<PoolAuthorization<'_>, Error> {
+        let admission = wrix_state::nix_store::admission::Guard::acquire(selection, system)?;
+        let registry = self.namespaces.lock().map_err(|_| Error::LockPoisoned)?;
+        if !registry.contains_key(&Namespace::from(admission.namespace())) {
+            return Err(Error::UnknownNamespace);
+        }
+        admission.recheck()?;
+        Ok(PoolAuthorization {
+            _registry: registry,
+            admission,
         })
     }
 

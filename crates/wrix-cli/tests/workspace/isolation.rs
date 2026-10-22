@@ -3,6 +3,7 @@
 use std::{
     fs,
     io::Read,
+    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -38,7 +39,7 @@ pub fn command_as(
 ) -> Command {
     use std::os::unix::process::CommandExt;
     let mut command = if isolated {
-        let mut command = Command::new("chroot");
+        let mut command = Command::new(chroot_binary());
         if let Some((uid, gid)) = owner {
             command.arg(format!("--userspec={}:{}", uid.as_raw(), gid.as_raw()));
         }
@@ -71,6 +72,41 @@ pub fn command_as(
             },
         );
     command
+}
+
+pub fn chroot_binary() -> PathBuf {
+    let path = std::env::var_os("PATH").expect("parent fixture PATH is required");
+    for directory in std::env::split_paths(&path) {
+        let candidate = directory.join("chroot");
+        match fs::metadata(&candidate) {
+            Ok(metadata) if metadata.is_file() && metadata.permissions().mode() & 0o111 != 0 => {
+                return if candidate.is_absolute() {
+                    candidate
+                } else {
+                    std::env::current_dir().unwrap().join(candidate)
+                };
+            }
+            Ok(_) => (),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+            Err(error) => panic!("cannot inspect fixture chroot {candidate:?}: {error}"),
+        }
+    }
+    panic!("chroot is unavailable in the parent fixture PATH");
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn parent_chroot_lookup_preserves_multicall_applet_identity() {
+    let output = Command::new(chroot_binary())
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).starts_with("chroot "));
 }
 
 pub fn install_executable(root: &Path, binary: &Path, destination: &Path) {

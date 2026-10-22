@@ -26,6 +26,13 @@ subsequent credentials without changing old bearers. No credential is
 serializable or included in diagnostic types. The Linux worker verifier below
 separately exercises production launcher delivery and native multi-view reads.
 
+Pool-issuance cases retain the original checked workspace and serialize current
+repository approval with controller registration through a short host issuance
+guard. The guest also executes direct-library worker-marker denial in a fresh
+chroot containing previously approved host metadata and a forged HOME. These
+checks establish neither an authenticated native pool endpoint nor owner,
+filesystem export, native roots or installed-store availability.
+
 These are component integration tests, not deployed worker, container mount,
 production build sandbox, shared installed-store or performance acceptance. The
 native backend VM runs the complete backend suite with ignored cases enabled,

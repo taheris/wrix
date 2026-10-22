@@ -1,3 +1,6 @@
+#[path = "nix_store/admission.rs"]
+mod admission;
+
 use super::{Fixture, snapshot};
 use std::{fs, path::Path};
 
