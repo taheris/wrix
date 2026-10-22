@@ -113,7 +113,7 @@ test_core_membership() {
       sortPathStrings = builtins.sort builtins.lessThan;
       expectedBaseDirectPackages = with imagePkgs; [
         bash
-        beads
+        (import ($REPO_ROOT + \"/lib/beads/package.nix\") { pkgs = imagePkgs; })
         coreutils
         curl
         diffutils
