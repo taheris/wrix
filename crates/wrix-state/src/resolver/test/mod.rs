@@ -24,7 +24,7 @@ fn exited_child_cleanup_preserves_process_failure() {
 
 #[test]
 fn running_child_cleanup_preserves_deadline_failure() {
-    let error = execute_shell("exec sleep 30", Duration::from_millis(200)).unwrap_err();
+    let error = execute_shell("while :; do :; done", Duration::from_millis(200)).unwrap_err();
     assert!(
         matches!(error, Error::Invalid(message) if message == "resolver execution deadline exceeded")
     );
