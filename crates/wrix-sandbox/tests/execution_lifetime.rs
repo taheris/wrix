@@ -43,6 +43,7 @@ fn execution_fixture_child() {
     if action == "reserve" {
         Store::initialize(&host).unwrap();
         Store::acknowledge(&host, 1).unwrap();
+        fs::create_dir_all(root.join("signals")).unwrap();
         let ticket = execution::reserve(&root).unwrap();
         fs::write(root.join("ticket"), ticket.as_str()).unwrap();
         return;
@@ -50,6 +51,28 @@ fn execution_fixture_child() {
     let ticket = Ticket::parse(&fs::read_to_string(root.join("ticket")).unwrap()).unwrap();
     let context = Context::inspect(&host, &root).unwrap();
     match action.as_str() {
+        "projection-unknown" => {
+            let before = state::observe(&host, &context, &ticket).unwrap();
+            assert!(execution::projection(&root, &ticket).is_err());
+            assert_eq!(state::observe(&host, &context, &ticket).unwrap(), before);
+        }
+        "projection" => {
+            let projection = execution::projection(&root, &ticket).unwrap();
+            assert!(
+                projection
+                    .mounts
+                    .iter()
+                    .any(|mount| mount.source == root.join("signals")
+                        && mount.destination == Path::new("/work")
+                        && mount.writable)
+            );
+            let value = serde_json::to_value(&projection).unwrap();
+            assert!(value.get("Config").is_none());
+            assert_eq!(
+                state::observe(&host, &context, &ticket).unwrap(),
+                Some(Phase::Bound(projection.id))
+            );
+        }
         "begin" => {
             state::begin(&host, &context, &ticket).unwrap();
             assert!(state::begin(&host, &context, &ticket).is_err());
@@ -102,7 +125,7 @@ fn execution_fixture_child() {
                     "--pids-limit=32",
                     "-v",
                 ])
-                .arg(format!("{}:/work", root.display()))
+                .arg(format!("{}:/work", root.join("signals").display()))
                 .args([
                     "docker.io/library/alpine:3.22",
                     "sh",
@@ -140,6 +163,7 @@ fn execution_fixture_child() {
 fn execution_restart_retains_unbound_launch_and_ignores_workspace_completion() {
     let root = tempfile::tempdir().unwrap();
     run(root.path(), "reserve").unwrap();
+    run(root.path(), "projection-unknown").unwrap();
     run(root.path(), "begin").unwrap();
     fs::create_dir(root.path().join(".wrix")).unwrap();
     fs::write(
@@ -156,6 +180,11 @@ fn execution_unavailable_ambiguous_and_failed_removal_observations_retain_bindin
     for (response, action) in [
         ("exit 125", "unknown"),
         ("printf invalid", "unknown"),
+        ("printf invalid", "projection-unknown"),
+        (
+            r#"printf '{"Id":"2222222222222222222222222222222222222222222222222222222222222222","Mounts":[]}'"#,
+            "projection-unknown",
+        ),
         ("printf '[]'", "ambiguous"),
         (
             "printf '[{\"Id\":\"2222222222222222222222222222222222222222222222222222222222222222\",\"State\":{\"Status\":\"exited\",\"Running\":false,\"Paused\":false,\"Restarting\":false}}]'",
@@ -212,7 +241,7 @@ fn execution_actual_podman_survives_launcher_death_and_reconciles_exact_teardown
         .spawn()
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(60);
-    while !root.join("ready").exists() {
+    while !root.join("signals/ready").exists() {
         assert!(
             launcher.try_wait().unwrap().is_none(),
             "{}",
@@ -221,6 +250,7 @@ fn execution_actual_podman_survives_launcher_death_and_reconciles_exact_teardown
         assert!(Instant::now() < deadline, "fixture runtime start timed out");
         std::thread::sleep(Duration::from_millis(50));
     }
+    run(&root, "projection").unwrap();
     launcher.kill().unwrap();
     assert!(!launcher.wait().unwrap().success());
     run(&root, "protected").unwrap();
@@ -233,5 +263,5 @@ fn execution_actual_podman_survives_launcher_death_and_reconciles_exact_teardown
             .success()
     );
     run(&root, "retired").unwrap();
-    assert!(root.join("ready").exists());
+    assert!(root.join("signals/ready").exists());
 }

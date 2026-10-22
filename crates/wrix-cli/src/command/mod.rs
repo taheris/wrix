@@ -413,7 +413,7 @@ fn root_command() -> ClapCommand {
         ).arg(help_arg()))
 }
 
-const EXECUTION_HELP: &str = "Reconcile trusted execution lifetimes.\n\nUsage: wrix execution reserve <workspace>\n       wrix execution reconcile <workspace> <ticket>\n\nTickets are host-only and supplied to spawn through --execution-ticket, never SpawnConfig. Missing or ambiguous runtime observations retain output.\n";
+const EXECUTION_HELP: &str = "Reconcile trusted execution lifetimes.\n\nUsage: wrix execution reserve <workspace>\n       wrix execution projection <workspace> <ticket>\n       wrix execution reconcile <workspace> <ticket>\n\nTickets are host-only and supplied to spawn through --execution-ticket, never SpawnConfig. Missing or ambiguous runtime observations retain output.\n";
 
 fn run_execution(
     args: &[String],
@@ -428,6 +428,16 @@ fn run_execution(
         [command, workspace] if command == "reserve" => {
             wrix_sandbox::execution::reserve(std::path::Path::new(workspace))
                 .map(|ticket| ticket.as_str().to_owned())
+        }
+        [command, workspace, ticket] if command == "projection" => {
+            wrix_state::execution::Ticket::parse(ticket)
+                .map_err(wrix_sandbox::execution::Error::from)
+                .and_then(|ticket| {
+                    wrix_sandbox::execution::projection(std::path::Path::new(workspace), &ticket)
+                })
+                .and_then(|projection| {
+                    serde_json::to_string(&projection).map_err(wrix_sandbox::execution::Error::from)
+                })
         }
         [command, workspace, ticket] if command == "reconcile" => {
             wrix_state::execution::Ticket::parse(ticket)

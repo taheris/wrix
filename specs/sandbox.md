@@ -614,6 +614,12 @@ attaching/starting that exact object. Existing resource, network, mount and
 credential construction is unchanged. Ticketed launches refuse the unsafe host
 Podman socket and are unavailable on Darwin.
 
+`wrix execution projection <workspace> <ticket>` reads only the exact bound
+object's ID and mount source/destination/writable fields. It never returns
+runtime environments, discovers arbitrary containers, changes state or supplies
+retirement authority. This host-only observation supports substrate conformance
+without giving consumers direct runtime access.
+
 `wrix execution reconcile <workspace> <ticket>` reports protected or retired.
 Only one exact bound object in an unambiguously exited state may be removed,
 without force. Retirement requires successful removal returning that exact ID

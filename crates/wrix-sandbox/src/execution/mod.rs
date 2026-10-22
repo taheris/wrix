@@ -91,6 +91,52 @@ pub fn launch(
         .status()?)
 }
 
+/// Read-only projection of one exact ticket-bound object. Never retirement authority.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Projection {
+    #[serde(rename = "Id")]
+    pub id: Container,
+    #[serde(rename = "Mounts")]
+    pub mounts: Vec<ProjectionMount>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ProjectionMount {
+    #[serde(rename = "Source")]
+    pub source: std::path::PathBuf,
+    #[serde(rename = "Destination")]
+    pub destination: std::path::PathBuf,
+    #[serde(rename = "RW")]
+    pub writable: bool,
+}
+
+pub fn projection(workspace: &Path, ticket: &Ticket) -> Result<Projection, Error> {
+    let host = Host::discover()?;
+    let context = Context::inspect(&host, workspace)?;
+    let Some(Phase::Bound(id)) = execution::observe(&host, &context, ticket)? else {
+        return Err(Error::Unknown);
+    };
+    let output = Command::new("podman")
+        .args([
+            "inspect",
+            "--type",
+            "container",
+            "--format",
+            r#"{"Id":"{{.Id}}","Mounts":{{json .Mounts}}}"#,
+            id.as_str(),
+        ])
+        .output()?;
+    if !output.status.success() {
+        return Err(Error::Unknown);
+    }
+    let projection: Projection = serde_json::from_slice(&output.stdout)?;
+    if projection.id != id {
+        return Err(Error::Unknown);
+    }
+    context.recheck(&host)?;
+    Ok(projection)
+}
+
 /// Missing objects and successful launcher exits do not establish teardown.
 pub fn reconcile(workspace: &Path, ticket: &Ticket) -> Result<Observation, Error> {
     let host = Host::discover()?;
