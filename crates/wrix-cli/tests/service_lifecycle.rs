@@ -136,6 +136,29 @@ fn public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql() -
 }
 
 #[test]
+fn shared_service_capabilities_are_passive_without_workspace_or_runtime() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let output = Command::new(env!("CARGO_BIN_EXE_wrix"))
+        .args(["service", "capabilities"])
+        .current_dir(root.path())
+        .env("HOME", root.path().join("home"))
+        .env("XDG_STATE_HOME", root.path().join("state"))
+        .env("XDG_CACHE_HOME", root.path().join("cache"))
+        .env("WRIX_CONTAINER_RUNTIME", "/missing/runtime")
+        .env("WRIX_SERVICE_PACKAGE_BINDING", "/missing/binding")
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"shared-services-v1\n");
+    assert_eq!(output.stderr, b"");
+    assert!(fs::read_dir(root.path())?.next().is_none());
+    Ok(())
+}
+
+#[test]
 fn running_cache_reentry_restores_only_the_verifier_from_existing_private_authority() -> TestResult
 {
     let fixture = Fixture::shared_cache()?;

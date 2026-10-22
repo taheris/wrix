@@ -5,6 +5,7 @@ let
     set -euo pipefail
     case "$*" in
       'run --help') printf '%s\n' 'Use generated project launch data';;
+      'service capabilities') printf '%s\n' 'shared-services-v1';;
       'run') printf '%s\n' "selected:$WRIX_PROJECT_PROFILE_CONFIG";;
       'service start')
         printf '%s\n' start >> "$CALLS"
@@ -17,6 +18,14 @@ let
     set -euo pipefail
     printf '%s\n' 'wrix requires --profile-config <Nix store ProfileConfig JSON>' >&2
     exit 2
+  '';
+  legacy = pkgs.writeShellScriptBin "legacy-wrix" ''
+    set -euo pipefail
+    case "$*" in
+      'run --help') printf '%s\n' 'Use generated project launch data';;
+      'service start') printf '%s\n' legacy-start >> "$CALLS";;
+      *) exit 2;;
+    esac
   '';
   devshell = import ../../lib/devshell {
     inherit pkgs;
@@ -82,5 +91,17 @@ pkgs.runCommand "wrix-devshell-cli-selection" { nativeBuildInputs = [ pkgs.bash 
   [[ ! -s "$CALLS" ]]
   ${pkgs.gnugrep}/bin/grep -F 'nix profile add' "$TMPDIR/stale.err"
   ${pkgs.gnugrep}/bin/grep -F 'Home Manager, nix-darwin' "$TMPDIR/stale.err"
+  # Generated-project support alone must not admit the old two-container CLI.
+  : > "$CALLS"
+  if (
+    export WRIX_BIN=${legacy}/bin/legacy-wrix
+    source ${hook}
+  ) 2> "$TMPDIR/legacy.err"; then
+    echo 'legacy service CLI was admitted' >&2
+    exit 1
+  fi
+  [[ ! -s "$CALLS" ]]
+  ${pkgs.gnugrep}/bin/grep -F 'lacks the shared-service protocol' "$TMPDIR/legacy.err"
+  ${pkgs.gnugrep}/bin/grep -F '${legacy}/bin/legacy-wrix' "$TMPDIR/legacy.err"
   touch "$out"
 ''

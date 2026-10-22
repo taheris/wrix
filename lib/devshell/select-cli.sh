@@ -24,6 +24,10 @@ _wrix_select_cli() {
       _wrix_cli_error "selected executable $selected does not support generated project launch data; no Wrix activation effects were performed."
       return 1
     fi
+    if ! help="$("$selected" service capabilities 2>/dev/null)" || [[ "$help" != shared-services-v1 ]]; then
+      _wrix_cli_error "selected executable $selected lacks the shared-service protocol; update the installed host CLI and clear or update any stale WRIX_BIN before re-entering this shell. No Wrix activation effects were performed."
+      return 1
+    fi
   fi
   printf '%s\n' "$selected"
 }

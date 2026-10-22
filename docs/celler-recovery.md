@@ -1,15 +1,41 @@
 # Recovering the shared host service
 
-If the selected shared Celler/Dolt container is absent or stopped, use the
-updated host CLI from any directory:
+Updating this checkout or reloading direnv does not update the installed host
+CLI. First check the selected executable, without changing services:
 
 ```bash
-wrix service recover
+printf '%s\n' "$WRIX_BIN"
+wrix service capabilities
+```
+
+The capability query must print `shared-services-v1`. If it is unsupported,
+update the host package through Home Manager, nix-darwin or the user profile. An
+explicit or inherited `WRIX_BIN` still takes precedence over PATH; clear a stale
+value before re-entering, or explicitly select the updated executable. For
+temporary provision from this updated checkout:
+
+```bash
+package=$(nix build .#wrix --no-link --print-out-paths)
+export WRIX_BIN="$package/bin/wrix"
+"$WRIX_BIN" service capabilities
+```
+
+The new shell refuses an incompatible legacy CLI before activation. Do not use
+an absolute recovery command printed by an older executable: it recreates that
+executable's old layout. A retained `loom-…-service` name alone is not evidence
+of the old layout; separate Celler and workspace-Dolt processes are.
+
+If the selected shared Celler/Dolt container is absent or stopped, use the
+compatible host CLI from any directory:
+
+```bash
+"${WRIX_BIN:-wrix}" service recover
 ```
 
 Startup prints an absolute recovery command selecting the invoked package
-wrapper and recorded runtime. Prefer that command if failed direnv entry leaves
-an older Wrix on PATH. No change to the original owner's workspace is required.
+wrapper and recorded runtime. Prefer that command only after confirming its
+capability marker if failed direnv entry leaves an older Wrix on PATH. No change
+to the original owner's workspace is required.
 
 If an inherited Wrix post-build hook prevents realizing the updated package,
 bypass it for that one Nix invocation:

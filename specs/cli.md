@@ -65,6 +65,11 @@ admitted before effects; controller lifetime/maintenance follows
 package supplies the service-image binding owned by
 [Generation Handoff](services.md#generation-handoff).
 
+`wrix service capabilities` is a passive compatibility query. It prints
+`shared-services-v1` without workspace discovery, runtime inspection or state
+creation. Generated-project shell admission requires this marker as well as
+project-launch support; a legacy two-container CLI fails before activation.
+
 Projects supply launch data, not another Wrix executable. The recommended
 `sandbox.devShell { }` constructor automatically delivers its generated,
 immutable launch configuration through a constructor-owned environment pointer

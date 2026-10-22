@@ -7,6 +7,7 @@ use crate::lifecycle::{self, CacheMode, DoltTransport};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Top {
+    Capabilities,
     Start,
     Recover,
     Stop,
@@ -35,6 +36,7 @@ pub enum Dolt {
 impl Top {
     pub fn parse(input: &str) -> Option<Self> {
         match input {
+            "capabilities" => Some(Self::Capabilities),
             "start" => Some(Self::Start),
             "recover" => Some(Self::Recover),
             "stop" => Some(Self::Stop),
@@ -67,7 +69,9 @@ impl Dolt {
     }
 }
 
-pub const HELP: &str = "Manage workspace services.\n\nUsage: wrix service <command> [options]\n\nCommands:\n  start      Start the workspace services.\n  recover    Recover the absent or stopped selected cache owner without deleting data.\n  stop       Stop the workspace services.\n  status     Show workspace service status.\n  logs       Print workspace service logs.\n  endpoints  Print workspace service endpoints.\n  dolt <status|socket|port|host|sandbox-endpoint|attach|gc|wait>       Manage the workspace Dolt service.\n  cache <config|status|publish|warm|rotate-key>        Manage the workspace project cache.\n  nix-store [enable|disable|gc]  Inspect approval or request scoped installed-store collection.\n\nOptions:\n  --no-cache  Disable project-cache handling for top-level service commands.\n  --sandbox-cache  Resolve the project-cache endpoint for sandbox reads (endpoints only).\n  -h, --help  Print help.\n";
+pub const CAPABILITIES: &str = "shared-services-v1\n";
+
+pub const HELP: &str = "Manage workspace services.\n\nUsage: wrix service <command> [options]\n\nCommands:\n  capabilities  Print the passive shared-service protocol marker.\n  start      Start the workspace services.\n  recover    Recover the absent or stopped selected cache owner without deleting data.\n  stop       Stop the workspace services.\n  status     Show workspace service status.\n  logs       Print workspace service logs.\n  endpoints  Print workspace service endpoints.\n  dolt <status|socket|port|host|sandbox-endpoint|attach|gc|wait>       Manage the workspace Dolt service.\n  cache <config|status|publish|warm|rotate-key>        Manage the workspace project cache.\n  nix-store [enable|disable|gc]  Inspect approval or request scoped installed-store collection.\n\nOptions:\n  --no-cache  Disable project-cache handling for top-level service commands.\n  --sandbox-cache  Resolve the project-cache endpoint for sandbox reads (endpoints only).\n  -h, --help  Print help.\n";
 pub const DOLT_HELP: &str = "Manage the workspace Dolt service.\n\nUsage: wrix service dolt <command>\n\nCommands:\n  status  Show Dolt service status and connection details.\n  socket  Print the Dolt Unix-socket path.\n  port    Print the Dolt TCP port.\n  host    Print the Dolt TCP host.\n  sandbox-endpoint  Print the sandbox-visible Dolt TCP endpoint.\n  attach  Print a command that connects to Dolt.\n  gc      Print the Dolt garbage-collection target.\n  wait    Wait until the Dolt service is ready.\n\nOptions:\n  -h, --help  Print help.\n";
 
 pub fn write_help(stdout: &mut impl Write) -> io::Result<()> {
@@ -81,6 +85,7 @@ pub fn write_dolt_help(stdout: &mut impl Write) -> io::Result<()> {
 pub fn run_top(command: Top, args: &[String], stdout: &mut impl Write) -> io::Result<ExitCode> {
     let (cache_mode, endpoint_view) = parse_options(command, args)?;
     match command {
+        Top::Capabilities => stdout.write_all(CAPABILITIES.as_bytes())?,
         Top::Start => {
             let status = lifecycle::start(cache_mode).map_err(io::Error::other)?;
             stdout.write_all(status.render().as_bytes())?;
@@ -294,7 +299,9 @@ fn parse_options(command: Top, args: &[String]) -> io::Result<(CacheMode, Endpoi
     let mut endpoint_view = EndpointView::Host;
     for arg in args {
         match arg.as_str() {
-            "--no-cache" if command != Top::Recover => cache_mode = CacheMode::Disabled,
+            "--no-cache" if !matches!(command, Top::Recover | Top::Capabilities) => {
+                cache_mode = CacheMode::Disabled;
+            }
             "--sandbox-cache" if command == Top::Endpoints => {
                 endpoint_view = EndpointView::SandboxCache;
             }
@@ -316,6 +323,7 @@ mod test {
 
     #[test]
     fn top_command_parser_accepts_public_service_commands() {
+        assert_eq!(Top::parse("capabilities"), Some(Top::Capabilities));
         assert_eq!(Top::parse("start"), Some(Top::Start));
         assert_eq!(Top::parse("recover"), Some(Top::Recover));
         assert_eq!(Top::parse("stop"), Some(Top::Stop));
