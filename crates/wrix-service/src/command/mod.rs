@@ -22,6 +22,11 @@ pub enum Dolt {
     Port,
     Host,
     SandboxEndpoint,
+    Client,
+    SandboxClient,
+    ClientEnv,
+    SyncPush,
+    SyncPull,
     Attach,
     Gc,
     Wait,
@@ -49,6 +54,11 @@ impl Dolt {
             "port" => Some(Self::Port),
             "host" => Some(Self::Host),
             "sandbox-endpoint" => Some(Self::SandboxEndpoint),
+            "client" => Some(Self::Client),
+            "sandbox-client" => Some(Self::SandboxClient),
+            "client-env" => Some(Self::ClientEnv),
+            "sync-push" => Some(Self::SyncPush),
+            "sync-pull" => Some(Self::SyncPull),
             "attach" => Some(Self::Attach),
             "gc" => Some(Self::Gc),
             "wait" => Some(Self::Wait),
@@ -104,6 +114,87 @@ pub fn run_top(command: Top, args: &[String], stdout: &mut impl Write) -> io::Re
 }
 
 pub fn run_dolt(command: Dolt, stdout: &mut impl Write) -> io::Result<ExitCode> {
+    match command {
+        Dolt::Client | Dolt::SandboxClient | Dolt::ClientEnv => {
+            let client = lifecycle::shared::client(command == Dolt::SandboxClient)
+                .map_err(io::Error::other)?;
+            if command == Dolt::ClientEnv {
+                let plan = lifecycle::Plan::for_current_dir(CacheMode::Disabled)
+                    .map_err(io::Error::other)?;
+                writeln!(
+                    stdout,
+                    "export BEADS_DOLT_AUTO_START=0 BEADS_DOLT_SERVER_MODE=1 BEADS_DOLT_SHARED_SERVER=1"
+                )?;
+                match plan
+                    .dolt()
+                    .ok_or_else(|| io::Error::other("missing managed endpoint"))?
+                {
+                    lifecycle::DoltEndpoint::UnixSocket { socket_path } => {
+                        writeln!(
+                            stdout,
+                            "unset BEADS_DOLT_SERVER_HOST BEADS_DOLT_SERVER_PORT"
+                        )?;
+                        writeln!(
+                            stdout,
+                            "export BEADS_DOLT_SERVER_SOCKET={}",
+                            shell_quote(&socket_path.as_path().to_string_lossy())
+                        )?;
+                    }
+                    lifecycle::DoltEndpoint::Tcp { port, .. } => {
+                        writeln!(stdout, "unset BEADS_DOLT_SERVER_SOCKET")?;
+                        writeln!(
+                            stdout,
+                            "export BEADS_DOLT_SERVER_HOST=127.0.0.1 BEADS_DOLT_SERVER_PORT={port}"
+                        )?;
+                    }
+                }
+                let sync = serde_json::to_string(&client.sync).map_err(io::Error::other)?;
+                for (name, value) in [
+                    ("BEADS_DOLT_SERVER_USER", client.credentials.user()),
+                    ("BEADS_DOLT_PASSWORD", client.credentials.password()),
+                    ("BEADS_DOLT_SERVER_DATABASE", client.credentials.database()),
+                    ("WRIX_BEADS_SYNC_ENDPOINT", sync.as_str()),
+                    ("WRIX_BEADS_MANAGED", "1"),
+                    (
+                        "WRIX_BEADS_WORKTREE",
+                        client
+                            .worktree
+                            .to_str()
+                            .ok_or_else(|| io::Error::other("non-Unicode managed worktree"))?,
+                    ),
+                ] {
+                    writeln!(stdout, "export {name}={}", shell_quote(value))?;
+                }
+            } else {
+                serde_json::to_writer(&mut *stdout, &client).map_err(io::Error::other)?;
+                writeln!(stdout)?;
+            }
+            return Ok(ExitCode::SUCCESS);
+        }
+        Dolt::SyncPush | Dolt::SyncPull => {
+            let operation = if command == Dolt::SyncPush {
+                crate::dolt::Sync::Push
+            } else {
+                crate::dolt::Sync::Pull
+            };
+            let reply = lifecycle::shared::sync(operation).map_err(io::Error::other)?;
+            match reply {
+                crate::dolt::broker::Reply::Applied => return Ok(ExitCode::SUCCESS),
+                crate::dolt::broker::Reply::NonFastForward => {
+                    writeln!(stdout, "non-fast-forward: namespace remote advanced")?;
+                }
+                crate::dolt::broker::Reply::Rejected => {
+                    writeln!(stdout, "namespace sync authorization rejected")?;
+                }
+                crate::dolt::broker::Reply::Failed => writeln!(
+                    stdout,
+                    "namespace sync failed; no automatic pull was attempted"
+                )?,
+            }
+            return Ok(ExitCode::FAILURE);
+        }
+        _ => (),
+    }
     let plan = lifecycle::Plan::for_current_dir(CacheMode::Disabled).map_err(io::Error::other)?;
     let Some(endpoint) = plan.dolt() else {
         writeln!(stdout, "dolt: disabled")?;
@@ -111,6 +202,9 @@ pub fn run_dolt(command: Dolt, stdout: &mut impl Write) -> io::Result<ExitCode> 
     };
 
     match command {
+        Dolt::Client | Dolt::SandboxClient | Dolt::ClientEnv | Dolt::SyncPush | Dolt::SyncPull => {
+            return Err(io::Error::other("invalid client dispatch"));
+        }
         Dolt::Status => {
             writeln!(stdout, "dolt: enabled")?;
             writeln!(stdout, "transport: {}", endpoint.transport().as_str())?;
@@ -169,6 +263,10 @@ pub fn run_dolt(command: Dolt, stdout: &mut impl Write) -> io::Result<ExitCode> 
         }
     }
     Ok(ExitCode::SUCCESS)
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 fn attach_command(endpoint: &lifecycle::DoltEndpoint) -> String {

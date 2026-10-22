@@ -17,9 +17,8 @@ let
   # The function accepts a package set so it can be instantiated with
   # linuxPkgs (container images) or hostPkgs (devshells).
   commonPackagesFn =
-    {
+    packages@{
       bash,
-      beads,
       coreutils,
       curl,
       diffutils,
@@ -58,7 +57,7 @@ let
     }:
     [
       bash
-      beads
+      (import ../beads/package.nix { pkgs = packages; })
       coreutils
       curl
       diffutils

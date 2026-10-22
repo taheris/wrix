@@ -4,9 +4,9 @@ mod common;
 #[path = "common/service_binding.rs"]
 mod service_binding;
 
-use std::{fs, path::PathBuf, process::Command};
+use std::{fs, os::unix::ffi::OsStrExt, path::PathBuf, process::Command};
 
-use common::{TestResult, run_command, set_mode, wrix_command_with_path};
+use common::{TestResult, host_wrix_command_with_path, run_command, set_mode};
 use serde_json::{Value, json};
 
 struct Fixture {
@@ -28,7 +28,14 @@ impl Fixture {
         fs::create_dir(&bin)?;
         for runtime in ["podman", "container", "skopeo"] {
             let path = bin.join(runtime);
-            fs::write(&path, include_str!("fixtures/service-runtime.sh"))?;
+            fs::write(
+                &path,
+                concat!(
+                    include_str!("fixtures/shared-readiness.sh"),
+                    "\n",
+                    include_str!("fixtures/service-runtime.sh")
+                ),
+            )?;
             set_mode(&path, 0o755)?;
         }
         service_binding::create(root.path(), &bin, "nix-descriptor")?;
@@ -44,7 +51,7 @@ impl Fixture {
     }
 
     fn command(&self, runtime: &str) -> TestResult<Command> {
-        let mut command = wrix_command_with_path(&self.workspace, &[&self.bin])?;
+        let mut command = host_wrix_command_with_path(&self.workspace, &[&self.bin])?;
         command
             .env(
                 "WRIX_SERVICE_PACKAGE_BINDING",
@@ -99,6 +106,98 @@ impl Fixture {
         assert!(output.status.success(), "{}", output.stderr);
         Ok(serde_json::from_str(&output.stdout)?)
     }
+}
+
+#[test]
+fn shared_readiness_fixture_accepts_only_the_native_management_probe() -> TestResult {
+    let fixture = Fixture::new()?;
+    let output = run_command(
+        fixture
+            .command("podman")?
+            .args(["service", "start"])
+            .env("WRIX_SERVICE_ALLOW_TEMP_CACHE", "1"),
+    )?;
+    assert!(output.status.success(), "{}", output.stderr);
+    let bytes = fs::read(fixture.root.path().join("calls"))?;
+    let calls: Vec<_> = bytes
+        .split(|byte| *byte == 0)
+        .filter(|arg| !arg.is_empty())
+        .collect();
+    let start = calls
+        .iter()
+        .position(|arg| *arg == b"exec")
+        .ok_or("missing native readiness probe")?;
+    let args: Vec<_> = calls[start..start + 7]
+        .iter()
+        .map(|arg| std::ffi::OsStr::from_bytes(arg))
+        .collect();
+    let environment = fixture.command("podman")?;
+    let invoke = |args: &[&std::ffi::OsStr]| -> TestResult<std::process::Output> {
+        Ok(Command::new(fixture.bin.join("podman"))
+            .envs(
+                environment
+                    .get_envs()
+                    .filter_map(|(key, value)| value.map(|value| (key, value))),
+            )
+            .args(args)
+            .output()?)
+    };
+    let reply = invoke(&args)?;
+    assert!(reply.status.success());
+    assert_eq!(
+        serde_json::from_slice::<Value>(&reply.stdout)?,
+        json!({"rows": [{"secure_file_priv": "/dev/null"}]})
+    );
+    let mut wrong = args.clone();
+    wrong[4] = std::ffi::OsStr::new("SELECT 1");
+    assert_eq!(invoke(&wrong)?.status.code(), Some(64));
+    wrong = args.clone();
+    wrong[1] = std::ffi::OsStr::new("foreign-service");
+    assert!(!invoke(&wrong)?.status.success());
+    let launch = fixture.root.path().join("run.argv");
+    let original = fs::read(&launch)?;
+    let incompatible = original
+        .split(|byte| *byte == 0)
+        .map(|arg| {
+            if arg == b"wrix.dolt.shared=native-v1" {
+                b"wrix.dolt.shared=legacy".as_slice()
+            } else {
+                arg
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(&0);
+    fs::write(&launch, incompatible)?;
+    assert!(!invoke(&args)?.status.success());
+    fs::write(launch, original)?;
+    Ok(())
+}
+
+#[test]
+fn explicit_host_adapter_preserves_the_outer_worker_marker() -> TestResult {
+    let marker = std::path::Path::new("/etc/wrix/image-agent");
+    let before = marker.is_file().then(|| fs::read(marker)).transpose()?;
+    let output = Command::new("bash")
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/host-command.sh"
+        ))
+        .args([
+            "bash",
+            "-c",
+            "set -euo pipefail; [[ ! -e /etc/wrix/image-agent ]]",
+        ])
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        marker.is_file().then(|| fs::read(marker)).transpose()?,
+        before
+    );
+    Ok(())
 }
 
 #[test]
@@ -491,7 +590,9 @@ fn celler_layout_separates_managed_cache_data_from_host_authority() -> TestResul
         assert_eq!(metadata["cache_root"].as_str(), cache_root.to_str());
         assert!(!state_root.starts_with(&fixture.workspace));
         assert!(!cache_root.starts_with(&fixture.workspace));
-        let observer = std::path::Path::new("/etc/wrix/image-agent").exists();
+        // The command runs in disposable host context even when this test
+        // process is a worker. Host authority is SQLite, never JSON exports.
+        let observer = false;
         assert_eq!(state_root.join("services.json").is_file(), observer);
         for file in ["cache-status.json", "publish-roots.json"] {
             assert_eq!(state_root.join(file).is_file(), cache && observer, "{file}");

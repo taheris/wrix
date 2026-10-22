@@ -68,6 +68,8 @@ let
   bootstrapSensitiveEnvNames = [
     "BASHOPTS"
     "BASH_ENV"
+    "BEADS_DOLT_PASSWORD"
+    "BEADS_DOLT_SHARED_SERVER"
     "ENV"
     "GLIBC_TUNABLES"
     "PATH"
@@ -81,6 +83,7 @@ let
   ++ privateNix.reservedEnv;
   bootstrapSensitiveEnvPrefixes = [
     "BEADS_DOLT_SERVER_"
+    "WRIX_BEADS_"
     "LD_"
     "WRIX_NETWORK_"
     "WRIX_NIX_CACHE_"

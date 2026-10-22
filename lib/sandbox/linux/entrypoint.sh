@@ -98,6 +98,13 @@ wrix_bd_sql_quote() {
 if [[ "${1:-}" != "dolt" || ( "${2:-}" != "pull" && "${2:-}" != "push" ) ]]; then
   exec "$real_bd" "$@"
 fi
+if [[ "${WRIX_BEADS_MANAGED:-}" == 1 ]]; then
+  if [[ "$#" -ne 2 ]]; then
+    echo 'Managed sync rejects remote/path overrides.' >&2
+    exit 1
+  fi
+  exec "${WRIX_BIN:-wrix}" service dolt "sync-$2"
+fi
 
 root="/workspace"
 if [[ -f /workspace/.git || -f /workspace/.git/HEAD ]] && git_root=$(git -C /workspace rev-parse --show-toplevel); then

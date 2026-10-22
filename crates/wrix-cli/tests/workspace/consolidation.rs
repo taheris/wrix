@@ -123,7 +123,7 @@ fn host_service_and_cache_commands_create_database_records_without_metadata_expo
                 [key.as_str(), owner],
                 |row| row.get(0),
             )
-            .unwrap();
+            .unwrap_or_else(|error| panic!("missing {owner} metadata: {error}"));
         assert!(
             serde_json::from_slice::<serde_json::Value>(&bytes)
                 .unwrap()

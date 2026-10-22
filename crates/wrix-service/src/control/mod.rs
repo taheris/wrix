@@ -14,12 +14,10 @@ use std::{
     io::{self, Read, Write},
     os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
-    sync::{Mutex, MutexGuard},
     time::Duration,
 };
 
 use displaydoc::Display;
-use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use thiserror::Error as ThisError;
 use tokio::{
@@ -29,7 +27,7 @@ use tokio::{
 };
 use wrix_core::path::WorkspaceHash;
 
-pub(crate) const VERSION: u16 = 1;
+pub(crate) const VERSION: u16 = 2;
 const MAX_FRAME: usize = 1024 * 1024;
 const MAX_NAMESPACES: usize = 4096;
 const IO_BUDGET: Duration = Duration::from_secs(5);
@@ -62,6 +60,8 @@ pub enum Error {
     LockPoisoned,
     /// persisted namespace registration has an unsupported version, duplicate identity or excess entries
     InvalidRegistration,
+    /// controller registry requires maintenance: stop the old host controller, then run `wrix service recover` with the updated package; never remove ownership or policy files
+    RegistryUpgrade,
     /// workspace namespace is not registered
     UnknownNamespace,
     /// workspace policy denies the requested permission
@@ -181,13 +181,106 @@ impl Policy {
 
 /// Host-only issuance guard; retirement cannot race issuance while this guard is held.
 /// It is not a traffic credential and cannot be constructed from container reports.
+enum Authority<'a> {
+    Controller {
+        _lease: registration::Lease,
+    },
+    Host {
+        _host: wrix_state::host::Host,
+        _selection: &'a wrix_state::context::Selection,
+        _lease: registration::Lease,
+        root: PathBuf,
+    },
+}
+
 pub struct Authorization<'a> {
-    _registry: MutexGuard<'a, BTreeMap<Namespace, Policy>>,
+    authority: Authority<'a>,
     namespace: Namespace,
     permission: Permission,
 }
 
-impl Authorization<'_> {
+impl<'a> Authorization<'a> {
+    /// Check the durable controller registry, retaining policy exclusion through
+    /// native issuance. A repository marker alone never authorizes SQL.
+    pub fn host_sql(selection: &'a wrix_state::context::Selection) -> Result<Self, Error> {
+        Self::host_sql_policy(selection, false)
+    }
+
+    /// Explicit host lifecycle admission, never passive client delivery.
+    pub(crate) fn admit_host_sql(
+        selection: &'a wrix_state::context::Selection,
+    ) -> Result<Self, Error> {
+        Self::host_sql_policy(selection, true)
+    }
+
+    fn host_sql_policy(
+        selection: &'a wrix_state::context::Selection,
+        admit: bool,
+    ) -> Result<Self, Error> {
+        let host = wrix_state::host::Host::discover().map_err(io::Error::other)?;
+        selection.authorize_effects().map_err(io::Error::other)?;
+        if !selection
+            .workspace()
+            .canonical_path()
+            .join(".beads/dolt")
+            .is_dir()
+        {
+            return Err(Error::PermissionDenied);
+        }
+        let root = host.roots().state().join("control/authority");
+        if admit {
+            wrix_core::private_directory::prepare_with_parents(&root).map_err(io::Error::other)?;
+        } else if !root.try_exists()? {
+            return Err(Error::PermissionDenied);
+        }
+        let store = registration::Store::open(&root)?;
+        let namespace = Namespace::from(selection.workspace().hash());
+        let lease = store.lease(&namespace)?;
+        let mut registry = store.lock()?;
+        if admit {
+            if !registry.contains_key(&namespace) && registry.len() >= MAX_NAMESPACES {
+                return Err(Error::InvalidRegistration);
+            }
+            let policy = registry.entry(namespace.clone()).or_insert(Policy {
+                dolt: Access::Denied,
+                private_cache_read: Access::Denied,
+                common_cache_read: Access::Denied,
+                egress: Access::Denied,
+                compiler: Access::Denied,
+            });
+            policy.dolt = Access::Allowed;
+            registry.commit()?;
+        }
+        if registry
+            .get(&namespace)
+            .is_none_or(|policy| policy.dolt != Access::Allowed)
+        {
+            return Err(Error::PermissionDenied);
+        }
+        Ok(Self {
+            authority: Authority::Host {
+                _host: host,
+                _selection: selection,
+                _lease: lease,
+                root,
+            },
+            namespace: Namespace::from(selection.workspace().hash()),
+            permission: Permission::Sql,
+        })
+    }
+
+    pub(crate) fn retire_sql(self) -> Result<(), Error> {
+        let Authority::Host { root, .. } = &self.authority else {
+            return Err(Error::PermissionDenied);
+        };
+        let mut registry = registration::Store::open(root)?.lock()?;
+        let policy = registry
+            .get_mut(&self.namespace)
+            .ok_or(Error::UnknownNamespace)?;
+        policy.dolt = Access::Denied;
+        registry.commit()
+    }
+
     pub const fn namespace(&self) -> &Namespace {
         &self.namespace
     }
@@ -196,13 +289,55 @@ impl Authorization<'_> {
     }
 }
 
+/// Explicit host maintenance can upgrade a stopped controller's policy epoch.
+/// A live old controller is never replaced or allowed to overwrite new policy.
+pub(crate) fn recover_registry(host: &wrix_state::host::Host) -> Result<(), Error> {
+    let root = host.roots().state().join("control/authority");
+    if !root.try_exists()? {
+        return Ok(());
+    }
+    let store = registration::Store::open(&root)?;
+    // A current live controller already has a v2 snapshot; no migration needed.
+    match store.load() {
+        Ok(_) => return Ok(()),
+        Err(Error::RegistryUpgrade) => (),
+        Err(error) => return Err(error),
+    }
+    let owner = registration::Ownership::acquire(&root).map_err(|error| match error {
+        Error::Io(error) if error.kind() == io::ErrorKind::WouldBlock => Error::RegistryUpgrade,
+        other => other,
+    })?;
+    store.initialize(&owner)
+}
+
+/// Host retirement shares the controller's registry lock, including while the
+/// controller is stopped. Revoke only cache audiences, preserving SQL policy.
+pub(crate) fn retire_host_cache(selection: &wrix_state::context::Selection) -> Result<(), Error> {
+    let host = wrix_state::host::Host::discover().map_err(io::Error::other)?;
+    selection.authorize_effects().map_err(io::Error::other)?;
+    let root = host.roots().state().join("control/authority");
+    if !root.try_exists()? {
+        return Ok(());
+    }
+    let store = registration::Store::open(&root)?;
+    let namespace = Namespace::from(selection.workspace().hash());
+    let _lease = store.lease(&namespace)?;
+    let mut registry = store.lock()?;
+    if let Some(policy) = registry.get_mut(&namespace) {
+        policy.private_cache_read = Access::Denied;
+        policy.common_cache_read = Access::Denied;
+        registry.commit()?;
+    }
+    Ok(())
+}
+
 /// Local issuance authority only; this is neither a serializable grant nor native pool readiness.
-pub struct PoolAuthorization<'a> {
-    _registry: MutexGuard<'a, BTreeMap<Namespace, Policy>>,
+pub struct PoolAuthorization {
+    _lease: registration::Lease,
     admission: wrix_state::nix_store::admission::Guard,
 }
 
-impl PoolAuthorization<'_> {
+impl PoolAuthorization {
     pub const fn pool(&self) -> &wrix_core::nix_store::pool::Key {
         self.admission.pool()
     }
@@ -227,6 +362,9 @@ pub enum Operation {
     Retire {
         namespace: Namespace,
     },
+    AdmitCache {
+        namespace: Namespace,
+    },
     IssueCache {
         namespace: Namespace,
     },
@@ -236,6 +374,12 @@ pub enum Operation {
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct Namespace(String);
+
+impl Namespace {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 impl TryFrom<String> for Namespace {
     type Error = wrix_core::path::WorkspaceHashParseError;
@@ -284,10 +428,9 @@ pub enum Reply {
 /// One descriptor owns the local control endpoint until dropped; it is close-on-exec.
 pub struct Controller {
     listener: UnixListener,
-    _ownership: File,
+    _ownership: registration::Ownership,
     credential: Credential,
     uid: u32,
-    namespaces: Mutex<BTreeMap<Namespace, Policy>>,
     registrations: registration::Store,
     endpoints: endpoint::Store,
     deployment: crate::deployment::Id,
@@ -313,27 +456,9 @@ impl Controller {
         if !metadata.is_dir() || metadata.mode() & 0o077 != 0 || root.canonicalize()? != root {
             return Err(Error::PrivateRoot);
         }
-        let ownership_path = root.join("ownership");
-        match ownership_path.symlink_metadata() {
-            Ok(metadata) if !metadata.is_file() => return Err(Error::PrivateRoot),
-            Ok(_) => (),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => (),
-            Err(error) => return Err(error.into()),
-        }
-        let ownership = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .mode(0o600)
-            .open(ownership_path)?;
-        let owner = ownership.metadata()?;
-        if owner.uid() != metadata.uid() || owner.mode() & 0o077 != 0 {
-            return Err(Error::PrivateRoot);
-        }
-        ownership.try_lock_exclusive()?;
+        let ownership = registration::Ownership::acquire(root)?;
         let registrations = registration::Store::open(root)?;
-        let namespaces = registrations.load()?;
+        registrations.initialize(&ownership)?;
         let endpoints = endpoint::Store::open(root)?;
         let recorded_deployment = deployment::load(root)?;
         let assignments = assignment::Store::open(root, recorded_deployment.as_ref())?;
@@ -349,7 +474,6 @@ impl Controller {
             _ownership: ownership,
             credential,
             uid: metadata.uid(),
-            namespaces: Mutex::new(namespaces),
             registrations,
             endpoints,
             deployment,
@@ -423,13 +547,14 @@ impl Controller {
         namespace: &Namespace,
         permission: Permission,
     ) -> Result<Authorization<'_>, Error> {
-        let registry = self.namespaces.lock().map_err(|_| Error::LockPoisoned)?;
+        let lease = self.registrations.lease(namespace)?;
+        let registry = self.registrations.lock()?;
         let policy = registry.get(namespace).ok_or(Error::UnknownNamespace)?;
         if policy.access(permission) == Access::Denied {
             return Err(Error::PermissionDenied);
         }
         Ok(Authorization {
-            _registry: registry,
+            authority: Authority::Controller { _lease: lease },
             namespace: namespace.clone(),
             permission,
         })
@@ -441,26 +566,36 @@ impl Controller {
         &self,
         selection: &wrix_state::context::Selection,
         system: wrix_core::nix_store::pool::System,
-    ) -> Result<PoolAuthorization<'_>, Error> {
+    ) -> Result<PoolAuthorization, Error> {
         let admission = wrix_state::nix_store::admission::Guard::acquire(selection, system)?;
-        let registry = self.namespaces.lock().map_err(|_| Error::LockPoisoned)?;
+        let lease = self
+            .registrations
+            .lease(&Namespace::from(admission.namespace()))?;
+        let registry = self.registrations.lock()?;
         if !registry.contains_key(&Namespace::from(admission.namespace())) {
             return Err(Error::UnknownNamespace);
         }
         admission.recheck()?;
         Ok(PoolAuthorization {
-            _registry: registry,
+            _lease: lease,
             admission,
         })
     }
 
     fn apply(&self, operation: Operation) -> Result<Reply, Error> {
-        let mut namespaces = self.namespaces.lock().map_err(|_| Error::LockPoisoned)?;
+        // Namespace lease precedes the short global metadata transaction.
+        let _lease = match &operation {
+            Operation::Register { namespace, .. }
+            | Operation::Retire { namespace }
+            | Operation::AdmitCache { namespace } => Some(self.registrations.lease(namespace)?),
+            Operation::Inspect {} | Operation::IssueCache { .. } => None,
+        };
+        let mut namespaces = self.registrations.lock()?;
         Ok(match operation {
             Operation::IssueCache { .. } => return Err(Error::PermissionDenied),
             Operation::Inspect {} => Reply::Snapshot {
                 version: VERSION,
-                namespaces: namespaces.clone(),
+                namespaces: (*namespaces).clone(),
             },
             Operation::Register { namespace, policy } => {
                 match namespaces.get(&namespace).copied() {
@@ -476,7 +611,32 @@ impl Controller {
                     }
                 }
             }
+            Operation::AdmitCache { namespace } => {
+                if !namespaces.contains_key(&namespace) && namespaces.len() >= MAX_NAMESPACES {
+                    return Ok(Reply::Capacity);
+                }
+                let mut updated = (*namespaces).clone();
+                let policy = updated.entry(namespace).or_insert(Policy {
+                    dolt: Access::Denied,
+                    private_cache_read: Access::Denied,
+                    common_cache_read: Access::Denied,
+                    egress: Access::Denied,
+                    compiler: Access::Denied,
+                });
+                policy.private_cache_read = Access::Allowed;
+                policy.common_cache_read = Access::Allowed;
+                self.registrations.commit(&updated)?;
+                *namespaces = updated;
+                Reply::Applied
+            }
             Operation::Retire { namespace } => {
+                // Metadata-only IPC cannot claim native SQL revocation.
+                if namespaces
+                    .get(&namespace)
+                    .is_some_and(|policy| policy.dolt == Access::Allowed)
+                {
+                    return Err(Error::PermissionDenied);
+                }
                 if namespaces.contains_key(&namespace) {
                     let mut updated = namespaces.clone();
                     updated.remove(&namespace);
@@ -574,6 +734,113 @@ impl Client {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[tokio::test]
+    async fn controller_uses_current_durable_sql_policy_and_cache_admission_preserves_it() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("authority");
+        let controller = Controller::bind(&root).unwrap();
+        let namespace = Namespace::from(&WorkspaceHash::parse(&"a".repeat(64)).unwrap());
+        assert!(matches!(
+            controller.authorize(&namespace, Permission::Sql),
+            Err(Error::UnknownNamespace)
+        ));
+        // The host lifecycle and IPC operate on exactly the same authoritative
+        // registry, even when admission happens after controller startup.
+        let store = registration::Store::open(&root).unwrap();
+        let mut policy = Policy {
+            dolt: Access::Allowed,
+            private_cache_read: Access::Denied,
+            common_cache_read: Access::Denied,
+            egress: Access::Denied,
+            compiler: Access::Denied,
+        };
+        {
+            let mut registry = store.lock().unwrap();
+            registry.insert(namespace.clone(), policy);
+            registry.commit().unwrap();
+        }
+        drop(controller.authorize(&namespace, Permission::Sql).unwrap());
+        assert_eq!(
+            controller
+                .apply(Operation::AdmitCache {
+                    namespace: namespace.clone()
+                })
+                .unwrap(),
+            Reply::Applied
+        );
+        policy.private_cache_read = Access::Allowed;
+        policy.common_cache_read = Access::Allowed;
+        assert_eq!(store.lock().unwrap().get(&namespace), Some(&policy));
+        {
+            let mut registry = store.lock().unwrap();
+            registry.get_mut(&namespace).unwrap().dolt = Access::Denied;
+            registry.commit().unwrap();
+        }
+        assert!(matches!(
+            controller.authorize(&namespace, Permission::Sql),
+            Err(Error::PermissionDenied)
+        ));
+        drop(
+            controller
+                .authorize(&namespace, Permission::PrivateCacheRead)
+                .unwrap(),
+        );
+        controller.close().unwrap();
+    }
+
+    #[tokio::test]
+    async fn sql_native_lease_does_not_block_peer_authorization_or_allow_metadata_only_retirement()
+    {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("authority");
+        let controller = Controller::bind(&root).unwrap();
+        let first = Namespace::from(&WorkspaceHash::parse(&"a".repeat(64)).unwrap());
+        let peer = Namespace::from(&WorkspaceHash::parse(&"b".repeat(64)).unwrap());
+        let policy = Policy {
+            dolt: Access::Allowed,
+            private_cache_read: Access::Allowed,
+            common_cache_read: Access::Allowed,
+            egress: Access::Denied,
+            compiler: Access::Denied,
+        };
+        for namespace in [&first, &peer] {
+            assert_eq!(
+                controller
+                    .apply(Operation::Register {
+                        namespace: namespace.clone(),
+                        policy
+                    })
+                    .unwrap(),
+                Reply::Applied
+            );
+        }
+        let native_lease = controller.authorize(&first, Permission::Sql).unwrap();
+        drop(controller.authorize(&peer, Permission::Sql).unwrap());
+        drop(
+            controller
+                .authorize(&peer, Permission::PrivateCacheRead)
+                .unwrap(),
+        );
+        // A long native restore holds no global registry lock.
+        drop(controller.registrations.lock().unwrap());
+        assert!(
+            controller
+                .apply(Operation::Retire {
+                    namespace: first.clone()
+                })
+                .is_err()
+        );
+        drop(native_lease);
+        assert!(matches!(
+            controller.apply(Operation::Retire {
+                namespace: first.clone()
+            }),
+            Err(Error::PermissionDenied)
+        ));
+        drop(controller.authorize(&first, Permission::Sql).unwrap());
+        controller.close().unwrap();
+    }
 
     #[test]
     fn peer_uid_is_required_even_with_a_valid_management_secret() {

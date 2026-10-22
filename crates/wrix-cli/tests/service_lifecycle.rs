@@ -20,17 +20,120 @@ use std::{
     time::{Duration, Instant},
 };
 
-use common::{RunResult, TestResult, run_command, set_mode, wrix_command_with_path};
+use common::{RunResult, TestResult, host_wrix_command_with_path, run_command, set_mode};
 use fs2::FileExt;
 use serde_json::{Value, json};
 use wrix_sandbox::command::Command as LaunchCommand;
 
-const APPLE_RUNTIME: &str = include_str!("fixtures/apple-service-runtime.sh");
+const APPLE_RUNTIME: &str = concat!(
+    include_str!("fixtures/shared-readiness.sh"),
+    "\n",
+    include_str!("fixtures/apple-service-runtime.sh")
+);
+
+#[test]
+fn public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql() -> TestResult {
+    let root = tempfile::Builder::new()
+        .prefix("cli-native-")
+        .tempdir_in("/tmp")?;
+    let lock = fs::File::options()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open("/tmp/wrix-shared-native-port.lock")?;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        match lock.try_lock_exclusive() {
+            Ok(()) => break,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                assert!(
+                    Instant::now() < deadline,
+                    "native port fixture lock deadline exceeded"
+                );
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    let bin = root.path().join("bin");
+    fs::create_dir(&bin)?;
+    for name in ["podman", "container"] {
+        fs::write(
+            bin.join(name),
+            include_str!("fixtures/native-shared-runtime.py"),
+        )?;
+        set_mode(&bin.join(name), 0o755)?;
+    }
+    // Celler's external container launch is represented by the existing HTTP
+    // boundary fixture; this process holds the entrypoint's external flock.
+    // Native SQL and Beads registration are never emulated.
+    fs::write(
+        bin.join("flock"),
+        "#!/usr/bin/env bash\nset -euo pipefail\nexec sleep 240\n",
+    )?;
+    set_mode(&bin.join("flock"), 0o755)?;
+    let native_bd = std::env::var_os("WRIX_REAL_BD_BIN")
+        .unwrap_or_else(|| "/nix/store/7aalmix7lxvs73apxl1pwkrvqw52snhm-beads-1.3.1/bin/bd".into());
+    let native_package = root.path().join("native-package");
+    fs::create_dir_all(native_package.join("bin"))?;
+    std::os::unix::fs::symlink(&native_bd, native_package.join("bin/bd"))?;
+    let expression = format!(
+        "import {} {{ pkgs = {{ writeShellScriptBin = name: script: script; beads = {}; }}; }}",
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../../lib/beads/package.nix"),
+        serde_json::to_string(&native_package)?
+    );
+    let rendered = Command::new(common::command_path("nix")?)
+        .args(["eval", "--raw", "--impure", "--expr", &expression])
+        .output()?;
+    assert!(
+        rendered.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rendered.stderr)
+    );
+    fs::write(
+        bin.join("bd"),
+        [b"#!/usr/bin/env bash\n".as_slice(), &rendered.stdout].concat(),
+    )?;
+    set_mode(&bin.join("bd"), 0o755)?;
+    service_binding::create(root.path(), &bin, "nix-descriptor")?;
+    let _celler = celler::Server::watch(root.path(), None);
+    let shared = common::binary_dir()?.join("wrix-shared-service");
+    assert!(
+        shared.is_file(),
+        "build the native wrix-shared-service fixture before running CLI conformance"
+    );
+    let mut command = Command::new("timeout");
+    command
+        .args(["--signal=TERM", "--kill-after=5", "240", "bash"])
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/host-command.sh"
+        ))
+        .arg("python3")
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/native-cli-shared.py"
+        ))
+        .arg(root.path())
+        .arg(env!("CARGO_BIN_EXE_wrix"))
+        .env("WRIX_SHARED_BINARY", shared)
+        .env("WRIX_REAL_BD_BIN", native_bd);
+    common::set_isolated_git_env(&mut command);
+    let output = run_command(&mut command)?;
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        output.stdout,
+        output.stderr
+    );
+    Ok(())
+}
 
 #[test]
 fn running_cache_reentry_restores_only_the_verifier_from_existing_private_authority() -> TestResult
 {
-    let fixture = Fixture::new()?;
+    let fixture = Fixture::shared_cache()?;
     let state = fixture.state_root()?;
     let host = state.parent().unwrap().parent().unwrap();
     let issuer = host.join("host-control/celler-issuer/issuer.pem");
@@ -50,7 +153,7 @@ fn running_cache_reentry_restores_only_the_verifier_from_existing_private_author
 
 #[test]
 fn reentry_preserves_host_selected_finite_publication_retention() -> TestResult {
-    let fixture = Fixture::new()?;
+    let fixture = Fixture::shared_cache()?;
     let state = fixture.state_root()?;
     let host = state.parent().unwrap().parent().unwrap();
     let workspace = wrix_core::path::Workspace::from_path(&fixture.workspace)?;
@@ -74,12 +177,14 @@ fn reentry_preserves_host_selected_finite_publication_retention() -> TestResult 
 
 #[test]
 fn running_cache_owner_cannot_bootstrap_replacement_issuer_authority() -> TestResult {
-    let fixture = Fixture::new()?;
+    let fixture = Fixture::shared_cache()?;
     let state = fixture.state_root()?;
     let host = state.parent().unwrap().parent().unwrap();
     let issuer = host.join("host-control/celler-issuer/issuer.pem");
     let verifier = host.join("service-data/celler/jwt.pub");
     let before = fs::read(&verifier)?;
+    let configuration = host.join("service-data/celler/server.toml");
+    let configuration_before = fs::read(&configuration)?;
     fs::remove_file(&issuer)?;
     let output = fixture.run("start")?;
     assert!(!output.status.success());
@@ -90,7 +195,7 @@ fn running_cache_owner_cannot_bootstrap_replacement_issuer_authority() -> TestRe
     );
     assert!(!issuer.exists());
     assert_eq!(fs::read(verifier)?, before);
-    assert!(!host.join("service-data/celler/server.toml").exists());
+    assert_eq!(fs::read(configuration)?, configuration_before);
     assert!(!fixture.root.path().join("run.argv").exists());
     let calls = fs::read_to_string(fixture.root.path().join("runtime.log"))?;
     assert!(!calls.lines().any(|line| line.starts_with("rm ")));
@@ -107,9 +212,7 @@ fn service_fixture_keeps_native_host_state_private() -> TestResult {
         .ok_or("missing native root")?;
     assert_eq!(common::mode(native_root)?, 0o700);
     assert_eq!(common::mode(&state_root.join("keys"))?, 0o700);
-    if !Path::new("/etc/wrix/image-agent").exists() {
-        assert_eq!(common::mode(&native_root.join("state.db"))?, 0o600);
-    }
+    assert_eq!(common::mode(&native_root.join("state.db"))?, 0o600);
     let imported: Value = serde_json::from_slice(&common::read_namespace_document(
         &state_root.join("services.json"),
     )?)?;
@@ -157,6 +260,27 @@ struct Fixture {
 }
 
 impl Fixture {
+    /// A cache-only namespace on a fresh, verified singleton deployment. SQL
+    /// namespaces instead use the native public-CLI conformance fixture above.
+    fn shared_cache() -> TestResult<Self> {
+        let mut fixture = Self::new()?;
+        fixture.disable_dolt()?;
+        fixture.snapshot = json!([]);
+        fixture.write_snapshot()?;
+        let output = fixture.run("start")?;
+        assert!(output.status.success(), "{}", output.stderr);
+        fixture.snapshot =
+            serde_json::from_slice(&fs::read(fixture.root.path().join("runtime.json"))?)?;
+        let output = fixture.run("endpoints")?;
+        assert!(output.status.success(), "{}", output.stderr);
+        fixture.metadata = serde_json::from_str(&output.stdout)?;
+        // Preserve the NUL runtime contract record for readiness checks, while
+        // clearing the old line-oriented creation sentinel for reentry tests.
+        fs::remove_file(fixture.root.path().join("run.argv"))?;
+        fs::remove_file(fixture.root.path().join("runtime.log"))?;
+        Ok(fixture)
+    }
+
     fn new() -> TestResult<Self> {
         // Repository-local TMPDIR paths inherit the enclosing checkout's service identity.
         let root = tempfile::Builder::new()
@@ -269,7 +393,7 @@ impl Fixture {
 
     fn command(&self) -> TestResult<Command> {
         let mut command =
-            wrix_command_with_path(&self.workspace, &[&self.root.path().join("bin")])?;
+            host_wrix_command_with_path(&self.workspace, &[&self.root.path().join("bin")])?;
         command
             .env(
                 "WRIX_SERVICE_PACKAGE_BINDING",
@@ -575,8 +699,12 @@ fn null_fixture_endpoint_reports_cli_workspace_and_payload() -> TestResult {
 
 #[test]
 fn repeated_apple_service_start_preserves_busy_owned_endpoints() -> TestResult {
-    let fixture = Fixture::new()?;
-    let _dolt = TcpListener::bind(("127.0.0.1", fixture.port("dolt_tcp")?))?;
+    let fixture = Fixture::shared_cache()?;
+    let selected = owner_selection(&fixture)?;
+    let shared: Value =
+        serde_json::from_slice(&fs::read(selected.parent().unwrap().join("shared.json"))?)?;
+    let sql_port: u16 = serde_json::from_value(shared["sql_port"].clone())?;
+    let _sql = TcpListener::bind(("127.0.0.1", sql_port))?;
 
     for _ in 0..2 {
         let output = fixture.run("start")?;
@@ -595,8 +723,9 @@ fn repeated_apple_service_start_preserves_busy_owned_endpoints() -> TestResult {
     }
     let log = fs::read_to_string(fixture.root.path().join("runtime.log"))?;
     assert!(
-        log.lines()
-            .all(|line| line.starts_with("list ") || line.starts_with("inspect ")),
+        log.lines().all(|line| line.starts_with("list ")
+            || line.starts_with("inspect ")
+            || line.starts_with("exec ")),
         "{log}"
     );
     Ok(())
@@ -624,44 +753,28 @@ fn apple_start_preserves_stopped_legacy_tcp_services_pending_reconciliation() ->
 }
 
 #[test]
-fn fresh_services_keep_host_cache_separate_from_authenticated_workspace_sql() -> TestResult {
+fn fresh_service_refuses_empty_dolt_source_without_discarding_it() -> TestResult {
     let fixture = Fixture::new()?;
     fs::write(fixture.root.path().join("runtime.json"), "[]")?;
+    let source = fixture.workspace.join(".beads/dolt");
+    let marker = source.join("retained-evidence");
+    fs::write(&marker, "not a native database")?;
     let output = fixture.run("start")?;
-    assert!(output.status.success(), "{}", output.stderr);
+    assert!(!output.status.success());
+    assert!(
+        output.stderr.contains("registration is incomplete"),
+        "{}",
+        output.stderr
+    );
+    assert_eq!(fs::read_to_string(marker)?, "not a native database");
     let log = fs::read_to_string(fixture.root.path().join("runtime.log"))?;
     assert_eq!(
         log.lines().filter(|line| line.starts_with("run ")).count(),
-        2,
-        "{log}"
+        1
     );
-    let containers: Value =
-        serde_json::from_slice(&fs::read(fixture.root.path().join("runtime.json"))?)?;
-    let host = containers
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|entry| entry["configuration"]["labels"]["wrix.service.scope"] == "host")
-        .unwrap();
-    assert_eq!(host["configuration"]["id"], "wrix-host-service");
-    assert!(
-        host["configuration"]["labels"]
-            .get("wrix.workspace.hash")
-            .is_none()
-    );
-    let args = fs::read_to_string(fixture.root.path().join("run.argv"))?;
-    assert!(args.contains("wrix.cache.enabled=false"));
-    assert!(!args.contains("/var/lib/wrix/celler"));
-    assert!(!args.contains("/var/lib/wrix/service-supervisor"));
-    assert!(args.lines().any(|arg| arg == "wrix.dolt.auth=tcp-root-v1"));
-    assert!(
-        args.lines()
-            .any(|arg| arg == format!("127.0.0.1:{}:3306", fixture.port("dolt_tcp").unwrap()))
-    );
-    assert!(
-        args.contains("CREATE USER IF NOT EXISTS")
-            && args.contains("GRANT ALL PRIVILEGES ON *.* TO")
-    );
+    assert!(!log.lines().any(|line| line.starts_with("rm ")));
+    // Genuine source adoption, scoped SQL, and singleton preservation are
+    // verified by public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql.
     Ok(())
 }
 
@@ -1135,7 +1248,7 @@ fn cache_endpoint_generates_only_an_exact_tcp_network_exception() -> TestResult 
 }
 
 #[test]
-fn cache_start_preserves_valid_keys_when_creating_a_stopped_legacy_static_service() -> TestResult {
+fn cache_start_preserves_valid_keys_and_requires_explicit_legacy_conversion() -> TestResult {
     let mut fixture = Fixture::new()?;
     fixture.snapshot[0]["status"]["state"] = json!("stopped");
     fixture.disable_dolt()?;
@@ -1145,11 +1258,9 @@ fn cache_start_preserves_valid_keys_when_creating_a_stopped_legacy_static_servic
         .remove("wrix.cache.backend");
     fixture.write_snapshot()?;
     let key = fs::read(fixture.state_root()?.join("keys/cache.pub"))?;
-    let output = fixture.run("start")?;
-    assert!(output.status.success(), "{}", output.stderr);
-    let args = fs::read_to_string(fixture.root.path().join("run.argv"))?;
-    assert!(args.contains(wrix_cache::backend::layout::runtime::COMMAND));
-    assert!(args.contains("wrix.cache.backend=celler-v2"));
+    let before = fs::read(fixture.root.path().join("runtime.json"))?;
+    assert_cache_start_preserves_owner(&fixture)?;
+    assert_eq!(fs::read(fixture.root.path().join("runtime.json"))?, before);
     assert_eq!(fs::read(fixture.state_root()?.join("keys/cache.pub"))?, key);
     Ok(())
 }
@@ -1190,8 +1301,7 @@ fn service_start_never_removes_workers_with_the_same_workspace_identity() -> Tes
     fixture.snapshot.as_array_mut().unwrap().push(worker);
     fixture.write_snapshot()?;
     let before = fs::read(fixture.root.path().join("runtime.json"))?;
-    let output = fixture.run("start")?;
-    assert!(output.status.success(), "{}", output.stderr);
+    assert_cache_start_preserves_owner(&fixture)?;
     assert_eq!(fs::read(fixture.root.path().join("runtime.json"))?, before);
     let calls = fs::read_to_string(fixture.root.path().join("runtime.log"))?;
     assert!(!calls.lines().any(|line| line.starts_with("rm ")));
@@ -1258,17 +1368,11 @@ fn all_obsolete_services_are_validated_before_any_container_is_removed() -> Test
     assert_cache_start_preserves_owner(&fixture)?;
     fixture.snapshot[2]["configuration"]["labels"]["wrix.dolt.transport"] = json!("disabled");
     fixture.write_snapshot()?;
-    let output = fixture.run("start")?;
-    assert!(output.status.success(), "{}", output.stderr);
+    // Even cache-only stopped peers are not automatic replacement authority.
+    // Ordinary startup leaves the entire legacy inventory for explicit recovery.
+    assert_cache_start_preserves_owner(&fixture)?;
     let calls = fs::read_to_string(fixture.root.path().join("runtime.log"))?;
-    let removals: Vec<_> = calls
-        .lines()
-        .filter(|line| line.starts_with("rm "))
-        .collect();
-    assert_eq!(
-        removals,
-        ["rm -f stopped-legacy-cache", "rm -f stopped-dolt"]
-    );
+    assert!(!calls.lines().any(|line| line.starts_with("rm ")));
     assert!(!calls.lines().any(|line| line.starts_with("run ")));
     Ok(())
 }
@@ -1288,7 +1392,9 @@ fn a_foreign_hash_is_not_overridden_by_a_matching_workspace_path() -> TestResult
     let output = fixture.run("stop")?;
     assert!(!output.status.success());
     assert!(
-        output.stderr.contains("explicit host-wide maintenance"),
+        output
+            .stderr
+            .contains("Explicitly stop ALL legacy Wrix service containers"),
         "{}",
         output.stderr
     );
@@ -1315,7 +1421,13 @@ fn assert_cache_start_preserves_owner(fixture: &Fixture) -> TestResult {
     assert!(!output.status.success());
     assert!(
         output.stderr.contains("explicit recovery")
-            || output.stderr.contains("explicit host-wide maintenance"),
+            || output.stderr.contains("explicit host-wide maintenance")
+            || output
+                .stderr
+                .contains("Explicitly stop ALL legacy Wrix service containers")
+            || output
+                .stderr
+                .contains("run `wrix service recover` explicitly"),
         "{}",
         output.stderr
     );
@@ -1426,6 +1538,7 @@ fn cache_start_rejects_competing_guarded_owner_without_claiming_shared_reuse() -
 fn cache_start_rejects_running_celler_in_the_other_runtime() -> TestResult {
     for backend in ["celler-v1", "celler-v2", "unknown-version"] {
         let fixture = Fixture::new()?;
+        fs::write(fixture.root.path().join("runtime.json"), "[]")?;
         peer_runtime::install(
             &fixture.root.path().join("bin"),
             "wrix-service-peer",
@@ -1456,6 +1569,7 @@ fn identical_container_names_in_different_runtimes_do_not_authorize_reuse() -> T
 #[test]
 fn inaccessible_other_runtime_does_not_authorize_cache_start() -> TestResult {
     let fixture = Fixture::new()?;
+    fs::write(fixture.root.path().join("runtime.json"), "[]")?;
     peer_runtime::install(
         &fixture.root.path().join("bin"),
         "wrix-service-peer",
@@ -1491,7 +1605,13 @@ fn podman_start_checks_apple_backend_ownership_before_selected_runtime_access() 
             .args(["service", "start"]),
     )?;
     assert!(!output.status.success());
-    assert!(output.stderr.contains("competing"), "{}", output.stderr);
+    assert!(
+        output
+            .stderr
+            .contains("Explicitly stop ALL legacy Wrix service containers"),
+        "{}",
+        output.stderr
+    );
     assert!(!output.stderr.contains("selected runtime was accessed"));
     assert!(!fixture.root.path().join("run.argv").exists());
     assert!(!fixture.state_root()?.join("cache.lock").exists());
@@ -1501,6 +1621,7 @@ fn podman_start_checks_apple_backend_ownership_before_selected_runtime_access() 
 #[test]
 fn installed_other_runtime_with_missing_interpreter_is_not_treated_as_absent() -> TestResult {
     let fixture = Fixture::new()?;
+    fs::write(fixture.root.path().join("runtime.json"), "[]")?;
     let peer = fixture.root.path().join("bin/podman");
     fs::write(&peer, "#!/definitely/missing/interpreter\n")?;
     set_mode(&peer, 0o755)?;
@@ -1532,6 +1653,7 @@ fn installed_other_runtime_with_missing_interpreter_is_not_treated_as_absent() -
 #[test]
 fn unknown_other_runtime_state_is_not_treated_as_stopped() -> TestResult {
     let fixture = Fixture::new()?;
+    fs::write(fixture.root.path().join("runtime.json"), "[]")?;
     peer_runtime::install(
         &fixture.root.path().join("bin"),
         "wrix-service-peer",
@@ -1552,15 +1674,26 @@ fn unknown_other_runtime_state_is_not_treated_as_stopped() -> TestResult {
 
 #[test]
 fn stopped_backend_in_the_other_runtime_does_not_prevent_cache_reentry() -> TestResult {
-    let fixture = Fixture::new()?;
+    let fixture = Fixture::shared_cache()?;
     peer_runtime::install(
         &fixture.root.path().join("bin"),
         "wrix-service-peer",
         "celler-v1",
         "false",
     )?;
+    let selected = fs::read(owner_selection(&fixture)?)?;
+    let inventory = fs::read(fixture.root.path().join("runtime.json"))?;
     let output = fixture.run("start")?;
     assert!(output.status.success(), "{}", output.stderr);
+    assert_eq!(fs::read(owner_selection(&fixture)?)?, selected);
+    assert_eq!(
+        fs::read(fixture.root.path().join("runtime.json"))?,
+        inventory
+    );
+    let calls = fs::read_to_string(fixture.root.path().join("bin/peer.log"))?;
+    assert!(!calls.lines().any(|line| line.starts_with("rm ")
+        || line.starts_with("run ")
+        || line.starts_with("start ")));
     assert!(!fixture.root.path().join("run.argv").exists());
     Ok(())
 }
@@ -1580,9 +1713,20 @@ fn apple_cache_service_preserves_loopback_publication_and_narrow_managed_mounts(
         .filter(|pair| pair[0] == "-p")
         .map(|pair| pair[1])
         .collect();
+    let exported: Value = serde_json::from_str(&fixture.run("endpoints")?.stdout)?;
+    let selection = owner_selection(&fixture)?;
+    let shared: Value =
+        serde_json::from_slice(&fs::read(selection.parent().unwrap().join("shared.json"))?)?;
     assert_eq!(
         publications,
-        [format!("127.0.0.1:{}:8080", fixture.port("cache_http")?)]
+        [
+            format!(
+                "127.0.0.1:{}:8080",
+                exported["endpoints"]["cache_http"]["port"]
+            ),
+            format!("127.0.0.1:{}:3306", shared["sql_port"]),
+            format!("127.0.0.1:{}:3307", shared["sync_port"]),
+        ]
     );
     let layout = wrix_cache::backend::layout::Layout::resolve(
         if cfg!(target_os = "macos") {
@@ -1601,7 +1745,15 @@ fn apple_cache_service_preserves_loopback_publication_and_narrow_managed_mounts(
         );
     }
     assert!(!args.contains(":/cache:ro"));
-    assert!(args.contains(wrix_cache::backend::layout::runtime::COMMAND));
+    assert!(args.lines().any(|arg| arg == "wrix-shared-service"));
+    assert!(args.lines().any(|arg| arg == "wrix.dolt.shared=native-v1"));
+    let host = selection.parent().unwrap().parent().unwrap();
+    let data = host.join("service-data/dolt");
+    assert!(
+        args.lines()
+            .any(|arg| arg == format!("{}:{}:rw", data.display(), data.display()))
+    );
+    assert!(!args.contains("host-control"));
     assert!(!args.contains("/var/lib/wrix/beads/dolt"));
     Ok(())
 }
@@ -1628,8 +1780,7 @@ fn launcher_fails_before_agent_start_without_a_guest_cache_address() -> TestResu
 
 #[test]
 fn host_lifecycle_lock_blocks_starts_from_unrelated_workspaces() -> TestResult {
-    let mut fixture = Fixture::new()?;
-    fixture.disable_dolt()?;
+    let fixture = Fixture::shared_cache()?;
     let peer = fixture.root.path().join("peer");
     fs::create_dir(&peer)?;
     initialize_repository(&peer)?;
@@ -1766,8 +1917,7 @@ fn workspace_stop_preserves_running_celler_even_with_cache_opt_out() -> TestResu
 
 #[test]
 fn cache_only_retirement_preserves_backend_and_reopens_only_after_registration() -> TestResult {
-    let mut fixture = Fixture::new()?;
-    fixture.disable_dolt()?;
+    let fixture = Fixture::shared_cache()?;
     let output = fixture.run("start")?;
     assert!(output.status.success(), "{}", output.stderr);
     let state = fixture.state_root()?;
@@ -1819,102 +1969,66 @@ fn cache_only_retirement_preserves_backend_and_reopens_only_after_registration()
 }
 
 #[test]
-fn namespaces_reuse_the_selected_celler_owner_and_retire_without_removing_it() -> TestResult {
+fn cache_namespaces_reuse_the_selected_shared_owner_and_retire_without_removing_it() -> TestResult {
     use std::os::unix::fs::MetadataExt;
-    for dolt in [false, true] {
-        let mut fixture = Fixture::new()?;
-        fixture.disable_dolt()?;
-        let output = fixture.run("start")?;
-        assert!(output.status.success(), "{}", output.stderr);
-        let state = fixture.state_root()?;
-        let host = state.parent().unwrap().parent().unwrap();
-        let selection = host.join("host-lifecycle/celler-owner.json");
-        let configuration = host.join("service-data/celler/server.toml");
-        let selection_before = fs::read(&selection)?;
-        let configuration_inode = fs::metadata(&configuration)?.ino();
-        let owner_key = fs::read(state.join("keys/cache.pub"))?;
-        let peer = fixture.root.path().join("peer");
-        fs::create_dir(&peer)?;
-        initialize_repository(&peer)?;
-        if dolt {
-            fs::create_dir_all(peer.join(".beads/dolt"))?;
-        }
-        let output = run_command(
-            fixture
-                .command()?
-                .current_dir(&peer)
-                .args(["service", "endpoints"]),
-        )?;
-        assert!(output.status.success(), "{}", output.stderr);
-        let metadata: Value = serde_json::from_str(&output.stdout)?;
-        assert_eq!(
-            metadata["endpoints"]["cache_http"],
-            fixture.metadata["endpoints"]["cache_http"]
-        );
-        assert_ne!(
-            metadata["container_name"],
-            fixture.metadata["container_name"]
-        );
-        if dolt {
-            let mut replacement = fixture.snapshot.clone();
-            replacement.as_array_mut().unwrap().push(json!({
-                "configuration": {
-                    "id": metadata["container_name"],
-                    "labels": {
-                        "wrix.kind": "service",
-                        "wrix.workspace": metadata["workspace_path"],
-                        "wrix.workspace.hash": metadata["workspace_hash"],
-                        "wrix.cache.enabled": "false",
-                        "wrix.service.supervision": "1",
-                        "wrix.dolt.transport": "tcp",
-                        "wrix.dolt.auth": "tcp-root-v1"
-                    },
-                    "publishedPorts": [{"hostPort": metadata["endpoints"]["dolt_tcp"]["port"], "count": 1}]
-                },
-                "status": {"state": "running", "networks": [{"ipv4Address": "192.168.64.13/24"}]}
-            }));
-            fs::write(
-                fixture.root.path().join("replacement.json"),
-                serde_json::to_vec(&replacement)?,
-            )?;
-        }
-        let output = run_command(
-            fixture
-                .command()?
-                .current_dir(&peer)
-                .args(["service", "start"]),
-        )?;
-        assert!(output.status.success(), "{}", output.stderr);
-        let peer_state: PathBuf = serde_json::from_value(metadata["state_root"].clone())?;
-        let identity =
-            wrix_core::path::WorkspaceHash::parse(metadata["workspace_hash"].as_str().unwrap())?;
-        assert!(wrix_cache::backend::publication::Publisher::load(&peer_state, &identity).is_ok());
-        let output = run_command(fixture.command()?.current_dir(&peer).args([
-            "service",
-            "endpoints",
-            "--sandbox-cache",
-        ]))?;
-        assert!(output.status.success(), "{}", output.stderr);
-        let guest: Value = serde_json::from_str(&output.stdout)?;
-        assert_eq!(
-            guest["endpoints"]["cache_http"],
-            json!({"host": "192.168.64.12", "port": 8080})
-        );
-        if dolt {
-            let output = run_command(fixture.command()?.current_dir(&peer).args([
-                "service",
-                "dolt",
-                "sandbox-endpoint",
-            ]))?;
-            assert!(output.status.success(), "{}", output.stderr);
-            assert_eq!(
-                serde_json::from_str::<Value>(&output.stdout)?,
-                json!({"host": "192.168.64.13", "port": 3306})
-            );
-        }
+    let fixture = Fixture::shared_cache()?;
+    let state = fixture.state_root()?;
+    let host = state.parent().unwrap().parent().unwrap();
+    let selection = host.join("host-lifecycle/celler-owner.json");
+    let configuration = host.join("service-data/celler/server.toml");
+    let selection_before = fs::read(&selection)?;
+    let configuration_inode = fs::metadata(&configuration)?.ino();
+    let owner_key = fs::read(state.join("keys/cache.pub"))?;
+    let peer = fixture.root.path().join("peer");
+    fs::create_dir(&peer)?;
+    initialize_repository(&peer)?;
+    let output = run_command(
+        fixture
+            .command()?
+            .current_dir(&peer)
+            .args(["service", "start"]),
+    )?;
+    assert!(output.status.success(), "{}", output.stderr);
+    let output = run_command(
+        fixture
+            .command()?
+            .current_dir(&peer)
+            .args(["service", "endpoints"]),
+    )?;
+    assert!(output.status.success(), "{}", output.stderr);
+    let metadata: Value = serde_json::from_str(&output.stdout)?;
+    assert_eq!(
+        metadata["endpoints"]["cache_http"],
+        fixture.metadata["endpoints"]["cache_http"]
+    );
+    let peer_state: PathBuf = serde_json::from_value(metadata["state_root"].clone())?;
+    let peer_identity =
+        wrix_core::path::WorkspaceHash::parse(metadata["workspace_hash"].as_str().unwrap())?;
+    assert!(wrix_cache::backend::publication::Publisher::load(&peer_state, &peer_identity).is_ok());
+    let output = run_command(fixture.command()?.current_dir(&peer).args([
+        "service",
+        "endpoints",
+        "--sandbox-cache",
+    ]))?;
+    assert!(output.status.success(), "{}", output.stderr);
+    let guest: Value = serde_json::from_str(&output.stdout)?;
+    assert_eq!(
+        guest["endpoints"]["cache_http"],
+        json!({"host": "192.168.64.12", "port": 8080})
+    );
+    let owner_identity = wrix_core::path::WorkspaceHash::parse(
+        fixture.metadata["workspace_hash"].as_str().unwrap(),
+    )?;
+    for _ in 0..2 {
         let output = fixture.run("stop")?;
         assert!(output.status.success(), "{}", output.stderr);
-        assert!(wrix_cache::backend::publication::Publisher::load(&peer_state, &identity).is_ok());
+        assert!(
+            wrix_cache::backend::publication::Publisher::load(&peer_state, &peer_identity).is_ok()
+        );
+        assert!(matches!(
+            wrix_cache::backend::publication::Publisher::load(&state, &owner_identity),
+            Err(wrix_cache::backend::publication::Error::Retired)
+        ));
         let output = run_command(
             fixture
                 .command()?
@@ -1923,51 +2037,39 @@ fn namespaces_reuse_the_selected_celler_owner_and_retire_without_removing_it() -
         )?;
         assert!(output.status.success(), "{}", output.stderr);
         assert!(output.stdout.contains("Running"), "{}", output.stdout);
-        assert_eq!(fs::read(&selection)?, selection_before);
-        assert_eq!(fs::metadata(&configuration)?.ino(), configuration_inode);
-        assert_eq!(fs::read(state.join("keys/cache.pub"))?, owner_key);
-        if dolt {
-            let args = fs::read_to_string(fixture.root.path().join("run.argv"))?;
-            assert!(args.contains("wrix.cache.enabled=false"));
-            assert!(!args.contains("/var/lib/wrix/celler"));
-            assert!(!args.contains("/var/cache/wrix/celler"));
-            assert!(!args.contains(wrix_cache::backend::layout::runtime::COMMAND));
-        } else {
-            assert!(!fixture.root.path().join("run.argv").exists());
-        }
-        let output = run_command(
-            fixture
-                .command()?
-                .current_dir(&peer)
-                .args(["service", "stop"]),
-        )?;
-        assert!(output.status.success(), "{}", output.stderr);
-        assert!(matches!(
-            wrix_cache::backend::publication::Publisher::load(&peer_state, &identity),
-            Err(wrix_cache::backend::publication::Error::Retired)
-        ));
-        let remaining: Value =
-            serde_json::from_slice(&fs::read(fixture.root.path().join("runtime.json"))?)?;
-        assert_eq!(remaining, fixture.snapshot);
-        assert_eq!(fs::read(&selection)?, selection_before);
-        let owner_identity = wrix_core::path::WorkspaceHash::parse(
-            fixture.metadata["workspace_hash"].as_str().unwrap(),
-        )?;
-        assert!(matches!(
-            wrix_cache::backend::publication::Publisher::load(&state, &owner_identity),
-            Err(wrix_cache::backend::publication::Error::Retired)
-        ));
         let output = fixture.run("start")?;
         assert!(output.status.success(), "{}", output.stderr);
         assert!(wrix_cache::backend::publication::Publisher::load(&state, &owner_identity).is_ok());
-        assert_eq!(fs::read(state.join("keys/cache.pub"))?, owner_key);
     }
+    let output = run_command(
+        fixture
+            .command()?
+            .current_dir(&peer)
+            .args(["service", "stop"]),
+    )?;
+    assert!(output.status.success(), "{}", output.stderr);
+    assert!(matches!(
+        wrix_cache::backend::publication::Publisher::load(&peer_state, &peer_identity),
+        Err(wrix_cache::backend::publication::Error::Retired)
+    ));
+    assert_eq!(fs::read(&selection)?, selection_before);
+    assert_eq!(fs::metadata(configuration)?.ino(), configuration_inode);
+    assert_eq!(fs::read(state.join("keys/cache.pub"))?, owner_key);
+    let remaining: Value =
+        serde_json::from_slice(&fs::read(fixture.root.path().join("runtime.json"))?)?;
+    assert_eq!(remaining, fixture.snapshot);
+    let log = fs::read_to_string(fixture.root.path().join("runtime.log"))?;
+    assert!(
+        !log.lines()
+            .any(|line| line.starts_with("run ") || line.starts_with("rm "))
+    );
+    // Native SQL peer retirement and authenticated writes use genuine Beads
+    // databases in public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql.
     Ok(())
 }
 
 fn selected_inactive_owner(stopped: bool) -> TestResult<Fixture> {
-    let mut fixture = Fixture::new()?;
-    fixture.disable_dolt()?;
+    let mut fixture = Fixture::shared_cache()?;
     let output = fixture.run("start")?;
     assert!(output.status.success(), "{}", output.stderr);
     fixture.server.borrow_mut().take();
@@ -2082,8 +2184,13 @@ fn recovery_guidance_executes_selected_wrapper_after_failed_entry_with_stale_glo
     assert!(!command.starts_with("wrix "));
     fixture.api()?;
     let environment = fixture.command()?;
-    let mut recovery = Command::new("sh");
+    let mut recovery = Command::new("bash");
     recovery
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/host-command.sh"
+        ))
+        .arg("sh")
         .current_dir(&fixture.workspace)
         .envs(
             environment
@@ -2393,16 +2500,13 @@ fn selected_celler_owner_is_not_replaced_when_its_runtime_identity_is_unconfirme
     for (change, value) in [
         ("/status/state", json!("stopped")),
         (
-            "/configuration/labels/wrix.workspace.hash",
-            json!("f".repeat(64)),
+            "/configuration/labels/wrix.service.scope",
+            json!("workspace"),
         ),
         ("/configuration/labels/wrix.cache.backend", json!("unknown")),
         ("/configuration/publishedPorts", json!([])),
     ] {
-        let mut fixture = Fixture::new()?;
-        fixture.disable_dolt()?;
-        let output = fixture.run("start")?;
-        assert!(output.status.success(), "{}", output.stderr);
+        let mut fixture = Fixture::shared_cache()?;
         *fixture.snapshot[0].pointer_mut(change).unwrap() = value;
         fixture.write_snapshot()?;
         let state = fixture.state_root()?;
@@ -2429,88 +2533,50 @@ fn selected_celler_owner_is_not_replaced_when_its_runtime_identity_is_unconfirme
 
 #[cfg(target_os = "linux")]
 #[test]
-fn cohosted_namespace_retirement_and_reentry_preserve_celler_and_peer_admission() -> TestResult {
-    use std::os::unix::fs::MetadataExt;
+fn legacy_cohosted_start_preserves_live_components_and_peer_inventory_pending_maintenance()
+-> TestResult {
     let mut fixture = Fixture::new()?;
     fixture.enable_components()?;
-    let output = fixture.run("start")?;
-    assert!(output.status.success(), "{}", output.stderr);
-    let state = fixture.state_root()?;
-    let host = state.parent().unwrap().parent().unwrap();
-    let selection = host.join("host-lifecycle/celler-owner.json");
-    let configuration = host.join("service-data/celler/server.toml");
-    let before = fs::read(&selection)?;
-    let configuration_inode = fs::metadata(&configuration)?.ino();
-    let key = fs::read(state.join("keys/cache.pub"))?;
-    let key_inode = fs::metadata(state.join("keys/cache.pub"))?.ino();
     let component = fixture.component.as_ref().unwrap();
     let celler_pid = fs::read(component.root().join("celler.pid"))?;
-    let peer = fixture.root.path().join("cohost-peer");
-    fs::create_dir(&peer)?;
-    initialize_repository(&peer)?;
-    let output = run_command(
-        fixture
-            .command()?
-            .current_dir(&peer)
-            .args(["service", "start"]),
-    )?;
-    assert!(output.status.success(), "{}", output.stderr);
-    let output = run_command(
-        fixture
-            .command()?
-            .current_dir(&peer)
-            .args(["service", "endpoints"]),
-    )?;
-    let peer_metadata: Value = serde_json::from_str(&output.stdout)?;
-    let peer_state: PathBuf = serde_json::from_value(peer_metadata["state_root"].clone())?;
-    let peer_hash =
-        wrix_core::path::WorkspaceHash::parse(peer_metadata["workspace_hash"].as_str().unwrap())?;
-    let output = fixture.run("stop")?;
-    assert!(output.status.success(), "{}", output.stderr);
-    assert!(output.stdout.contains("Stopped"), "{}", output.stdout);
-    assert!(!state.join("component-transition.json").exists());
-    assert!(wrix_cache::backend::publication::Publisher::load(&peer_state, &peer_hash).is_ok());
-    let output = run_command(
-        fixture
-            .command()?
-            .current_dir(&peer)
-            .args(["service", "start"]),
-    )?;
-    assert!(output.status.success(), "{}", output.stderr);
-    for _ in 0..2 {
-        let output = fixture.run("start")?;
-        assert!(output.status.success(), "{}", output.stderr);
-    }
-    let deadline = Instant::now() + Duration::from_secs(3);
-    while fs::read_to_string(component.root().join("launches"))?
-        .lines()
-        .count()
-        != 2
-    {
-        assert!(Instant::now() < deadline);
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    let peer = fixture.snapshot[0].clone();
+    let mut peer = peer;
+    peer["configuration"]["id"] = json!("live-peer");
+    peer["configuration"]["labels"]["wrix.workspace.hash"] = json!("0123456789abcdef");
+    fixture.snapshot.as_array_mut().unwrap().push(peer);
+    fixture.write_snapshot()?;
+    let before = fs::read(fixture.root.path().join("runtime.json"))?;
+    let source = fixture.workspace.join(".beads/dolt/retained");
+    fs::write(&source, "legacy database evidence")?;
+    assert_cache_start_preserves_owner(&fixture)?;
+    assert_eq!(fs::read(fixture.root.path().join("runtime.json"))?, before);
     assert_eq!(fs::read(component.root().join("celler.pid"))?, celler_pid);
-    assert_eq!(fs::read(selection)?, before);
-    assert_eq!(fs::metadata(configuration)?.ino(), configuration_inode);
-    assert_eq!(fs::read(state.join("keys/cache.pub"))?, key);
-    assert_eq!(fs::metadata(state.join("keys/cache.pub"))?.ino(), key_inode);
-    let log = fs::read_to_string(fixture.root.path().join("runtime.log"))?;
+    assert_eq!(fs::read_to_string(source)?, "legacy database evidence");
+    let pid = String::from_utf8(celler_pid)?;
     assert!(
-        !log.lines()
-            .any(|line| line.starts_with("run ") || line.starts_with("rm ")),
-        "{log}"
+        Command::new("kill")
+            .args(["-0", pid.trim()])
+            .status()?
+            .success()
     );
+    assert!(
+        !fixture
+            .state_root()?
+            .join("component-transition.json")
+            .exists()
+    );
+    // The shared replacement's actual native retirement/peer continuity is
+    // exercised by public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql.
     Ok(())
 }
 
 #[cfg(target_os = "linux")]
 #[test]
-fn unconfirmed_component_dispatch_fences_later_mutations_and_passive_status() -> TestResult {
+fn unconfirmed_legacy_component_dispatch_fences_later_mutations_and_passive_status() -> TestResult {
     let mut fixture = Fixture::new()?;
     fixture.enable_components()?;
-    let output = fixture.run("start")?;
-    assert!(output.status.success(), "{}", output.stderr);
+    // Ordinary start must refuse legacy replacement; it is not prerequisite
+    // authority for a namespace-scoped stop of the already-running supervisor.
     fixture.component.as_mut().unwrap().stop()?;
     let output = fixture.run("stop")?;
     assert!(!output.status.success());
@@ -2678,61 +2744,10 @@ fn service_fixture_removes_ambient_image_metadata() -> TestResult {
 
 #[test]
 fn managed_checkout_outside_devshell_skips_import_and_preserves_chained_hooks() -> TestResult {
-    let fixture = Fixture::new()?;
-    let root = &fixture.workspace;
-    common::run_git(root, &["init", "-q"])?;
-    common::run_git(root, &["config", "user.name", "Wrix Test"])?;
-    common::run_git(root, &["config", "user.email", "test@example.invalid"])?;
-    fs::write(
-        root.join(".beads/config.yaml"),
-        "sync:\n  mode: dolt-native\nsync-branch: beads\nimport.auto: true\nexport.auto: false\n",
-    )?;
-    fs::write(
-        root.join(".beads/metadata.json"),
-        "{\"backend\":\"dolt\",\"dolt_mode\":\"server\",\"dolt_database\":\"beads\",\"last_bd_version\":\"1.3.0\"}\n",
-    )?;
-    fs::write(root.join(".beads/.local_version"), "1.3.0\n")?;
-    fs::write(
-        root.join(".beads/issues.jsonl"),
-        "legacy JSONL must not be imported\n",
-    )?;
-    common::run_git(root, &["add", ".beads/config.yaml", ".beads/metadata.json"])?;
-    common::run_git(root, &["commit", "-qm", "fixture"])?;
-    let output = fixture.run("start")?;
-    assert!(output.status.success(), "{}", output.stderr);
-    let hooks = root.join(".git/hooks");
-    fs::write(
-        hooks.join("post-checkout"),
-        "#!/usr/bin/env bash\nset -euo pipefail\nexec bd hooks run post-checkout \"$@\"\n",
-    )?;
-    fs::write(
-        hooks.join("post-checkout.old"),
-        "#!/usr/bin/env bash\nset -euo pipefail\ntouch chained-hook-ran\n",
-    )?;
-    set_mode(&hooks.join("post-checkout"), 0o755)?;
-    set_mode(&hooks.join("post-checkout.old"), 0o755)?;
-    let mut command = common::git_command(root, &["checkout", "-b", "after-managed-start"]);
-    command.env("HOME", fixture.root.path().join("home"));
-    for (name, _) in std::env::vars() {
-        if name.starts_with("BEADS_") || name.starts_with("BD_") {
-            command.env_remove(name);
-        }
-    }
-    let output = run_command(&mut command)?;
-    assert!(output.status.success(), "{}", output.stderr);
-    assert!(!output.stderr.contains("JSONL import"), "{}", output.stderr);
-    assert!(
-        !output.stderr.contains("no Dolt remote"),
-        "{}",
-        output.stderr
-    );
-    assert!(root.join("chained-hook-ran").is_file());
-    assert!(!root.join(".beads/dolt-server.pid").exists());
-    assert_eq!(
-        fs::read_to_string(root.join(".beads/issues.jsonl"))?,
-        "legacy JSONL must not be imported\n"
-    );
-    Ok(())
+    // The native fixture now performs this check on a genuinely seeded and
+    // adopted shared namespace. Empty .beads/dolt directories cannot stand in
+    // for a native database, nor can a fabricated version witness admit one.
+    public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql()
 }
 
 #[test]

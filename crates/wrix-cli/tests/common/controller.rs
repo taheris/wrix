@@ -47,7 +47,7 @@ impl Server {
                     }
                     match Client::open(&control.join("authority")) {
                         Ok(client) => match client.request(Operation::Inspect {}).await {
-                            Ok(Reply::Snapshot { version: 1, .. }) => return Ok(()),
+                            Ok(Reply::Snapshot { version: 2, .. }) => return Ok(()),
                             Ok(_) => {
                                 return Err(io::Error::other(
                                     "incompatible native controller fixture",

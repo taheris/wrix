@@ -34,6 +34,21 @@ pub fn wrix_command_with_path(cwd: &Path, extra_paths: &[&Path]) -> TestResult<C
     Ok(command)
 }
 
+/// Run an explicitly host-owned fixture without changing the enclosing worker.
+/// Ordinary `wrix_command` deliberately retains the worker capability boundary.
+pub fn host_wrix_command_with_path(cwd: &Path, extra_paths: &[&Path]) -> TestResult<Command> {
+    let mut command = Command::new("bash");
+    command
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/host-command.sh"
+        ))
+        .arg(env!("CARGO_BIN_EXE_wrix"))
+        .current_dir(cwd);
+    set_isolated_env(&mut command, extra_paths)?;
+    Ok(command)
+}
+
 pub fn git_command(cwd: &Path, args: &[&str]) -> Command {
     let mut command = Command::new("git");
     command.current_dir(cwd).args(args);
@@ -606,12 +621,9 @@ pub fn import_host_namespace(root: &Path, key: &str) -> TestResult {
 }
 
 fn host_workspace_command(root: &Path, args: &[&str]) -> TestResult {
-    if Path::new("/etc/wrix/image-agent").exists() {
-        return Ok(());
-    }
     fs::create_dir_all(root.join("home"))?;
     let result = run_command(
-        wrix_command(root)?
+        host_wrix_command_with_path(root, &[])?
             .env("HOME", root.join("home"))
             .env("XDG_STATE_HOME", root.join("state"))
             .env("XDG_CACHE_HOME", root.join("cache"))
@@ -649,7 +661,11 @@ fn namespace_connection(
 }
 
 pub fn read_namespace_document(path: &Path) -> TestResult<Vec<u8>> {
-    if Path::new("/etc/wrix/image-agent").exists() {
+    if !path
+        .ancestors()
+        .nth(3)
+        .is_some_and(|root| root.join("state.db").is_file())
+    {
         return Ok(fs::read(path)?);
     }
     let (db, key, owner) = namespace_connection(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
@@ -661,7 +677,11 @@ pub fn read_namespace_document(path: &Path) -> TestResult<Vec<u8>> {
 }
 
 pub fn write_namespace_document(path: &Path, bytes: &[u8]) -> TestResult {
-    if Path::new("/etc/wrix/image-agent").exists() {
+    if !path
+        .ancestors()
+        .nth(3)
+        .is_some_and(|root| root.join("state.db").is_file())
+    {
         return Ok(fs::write(path, bytes)?);
     }
     let (db, key, owner) = namespace_connection(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;

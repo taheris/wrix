@@ -145,17 +145,8 @@ pub(super) fn retire(plan: &Plan) -> Result<(), Error> {
         plan.workspace().hash(),
         Duration::from_millis(settings.explicit_lock_timeout_ms),
     ))?;
-    if let Some(lifecycle) = &plan.paths().host_lifecycle {
-        let root = lifecycle.parent().ok_or(Error::Location)?.join("control");
-        if root.try_exists()? {
-            let client = crate::control::Client::open(&root.join("authority"))?;
-            let reply = runtime.block_on(client.request(crate::control::Operation::Retire {
-                namespace: crate::control::Namespace::from(plan.workspace().hash()),
-            }))?;
-            if reply != crate::control::Reply::Applied {
-                return Err(Error::RetirementUnconfirmed);
-            }
-        }
+    if let Some(selection) = &plan.selection {
+        crate::control::retire_host_cache(selection)?;
     }
     Ok(())
 }

@@ -5,12 +5,15 @@ use std::{
     time::Duration,
 };
 
+#[cfg(test)]
 use super::DoltTransport;
 
 // Root is scoped to this workspace's service; TCP publication remains host-loopback-only.
+#[cfg(test)]
 const BOOTSTRAP_SQL: &str = "CREATE USER IF NOT EXISTS 'root'@'%'; \
     GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;";
 
+#[cfg(test)]
 pub(super) fn server_command(
     transport: DoltTransport,
     data_dir: &Path,
@@ -39,6 +42,7 @@ pub(super) fn server_command(
 }
 
 /// File SQL is disabled even when the native engine omits FILE privilege checks.
+#[cfg(test)]
 fn server_configuration(data_dir: &Path, socket_dir: &Path, host: &str, port: u16) -> String {
     serde_json::json!({
         "data_dir": data_dir.display().to_string().replace('$', "$$"),
@@ -90,6 +94,7 @@ fn probe_tcp_with_client(port: u16, budget: Duration, client: &Path) -> io::Resu
     }))
 }
 
+#[cfg(test)]
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }

@@ -35,7 +35,10 @@ async fn controller_identity_survives_restart_without_becoming_a_namespace() -> 
     let resumed = Controller::bind(&root)?;
     assert_eq!(resumed.deployment_id(), &id);
     assert_eq!(fs::read(root.join("deployment.json"))?, snapshot);
-    assert!(!root.join("namespaces.json").exists());
+    let registry: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join("namespaces.json"))?)?;
+    assert_eq!(registry["version"], 2);
+    assert_eq!(registry["entries"], serde_json::json!([]));
     let other = Controller::bind(&directory.path().canonicalize()?.join("other"))?;
     assert_ne!(other.deployment_id(), &id);
     Ok(())
@@ -70,7 +73,9 @@ async fn concurrent_controller_ownership_creates_only_one_deployment_identity() 
             "ownership",
             "deployment.json",
             "management.key",
-            "control.sock"
+            "control.sock",
+            "namespaces.lock",
+            "namespaces.json"
         ]
         .into_iter()
         .map(std::ffi::OsString::from)

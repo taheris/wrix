@@ -78,23 +78,6 @@ impl Selected {
             && self.container == plan.container_name()
     }
 
-    pub fn from_plan(
-        plan: &Plan,
-        runtime: RuntimeKind,
-        recipe: Option<Recipe>,
-    ) -> Result<Self, Error> {
-        Ok(Self {
-            runtime,
-            workspace: Some(plan.workspace().hash().clone()),
-            container: plan.container_name(),
-            port: plan
-                .owned_cache_port()
-                .and_then(NonZeroU16::new)
-                .ok_or(Error::Invalid)?,
-            recipe,
-        })
-    }
-
     /// Passive lookup never creates state, selects a backend or repairs metadata.
     pub fn read(root: &Path) -> Result<Option<Self>, Error> {
         let file = match OpenOptions::new()

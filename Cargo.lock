@@ -3201,6 +3201,7 @@ name = "wrix-beads"
 version = "0.1.0"
 dependencies = [
  "displaydoc",
+ "fs2",
  "tempfile",
  "thiserror",
  "wrix-core",
@@ -3325,6 +3326,7 @@ dependencies = [
  "rama-net",
  "rama-tcp",
  "reqwest",
+ "rustix",
  "serde",
  "serde_json",
  "serde_yaml_ng",

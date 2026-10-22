@@ -223,6 +223,9 @@ wrix_allow_local_endpoints() {
   if [[ -n "${BEADS_DOLT_SERVER_HOST:-}" && -n "${BEADS_DOLT_SERVER_PORT:-}" ]]; then
     endpoints="$endpoints,${BEADS_DOLT_SERVER_HOST}:${BEADS_DOLT_SERVER_PORT}/tcp"
   fi
+  if [[ -n "${WRIX_BEADS_SYNC_HOST:-}" && -n "${WRIX_BEADS_SYNC_PORT:-}" ]]; then
+    endpoints="$endpoints,${WRIX_BEADS_SYNC_HOST}:${WRIX_BEADS_SYNC_PORT}/tcp"
+  fi
   if [[ -n "${WRIX_NIX_CACHE_HOST:-}" && -n "${WRIX_NIX_CACHE_PORT:-}" ]]; then
     endpoints="$endpoints,${WRIX_NIX_CACHE_HOST}:${WRIX_NIX_CACHE_PORT}/tcp"
   fi

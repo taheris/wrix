@@ -6,6 +6,7 @@ use std::{
 };
 
 use displaydoc::Display;
+use fs2::FileExt;
 use thiserror::Error as ThisError;
 use wrix_core::{
     beads_config::{ReadError, read_sync_branch},
@@ -155,7 +156,11 @@ fn push(stdout: &mut impl Write, stderr: &mut impl Write) -> Result<ExitCode> {
     env::set_current_dir(&context.root)?;
     disable_auto_export()?;
     restore_staged_dolt_remote(&context)?;
-    let remote_override = prepare_dolt_origin_remote(&context, stderr)?;
+    let remote_override = if context.managed.is_some() {
+        DoltRemoteOverride::inactive()
+    } else {
+        prepare_dolt_origin_remote(&context, stderr)?
+    };
     let sync_result = sync_dolt_remote(&context, stderr);
     let restore_result = remote_override.restore();
     let sync_status = sync_result?;
@@ -163,6 +168,15 @@ fn push(stdout: &mut impl Write, stderr: &mut impl Write) -> Result<ExitCode> {
     if sync_status != ExitCode::SUCCESS {
         return Ok(ExitCode::FAILURE);
     }
+    let _sync_lock = context
+        .managed
+        .as_ref()
+        .map(|managed| -> Result<fs::File> {
+            let file = fs::File::open(&managed.lock)?;
+            file.lock_exclusive()?;
+            Ok(file)
+        })
+        .transpose()?;
     sync_beads_git_branch(&context, stdout, stderr)
 }
 
@@ -173,6 +187,13 @@ struct Context {
     worktree: PathBuf,
     worktree_remote_dir: PathBuf,
     recovery_remote_dir: PathBuf,
+    managed: Option<Managed>,
+}
+
+struct Managed {
+    base: PathBuf,
+    lock: PathBuf,
+    guest: bool,
 }
 
 impl Context {
@@ -192,9 +213,49 @@ impl Context {
         }
         let root = root.canonicalize()?;
         let branch = read_sync_branch(&root)?;
-        let worktree = root.join(".git/beads-worktrees").join(branch.as_str());
+        let guest =
+            env::var_os("IS_SANDBOX").is_some() || Path::new("/etc/wrix/image-agent").exists();
+        let roots = wrix_core::host_path::Roots::discover()?;
+        let namespace = roots
+            .state()
+            .join("service-data/dolt/namespaces")
+            .join(selection.workspace().hash().as_str());
+        let registered = roots
+            .state()
+            .join("host-control/dolt")
+            .join(selection.workspace().hash().as_str())
+            .join("registration.json")
+            .is_file();
+        let managed = if guest && env::var("WRIX_BEADS_MANAGED").as_deref() == Ok("1") {
+            Some(Managed {
+                base: PathBuf::from("/run/wrix/beads-sync"),
+                lock: PathBuf::from("/run/wrix/beads-lock"),
+                guest: true,
+            })
+        } else if !guest && registered {
+            Some(Managed {
+                base: namespace.clone(),
+                lock: namespace.join("git-sync.lock"),
+                guest: false,
+            })
+        } else {
+            None
+        };
+        let worktree = managed.as_ref().map_or_else(
+            || root.join(".git/beads-worktrees").join(branch.as_str()),
+            |managed| {
+                if managed.guest {
+                    managed.base.clone()
+                } else {
+                    managed.base.join("beads-sync").join(branch.as_str())
+                }
+            },
+        );
         let worktree_remote_dir = worktree.join(".beads/dolt-remote");
-        let recovery_remote_dir = root.join(".git/wrix-beads-dolt-remote-recovery");
+        let recovery_remote_dir = managed.as_ref().map_or_else(
+            || root.join(".git/wrix-beads-dolt-remote-recovery"),
+            |managed| managed.base.join("remote-recovery"),
+        );
         let context = Self {
             selection,
             root,
@@ -202,6 +263,7 @@ impl Context {
             worktree,
             worktree_remote_dir,
             recovery_remote_dir,
+            managed,
         };
         context.check_worktree_paths()?;
         Ok(Some(context))
@@ -210,8 +272,13 @@ impl Context {
     fn check_worktree_paths(&self) -> Result<()> {
         self.selection.recheck()?;
         let git_dir = self.root.join(".git");
-        check_managed_directory(&git_dir, &self.worktree_remote_dir)?;
-        check_managed_directory(&git_dir, &self.recovery_remote_dir)
+        check_directory_component(&git_dir)?;
+        let base = self
+            .managed
+            .as_ref()
+            .map_or(git_dir.as_path(), |managed| managed.base.as_path());
+        check_managed_directory(base, &self.worktree_remote_dir)?;
+        check_managed_directory(base, &self.recovery_remote_dir)
     }
 }
 
@@ -372,7 +439,7 @@ fn sync_dolt_remote(context: &Context, stderr: &mut impl Write) -> Result<ExitCo
 
     context.selection.recheck()?;
 
-    let push = run_output("bd", &["dolt", "push"])?;
+    let push = run_sync(context, Sync::Push)?;
     if !push.stderr.is_empty() {
         stderr.write_all(&push.stderr)?;
     }
@@ -383,6 +450,29 @@ fn sync_dolt_remote(context: &Context, stderr: &mut impl Write) -> Result<ExitCo
         return Ok(ExitCode::FAILURE);
     }
     pull_with_intent_protection(context, stderr)
+}
+
+#[derive(Clone, Copy)]
+enum Sync {
+    Push,
+    Pull,
+}
+
+fn run_sync(context: &Context, operation: Sync) -> Result<Output> {
+    let operation = match operation {
+        Sync::Push => "push",
+        Sync::Pull => "pull",
+    };
+    if context.managed.is_some() {
+        Ok(
+            ProcessCommand::new(env::var_os("WRIX_BIN").unwrap_or_else(|| "wrix".into()))
+                .args(["service", "dolt", &format!("sync-{operation}")])
+                .current_dir(&context.root)
+                .output()?,
+        )
+    } else {
+        run_output("bd", &["dolt", operation])
+    }
 }
 
 fn is_fast_forward_rejection(stderr: &[u8]) -> bool {
@@ -405,16 +495,16 @@ fn pull_with_intent_protection(context: &Context, stderr: &mut impl Write) -> Re
     let affected_ids = query_affected_ids()?;
     if affected_ids.is_empty() {
         context.selection.recheck()?;
-        run_required("bd", &["dolt", "pull"])?;
+        status_to_result("namespace pull", &run_sync(context, Sync::Pull)?)?;
         context.selection.recheck()?;
-        let push = run_output("bd", &["dolt", "push"])?;
+        let push = run_sync(context, Sync::Push)?;
         return Ok(status_to_exit(&push));
     }
 
     let snapshot_query = snapshot_query_for_ids(&affected_ids);
     let intent = run_required_output("bd", &["sql", "--csv", &snapshot_query])?;
     context.selection.recheck()?;
-    run_required("bd", &["dolt", "pull"])?;
+    status_to_result("namespace pull", &run_sync(context, Sync::Pull)?)?;
     let post = run_required_output("bd", &["sql", "--csv", &snapshot_query])?;
     if intent.stdout != post.stdout {
         writeln!(
@@ -433,7 +523,7 @@ fn pull_with_intent_protection(context: &Context, stderr: &mut impl Write) -> Re
         return Ok(ExitCode::FAILURE);
     }
     context.selection.recheck()?;
-    let push = run_output("bd", &["dolt", "push"])?;
+    let push = run_sync(context, Sync::Push)?;
     Ok(status_to_exit(&push))
 }
 
@@ -474,7 +564,9 @@ fn sync_beads_git_branch(
         return Ok(ExitCode::SUCCESS);
     }
     context.check_worktree_paths()?;
-    repair_worktree_pointers(context)?;
+    if context.managed.is_none() {
+        repair_worktree_pointers(context)?;
+    }
     context.selection.recheck()?;
     commit_dirty_worktree(&context.worktree)?;
     context.selection.recheck()?;
@@ -499,6 +591,16 @@ fn ensure_beads_worktree(context: &Context, stderr: &mut impl Write) -> Result<b
             .success()
     {
         return Ok(true);
+    }
+    if context
+        .managed
+        .as_ref()
+        .is_some_and(|managed| managed.guest)
+    {
+        return Err(Error::UnsafeWorktreePath {
+            path: "managed guest worktree is unavailable; repair from the host before retrying"
+                .into(),
+        });
     }
     if context.worktree.is_dir() {
         run_git_required(&["worktree", "prune"])?;
@@ -735,8 +837,78 @@ fn run_git_output(args: &[&str]) -> Result<Output> {
 }
 
 fn run_git_output_in(cwd: &Path, args: &[&str]) -> Result<Output> {
-    let mut command = process_command_in(cwd, "git", args);
-    Ok(command.env("PREK_ALLOW_NO_CONFIG", "1").output()?)
+    let mut command = process_command_in(cwd, "git", &[]);
+    if cwd == Path::new("/run/wrix/beads-sync")
+        && env::var("WRIX_BEADS_MANAGED").as_deref() == Ok("1")
+    {
+        let git_dir = PathBuf::from(
+            env::var_os("WRIX_BEADS_GIT_DIR")
+                .ok_or_else(|| io::Error::other("missing scoped Git administration"))?,
+        );
+        if git_dir != Path::new("/run/wrix/beads-git")
+            || git_dir
+                .components()
+                .any(|component| matches!(component, Component::ParentDir | Component::CurDir))
+        {
+            return Err(Error::UnsafeWorktreePath {
+                path: git_dir.display().to_string(),
+            });
+        }
+        command
+            .env("GIT_DIR", git_dir)
+            .env("GIT_COMMON_DIR", "/run/wrix/beads-git")
+            .env("GIT_WORK_TREE", cwd);
+    }
+    if wrix_state::host::Host::discover().is_ok() {
+        let namespaces = wrix_core::host_path::Roots::discover()?
+            .state()
+            .join("service-data/dolt/namespaces");
+        if let Ok(relative) = cwd.strip_prefix(&namespaces) {
+            let parts: Vec<_> = relative.components().collect();
+            if parts.len() != 3 || parts[1].as_os_str() != "beads-sync" {
+                return Err(Error::UnsafeWorktreePath {
+                    path: cwd.display().to_string(),
+                });
+            }
+            let hash = parts[0]
+                .as_os_str()
+                .to_str()
+                .ok_or_else(|| io::Error::other("invalid namespace"))?;
+            wrix_core::path::WorkspaceHash::parse(hash).map_err(io::Error::other)?;
+            let git = wrix_core::host_path::Roots::discover()?
+                .state()
+                .join("host-control/beads-git")
+                .join(hash)
+                .join("repository");
+            check_directory_component(&git)?;
+            if !git.is_dir() {
+                return Err(Error::UnsafeWorktreePath {
+                    path: git.display().to_string(),
+                });
+            }
+            command
+                .env("GIT_DIR", &git)
+                .env("GIT_COMMON_DIR", &git)
+                .env("GIT_WORK_TREE", cwd)
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env_remove("GIT_CONFIG_COUNT")
+                .env_remove("GIT_CONFIG_PARAMETERS")
+                .env_remove("GIT_INDEX_FILE")
+                .env_remove("GIT_OBJECT_DIRECTORY")
+                .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
+                .args([
+                    "-c",
+                    "core.hooksPath=/dev/null",
+                    "-c",
+                    "core.fsmonitor=false",
+                ]);
+        }
+    }
+    Ok(command
+        .args(args)
+        .env("PREK_ALLOW_NO_CONFIG", "1")
+        .output()?)
 }
 
 fn process_command_in(cwd: &Path, program: &str, args: &[&str]) -> ProcessCommand {

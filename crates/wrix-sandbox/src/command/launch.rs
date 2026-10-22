@@ -377,6 +377,7 @@ struct ServicesState {
     project_cache: Option<ProjectCache>,
     beads_socket: Option<BeadsSocket>,
     beads_tcp: Option<BeadsTcp>,
+    beads_client: Option<BeadsClient>,
 }
 
 struct ProjectCache {
@@ -388,6 +389,8 @@ struct ProjectCache {
 
 #[derive(Deserialize)]
 struct ServiceMetadata {
+    #[serde(default)]
+    dolt_managed: bool,
     state_root: PathBuf,
     endpoints: ServiceEndpoints,
 }
@@ -415,6 +418,32 @@ fn read_cache_public_key(path: &Path) -> Result<CachePublicKey, LaunchError> {
             source,
         }
     })
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BeadsClient {
+    credentials: BeadsCredentials,
+    sync: BeadsSync,
+    worktree: PathBuf,
+    git_common: PathBuf,
+    git_admin: PathBuf,
+    lock: PathBuf,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BeadsCredentials {
+    database: String,
+    user: String,
+    password: String,
+}
+
+#[derive(Deserialize, serde::Serialize)]
+#[serde(tag = "transport", rename_all = "snake_case", deny_unknown_fields)]
+enum BeadsSync {
+    Unix { path: PathBuf },
+    Tcp { host: Ipv4Addr, port: NonZeroU16 },
 }
 
 struct BeadsSocket {
@@ -1129,7 +1158,7 @@ impl<'a> Plan<'a> {
                     .is_some()
                     .then_some(pi_auth::CONTAINER_FILE.to_owned()),
                 services,
-            ) {
+            )? {
                 command.arg("-e").arg(format!("{key}={value}"));
             }
             for (key, value) in self.host_podman_socket_env_pairs(staged_beads.as_deref()) {
@@ -1178,6 +1207,7 @@ impl<'a> Plan<'a> {
             let credentials = self.credentials(staging)?;
             let pi_auth = self.pi_auth()?;
             let mut darwin_mounts = self.darwin_mounts(staging, pi_auth.as_ref())?;
+            darwin_mounts.mounts.extend(services.beads_mounts());
             if let Some(cache) = &services.project_cache {
                 darwin_mounts.mounts.push(cache.mount());
             }
@@ -1220,7 +1250,7 @@ impl<'a> Plan<'a> {
                     .is_some()
                     .then_some(pi_auth::CONTAINER_FILE.to_owned()),
                 services,
-            ) {
+            )? {
                 command.arg("-e").arg(format!("{key}={value}"));
             }
             if let Some(value) = darwin_mounts.dir_env() {
@@ -1261,16 +1291,10 @@ impl<'a> Plan<'a> {
         if let Some(notification) = linux_notification_socket_mount()? {
             volumes.push(notification);
         }
-        if let Some(beads) = &services.beads_socket
-            && let Some(source) = &beads.mount_source
-        {
-            volumes.push(RenderedMount {
-                host: source.display().to_string(),
-                container: String::from("/run/wrix/dolt"),
-                mode: MountMode::Rw,
-                optional: false,
-            });
+        if let Some(socket) = services.beads_socket_mount() {
+            volumes.push(socket);
         }
+        volumes.extend(services.beads_mounts());
         if let Some(cache) = &services.project_cache {
             volumes.push(cache.mount());
         }
@@ -1397,7 +1421,7 @@ impl<'a> Plan<'a> {
         credentials: Option<&Credentials>,
         pi_auth: Option<String>,
         services: &ServicesState,
-    ) -> Vec<(String, String)> {
+    ) -> Result<Vec<(String, String)>, LaunchError> {
         let mut pairs = self
             .request
             .profile_config
@@ -1476,6 +1500,45 @@ impl<'a> Plan<'a> {
                 beads.port.to_string(),
             ));
         }
+        if let Some(client) = &services.beads_client {
+            if let BeadsSync::Tcp { host, port } = &client.sync {
+                pairs.extend([
+                    ("WRIX_BEADS_SYNC_HOST".into(), host.to_string()),
+                    ("WRIX_BEADS_SYNC_PORT".into(), port.to_string()),
+                ]);
+            }
+            pairs.extend([
+                (
+                    "BEADS_DOLT_SERVER_USER".into(),
+                    client.credentials.user.clone(),
+                ),
+                (
+                    "BEADS_DOLT_PASSWORD".into(),
+                    client.credentials.password.clone(),
+                ),
+                (
+                    "BEADS_DOLT_SERVER_DATABASE".into(),
+                    client.credentials.database.clone(),
+                ),
+                ("WRIX_BEADS_MANAGED".into(), "1".into()),
+                ("BEADS_DOLT_SHARED_SERVER".into(), "1".into()),
+                ("WRIX_BEADS_WORKTREE".into(), "/run/wrix/beads-sync".into()),
+                ("WRIX_BEADS_GIT_COMMON".into(), "/run/wrix/beads-git".into()),
+                (
+                    "WRIX_BEADS_GIT_DIR".into(),
+                    Path::new("/run/wrix/beads-git")
+                        .join(&client.git_admin)
+                        .display()
+                        .to_string(),
+                ),
+                ("WRIX_BEADS_SYNC_LOCK".into(), "/run/wrix/beads-lock".into()),
+                (
+                    "WRIX_BEADS_SYNC_ENDPOINT".into(),
+                    serde_json::to_string(&client.sync)
+                        .map_err(|source| LaunchError::ServiceJson { source })?,
+                ),
+            ]);
+        }
         if let Some(auth) = pi_auth {
             pairs.push((String::from("WRIX_PI_AUTH_JSON"), auth));
         }
@@ -1484,7 +1547,7 @@ impl<'a> Plan<'a> {
         }
         pairs.retain(|(name, _)| name != "WRIX_EFFECTIVE_GIT_SIGN");
         pairs.push(self.effective_sign_env_pair());
-        pairs
+        Ok(pairs)
     }
 
     fn effective_sign_env_pair(&self) -> (String, String) {
@@ -1802,6 +1865,46 @@ impl ProjectCache {
 }
 
 impl ServicesState {
+    fn beads_socket_mount(&self) -> Option<RenderedMount> {
+        let source = self.beads_socket.as_ref()?.mount_source.as_ref()?;
+        Some(RenderedMount {
+            host: source.display().to_string(),
+            container: String::from("/run/wrix/dolt"),
+            // Connecting is allowed through RO; replacing shared listeners is not.
+            mode: if self.beads_client.is_some() {
+                MountMode::Ro
+            } else {
+                MountMode::Rw
+            },
+            optional: false,
+        })
+    }
+
+    fn beads_mounts(&self) -> Vec<RenderedMount> {
+        self.beads_client.as_ref().map_or_else(Vec::new, |client| {
+            vec![
+                RenderedMount {
+                    host: client.worktree.display().to_string(),
+                    container: "/run/wrix/beads-sync".into(),
+                    mode: MountMode::Rw,
+                    optional: false,
+                },
+                RenderedMount {
+                    host: client.git_common.display().to_string(),
+                    container: "/run/wrix/beads-git".into(),
+                    mode: MountMode::Rw,
+                    optional: false,
+                },
+                RenderedMount {
+                    host: client.lock.display().to_string(),
+                    container: "/run/wrix/beads-lock".into(),
+                    mode: MountMode::Ro,
+                    optional: false,
+                },
+            ]
+        })
+    }
+
     fn wait(&mut self, command: &mut ProcessCommand) -> Result<ExitStatus, LaunchError> {
         match self.project_cache.take() {
             Some(cache) => Ok(cache.session.wait(&mut command.spawn()?)?),
@@ -1903,6 +2006,42 @@ impl ServicesState {
     }
 
     fn load_dolt(&mut self, workspace: &Path) -> Result<(), LaunchError> {
+        let metadata = run_service(workspace, &["service", "endpoints", "--no-cache"])?;
+        let metadata: ServiceMetadata = serde_json::from_slice(&metadata.stdout)
+            .map_err(|source| LaunchError::ServiceJson { source })?;
+        if metadata.dolt_managed {
+            let output = run_service(workspace, &["service", "dolt", "sandbox-client"])?;
+            let mut client: BeadsClient = serde_json::from_slice(&output.stdout)
+                .map_err(|source| LaunchError::ServiceJson { source })?;
+            wrix_core::path::WorkspaceHash::parse(&client.credentials.database)
+                .map_err(|_| LaunchError::MissingDoltSocket)?;
+            if client.credentials.user != client.credentials.database[..32]
+                || client.credentials.password.len() != 64
+                || !client
+                    .credentials
+                    .password
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit())
+            {
+                return Err(LaunchError::MissingDoltSocket);
+            }
+            if !client.worktree.is_absolute()
+                || !client.git_common.is_absolute()
+                || !client.lock.is_absolute()
+                || client.git_common != client.worktree.join(".git")
+                || !client.git_admin.as_os_str().is_empty()
+                || client
+                    .git_admin
+                    .components()
+                    .any(|component| !matches!(component, std::path::Component::Normal(_)))
+            {
+                return Err(LaunchError::MissingDoltSocket);
+            }
+            if let BeadsSync::Unix { path } = &mut client.sync {
+                *path = PathBuf::from("/run/wrix/dolt/sync.sock");
+            }
+            self.beads_client = Some(client);
+        }
         if Platform::CURRENT == Platform::Linux {
             let output = run_service(workspace, &["service", "dolt", "socket"])?;
             let socket = trim_stdout(&output.stdout);
@@ -2937,6 +3076,53 @@ mod test {
         vmnet_interface,
     };
     use crate::command::config::{MountMode, Platform, ProfileMount, SpawnMount};
+
+    #[test]
+    fn managed_beads_mounts_only_own_private_git_and_readonly_shared_sockets() {
+        let namespace = PathBuf::from("/host/service-data/dolt/namespaces").join("a".repeat(64));
+        let worktree = namespace.join("beads-sync/beads");
+        let client = super::BeadsClient {
+            credentials: super::BeadsCredentials {
+                database: "a".repeat(64),
+                user: "a".repeat(32),
+                password: "b".repeat(64),
+            },
+            sync: super::BeadsSync::Unix {
+                path: "/run/wrix/dolt/sync.sock".into(),
+            },
+            git_common: namespace.join("guest-git"),
+            git_admin: PathBuf::new(),
+            worktree,
+            lock: namespace.join("git-sync.lock"),
+        };
+        let services = super::ServicesState {
+            beads_client: Some(client),
+            beads_socket: Some(super::BeadsSocket {
+                container_socket: "/run/wrix/dolt/dolt.sock".into(),
+                mount_source: Some("/host/service-data/dolt/run".into()),
+            }),
+            ..super::ServicesState::default()
+        };
+        let socket = services.beads_socket_mount().unwrap();
+        assert_eq!(socket.mode, MountMode::Ro);
+        assert_eq!(socket.container, "/run/wrix/dolt");
+        let mounts = services.beads_mounts();
+        assert_eq!(mounts.len(), 3);
+        assert!(
+            mounts
+                .iter()
+                .all(|mount| Path::new(&mount.host).starts_with(&namespace))
+        );
+        assert!(mounts.iter().all(|mount| {
+            !Path::new(&mount.host).starts_with(namespace.join("native-remote"))
+                && !Path::new(&mount.host).starts_with(namespace.join("host-git"))
+                && Path::new(&mount.host) != namespace.join("sync.lock")
+        }));
+        assert_eq!(
+            mounts[1].host,
+            namespace.join("guest-git").display().to_string()
+        );
+    }
 
     #[test]
     fn krun_configuration_maps_host_identity_to_managed_guest_root() {

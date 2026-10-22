@@ -7,7 +7,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use super::{Action, Error, Observation};
+use super::{Error, Observation};
 use crate::{control::Namespace, lifecycle::coordination};
 use serde::{Deserialize, Serialize};
 use wrix_core::path::WorkspaceHash;
@@ -20,15 +20,6 @@ const LIMIT: u64 = 4096;
 pub enum Change {
     Retire,
     Resume,
-}
-
-impl Change {
-    pub const fn action(self) -> Action {
-        match self {
-            Self::Retire => Action::Retire,
-            Self::Resume => Action::Resume,
-        }
-    }
 }
 
 #[derive(Deserialize, Serialize)]

@@ -82,10 +82,8 @@ impl Controller {
         issuer: &Authority,
         workspace: &WorkspaceHash,
     ) -> Result<Credential, Error> {
-        let registry = self
-            .namespaces
-            .lock()
-            .map_err(|_| super::Error::LockPoisoned)?;
+        let _lease = self.registrations.lease(&Namespace::from(workspace))?;
+        let registry = self.registrations.lock()?;
         let policy = registry
             .get(&Namespace::from(workspace))
             .ok_or(super::Error::UnknownNamespace)?;

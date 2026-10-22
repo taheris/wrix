@@ -12,6 +12,7 @@ mod wire;
 use displaydoc::Display;
 use std::io;
 use thiserror::Error as ThisError;
+#[cfg(test)]
 use wrix_core::path::WorkspaceHash;
 
 pub use wire::{Action, Observation};
@@ -88,6 +89,7 @@ pub enum Error {
     },
 }
 
+#[cfg(test)]
 pub(super) fn command(namespace: &WorkspaceHash, first: &str, second: &str) -> String {
     format!(
         "exec wrix-service-supervisor serve {} {} {} {} {}",
@@ -99,6 +101,7 @@ pub(super) fn command(namespace: &WorkspaceHash, first: &str, second: &str) -> S
     )
 }
 
+#[cfg(test)]
 fn quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }

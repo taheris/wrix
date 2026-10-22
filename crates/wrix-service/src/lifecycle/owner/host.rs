@@ -20,16 +20,15 @@ use wrix_cache::backend::{
 use wrix_core::path::ContainerName;
 
 pub(in crate::lifecycle) fn recover() -> Result<String> {
-    let roots = wrix_core::host_path::Roots::discover()?;
-    let guard = coordination::acquire(&roots.state().join("host-lifecycle"))?;
+    let host = wrix_state::host::Host::discover().map_err(std::io::Error::other)?;
+    let guard = coordination::acquire(&host.roots().state().join("host-lifecycle"))?;
     let previous = Selected::read(guard.root())?;
     let pending = Selected::read(&guard.root().join("celler-candidate"))?;
-    let recorded = previous
-        .as_ref()
-        .or(pending.as_ref())
-        .ok_or(Error::RecoveryScope)?;
+    let recorded = previous.as_ref().or(pending.as_ref());
     let mut runtime = Runtime::from_env()?;
-    if runtime.kind != recorded.runtime {
+    if let Some(recorded) = recorded
+        && runtime.kind != recorded.runtime
+    {
         runtime.kind = recorded.runtime;
         runtime.binary = match recorded.runtime {
             RuntimeKind::Podman => "podman",
@@ -37,7 +36,8 @@ pub(in crate::lifecycle) fn recover() -> Result<String> {
         }
         .into();
     }
-    let selected = ensure(&runtime, &guard, previous.as_ref(), None)?;
+    let selected = ensure(&runtime, &guard, previous.as_ref(), None, true)?;
+    crate::control::recover_registry(&host).map_err(std::io::Error::other)?;
     Ok(format!(
         "Celler owner: {}\nruntime: Running\n",
         selected.container
@@ -50,6 +50,7 @@ pub(in crate::lifecycle) fn ensure(
     guard: &coordination::Guard,
     previous: Option<&Selected>,
     bootstrap_port: Option<NonZeroU16>,
+    maintenance: bool,
 ) -> Result<Selected> {
     let root = guard
         .root()
@@ -127,6 +128,30 @@ pub(in crate::lifecycle) fn ensure(
         }
         validate(runtime, &selected, status)?;
     }
+    let shared = super::super::shared::Record::at(guard.root())?;
+    let shared_runtime = status != RuntimeStatus::Missing
+        && runtime
+            .inspect_label(selected.container.as_str(), super::super::shared::LABEL)?
+            .as_deref()
+            == Some(super::super::shared::VERSION);
+    if status == RuntimeStatus::Running && (shared.is_none() || !shared_runtime) {
+        return Err(Error::IncompatibleService {
+            container: selected.container.as_str().into(),
+        });
+    }
+    if previous.is_some() && (shared.is_none() || status != RuntimeStatus::Running) && !maintenance
+    {
+        return Err(Error::CellerUnavailable {
+            container: selected.container.as_str().into(),
+            status,
+            command: super::super::recovery_command(runtime.kind)?,
+        });
+    }
+    super::super::shared::check_inventory(
+        runtime,
+        Some(&selected),
+        maintenance || (shared.is_some() && shared_runtime),
+    )?;
     let layout = Layout::current()?;
     let issuer = root.join("host-control/celler-issuer");
     if previous.is_some() || candidate.is_some() {
@@ -136,18 +161,47 @@ pub(in crate::lifecycle) fn ensure(
     Authority::provision(&issuer, layout.metadata()).map_err(super::super::cache::Error::from)?;
     if status == RuntimeStatus::Running {
         ready(root, &issuer, selected.port)?;
+        sql_ready(runtime, &selected, root)?;
         if candidate.is_some() {
             commit(&selected, previous, guard)?;
             fs::remove_file(candidate_root.join("celler-owner.json"))?;
         }
         return Ok(selected);
     }
-    runtime.binding.as_ref().ok_or(binding::Error::Missing)?;
+    if shared_runtime && status == RuntimeStatus::Stopped {
+        let output = Command::new(&runtime.binary)
+            .args(["start", selected.container.as_str()])
+            .output()?;
+        if !output.status.success() {
+            return Err(Error::Operation {
+                message: String::from_utf8_lossy(&output.stderr).into_owned(),
+            });
+        }
+        ready(root, &issuer, selected.port)?;
+        sql_ready(runtime, &selected, root)?;
+        return Ok(selected);
+    }
     if status == RuntimeStatus::Stopped {
         runtime.remove(&selected.container)?;
     }
+    let shared = super::super::shared::Record::prepare(guard)?;
+    let data = root.join("service-data/dolt");
+    crate::dolt::private_directory(&data)?;
     wrix_cache::backend::layout::runtime::install(layout.metadata())?;
-    let image = runtime.ensure_image_at(root)?;
+    let resumed_runtime = Runtime {
+        binary: runtime.binary.clone(),
+        kind: runtime.kind,
+        binding: if maintenance {
+            runtime.binding.clone()
+        } else {
+            selected
+                .recipe
+                .as_ref()
+                .map(|recipe| recipe.binding.clone())
+                .or_else(|| runtime.binding.clone())
+        },
+    };
+    let image = resumed_runtime.ensure_image_at(root)?;
     let recovered = Selected {
         workspace: None,
         recipe: image.clone_recipe(),
@@ -185,20 +239,53 @@ pub(in crate::lifecycle) fn ensure(
             .arg("--label")
             .arg(format!("wrix.workspace.hash={workspace}"));
     }
+    command.args(shared.arguments(&data));
     let output = command
         .arg(image.as_str())
-        .args(["sh", "-c", wrix_cache::backend::layout::runtime::COMMAND])
+        .arg("wrix-shared-service")
+        .arg(&data)
+        .arg(shared.transport())
         .stdin(Stdio::null())
         .output()?;
     if !output.status.success() {
-        return Err(Error::Operation {
-            message: String::from_utf8_lossy(&output.stderr).into_owned(),
-        });
+        let message = String::from_utf8_lossy(&output.stderr).into_owned();
+        return Err(
+            super::super::bind_port_from_runtime_error(&message).map_or_else(
+                || Error::Operation { message },
+                |port| runtime.port_in_use_error(port),
+            ),
+        );
     }
     ready(root, &issuer, selected.port)?;
+    sql_ready(runtime, &recovered, root)?;
     commit(&recovered, previous, guard)?;
     fs::remove_file(candidate_root.join("celler-owner.json"))?;
     Ok(recovered)
+}
+
+fn sql_ready(runtime: &Runtime, selected: &Selected, root: &Path) -> Result<()> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let data = root.join("service-data/dolt");
+        let output = Command::new("timeout").args(["--signal=KILL", "2"]).arg(&runtime.binary)
+            .args(["exec", selected.container.as_str(), "sh", "-c", "export DOLT_CLI_PASSWORD=\"$(cat -- \"$1/admin.password\")\"; exec dolt --host 127.0.0.1 --port 3306 --no-tls --password \"$DOLT_CLI_PASSWORD\" --user wrixadmin --use-db controller sql -r json -q 'SELECT @@GLOBAL.secure_file_priv AS secure_file_priv'", "wrix-ready"])
+            .arg(data).output()?;
+        if output.status.success() {
+            let value: serde_json::Value =
+                serde_json::from_slice(&output.stdout).map_err(std::io::Error::other)?;
+            if value["rows"][0]["secure_file_priv"] == "/dev/null" {
+                return Ok(());
+            }
+            return Err(crate::dolt::Error::UnsafeServer.into());
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(crate::dolt::Error::Native {
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            }
+            .into());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 fn commit(
@@ -209,7 +296,13 @@ fn commit(
     if Selected::read(guard.root())?.as_ref() != previous {
         return Err(super::Error::Conflict.into());
     }
-    selected.persist(guard.root())?;
+    match previous {
+        None => selected.record(guard)?,
+        Some(previous) if previous.workspace == selected.workspace => {
+            selected.recovered(previous, guard)?;
+        }
+        Some(_) => selected.persist(guard.root())?,
+    }
     Ok(())
 }
 

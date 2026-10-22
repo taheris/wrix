@@ -901,7 +901,7 @@ tenant or component compromise/fault isolation.
 - Fresh Celler creation uses host-user ownership without binding the backend to
   the first requesting repository; workspace SQL startup does not acquire the
   shared cache's persistent mounts.
-  [test](../crates/wrix-cli/tests/service_lifecycle.rs::fresh_services_keep_host_cache_separate_from_authenticated_workspace_sql)
+  [test](../crates/wrix-cli/tests/service_lifecycle.rs::public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql)
 - Host ownership metadata roundtrips without a workspace identity.
   [test](../crates/wrix-service/src/lifecycle/owner/test.rs::host_owner_roundtrips_without_a_workspace_identity)
 

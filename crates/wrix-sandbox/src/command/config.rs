@@ -871,6 +871,8 @@ fn is_bootstrap_sensitive_env(name: &str) -> bool {
     const EXACT_NAMES: &[&str] = &[
         "BASHOPTS",
         "BASH_ENV",
+        "BEADS_DOLT_PASSWORD",
+        "BEADS_DOLT_SHARED_SERVER",
         "ENV",
         "GLIBC_TUNABLES",
         "IS_SANDBOX",
@@ -892,6 +894,7 @@ fn is_bootstrap_sensitive_env(name: &str) -> bool {
     ];
     const PREFIXES: &[&str] = &[
         "BEADS_DOLT_SERVER_",
+        "WRIX_BEADS_",
         "LD_",
         "WRIX_NETWORK_",
         "WRIX_NIX_CACHE_",

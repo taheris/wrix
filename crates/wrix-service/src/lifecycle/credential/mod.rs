@@ -12,7 +12,7 @@ use wrix_state::{context::Selection, host::Host as Capability};
 
 use super::Paths;
 use crate::control::{
-    Access, Client, Namespace, Operation, Policy, Reply, VERSION,
+    Access, Client, Namespace, Operation, Reply, VERSION,
     supervision::{Lifecycle, Native, Package, Platform},
 };
 
@@ -140,19 +140,13 @@ fn open(selection: &Selection) -> Result<Source, OpenError> {
     else {
         return Err(OpenError::Admission);
     };
-    if !namespaces.contains_key(&namespace) {
+    if namespaces.get(&namespace).is_none_or(|policy| {
+        policy.private_cache_read != Access::Allowed || policy.common_cache_read != Access::Allowed
+    }) {
         // Resolver rechecks are synchronous and own their bounded runtime.
         selection.recheck()?;
-        let policy = Policy {
-            dolt: Access::Denied,
-            private_cache_read: Access::Allowed,
-            common_cache_read: Access::Allowed,
-            egress: Access::Denied,
-            compiler: Access::Denied,
-        };
-        if runtime.block_on(client.request(Operation::Register {
+        if runtime.block_on(client.request(Operation::AdmitCache {
             namespace: namespace.clone(),
-            policy,
         }))? != Reply::Applied
         {
             return Err(OpenError::Admission);

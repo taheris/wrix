@@ -75,7 +75,7 @@ async fn private_controller_process_is_singleton_and_resumes_after_clean_stop() 
             .request(Operation::Inspect {})
             .await
             .unwrap();
-        assert!(matches!(reply, Reply::Snapshot { version: 1, .. }));
+        assert!(matches!(reply, Reply::Snapshot { version: 2, .. }));
         let endpoints: serde_json::Value = serde_json::from_slice(
             &std::fs::read(root.join("authority/role-endpoints.json")).unwrap(),
         )
@@ -491,7 +491,7 @@ fn envelope(
     operation: &serde_json::Value,
 ) -> TestResult<serde_json::Value> {
     Ok(
-        serde_json::json!({"version":1, "management":std::fs::read(root.join("management.key"))?, "operation":operation}),
+        serde_json::json!({"version":2, "management":std::fs::read(root.join("management.key"))?, "operation":operation}),
     )
 }
 
@@ -508,7 +508,10 @@ async fn control_operations_are_typed_authenticated_and_host_only() {
         let client = Client::open(&root).unwrap();
         let operation = Operation::Register {
             namespace: namespace('a').unwrap(),
-            policy: POLICY,
+            policy: Policy {
+                dolt: Access::Denied,
+                ..POLICY
+            },
         };
         assert_eq!(
             control_request(&controller, &client, operation.clone())
@@ -584,7 +587,7 @@ async fn control_operations_are_typed_authenticated_and_host_only() {
         else {
             panic!("missing snapshot")
         };
-        assert_eq!(version, 1);
+        assert_eq!(version, 2);
         assert_eq!(namespaces.len(), 1);
         assert_eq!(namespaces.get(&namespace('b').unwrap()), Some(&POLICY));
         assert!(matches!(
@@ -631,7 +634,7 @@ async fn private_authority_is_not_delegated_to_service_observations() {
             assert!(Controller::bind(&root).is_err(), "untrusted report released ownership");
         }
         let snapshot = control_request(&controller, &client, Operation::Inspect {}).await.unwrap();
-        assert_eq!(serde_json::to_value(snapshot).unwrap(), serde_json::json!({"result":"snapshot", "version":1, "namespaces":{}}));
+        assert_eq!(serde_json::to_value(snapshot).unwrap(), serde_json::json!({"result":"snapshot", "version":2, "namespaces":{}}));
         assert_eq!(std::fs::metadata(&root).unwrap().permissions().mode() & 0o777, 0o700);
         for name in ["management.key", "ownership", "control.sock"] {
             assert_eq!(std::fs::metadata(root.join(name)).unwrap().permissions().mode() & 0o777, 0o600);
@@ -792,7 +795,7 @@ async fn concurrent_control_registrations_preserve_peer_policies_on_disk() -> Te
         assert_eq!(
             control_request(&controller, &client, Operation::Inspect {}).await?,
             Reply::Snapshot {
-                version: 1,
+                version: 2,
                 namespaces: expected
             }
         );
@@ -837,16 +840,24 @@ async fn registration_commit_failure_does_not_grant_or_erase_peer_policy() -> Te
     );
     assert!(served.is_err());
     assert!(reply.is_err());
+    // An unreadable durable registry is unavailable, not permission to replay
+    // a formerly cached grant. Restoring the original file restores peer policy.
+    assert!(controller.authorize(&peer, Permission::Sql).is_err());
+    assert!(controller.authorize(&denied, Permission::Sql).is_err());
+    assert_eq!(std::fs::read(root.join("saved.json"))?, before);
+    let entries_after = std::fs::read_dir(&root)?
+        .map(|entry| entry.map(|entry| entry.file_name()))
+        .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
+    let mut expected = entries_before;
+    expected.insert(format!("namespace-{}.lock", denied.as_str()).into());
+    assert_eq!(entries_after, expected);
+    std::fs::remove_dir(root.join("namespaces.json"))?;
+    std::fs::rename(root.join("saved.json"), root.join("namespaces.json"))?;
     assert!(controller.authorize(&peer, Permission::Sql).is_ok());
     assert!(matches!(
         controller.authorize(&denied, Permission::Sql),
         Err(wrix_service::control::Error::UnknownNamespace)
     ));
-    assert_eq!(std::fs::read(root.join("saved.json"))?, before);
-    let entries_after = std::fs::read_dir(&root)?
-        .map(|entry| entry.map(|entry| entry.file_name()))
-        .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
-    assert_eq!(entries_after, entries_before);
     Ok(())
 }
 
@@ -894,7 +905,14 @@ async fn namespace_retirement_is_durable_without_changing_peer_authority() -> Te
                 &client,
                 Operation::Register {
                     namespace: namespace(digit)?,
-                    policy: POLICY
+                    policy: Policy {
+                        dolt: if digit == 'a' {
+                            Access::Denied
+                        } else {
+                            Access::Allowed
+                        },
+                        ..POLICY
+                    }
                 }
             )
             .await?,
@@ -988,7 +1006,7 @@ async fn controller_host_retains_live_role_routes_during_concurrent_registration
         assert_eq!(
             client.request(Operation::Inspect {}).await?,
             Reply::Snapshot {
-                version: 1,
+                version: 2,
                 namespaces: [(namespace('a')?, POLICY), (namespace('b')?, POLICY)].into(),
             }
         );
@@ -1059,7 +1077,7 @@ async fn controller_host_restart_keeps_policy_but_not_route_readiness() -> TestR
         assert_eq!(
             client.request(Operation::Inspect {}).await?,
             Reply::Snapshot {
-                version: 1,
+                version: 2,
                 namespaces: [(namespace('a')?, POLICY)].into(),
             }
         );

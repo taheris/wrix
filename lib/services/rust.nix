@@ -278,6 +278,7 @@ in
     pkgs.runCommand "wrix-service-supervisor" { meta = binaryMeta "wrix-service-supervisor"; }
       ''
         install -Dm755 "${workspace.bin}/bin/wrix-service-supervisor" "$out/bin/wrix-service-supervisor"
+        install -Dm755 "${workspace.bin}/bin/wrix-shared-service" "$out/bin/wrix-shared-service"
       '';
   hostCachePolicy = mkBinaryPackage "wrix-host-cache-policy" [ ];
   cacheHook = mkBinaryPackage "wrix-cache-hook" [ ];

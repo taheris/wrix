@@ -117,6 +117,14 @@ let
           return 1 2>/dev/null || exit 1
           ;;
       esac
+      if [[ $(printf '%s\n' "$_wrix_endpoints" | ${jqBin} -r '.dolt_managed // false') == true ]]; then
+        if ! _wrix_client_env=$("$_wrix_service_bin" service dolt client-env); then
+          _wrix_beads_fail "beads: cannot deliver scoped Dolt credentials"
+          return 1 2>/dev/null || exit 1
+        fi
+        eval "$_wrix_client_env"
+        unset _wrix_client_env
+      fi
       unset _wrix_service_bin _wrix_endpoints _wrix_transport _wrix_socket _wrix_host _wrix_port _wrix_waited
     fi
   '';

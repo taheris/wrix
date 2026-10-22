@@ -6,6 +6,7 @@ pub mod credential;
 mod dolt;
 mod managed;
 mod owner;
+pub mod shared;
 pub mod supervisor;
 
 use std::{
@@ -47,7 +48,6 @@ const CACHE_ENABLED_LABEL: &str = "wrix.cache.enabled";
 const CACHE_BACKEND_LABEL: &str = "wrix.cache.backend";
 const CACHE_BACKEND_VERSION: &str = "celler-v2";
 const SUPERVISION_LABEL: &str = "wrix.service.supervision";
-const SUPERVISION_VERSION: &str = "2";
 const DOLT_TRANSPORT_LABEL: &str = "wrix.dolt.transport";
 const DOLT_AUTH_LABEL: &str = "wrix.dolt.auth";
 const DOLT_AUTH_VERSION: &str = "tcp-root-v1";
@@ -59,11 +59,13 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, Display, ThisError)]
 pub enum Error {
+    /// {0}
+    SharedDolt(#[from] crate::dolt::Error),
     /// workspace admission failed: {0}
     Admission(#[from] wrix_state::store::Error),
     /// host package service-image binding failed: {0}
     Binding(#[from] binding::Error),
-    /// service lifecycle I/O failed
+    /// service lifecycle I/O failed: {source}
     Io { source: io::Error },
     /// managed Beads configuration failed: {source}
     Beads { source: managed::Error },
@@ -130,7 +132,7 @@ pub enum Error {
     },
     /// Celler recovery requires an existing selected owner and its recorded runtime; no ownership was transferred
     RecoveryScope,
-    /// service identity or compatibility in container {container} requires explicit host-wide maintenance; ordinary startup cannot adopt or migrate an unverified service
+    /// running legacy service {container} is not a verified shared Dolt/Celler owner; retain it and its peers. Explicitly stop ALL legacy Wrix service containers in both runtimes, then run `wrix service recover` with this host package before retrying; never delete managed data or signing state
     IncompatibleService { container: String },
     /// workspace stop cannot remove shared Celler backend {container}; namespace retirement requires host-wide lifecycle integration, not container removal
     CellerWorkspaceStop { container: String },
@@ -208,6 +210,7 @@ pub struct Plan {
     dolt: Option<DoltEndpoint>,
     selected_owner: Option<owner::Selected>,
     namespace_runtime: RuntimeKind,
+    shared: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -246,7 +249,6 @@ pub struct Paths {
     state_root: PathBuf,
     cache_root: PathBuf,
     host_lifecycle: Option<PathBuf>,
-    component_root: PathBuf,
 }
 
 struct Registration {
@@ -259,11 +261,6 @@ pub enum RuntimeStatus {
     Running,
     Stopped,
     Missing,
-}
-
-enum RunDisposition {
-    Created(Option<Box<owner::Recipe>>),
-    Retained,
 }
 
 enum PreparedImage {
@@ -282,13 +279,6 @@ impl PreparedImage {
     fn clone_recipe(&self) -> Option<owner::Recipe> {
         match self {
             Self::Pinned(recipe) => Some((**recipe).clone()),
-            Self::Reference(_) => None,
-        }
-    }
-
-    fn into_recipe(self) -> Option<Box<owner::Recipe>> {
-        match self {
-            Self::Pinned(recipe) => Some(recipe),
             Self::Reference(_) => None,
         }
     }
@@ -350,6 +340,16 @@ impl Plan {
             container_name = ContainerName::from_persisted(format!("{container_name}-namespace"))
                 .ok_or(owner::Error::Invalid)?;
         }
+        let shared_record = shared::Record::read(&paths)?;
+        if shared_record.is_some() {
+            container_name = selected_owner.as_ref().map_or_else(
+                || {
+                    ContainerName::from_persisted("wrix-host-service".into())
+                        .ok_or(owner::Error::Invalid)
+                },
+                |owner| Ok(owner.container.clone()),
+            )?;
+        }
         let cache_port = match cache_mode {
             CacheMode::Enabled
                 if cache_settings.enable
@@ -371,18 +371,28 @@ impl Plan {
         let dolt = if workspace.canonical_path().join(".beads/dolt").is_dir() {
             let transport = DoltTransport::from_env()?;
             let socket_path = DoltSocketPath::for_workspace(&workspace);
-            Some(match transport {
-                DoltTransport::UnixSocket => DoltEndpoint::UnixSocket { socket_path },
-                DoltTransport::Tcp => DoltEndpoint::Tcp {
-                    socket_path,
-                    port: parse_dolt_port(select_port(
-                        prior_ports.dolt_tcp_port,
-                        DOLT_PORT_START,
-                        DOLT_PORT_WIDTH,
-                        workspace.hash(),
-                        &peer_ports,
-                    )?)?,
-                },
+            Some(if let Some(shared) = &shared_record {
+                shared.endpoint(
+                    paths
+                        .host_lifecycle
+                        .as_deref()
+                        .and_then(Path::parent)
+                        .ok_or(owner::Error::Invalid)?,
+                )
+            } else {
+                match transport {
+                    DoltTransport::UnixSocket => DoltEndpoint::UnixSocket { socket_path },
+                    DoltTransport::Tcp => DoltEndpoint::Tcp {
+                        socket_path,
+                        port: parse_dolt_port(select_port(
+                            prior_ports.dolt_tcp_port,
+                            DOLT_PORT_START,
+                            DOLT_PORT_WIDTH,
+                            workspace.hash(),
+                            &peer_ports,
+                        )?)?,
+                    },
+                }
             })
         } else {
             None
@@ -397,6 +407,7 @@ impl Plan {
             dolt,
             selected_owner,
             namespace_runtime: RuntimeKind::current(),
+            shared: shared_record.is_some(),
         })
     }
 
@@ -506,6 +517,9 @@ impl Plan {
 
     fn validate_registration(&self) -> Result<()> {
         PortLease::read(&self.paths.services_path(), self.workspace.hash())?;
+        if shared::is_managed(self)? {
+            return Ok(());
+        }
         let peer_ports = peer_port_leases(&self.paths, self.workspace.hash())?;
         for port in self.selected_host_ports() {
             if peer_ports.contains(&port) {
@@ -543,6 +557,7 @@ impl Plan {
         self.write_services()
     }
 
+    #[cfg(test)]
     fn beads_worktree_remote(&self) -> Option<(&Branch, PathBuf)> {
         let branch = &self.beads_sync_branch;
         let path = self
@@ -578,6 +593,7 @@ impl Plan {
             concat!(
                 "{{\n",
                 "  \"schema_version\": {},\n",
+                "  \"dolt_managed\": {},\n",
                 "  \"workspace_path\": \"{}\",\n",
                 "  \"workspace_hash\": \"{}\",\n",
                 "  \"container_name\": \"{}\",\n",
@@ -592,6 +608,7 @@ impl Plan {
                 "}}\n"
             ),
             SCHEMA_VERSION,
+            self.shared,
             escape_json(&self.workspace.canonical_path().display().to_string()),
             self.workspace.hash(),
             escape_json(self.container_name().as_str()),
@@ -680,12 +697,10 @@ impl DoltTransport {
 impl Paths {
     pub fn new(state_root: impl Into<PathBuf>, cache_root: impl Into<PathBuf>) -> Self {
         let state_root = state_root.into();
-        let component_root = state_root.join("component-data");
         Self {
             state_root,
             cache_root: cache_root.into(),
             host_lifecycle: None,
-            component_root,
         }
     }
 
@@ -694,15 +709,10 @@ impl Paths {
         let state_root = roots.workspace_state(hash);
         let cache_root = roots.workspace_cache(hash);
         let host_lifecycle = roots.state().join("host-lifecycle");
-        let component_root = roots
-            .state()
-            .join("service-data/supervisor")
-            .join(hash.as_str());
         Ok(Self {
             state_root,
             cache_root,
             host_lifecycle: Some(host_lifecycle),
-            component_root,
         })
     }
 
@@ -832,86 +842,38 @@ pub fn recover() -> Result<String> {
 }
 
 pub fn start(cache_mode: CacheMode) -> Result<Status> {
+    wrix_state::host::Host::discover().map_err(io::Error::other)?;
     let (mut plan, _lock) = locked_plan(cache_mode)?;
     plan.authorize()?;
+    supervisor::transition::ensure_clear(plan.paths().state_root(), plan.workspace().hash())?;
     let host_lock = (plan.has_services() || plan.cache_enabled())
         .then(|| host_lifecycle_lock(plan.paths()))
         .transpose()?;
     if let Some(guard) = &host_lock {
         plan.reconcile_owner(guard)?;
-        if plan.cache_enabled() && plan.selected_owner.is_none() {
-            let runtime = Runtime::from_env()?;
-            runtime.binding.as_ref().ok_or(binding::Error::Missing)?;
-            let alternate = runtime.alternate();
-            if let Some(containers) = alternate.available_container_infos()? {
-                alternate.ensure_cache_inventory_compatible(&plan, containers, false)?;
-            }
-            if runtime.status(&plan.container_name())? == RuntimeStatus::Missing {
-                owner::host::ensure(
-                    &runtime,
-                    guard,
-                    None,
-                    plan.cache_port().and_then(NonZeroU16::new),
-                )?;
-                plan.reconcile_owner(guard)?;
-            }
-        }
-    }
-    supervisor::transition::ensure_clear(plan.paths().state_root(), plan.workspace().hash())?;
-    let runtime = Runtime::from_env()?;
-    if plan.has_services() {
+        let runtime = Runtime::from_env()?;
         runtime.binding.as_ref().ok_or(binding::Error::Missing)?;
-    }
-    if plan.has_services() || plan.cache_enabled() {
-        runtime.ensure_cache_owner_compatible(&plan)?;
-        runtime.ensure_namespace_compatible(&plan)?;
-    }
-    if plan.has_services() && runtime.reconcile_legacy_containers(&plan)? {
-        plan = Plan::for_current_dir(cache_mode)?;
-    }
-    if plan.dolt().is_some() {
-        managed::configure(plan.workspace().canonical_path())?;
-    }
-    runtime.refresh_unavailable_ports(&mut plan)?;
-    let cache = if plan.cache_enabled() {
-        Some(cache::prepare(
-            &plan,
-            runtime.status(&plan.cache_container_name())?,
-        )?)
-    } else {
-        None
-    };
-    plan.ensure_layout_locked()?;
-    let disposition = plan
-        .has_services()
-        .then(|| runtime.ensure_running(&plan))
-        .transpose()?;
-    if matches!(disposition, Some(RunDisposition::Retained))
-        && plan.owns_cache()
-        && plan.dolt().is_some()
-    {
-        runtime.resume_component(&plan, host_lock.as_ref().ok_or(owner::Error::Invalid)?)?;
-    }
-    if let Some(cache) = cache {
-        cache::activate(&plan, &cache)?;
-        if plan.selected_owner.is_none() {
-            let created = matches!(disposition, Some(RunDisposition::Created(_)));
-            let recipe = match disposition {
-                Some(RunDisposition::Created(recipe)) => recipe.map(|recipe| *recipe),
-                Some(RunDisposition::Retained) | None => None,
-            };
-            let selected = owner::Selected::from_plan(&plan, runtime.kind, recipe)?;
-            let guard = host_lock.as_ref().ok_or(owner::Error::Invalid)?;
-            if let Some(previous) = &plan.selected_owner {
-                if created {
-                    selected.recovered(previous, guard)?;
-                    plan.selected_owner = Some(selected);
-                }
-            } else {
-                selected.record(guard)?;
-            }
+        let retained_shared = plan.selected_owner.is_some() && shared::is_managed(&plan)?;
+        shared::check_inventory(&runtime, plan.selected_owner.as_ref(), retained_shared)?;
+        let selected =
+            owner::host::ensure(&runtime, guard, plan.selected_owner.as_ref(), None, false)?;
+        plan.reconcile_owner(guard)?;
+        plan.container_name = selected.container;
+        plan.shared = true;
+        let record = shared::Record::read(plan.paths())?.ok_or(owner::Error::Invalid)?;
+        if plan.dolt.is_some() {
+            plan.dolt = Some(record.endpoint(shared::host_root(&plan)?));
+            managed::configure(plan.workspace().canonical_path())?;
+            shared::register(&plan, &runtime)?;
         }
+        if plan.cache_enabled() {
+            let prepared = cache::prepare(&plan, RuntimeStatus::Running)?;
+            cache::activate(&plan, &prepared)?;
+        }
+        plan.ensure_layout_locked()?;
+        return status_for_plan(plan);
     }
+    plan.ensure_layout_locked()?;
     status_for_plan(plan)
 }
 
@@ -947,12 +909,24 @@ fn host_lifecycle_lock(paths: &Paths) -> Result<coordination::Guard> {
 }
 
 pub fn stop(cache_mode: CacheMode) -> Result<Status> {
+    wrix_state::host::Host::discover().map_err(io::Error::other)?;
     let (mut plan, _lock) = locked_plan(cache_mode)?;
     let host_lock = host_lifecycle_lock(plan.paths())?;
     plan.reconcile_owner(&host_lock)?;
     supervisor::transition::ensure_clear(plan.paths().state_root(), plan.workspace().hash())?;
     let runtime = Runtime::from_env()?;
     plan.authorize()?;
+    if shared::is_managed(&plan)? {
+        runtime.validate_selected_owner(&plan)?;
+        if plan.dolt().is_some() {
+            shared::retire(&plan, &runtime)?;
+        }
+        cache::retire(&plan)?;
+        return Ok(Status {
+            runtime: RuntimeStatus::Stopped,
+            plan,
+        });
+    }
     if plan.selected_owner.is_some() && !plan.owns_cache() {
         runtime.ensure_workspace_stop_safe(&plan)?;
         cache::retire(&plan)?;
@@ -1034,6 +1008,7 @@ pub fn sandbox_dolt_endpoint(cache_mode: CacheMode) -> Result<String> {
 enum SandboxService {
     Cache,
     Dolt,
+    Sync,
 }
 
 impl SandboxService {
@@ -1041,6 +1016,7 @@ impl SandboxService {
         match self {
             Self::Cache => 8080,
             Self::Dolt => 3306,
+            Self::Sync => 3307,
         }
     }
 
@@ -1048,6 +1024,7 @@ impl SandboxService {
         let name = match self {
             Self::Cache => "project cache",
             Self::Dolt => "Dolt",
+            Self::Sync => "Beads sync",
         };
         Error::Operation {
             message: format!(
@@ -1067,10 +1044,26 @@ fn json_tcp_endpoint(endpoint: SocketAddrV4) -> String {
 
 pub fn wait_for_dolt(cache_mode: CacheMode) -> Result<()> {
     let plan = Plan::for_current_dir(cache_mode)?;
+    if shared::is_managed(&plan)? {
+        return shared::probe_client();
+    }
     wait_for_dolt_plan(&plan)
 }
 
 fn status_for_plan(plan: Plan) -> Result<Status> {
+    if shared::is_managed(&plan)? {
+        let retired = if plan.dolt().is_some() {
+            !shared::sql_active(&plan)?
+        } else {
+            cache::is_retired(&plan)?
+        };
+        let runtime = if retired {
+            RuntimeStatus::Stopped
+        } else {
+            Runtime::from_env()?.status(&plan.container_name())?
+        };
+        return Ok(Status { runtime, plan });
+    }
     supervisor::transition::ensure_clear(plan.paths().state_root(), plan.workspace().hash())?;
     let runtime = if plan.owns_cache() && plan.dolt().is_some() && cache::is_retired(&plan)? {
         let runtime = Runtime::from_env()?;
@@ -1391,19 +1384,6 @@ impl ContainerInfo {
         )
     }
 
-    fn publishes_any(&self, ports: &[u16]) -> bool {
-        self.published_ports
-            .iter()
-            .any(|published| ports.contains(published))
-    }
-
-    fn is_legacy_service_on_selected_port(&self, ports: &[u16]) -> bool {
-        self.kind.as_deref() == Some("service")
-            && self.workspace_hash.is_none()
-            && self.workspace_path.is_none()
-            && self.publishes_any(ports)
-    }
-
     fn owner_description(&self) -> String {
         let mut description = format!("container {}", self.name);
         if self.kind.as_deref() == Some("service") {
@@ -1446,7 +1426,7 @@ impl Runtime {
                     .apple_snapshot(
                         match service {
                             SandboxService::Cache => plan.cache_container_name(),
-                            SandboxService::Dolt => plan.container_name(),
+                            SandboxService::Dolt | SandboxService::Sync => plan.container_name(),
                         }
                         .as_str(),
                     )?
@@ -1504,7 +1484,9 @@ impl Runtime {
                 command: recovery_command(owner.runtime)?,
             });
         }
-        if (owner.container == plan.container_name() && !owner.owns(plan))
+        if (owner.workspace.is_some()
+            && owner.container == plan.container_name()
+            && !owner.owns(plan))
             || self
                 .inspect_label(owner.container.as_str(), "wrix.kind")?
                 .as_deref()
@@ -1619,11 +1601,6 @@ impl Runtime {
         Ok(())
     }
 
-    fn is_legacy_cache_only(&self, name: &str) -> Result<bool> {
-        Ok(self.inspect_label(name, CACHE_BACKEND_LABEL)?.is_none()
-            && self.inspect_label(name, "wrix.dolt.transport")?.as_deref() == Some("disabled"))
-    }
-
     fn namespace_identity_matches(&self, plan: &Plan) -> Result<bool> {
         let name = plan.container_name();
         let identity = ContainerInfo {
@@ -1634,160 +1611,6 @@ impl Runtime {
             published_ports: Vec::new(),
         };
         Ok(identity.kind.as_deref() == Some("service") && identity.belongs_to_workspace(plan))
-    }
-
-    fn ensure_namespace_compatible(&self, plan: &Plan) -> Result<()> {
-        let name = plan.container_name();
-        let status = self.status(&name)?;
-        if status == RuntimeStatus::Missing {
-            return Ok(());
-        }
-        if !self.namespace_identity_matches(plan)?
-            || (status == RuntimeStatus::Running
-                && !self.running_container_satisfies_plan(&name, plan)?)
-            || (status == RuntimeStatus::Stopped && !self.is_legacy_cache_only(name.as_str())?)
-        {
-            return Err(Error::IncompatibleService {
-                container: name.as_str().into(),
-            });
-        }
-        Ok(())
-    }
-
-    fn ensure_running(&self, plan: &Plan) -> Result<RunDisposition> {
-        plan.authorize()?;
-        self.ensure_namespace_compatible(plan)?;
-        let name = plan.container_name();
-        match self.status(&name)? {
-            RuntimeStatus::Running => {
-                self.reconcile_legacy_containers(plan)?;
-                if self.running_container_satisfies_plan(&name, plan)? {
-                    return Ok(RunDisposition::Retained);
-                }
-                return Err(Error::IncompatibleService {
-                    container: name.as_str().into(),
-                });
-            }
-            RuntimeStatus::Stopped => self.remove(&name)?,
-            RuntimeStatus::Missing => {}
-        }
-        self.reconcile_legacy_containers(plan)?;
-        self.ensure_plan_ports_available(plan)?;
-        let image = self.ensure_image(plan)?;
-        let mut command = Command::new(&self.binary);
-        command
-            .arg("run")
-            .arg("-d")
-            .arg("--name")
-            .arg(name.as_str());
-        if self.kind == RuntimeKind::Podman {
-            command.args(["--restart=unless-stopped", "--pull=never"]);
-        }
-        command
-            .arg("--label")
-            .arg(format!(
-                "wrix.workspace={}",
-                plan.workspace().canonical_path().display()
-            ))
-            .arg("--label")
-            .arg(format!("wrix.workspace.hash={}", plan.workspace().hash()))
-            .arg("--label")
-            .arg("wrix.kind=service")
-            .arg("--label")
-            .arg(format!("{SUPERVISION_LABEL}={SUPERVISION_VERSION}"))
-            .arg("--label")
-            .arg(format!(
-                "{CACHE_ENABLED_LABEL}={}",
-                if plan.owns_cache() { "true" } else { "false" }
-            ))
-            .arg("--label")
-            .arg(format!(
-                "{DOLT_TRANSPORT_LABEL}={}",
-                expected_dolt_transport_label(plan)
-            ));
-        if let Some(port) = plan.owned_cache_port() {
-            command
-                .arg("--label")
-                .arg(format!("{CACHE_BACKEND_LABEL}={CACHE_BACKEND_VERSION}"));
-            command.arg("-p").arg(format!("127.0.0.1:{port}:8080"));
-            for mount in wrix_cache::backend::layout::Layout::current()?.mounts() {
-                command.arg("-v").arg(format!(
-                    "{}:{}:rw",
-                    mount.source.display(),
-                    mount.destination
-                ));
-            }
-        }
-        if plan.owns_cache() && plan.dolt().is_some() {
-            wrix_core::private_directory::prepare_with_parents(&plan.paths().component_root)?;
-            command.arg("-v").arg(format!(
-                "{}:{}:rw",
-                plan.paths().component_root.display(),
-                supervisor::DIRECTORY
-            ));
-        }
-        if let Some(dolt) = plan.dolt() {
-            if dolt.transport() == DoltTransport::Tcp {
-                command
-                    .arg("--label")
-                    .arg(format!("{DOLT_AUTH_LABEL}={DOLT_AUTH_VERSION}"));
-            }
-            command.arg("-v").arg(format!(
-                "{}:/var/lib/wrix/beads/dolt:rw",
-                plan.workspace()
-                    .canonical_path()
-                    .join(".beads/dolt")
-                    .display()
-            ));
-            if let Some((branch, remote)) = plan.beads_worktree_remote() {
-                command
-                    .arg("-v")
-                    .arg(format!("{}:{}:rw", remote.display(), remote.display()))
-                    .arg("-v")
-                    .arg(format!(
-                        "{}:/workspace/.git/beads-worktrees/{}/.beads/dolt-remote:rw",
-                        remote.display(),
-                        branch.as_str()
-                    ));
-            }
-            match dolt {
-                DoltEndpoint::UnixSocket { .. } => {
-                    remove_stale_socket(dolt.socket_path())?;
-                    if self.kind == RuntimeKind::Container {
-                        command.arg("--publish-socket").arg(format!(
-                            "{}:/run/wrix/dolt.sock",
-                            dolt.socket_path().display()
-                        ));
-                    } else {
-                        command.arg("-v").arg(format!(
-                            "{}:/run/wrix:rw",
-                            plan.workspace().canonical_path().join(".wrix").display()
-                        ));
-                    }
-                }
-                DoltEndpoint::Tcp { port, .. } => {
-                    command.arg("-p").arg(format!("127.0.0.1:{port}:3306"));
-                }
-            }
-        }
-        command
-            .arg(image.as_str())
-            .arg("sh")
-            .arg("-c")
-            .arg(container_command(plan))
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped());
-        let output = command.output()?;
-        if output.status.success() {
-            Ok(RunDisposition::Created(image.into_recipe()))
-        } else {
-            let message = String::from_utf8_lossy(&output.stderr).into_owned();
-            bind_port_from_runtime_error(&message).map_or_else(
-                || Err(Error::Operation { message }),
-                |port| Err(self.port_in_use_error(port)),
-            )
-        }
     }
 
     fn supervision(&self, name: &ContainerName) -> Result<Option<supervisor::Version>> {
@@ -1813,30 +1636,6 @@ impl Runtime {
             plan.workspace().hash().as_str(),
         ]);
         Ok(supervisor::transport::execute(command)?)
-    }
-
-    fn resume_component(&self, plan: &Plan, guard: &coordination::Guard) -> Result<()> {
-        if self.supervision(&plan.container_name())? != Some(supervisor::Version::Components) {
-            return Ok(());
-        }
-        match self.component_observation(plan, supervisor::Action::Inspect)? {
-            supervisor::Observation::Active => Ok(()),
-            supervisor::Observation::Retired => {
-                let change = supervisor::transition::Change::Resume;
-                let pending = supervisor::transition::Pending::begin(
-                    guard,
-                    plan.paths().state_root(),
-                    plan.workspace().hash(),
-                    change,
-                )?;
-                pending.finish(self.component_observation(plan, change.action())?)?;
-                Ok(())
-            }
-            supervisor::Observation::Retiring | supervisor::Observation::Busy => {
-                Err(supervisor::Error::Busy.into())
-            }
-            supervisor::Observation::Rejected => Err(supervisor::Error::Incompatible.into()),
-        }
     }
 
     fn running_container_satisfies_plan(&self, name: &ContainerName, plan: &Plan) -> Result<bool> {
@@ -1917,103 +1716,6 @@ impl Runtime {
             .selected_host_ports()
             .iter()
             .all(|port| published_ports.contains(port)))
-    }
-
-    fn reconcile_legacy_containers(&self, plan: &Plan) -> Result<bool> {
-        plan.authorize()?;
-        let planned_name = plan.container_name();
-        let selected_ports = plan.selected_host_ports();
-        let candidates: Vec<_> = self
-            .list_container_infos()?
-            .into_iter()
-            .filter(|container| {
-                container.name != planned_name.as_str()
-                    && plan
-                        .selected_owner
-                        .as_ref()
-                        .is_none_or(|owner| container.name != owner.container.as_str())
-                    && container.kind.as_deref() == Some("service")
-                    && (container.belongs_to_workspace(plan)
-                        || container.is_legacy_service_on_selected_port(&selected_ports))
-            })
-            .collect();
-        for container in &candidates {
-            if !container.belongs_to_workspace(plan)
-                || self.status_identifier(&container.name)? != RuntimeStatus::Stopped
-                || !self.is_legacy_cache_only(&container.name)?
-            {
-                return Err(Error::IncompatibleService {
-                    container: container.name.clone(),
-                });
-            }
-        }
-        for container in &candidates {
-            self.remove_identifier(&container.name)?;
-        }
-        Ok(!candidates.is_empty())
-    }
-
-    fn refresh_unavailable_ports(&self, plan: &mut Plan) -> Result<()> {
-        if let Some(port) = plan.cache_port
-            && plan.selected_owner.is_none()
-            && !self.port_available_for_plan(port, plan)?
-        {
-            plan.cache_port =
-                Some(self.select_available_port(plan, CACHE_PORT_START, CACHE_PORT_WIDTH)?);
-        }
-        let dolt_port = plan.dolt_port();
-        let replace_dolt_port = match dolt_port {
-            Some(port) => !self.port_available_for_plan(port.get(), plan)?,
-            None => false,
-        };
-        if replace_dolt_port {
-            let port = self.select_available_port(plan, DOLT_PORT_START, DOLT_PORT_WIDTH)?;
-            if let Some(DoltEndpoint::Tcp { port: selected, .. }) = plan.dolt.as_mut() {
-                *selected = parse_dolt_port(port)?;
-            }
-        }
-        Ok(())
-    }
-
-    fn select_available_port(&self, plan: &Plan, start: u16, width: u16) -> Result<u16> {
-        let preferred = start + plan.workspace.hash().port_offset(width);
-        for offset in 0..width {
-            let port = start + ((preferred - start + offset) % width);
-            if self.port_available_for_plan(port, plan)? {
-                return Ok(port);
-            }
-        }
-        Err(Error::NoAvailableLoopbackPort {
-            start,
-            end: start + width - 1,
-        })
-    }
-
-    fn port_available_for_plan(&self, port: u16, plan: &Plan) -> Result<bool> {
-        if peer_port_leases(plan.paths(), plan.workspace().hash())?.contains(&port) {
-            return Ok(false);
-        }
-        if let Some(owner) = self.container_port_owner(port)? {
-            return Ok(
-                owner.name == plan.container_name().as_str() && owner.belongs_to_workspace(plan)
-            );
-        }
-        Ok(is_loopback_port_available(port))
-    }
-
-    fn ensure_plan_ports_available(&self, plan: &Plan) -> Result<()> {
-        for port in plan.selected_host_ports() {
-            if let Some(owner) = self.container_port_owner(port)? {
-                return Err(Error::PortInUse {
-                    port,
-                    owner: owner.owner_description(),
-                });
-            }
-            if !is_loopback_port_available(port) {
-                return Err(self.port_in_use_error(port));
-            }
-        }
-        Ok(())
     }
 
     fn port_in_use_error(&self, port: u16) -> Error {
@@ -2237,15 +1939,6 @@ impl Runtime {
                 ),
             })
         }
-    }
-
-    fn ensure_image(&self, plan: &Plan) -> Result<PreparedImage> {
-        let root = plan
-            .paths()
-            .state_base()
-            .and_then(Path::parent)
-            .ok_or(binding::Error::Metadata("missing host state root"))?;
-        self.ensure_image_at(root)
     }
 
     fn ensure_image_at(&self, root: &Path) -> Result<PreparedImage> {
@@ -2622,42 +2315,9 @@ fn is_loopback_port_available(port: u16) -> bool {
     TcpListener::bind(("127.0.0.1", port)).is_ok()
 }
 
-fn container_command(plan: &Plan) -> String {
-    match (plan.owns_cache(), plan.dolt()) {
-        (true, Some(dolt)) => supervisor::command(
-            plan.workspace().hash(),
-            wrix_cache::backend::layout::runtime::COMMAND,
-            &dolt_server_command(dolt),
-        ),
-        (false, Some(dolt)) => dolt_server_command(dolt),
-        (true, None) => String::from(wrix_cache::backend::layout::runtime::COMMAND),
-        (false, None) => String::from("sleep infinity"),
-    }
-}
-
-fn dolt_server_command(dolt: &DoltEndpoint) -> String {
-    dolt::server_command(
-        dolt.transport(),
-        Path::new("/var/lib/wrix/beads/dolt"),
-        Path::new("/run/wrix"),
-        3306,
-    )
-}
-
 fn expected_dolt_transport_label(plan: &Plan) -> &'static str {
     plan.dolt()
         .map_or(DOLT_DISABLED_LABEL_VALUE, |dolt| dolt.transport().as_str())
-}
-
-fn remove_stale_socket(path: &Path) -> Result<()> {
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(source) => Err(Error::StaleDoltSocketRemoval {
-            path: path.display().to_string(),
-            source,
-        }),
-    }
 }
 
 #[cfg(unix)]

@@ -6,6 +6,7 @@ version.workspace = true
 
 [dependencies]
 displaydoc = { workspace = true }
+fs2 = { workspace = true }
 thiserror = { workspace = true }
 wrix-core = { workspace = true }
 wrix-state = { workspace = true }

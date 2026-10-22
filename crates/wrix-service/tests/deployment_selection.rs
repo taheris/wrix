@@ -55,7 +55,10 @@ async fn bootstrap_records_every_role_without_namespace_or_runtime_effects() -> 
             & 0o777,
         0o600
     );
-    assert!(!root.join("namespaces.json").exists());
+    let registry: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join("namespaces.json"))?)?;
+    assert_eq!(registry["version"], 2);
+    assert_eq!(registry["entries"], serde_json::json!([]));
     assert!(!root.join("role-endpoints.json").exists());
     assert!(!root.join("service-data").exists());
     controller.close()?;
