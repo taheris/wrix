@@ -69,6 +69,8 @@ package supplies the service-image binding owned by
 `shared-services-v1` without workspace discovery, runtime inspection or state
 creation. Generated-project shell admission requires this marker as well as
 project-launch support; a legacy two-container CLI fails before activation.
+[test](../crates/wrix-cli/tests/service_lifecycle.rs::shared_service_capabilities_are_passive_without_workspace_or_runtime)
+[check](verify:devshell.cli-selection)
 
 Projects supply launch data, not another Wrix executable. The recommended
 `sandbox.devShell { }` constructor automatically delivers its generated,
