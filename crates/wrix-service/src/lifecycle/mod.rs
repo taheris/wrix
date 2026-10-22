@@ -117,8 +117,18 @@ pub enum Error {
     InstalledImageUnavailable { path: String, image: String },
     /// service lifecycle operation failed: {message}
     Operation { message: String },
-    /// Celler ownership in container {container} requires explicit host-wide maintenance; ordinary startup cannot replace a running backend or start a competing owner
-    CellerOwnership { container: String },
+    /// Celler ownership in container {container} failed: {reason}; ordinary startup cannot replace a running backend or start a competing owner; `wrix service recover` only recovers an absent/stopped selected owner from its original workspace
+    CellerOwnership {
+        container: String,
+        reason: OwnershipFailure,
+    },
+    /// selected Celler owner {container} is {status:?}; run `wrix service recover` from the owner's original workspace to recover it under host-wide coordination without deleting persistent data
+    CellerUnavailable {
+        container: String,
+        status: RuntimeStatus,
+    },
+    /// Celler recovery requires the selected owner's original workspace and runtime with caching enabled; no ownership was transferred
+    RecoveryScope,
     /// service identity or compatibility in container {container} requires explicit host-wide maintenance; ordinary startup cannot adopt or migrate an unverified service
     IncompatibleService { container: String },
     /// workspace stop cannot remove shared Celler backend {container}; namespace retirement requires host-wide lifecycle integration, not container removal
@@ -789,9 +799,33 @@ impl Status {
     }
 }
 
+#[derive(Debug, Display)]
+pub enum OwnershipFailure {
+    /// selected owner belongs to a different container runtime
+    Runtime,
+    /// selected running owner's identity, backend version, endpoint or image is incompatible
+    Identity,
+    /// running owner's service features are incompatible with the workspace plan
+    Features,
+    /// competing running cache backend was found in the runtime inventory
+    Competing,
+}
+
 pub fn start(cache_mode: CacheMode) -> Result<Status> {
+    start_with_recovery(cache_mode, false)
+}
+
+/// Recover only an inactive selected owner; never transfer ownership or replace a running backend.
+pub fn recover() -> Result<Status> {
+    start_with_recovery(CacheMode::Enabled, true)
+}
+
+fn start_with_recovery(cache_mode: CacheMode, recovery: bool) -> Result<Status> {
     let (mut plan, _lock) = locked_plan(cache_mode)?;
     plan.authorize()?;
+    if recovery && (!plan.cache_enabled() || plan.selected_owner.is_none()) {
+        return Err(Error::RecoveryScope);
+    }
     let host_lock = (plan.has_services() || plan.cache_enabled())
         .then(|| host_lifecycle_lock(plan.paths()))
         .transpose()?;
@@ -804,7 +838,12 @@ pub fn start(cache_mode: CacheMode) -> Result<Status> {
         runtime.binding.as_ref().ok_or(binding::Error::Missing)?;
     }
     if plan.has_services() || plan.cache_enabled() {
-        runtime.ensure_cache_owner_compatible(&plan)?;
+        if recovery {
+            runtime
+                .prepare_owner_recovery(&plan, host_lock.as_ref().ok_or(owner::Error::Invalid)?)?;
+        } else {
+            runtime.ensure_cache_owner_compatible(&plan)?;
+        }
         runtime.ensure_namespace_compatible(&plan)?;
     }
     if plan.has_services() && runtime.reconcile_legacy_containers(&plan)? {
@@ -835,13 +874,22 @@ pub fn start(cache_mode: CacheMode) -> Result<Status> {
     }
     if let Some(cache) = cache {
         cache::activate(&plan, &cache)?;
-        if plan.selected_owner.is_none() {
+        if plan.selected_owner.is_none() || recovery {
+            let created = matches!(disposition, Some(RunDisposition::Created(_)));
             let recipe = match disposition {
                 Some(RunDisposition::Created(recipe)) => recipe.map(|recipe| *recipe),
                 Some(RunDisposition::Retained) | None => None,
             };
-            owner::Selected::from_plan(&plan, runtime.kind, recipe)?
-                .record(host_lock.as_ref().ok_or(owner::Error::Invalid)?)?;
+            let selected = owner::Selected::from_plan(&plan, runtime.kind, recipe)?;
+            let guard = host_lock.as_ref().ok_or(owner::Error::Invalid)?;
+            if let Some(previous) = &plan.selected_owner {
+                if created {
+                    selected.recovered(previous, guard)?;
+                    plan.selected_owner = Some(selected);
+                }
+            } else {
+                selected.record(guard)?;
+            }
         }
     }
     status_for_plan(plan)
@@ -1403,9 +1451,20 @@ impl Runtime {
         let Some(owner) = &plan.selected_owner else {
             return Ok(());
         };
-        if owner.runtime != self.kind
-            || (owner.container == plan.container_name() && !owner.owns(plan))
-            || self.status(&owner.container)? != RuntimeStatus::Running
+        if owner.runtime != self.kind {
+            return Err(Error::CellerOwnership {
+                container: owner.container.as_str().into(),
+                reason: OwnershipFailure::Runtime,
+            });
+        }
+        let status = self.status(&owner.container)?;
+        if status != RuntimeStatus::Running {
+            return Err(Error::CellerUnavailable {
+                container: owner.container.as_str().into(),
+                status,
+            });
+        }
+        if (owner.container == plan.container_name() && !owner.owns(plan))
             || self
                 .inspect_label(owner.container.as_str(), "wrix.kind")?
                 .as_deref()
@@ -1431,7 +1490,40 @@ impl Runtime {
         {
             return Err(Error::CellerOwnership {
                 container: owner.container.as_str().into(),
+                reason: OwnershipFailure::Identity,
             });
+        }
+        Ok(())
+    }
+
+    /// Keep lifecycle exclusion through validation, stopped-container removal and subsequent readiness.
+    fn prepare_owner_recovery(&self, plan: &Plan, guard: &coordination::Guard) -> Result<()> {
+        let owner = plan.selected_owner.as_ref().ok_or(Error::RecoveryScope)?;
+        if !plan.cache_enabled()
+            || !owner.owns(plan)
+            || owner.runtime != self.kind
+            || owner::Selected::read(guard.root())?.as_ref() != Some(owner)
+        {
+            return Err(Error::RecoveryScope);
+        }
+        let status = self.status(&owner.container)?;
+        if status == RuntimeStatus::Running {
+            return self.ensure_cache_owner_compatible(plan);
+        }
+        let alternate = self.alternate();
+        if let Some(containers) = alternate.available_container_infos()? {
+            alternate.ensure_cache_inventory_compatible(plan, containers, false)?;
+        }
+        self.ensure_cache_inventory_compatible(plan, self.list_container_infos()?, true)?;
+        if status == RuntimeStatus::Stopped && !self.namespace_identity_matches(plan)? {
+            return Err(Error::IncompatibleService {
+                container: owner.container.as_str().into(),
+            });
+        }
+        // Recovery must not replace lost signing authority while reusing persistent cache data.
+        cache::prepare(plan, RuntimeStatus::Running)?;
+        if status == RuntimeStatus::Stopped {
+            self.remove(&owner.container)?;
         }
         Ok(())
     }
@@ -1478,9 +1570,13 @@ impl Runtime {
                 && owner.runtime == self.kind
                 && container.name == owner.container.as_str()
             {
-                if selected && !self.running_container_satisfies_plan(&owner.container, plan)? {
+                if selected
+                    && self.status(&owner.container)? == RuntimeStatus::Running
+                    && !self.running_container_satisfies_plan(&owner.container, plan)?
+                {
                     return Err(Error::CellerOwnership {
                         container: container.name,
+                        reason: OwnershipFailure::Features,
                     });
                 }
                 continue;
@@ -1503,6 +1599,7 @@ impl Runtime {
             }
             return Err(Error::CellerOwnership {
                 container: container.name,
+                reason: OwnershipFailure::Competing,
             });
         }
         Ok(())

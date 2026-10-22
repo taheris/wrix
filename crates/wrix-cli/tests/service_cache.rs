@@ -10,7 +10,7 @@ use common::{TestResult, run_command, set_mode, wrix_command_with_path};
 use serde_json::{Value, json};
 
 struct Fixture {
-    _server: celler::Server,
+    server: celler::Server,
     root: tempfile::TempDir,
     workspace: PathBuf,
     bin: PathBuf,
@@ -36,10 +36,10 @@ impl Fixture {
         let server = celler::Server::watch(root.path(), None);
         common::initialize_host_scope(root.path())?;
         Ok(Self {
+            server,
             root,
             workspace,
             bin,
-            _server: server,
         })
     }
 
@@ -715,7 +715,7 @@ fn service_startup_does_not_collect_dirty_cache_contents() -> TestResult {
         let output = run_command(&mut command)?;
         assert!(!output.status.success());
         assert!(
-            output.stderr.contains("explicit host-wide maintenance"),
+            output.stderr.contains("is Missing") && output.stderr.contains("wrix service recover"),
             "{}",
             output.stderr
         );
@@ -894,15 +894,68 @@ fn selected_owner_preserves_its_record_when_the_callers_package_changes() -> Tes
         fs::write(fixture.root.path().join("run.argv"), &changed)?;
         let output = run_command(&mut command)?;
         assert!(!output.status.success());
-        assert!(
-            output.stderr.contains("explicit host-wide maintenance"),
-            "{}",
-            output.stderr
-        );
+        assert!(output.stderr.contains("incompatible"), "{}", output.stderr);
         assert_eq!(fs::read(fixture.root.path().join("run.argv"))?, changed);
         assert_eq!(fs::read(&selection)?, before);
         assert_eq!(fs::read(state.join("keys/cache.pub"))?, key);
     }
+    Ok(())
+}
+
+#[test]
+fn podman_recovers_a_missing_legacy_selected_owner_and_records_new_provenance() -> TestResult {
+    let mut fixture = Fixture::new()?;
+    let output = run_command(
+        fixture
+            .command("podman")?
+            .args(["service", "start"])
+            .env("WRIX_SERVICE_ALLOW_TEMP_CACHE", "1"),
+    )?;
+    assert!(output.status.success(), "{}", output.stderr);
+    let metadata = fixture.endpoints(true)?;
+    let state = PathBuf::from(metadata["state_root"].as_str().unwrap());
+    let selection = state
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("host-lifecycle/celler-owner.json");
+    let mut legacy: Value = serde_json::from_slice(&fs::read(&selection)?)?;
+    legacy["schema_version"] = json!(1);
+    legacy.as_object_mut().unwrap().remove("recipe");
+    fs::write(&selection, serde_json::to_vec(&legacy)?)?;
+    fs::remove_file(fixture.root.path().join("running"))?;
+    drop(fixture.server);
+    fs::remove_file(fixture.root.path().join("run.argv"))?;
+    fixture.server = celler::Server::watch(fixture.root.path(), None);
+    let output = run_command(
+        fixture
+            .command("podman")?
+            .args(["service", "recover"])
+            .env("WRIX_SERVICE_ALLOW_TEMP_CACHE", "1"),
+    )?;
+    assert!(output.status.success(), "{}", output.stderr);
+    let recovered: Value = serde_json::from_slice(&fs::read(&selection)?)?;
+    assert_eq!(recovered["schema_version"], 2);
+    assert_eq!(
+        recovered["recipe"]["image_id"],
+        format!("sha256:{}", "a".repeat(64))
+    );
+    for field in [
+        "runtime",
+        "workspace_hash",
+        "container_name",
+        "cache_http_port",
+    ] {
+        assert_eq!(legacy[field], recovered[field], "{field}");
+    }
+    let output = run_command(
+        fixture
+            .command("podman")?
+            .args(["service", "start"])
+            .env("WRIX_SERVICE_ALLOW_TEMP_CACHE", "1"),
+    )?;
+    assert!(output.status.success(), "{}", output.stderr);
     Ok(())
 }
 

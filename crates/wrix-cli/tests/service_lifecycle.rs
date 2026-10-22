@@ -382,7 +382,7 @@ impl Fixture {
     }
 
     fn run(&self, operation: &str) -> TestResult<RunResult> {
-        if operation == "start" {
+        if matches!(operation, "start" | "recover") {
             self.api()?;
         }
         run_command(self.command()?.args(["service", operation]))
@@ -1300,7 +1300,8 @@ fn assert_cache_start_preserves_owner(fixture: &Fixture) -> TestResult {
     let output = fixture.run("start")?;
     assert!(!output.status.success());
     assert!(
-        output.stderr.contains("explicit host-wide maintenance"),
+        output.stderr.contains("wrix service recover")
+            || output.stderr.contains("explicit host-wide maintenance"),
         "{}",
         output.stderr
     );
@@ -1476,11 +1477,7 @@ fn podman_start_checks_apple_backend_ownership_before_selected_runtime_access() 
             .args(["service", "start"]),
     )?;
     assert!(!output.status.success());
-    assert!(
-        output.stderr.contains("explicit host-wide maintenance"),
-        "{}",
-        output.stderr
-    );
+    assert!(output.stderr.contains("competing"), "{}", output.stderr);
     assert!(!output.stderr.contains("selected runtime was accessed"));
     assert!(!fixture.root.path().join("run.argv").exists());
     assert!(!fixture.state_root()?.join("cache.lock").exists());
@@ -1950,6 +1947,273 @@ fn namespaces_reuse_the_selected_celler_owner_and_retire_without_removing_it() -
     Ok(())
 }
 
+fn selected_inactive_owner(stopped: bool) -> TestResult<Fixture> {
+    let mut fixture = Fixture::new()?;
+    fixture.disable_dolt()?;
+    let output = fixture.run("start")?;
+    assert!(output.status.success(), "{}", output.stderr);
+    fixture.server.borrow_mut().take();
+    if stopped {
+        fixture.snapshot[0]["status"]["state"] = json!("stopped");
+        fixture.write_snapshot()?;
+    } else {
+        fs::write(fixture.root.path().join("runtime.json"), "[]")?;
+    }
+    Ok(fixture)
+}
+
+fn owner_selection(fixture: &Fixture) -> TestResult<PathBuf> {
+    let state = fixture.state_root()?;
+    Ok(state
+        .parent()
+        .and_then(Path::parent)
+        .ok_or("missing host state root")?
+        .join("host-lifecycle/celler-owner.json"))
+}
+
+#[test]
+fn recovery_recreates_only_absent_or_stopped_selected_owner_and_preserves_data() -> TestResult {
+    for stopped in [false, true] {
+        let fixture = selected_inactive_owner(stopped)?;
+        let selection = owner_selection(&fixture)?;
+        let previous: Value = serde_json::from_slice(&fs::read(&selection)?)?;
+        let host = selection.parent().unwrap().parent().unwrap();
+        let persistent = host.join("service-data/celler/persistent-test");
+        fs::write(&persistent, "retain data")?;
+        let issuer = host.join("host-control/celler-issuer/issuer.pem");
+        let authority = fs::read(&issuer)?;
+        let ordinary = fixture.run("start")?;
+        assert!(!ordinary.status.success());
+        assert!(
+            ordinary
+                .stderr
+                .contains(if stopped { "Stopped" } else { "Missing" }),
+            "{}",
+            ordinary.stderr
+        );
+        assert!(ordinary.stderr.contains("wrix service recover"));
+        let output = fixture.run("recover")?;
+        assert!(output.status.success(), "{}", output.stderr);
+        assert_eq!(fs::read_to_string(&persistent)?, "retain data");
+        assert_eq!(fs::read(&issuer)?, authority);
+        let recovered: Value = serde_json::from_slice(&fs::read(&selection)?)?;
+        for field in [
+            "runtime",
+            "workspace_hash",
+            "container_name",
+            "cache_http_port",
+        ] {
+            assert_eq!(previous[field], recovered[field], "{field}");
+        }
+        assert_eq!(recovered["schema_version"], 1);
+        assert!(fixture.root.path().join("run.argv").exists());
+        let output = fixture.run("start")?;
+        assert!(output.status.success(), "{}", output.stderr);
+    }
+    Ok(())
+}
+
+#[test]
+fn recovery_rejects_competing_owners_in_either_runtime_without_mutation() -> TestResult {
+    for other_runtime in [false, true] {
+        let mut fixture = selected_inactive_owner(false)?;
+        let selection = owner_selection(&fixture)?;
+        let before = fs::read(&selection)?;
+        if other_runtime {
+            peer_runtime::install(
+                &fixture.root.path().join("bin"),
+                "peer",
+                "celler-v2",
+                "true",
+            )?;
+        } else {
+            fixture.snapshot[0]["configuration"]["id"] = json!("competing-service");
+            fixture.write_snapshot()?;
+        }
+        let inventory = fs::read(fixture.root.path().join("runtime.json"))?;
+        let output = fixture.run("recover")?;
+        assert!(!output.status.success());
+        assert!(output.stderr.contains("competing"), "{}", output.stderr);
+        assert_eq!(fs::read(&selection)?, before);
+        assert_eq!(
+            fs::read(fixture.root.path().join("runtime.json"))?,
+            inventory
+        );
+        assert!(!fixture.root.path().join("run.argv").exists());
+    }
+    Ok(())
+}
+
+#[test]
+fn recovery_cannot_transfer_ownership_to_another_workspace() -> TestResult {
+    let fixture = selected_inactive_owner(false)?;
+    let other = fixture.root.path().join("other");
+    fs::create_dir(&other)?;
+    common::run_git(&other, &["init", "-q"])?;
+    let selection = owner_selection(&fixture)?;
+    let before = fs::read(&selection)?;
+    let output = run_command(
+        fixture
+            .command()?
+            .current_dir(&other)
+            .args(["service", "recover"]),
+    )?;
+    assert!(!output.status.success());
+    assert!(
+        output.stderr.contains("original workspace"),
+        "{}",
+        output.stderr
+    );
+    assert_eq!(fs::read(&selection)?, before);
+    assert!(!fixture.root.path().join("run.argv").exists());
+    Ok(())
+}
+
+#[test]
+fn recovery_requires_existing_private_authority_before_removing_a_stopped_container() -> TestResult
+{
+    let fixture = selected_inactive_owner(true)?;
+    let selection = owner_selection(&fixture)?;
+    let before = fs::read(&selection)?;
+    let host = selection.parent().unwrap().parent().unwrap();
+    fs::remove_file(host.join("host-control/celler-issuer/issuer.pem"))?;
+    let inventory = fs::read(fixture.root.path().join("runtime.json"))?;
+    let output = fixture.run("recover")?;
+    assert!(!output.status.success());
+    assert!(
+        output.stderr.contains("host-private Celler issuer"),
+        "{}",
+        output.stderr
+    );
+    assert_eq!(fs::read(&selection)?, before);
+    assert_eq!(
+        fs::read(fixture.root.path().join("runtime.json"))?,
+        inventory
+    );
+    assert!(!fixture.root.path().join("run.argv").exists());
+    Ok(())
+}
+
+#[test]
+fn recovery_refuses_unobservable_competing_runtime() -> TestResult {
+    let fixture = selected_inactive_owner(false)?;
+    peer_runtime::install(
+        &fixture.root.path().join("bin"),
+        "peer",
+        "celler-v2",
+        "unavailable",
+    )?;
+    let selection = owner_selection(&fixture)?;
+    let before = fs::read(&selection)?;
+    let output = fixture.run("recover")?;
+    assert!(!output.status.success());
+    assert!(
+        output.stderr.contains("cannot connect"),
+        "{}",
+        output.stderr
+    );
+    assert_eq!(fs::read(&selection)?, before);
+    assert!(!fixture.root.path().join("run.argv").exists());
+    Ok(())
+}
+
+#[test]
+fn recovery_preserves_selection_when_authenticated_readiness_fails() -> TestResult {
+    let fixture = selected_inactive_owner(false)?;
+    let selection = owner_selection(&fixture)?;
+    let before = fs::read(&selection)?;
+    fs::write(fixture.root.path().join("celler-status"), "403")?;
+    let output = fixture.run("recover")?;
+    assert!(!output.status.success());
+    assert!(output.stderr.contains("readiness"), "{}", output.stderr);
+    assert_eq!(fs::read(&selection)?, before);
+    assert!(fixture.root.path().join("run.argv").exists());
+    Ok(())
+}
+
+#[test]
+fn recovery_refuses_incompatible_running_backend() -> TestResult {
+    let mut fixture = selected_inactive_owner(true)?;
+    fixture.snapshot[0]["status"]["state"] = json!("running");
+    fixture.snapshot[0]["configuration"]["labels"]["wrix.cache.backend"] = json!("celler-v1");
+    fixture.write_snapshot()?;
+    let selection = owner_selection(&fixture)?;
+    let before = fs::read(&selection)?;
+    let inventory = fs::read(fixture.root.path().join("runtime.json"))?;
+    let output = fixture.run("recover")?;
+    assert!(!output.status.success());
+    assert!(output.stderr.contains("incompatible"), "{}", output.stderr);
+    assert_eq!(fs::read(&selection)?, before);
+    assert_eq!(
+        fs::read(fixture.root.path().join("runtime.json"))?,
+        inventory
+    );
+    assert!(!fixture.root.path().join("run.argv").exists());
+    Ok(())
+}
+
+#[test]
+fn recovery_does_not_treat_stopped_alternate_backend_as_a_running_owner() -> TestResult {
+    let fixture = selected_inactive_owner(false)?;
+    peer_runtime::install(
+        &fixture.root.path().join("bin"),
+        "peer",
+        "celler-v1",
+        "false",
+    )?;
+    let output = fixture.run("recover")?;
+    assert!(output.status.success(), "{}", output.stderr);
+    Ok(())
+}
+
+#[test]
+fn recovery_waits_for_host_lifecycle_exclusion_before_runtime_inspection() -> TestResult {
+    let fixture = selected_inactive_owner(false)?;
+    fixture.api()?;
+    fs::write(fixture.root.path().join("runtime.log"), "")?;
+    let lock = hold_host_lifecycle_lock(&fixture)?;
+    let mut child = fixture
+        .command()?
+        .args(["service", "recover"])
+        .stdout(std::process::Stdio::null())
+        .spawn()?;
+    let deadline = Instant::now() + Duration::from_millis(500);
+    while Instant::now() < deadline {
+        assert!(child.try_wait()?.is_none(), "recovery bypassed host lock");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(fs::read(fixture.root.path().join("runtime.log"))?, b"");
+    drop(lock);
+    assert!(child.wait()?.success());
+    Ok(())
+}
+
+#[test]
+fn concurrent_recovery_creates_one_owner() -> TestResult {
+    let fixture = selected_inactive_owner(false)?;
+    fixture.api()?;
+    let mut children = Vec::new();
+    for _ in 0..4 {
+        children.push(
+            fixture
+                .command()?
+                .args(["service", "recover"])
+                .stdout(std::process::Stdio::null())
+                .spawn()?,
+        );
+    }
+    for mut child in children {
+        assert!(child.wait()?.success());
+    }
+    let log = fs::read_to_string(fixture.root.path().join("runtime.log"))?;
+    assert_eq!(
+        log.lines().filter(|line| line.starts_with("run ")).count(),
+        1,
+        "{log}"
+    );
+    Ok(())
+}
+
 #[test]
 fn selected_celler_owner_is_not_replaced_when_its_runtime_identity_is_unconfirmed() -> TestResult {
     for (change, value) in [
@@ -1975,7 +2239,7 @@ fn selected_celler_owner_is_not_replaced_when_its_runtime_identity_is_unconfirme
         let output = fixture.run("start")?;
         assert!(!output.status.success(), "{change}");
         assert!(
-            output.stderr.contains("explicit host-wide maintenance"),
+            output.stderr.contains("wrix service recover"),
             "{}",
             output.stderr
         );

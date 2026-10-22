@@ -54,6 +54,9 @@ keep it current when specs land or retire.
 | [services](../specs/services.md)             | `crates/wrix-service/`                                                               | wx-fvr1x | Host-user control, shared service roles and draining updates             |
 | [tmux](../specs/tmux.md)                     | [`lib/sandbox/profiles.nix`](../lib/sandbox/profiles.nix)                            | wx-4f3g  | Native tmux CLI debugging and caller-owned session lifecycle             |
 
+[Celler ownership recovery](celler-recovery.md) describes explicit recovery of
+an absent or stopped selected cache owner without resetting persistent data.
+
 [Loom workspace safety troubleshooting](loom-troubleshooting.md) covers missing
 host associations and retained-history paths without resetting safety evidence.
 

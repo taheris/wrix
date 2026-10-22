@@ -108,6 +108,30 @@ fn new_owner_retains_exact_package_binding_and_native_identity() {
 }
 
 #[test]
+fn recovery_replaces_only_matching_selection_and_preserves_physical_identity() {
+    let root = tempfile::tempdir().unwrap();
+    let host = root.path().join("host-lifecycle");
+    let guard = coordination::acquire(&host).unwrap();
+    let previous = selected(root.path());
+    previous.record(&guard).unwrap();
+    let mut recovered = previous.clone();
+    recovered.recipe = Some(recipe());
+    recovered.recovered(&previous, &guard).unwrap();
+    assert_eq!(Selected::read(&host).unwrap(), Some(recovered.clone()));
+    assert!(matches!(
+        recovered.recovered(&previous, &guard),
+        Err(Error::Conflict)
+    ));
+    let mut transferred = recovered.clone();
+    transferred.port = NonZeroU16::new(21346).unwrap();
+    assert!(matches!(
+        transferred.recovered(&recovered, &guard),
+        Err(Error::Conflict)
+    ));
+    assert_eq!(Selected::read(&host).unwrap(), Some(recovered));
+}
+
+#[test]
 fn legacy_owner_is_not_implicitly_assigned_the_callers_package() {
     let root = tempfile::tempdir().unwrap();
     let host = root.path().join("host-lifecycle");

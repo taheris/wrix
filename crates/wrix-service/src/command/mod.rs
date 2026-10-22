@@ -8,6 +8,7 @@ use crate::lifecycle::{self, CacheMode, DoltTransport};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Top {
     Start,
+    Recover,
     Stop,
     Status,
     Logs,
@@ -30,6 +31,7 @@ impl Top {
     pub fn parse(input: &str) -> Option<Self> {
         match input {
             "start" => Some(Self::Start),
+            "recover" => Some(Self::Recover),
             "stop" => Some(Self::Stop),
             "status" => Some(Self::Status),
             "logs" => Some(Self::Logs),
@@ -55,7 +57,7 @@ impl Dolt {
     }
 }
 
-pub const HELP: &str = "Manage workspace services.\n\nUsage: wrix service <command> [options]\n\nCommands:\n  start      Start the workspace services.\n  stop       Stop the workspace services.\n  status     Show workspace service status.\n  logs       Print workspace service logs.\n  endpoints  Print workspace service endpoints.\n  dolt <status|socket|port|host|sandbox-endpoint|attach|gc|wait>       Manage the workspace Dolt service.\n  cache <config|status|publish|warm|rotate-key>        Manage the workspace project cache.\n  nix-store [enable|disable|gc]  Inspect approval or request scoped installed-store collection.\n\nOptions:\n  --no-cache  Disable project-cache handling for top-level service commands.\n  --sandbox-cache  Resolve the project-cache endpoint for sandbox reads (endpoints only).\n  -h, --help  Print help.\n";
+pub const HELP: &str = "Manage workspace services.\n\nUsage: wrix service <command> [options]\n\nCommands:\n  start      Start the workspace services.\n  recover    Recover the absent or stopped selected cache owner without deleting data.\n  stop       Stop the workspace services.\n  status     Show workspace service status.\n  logs       Print workspace service logs.\n  endpoints  Print workspace service endpoints.\n  dolt <status|socket|port|host|sandbox-endpoint|attach|gc|wait>       Manage the workspace Dolt service.\n  cache <config|status|publish|warm|rotate-key>        Manage the workspace project cache.\n  nix-store [enable|disable|gc]  Inspect approval or request scoped installed-store collection.\n\nOptions:\n  --no-cache  Disable project-cache handling for top-level service commands.\n  --sandbox-cache  Resolve the project-cache endpoint for sandbox reads (endpoints only).\n  -h, --help  Print help.\n";
 pub const DOLT_HELP: &str = "Manage the workspace Dolt service.\n\nUsage: wrix service dolt <command>\n\nCommands:\n  status  Show Dolt service status and connection details.\n  socket  Print the Dolt Unix-socket path.\n  port    Print the Dolt TCP port.\n  host    Print the Dolt TCP host.\n  sandbox-endpoint  Print the sandbox-visible Dolt TCP endpoint.\n  attach  Print a command that connects to Dolt.\n  gc      Print the Dolt garbage-collection target.\n  wait    Wait until the Dolt service is ready.\n\nOptions:\n  -h, --help  Print help.\n";
 
 pub fn write_help(stdout: &mut impl Write) -> io::Result<()> {
@@ -71,6 +73,10 @@ pub fn run_top(command: Top, args: &[String], stdout: &mut impl Write) -> io::Re
     match command {
         Top::Start => {
             let status = lifecycle::start(cache_mode).map_err(io::Error::other)?;
+            stdout.write_all(status.render().as_bytes())?;
+        }
+        Top::Recover => {
+            let status = lifecycle::recover().map_err(io::Error::other)?;
             stdout.write_all(status.render().as_bytes())?;
         }
         Top::Stop => {
@@ -190,7 +196,7 @@ fn parse_options(command: Top, args: &[String]) -> io::Result<(CacheMode, Endpoi
     let mut endpoint_view = EndpointView::Host;
     for arg in args {
         match arg.as_str() {
-            "--no-cache" => cache_mode = CacheMode::Disabled,
+            "--no-cache" if command != Top::Recover => cache_mode = CacheMode::Disabled,
             "--sandbox-cache" if command == Top::Endpoints => {
                 endpoint_view = EndpointView::SandboxCache;
             }
@@ -213,6 +219,7 @@ mod test {
     #[test]
     fn top_command_parser_accepts_public_service_commands() {
         assert_eq!(Top::parse("start"), Some(Top::Start));
+        assert_eq!(Top::parse("recover"), Some(Top::Recover));
         assert_eq!(Top::parse("stop"), Some(Top::Stop));
         assert_eq!(Top::parse("status"), Some(Top::Status));
         assert_eq!(Top::parse("logs"), Some(Top::Logs));
@@ -228,6 +235,13 @@ mod test {
         assert_eq!(Dolt::parse("attach"), Some(Dolt::Attach));
         assert_eq!(Dolt::parse("gc"), Some(Dolt::Gc));
         assert_eq!(Dolt::parse("wait"), Some(Dolt::Wait));
+    }
+
+    #[test]
+    fn recovery_rejects_cache_opt_out_and_scope_overrides() {
+        for option in ["--no-cache", "--host", "--sandbox-cache", "unexpected"] {
+            assert!(parse_options(Top::Recover, &[option.into()]).is_err());
+        }
     }
 
     #[test]

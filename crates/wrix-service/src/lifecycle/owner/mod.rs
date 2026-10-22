@@ -147,6 +147,23 @@ impl Selected {
                 Err(Error::Conflict)
             };
         }
+        self.persist(root)
+    }
+
+    /// Replace provenance only for the same physical owner, after coordinated recovery readiness.
+    pub fn recovered(&self, previous: &Self, guard: &coordination::Guard) -> Result<(), Error> {
+        if Self::read(guard.root())?.as_ref() != Some(previous)
+            || self.runtime != previous.runtime
+            || self.workspace != previous.workspace
+            || self.container != previous.container
+            || self.port != previous.port
+        {
+            return Err(Error::Conflict);
+        }
+        self.persist(guard.root())
+    }
+
+    fn persist(&self, root: &Path) -> Result<(), Error> {
         let wire = Wire {
             schema_version: if self.recipe.is_some() { 2 } else { 1 },
             backend_version: CACHE_BACKEND_VERSION.into(),
