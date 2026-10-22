@@ -468,6 +468,19 @@ async fn run(mut command: Command, input: &[u8], deadline: Instant) -> Result<Ve
     };
     match rustix::process::kill_process_group(pid, rustix::process::Signal::KILL) {
         Ok(()) | Err(rustix::io::Errno::SRCH) => (),
+        Err(rustix::io::Errno::PERM) if cfg!(target_os = "macos") => {
+            // Darwin denies signaling a zombie-only group; retain the child until this check.
+            let status = rustix::process::waitid(
+                rustix::process::WaitId::Pid(pid),
+                rustix::process::WaitIdOptions::EXITED
+                    | rustix::process::WaitIdOptions::NOHANG
+                    | rustix::process::WaitIdOptions::NOWAIT,
+            )
+            .map_err(std::io::Error::from)?;
+            if status.is_none() {
+                return Err(Error::Io(rustix::io::Errno::PERM.into()));
+            }
+        }
         Err(error) => return Err(Error::Io(error.into())),
     }
     tokio::time::timeout(Duration::from_secs(5), child.wait())
@@ -475,3 +488,6 @@ async fn run(mut command: Command, input: &[u8], deadline: Instant) -> Result<Ve
         .map_err(|_| Error::Invalid("resolver child cleanup deadline exceeded".into()))??;
     outcome
 }
+
+#[cfg(test)]
+mod test;
