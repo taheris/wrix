@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error as ThisError;
 use wrix_core::path::{ContainerName, WorkspaceHash};
 
+pub(super) mod host;
+
 use super::{CACHE_BACKEND_VERSION, Plan, RuntimeKind, binding, coordination};
 use wrix_sandbox::image::Digest;
 
@@ -40,7 +42,7 @@ pub enum Error {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct Selected {
     pub runtime: RuntimeKind,
-    pub workspace: WorkspaceHash,
+    pub workspace: Option<WorkspaceHash>,
     pub container: ContainerName,
     pub port: NonZeroU16,
     pub recipe: Option<Recipe>,
@@ -61,7 +63,8 @@ struct Wire {
     schema_version: u8,
     backend_version: String,
     runtime: RuntimeKind,
-    workspace_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    workspace_hash: Option<String>,
     container_name: String,
     cache_http_port: NonZeroU16,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -71,7 +74,7 @@ struct Wire {
 impl Selected {
     pub fn owns(&self, plan: &Plan) -> bool {
         self.runtime == plan.namespace_runtime
-            && self.workspace == *plan.workspace().hash()
+            && self.workspace.as_ref() == Some(plan.workspace().hash())
             && self.container == plan.container_name()
     }
 
@@ -82,7 +85,7 @@ impl Selected {
     ) -> Result<Self, Error> {
         Ok(Self {
             runtime,
-            workspace: plan.workspace().hash().clone(),
+            workspace: Some(plan.workspace().hash().clone()),
             container: plan.container_name(),
             port: plan
                 .owned_cache_port()
@@ -121,15 +124,24 @@ impl Selected {
         }
         let wire: Wire = serde_json::from_slice(&bytes)?;
         if !matches!(
-            (wire.schema_version, wire.recipe.is_some()),
-            (1, false) | (2, true)
+            (
+                wire.schema_version,
+                wire.recipe.is_some(),
+                wire.workspace_hash.is_some()
+            ),
+            (1, false, true) | (2, true, true) | (3, _, false)
         ) || wire.backend_version != CACHE_BACKEND_VERSION
         {
             return Err(Error::Invalid);
         }
         Ok(Some(Self {
             runtime: wire.runtime,
-            workspace: WorkspaceHash::parse(&wire.workspace_hash).map_err(|_| Error::Invalid)?,
+            workspace: wire
+                .workspace_hash
+                .as_deref()
+                .map(WorkspaceHash::parse)
+                .transpose()
+                .map_err(|_| Error::Invalid)?,
             container: ContainerName::from_persisted(wire.container_name).ok_or(Error::Invalid)?,
             port: wire.cache_http_port,
             recipe: wire.recipe,
@@ -165,10 +177,19 @@ impl Selected {
 
     fn persist(&self, root: &Path) -> Result<(), Error> {
         let wire = Wire {
-            schema_version: if self.recipe.is_some() { 2 } else { 1 },
+            schema_version: if self.workspace.is_none() {
+                3
+            } else if self.recipe.is_some() {
+                2
+            } else {
+                1
+            },
             backend_version: CACHE_BACKEND_VERSION.into(),
             runtime: self.runtime,
-            workspace_hash: self.workspace.as_str().into(),
+            workspace_hash: self
+                .workspace
+                .as_ref()
+                .map(|workspace| workspace.as_str().into()),
             container_name: self.container.as_str().into(),
             cache_http_port: self.port,
             recipe: self.recipe.clone(),

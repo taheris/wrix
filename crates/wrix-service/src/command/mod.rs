@@ -76,8 +76,8 @@ pub fn run_top(command: Top, args: &[String], stdout: &mut impl Write) -> io::Re
             stdout.write_all(status.render().as_bytes())?;
         }
         Top::Recover => {
-            let status = lifecycle::recover().map_err(io::Error::other)?;
-            stdout.write_all(status.render().as_bytes())?;
+            let report = lifecycle::recover().map_err(io::Error::other)?;
+            stdout.write_all(report.as_bytes())?;
         }
         Top::Stop => {
             let status = lifecycle::stop(cache_mode).map_err(io::Error::other)?;

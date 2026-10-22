@@ -228,21 +228,26 @@ direnv startup never implicitly authorizes activation or disruption.
 ### Celler Ownership Recovery
 
 `wrix service recover` is explicit maintenance for an absent or stopped selected
-Celler owner. Invoke it from that owner's original workspace with its recorded
-runtime and caching enabled; it is not an ownership-transfer or reset command.
-Under host lifecycle exclusion it checks both runtimes for competing running
-backends, retains persistent data and existing signing authority, recreates the
-selected container using the invoked package, confirms authenticated readiness,
-and only then records updated provenance. It refuses incompatible running
-owners, uncertain runtime observations and foreign-workspace takeovers. Ordinary
-startup reports missing/stopped ownership with this command's recovery guidance
-rather than deleting the selection or claiming a running incompatibility.
+Celler owner or an interrupted initial creation. It is host-user scoped and
+works outside repositories, without reading caller cache policy or requiring the
+original checkout. Recovery selects the recorded runtime. Under host lifecycle
+exclusion it checks both runtimes for competing running backends, retains
+persistent data and existing signing authority, recreates the selected container
+using the invoked package, confirms authenticated readiness, and only then
+records updated provenance. Inactive legacy workspace ownership becomes host
+ownership without mounting its repository or starting its Dolt database; the
+container name and endpoint remain unchanged. It refuses incompatible running
+owners and uncertain runtime observations. Ordinary startup reports
+missing/stopped ownership with this command's recovery guidance rather than
+deleting the selection or claiming a running incompatibility.
 
 - Missing/stopped recovery guidance pins the invoked package wrapper and
-  recorded runtime, identifies the original-owner workspace, and remains
-  executable after failed shell entry leaves an older global Wrix on PATH.
+  recorded runtime and remains executable after failed shell entry leaves an
+  older global Wrix on PATH, without requiring the original workspace.
   [test](../crates/wrix-cli/tests/service_lifecycle.rs::recovery_guidance_executes_selected_wrapper_after_failed_entry_with_stale_global)
-- Missing/stopped recovery preserves physical ownership and persistent data.
+- Recovery works without the original repository or caller cache policy.
+  [test](../crates/wrix-cli/tests/service_lifecycle.rs::recovery_is_host_scoped_without_the_original_repository_or_caller_cache_policy)
+- Missing/stopped recovery preserves the physical endpoint and persistent data.
   [test](../crates/wrix-cli/tests/service_lifecycle.rs::recovery_recreates_only_absent_or_stopped_selected_owner_and_preserves_data)
 - Recovery rejects competing running owners in either runtime without removing
   them.
@@ -251,6 +256,9 @@ rather than deleting the selection or claiming a running incompatibility.
   [test](../crates/wrix-cli/tests/service_lifecycle.rs::recovery_refuses_incompatible_running_backend)
 - Concurrent recovery creates only one owner.
   [test](../crates/wrix-cli/tests/service_lifecycle.rs::concurrent_recovery_creates_one_owner)
+- An interrupted recovery retains candidate identity separately from selection;
+  retry confirms readiness without starting a competing owner.
+  [test](../crates/wrix-cli/tests/service_lifecycle.rs::recovery_preserves_selection_when_authenticated_readiness_fails)
 - Missing legacy Podman ownership gains provenance only after readiness.
   [test](../crates/wrix-cli/tests/service_cache.rs::podman_recovers_a_missing_legacy_selected_owner_and_records_new_provenance)
 

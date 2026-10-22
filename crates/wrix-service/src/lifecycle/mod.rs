@@ -117,19 +117,18 @@ pub enum Error {
     InstalledImageUnavailable { path: String, image: String },
     /// service lifecycle operation failed: {message}
     Operation { message: String },
-    /// Celler ownership in container {container} failed: {reason}; explicit host-wide maintenance is required; ordinary startup cannot replace a running backend or start a competing owner; explicit recovery only applies to an absent/stopped selected owner from its original workspace, using the selected host package
+    /// Celler ownership in container {container} failed: {reason}; explicit host-wide maintenance is required; ordinary startup cannot replace a running backend or start a competing owner; explicit recovery applies to an absent/stopped selected owner using the selected host package
     CellerOwnership {
         container: String,
         reason: OwnershipFailure,
     },
-    /// selected Celler owner {container} is {status:?}; from the owner's original workspace {workspace}, run `{command}` to recover it under host-wide coordination without deleting persistent data; this absolute executable remains usable after failed shell/direnv entry, without ambient `wrix`
+    /// selected Celler owner {container} is {status:?}; run `{command}` from any directory to recover it under host-wide coordination without deleting persistent data; this absolute executable remains usable after failed shell/direnv entry, without ambient `wrix`
     CellerUnavailable {
         container: String,
         status: RuntimeStatus,
-        workspace: String,
         command: String,
     },
-    /// Celler recovery requires the selected owner's original workspace and runtime with caching enabled; no ownership was transferred
+    /// Celler recovery requires an existing selected owner and its recorded runtime; no ownership was transferred
     RecoveryScope,
     /// service identity or compatibility in container {container} requires explicit host-wide maintenance; ordinary startup cannot adopt or migrate an unverified service
     IncompatibleService { container: String },
@@ -280,6 +279,13 @@ impl PreparedImage {
         }
     }
 
+    fn clone_recipe(&self) -> Option<owner::Recipe> {
+        match self {
+            Self::Pinned(recipe) => Some((**recipe).clone()),
+            Self::Reference(_) => None,
+        }
+    }
+
     fn into_recipe(self) -> Option<Box<owner::Recipe>> {
         match self {
             Self::Pinned(recipe) => Some(recipe),
@@ -328,7 +334,7 @@ impl Plan {
         beads_sync_branch: Branch,
         cache_settings: &wrix_cache::config::Settings,
     ) -> Result<Self> {
-        let container_name = select_container_name(&workspace, &paths)?;
+        let mut container_name = select_container_name(&workspace, &paths)?;
         let prior_ports = PortLease::read(&paths.services_path(), workspace.hash())?;
         let peer_ports = peer_port_leases(&paths, workspace.hash())?;
         let selected_owner = paths
@@ -337,6 +343,13 @@ impl Plan {
             .map(owner::Selected::read)
             .transpose()?
             .flatten();
+        if selected_owner
+            .as_ref()
+            .is_some_and(|owner| owner.workspace.is_none() && owner.container == container_name)
+        {
+            container_name = ContainerName::from_persisted(format!("{container_name}-namespace"))
+                .ok_or(owner::Error::Invalid)?;
+        }
         let cache_port = match cache_mode {
             CacheMode::Enabled
                 if cache_settings.enable
@@ -813,26 +826,36 @@ pub enum OwnershipFailure {
     Competing,
 }
 
+/// Recover the host-user cache backend without requiring a repository.
+pub fn recover() -> Result<String> {
+    owner::host::recover()
+}
+
 pub fn start(cache_mode: CacheMode) -> Result<Status> {
-    start_with_recovery(cache_mode, false)
-}
-
-/// Recover only an inactive selected owner; never transfer ownership or replace a running backend.
-pub fn recover() -> Result<Status> {
-    start_with_recovery(CacheMode::Enabled, true)
-}
-
-fn start_with_recovery(cache_mode: CacheMode, recovery: bool) -> Result<Status> {
     let (mut plan, _lock) = locked_plan(cache_mode)?;
     plan.authorize()?;
-    if recovery && (!plan.cache_enabled() || plan.selected_owner.is_none()) {
-        return Err(Error::RecoveryScope);
-    }
     let host_lock = (plan.has_services() || plan.cache_enabled())
         .then(|| host_lifecycle_lock(plan.paths()))
         .transpose()?;
     if let Some(guard) = &host_lock {
         plan.reconcile_owner(guard)?;
+        if plan.cache_enabled() && plan.selected_owner.is_none() {
+            let runtime = Runtime::from_env()?;
+            runtime.binding.as_ref().ok_or(binding::Error::Missing)?;
+            let alternate = runtime.alternate();
+            if let Some(containers) = alternate.available_container_infos()? {
+                alternate.ensure_cache_inventory_compatible(&plan, containers, false)?;
+            }
+            if runtime.status(&plan.container_name())? == RuntimeStatus::Missing {
+                owner::host::ensure(
+                    &runtime,
+                    guard,
+                    None,
+                    plan.cache_port().and_then(NonZeroU16::new),
+                )?;
+                plan.reconcile_owner(guard)?;
+            }
+        }
     }
     supervisor::transition::ensure_clear(plan.paths().state_root(), plan.workspace().hash())?;
     let runtime = Runtime::from_env()?;
@@ -840,12 +863,7 @@ fn start_with_recovery(cache_mode: CacheMode, recovery: bool) -> Result<Status> 
         runtime.binding.as_ref().ok_or(binding::Error::Missing)?;
     }
     if plan.has_services() || plan.cache_enabled() {
-        if recovery {
-            runtime
-                .prepare_owner_recovery(&plan, host_lock.as_ref().ok_or(owner::Error::Invalid)?)?;
-        } else {
-            runtime.ensure_cache_owner_compatible(&plan)?;
-        }
+        runtime.ensure_cache_owner_compatible(&plan)?;
         runtime.ensure_namespace_compatible(&plan)?;
     }
     if plan.has_services() && runtime.reconcile_legacy_containers(&plan)? {
@@ -876,7 +894,7 @@ fn start_with_recovery(cache_mode: CacheMode, recovery: bool) -> Result<Status> 
     }
     if let Some(cache) = cache {
         cache::activate(&plan, &cache)?;
-        if plan.selected_owner.is_none() || recovery {
+        if plan.selected_owner.is_none() {
             let created = matches!(disposition, Some(RunDisposition::Created(_)));
             let recipe = match disposition {
                 Some(RunDisposition::Created(recipe)) => recipe.map(|recipe| *recipe),
@@ -1483,14 +1501,6 @@ impl Runtime {
             return Err(Error::CellerUnavailable {
                 container: owner.container.as_str().into(),
                 status,
-                workspace: if owner.owns(plan) {
-                    plan.workspace().canonical_path().display().to_string()
-                } else {
-                    format!(
-                        "with identity {} (not this checkout)",
-                        owner.workspace.as_str()
-                    )
-                },
                 command: recovery_command(owner.runtime)?,
             });
         }
@@ -1499,10 +1509,16 @@ impl Runtime {
                 .inspect_label(owner.container.as_str(), "wrix.kind")?
                 .as_deref()
                 != Some("service")
-            || self
-                .inspect_label(owner.container.as_str(), "wrix.workspace.hash")?
-                .as_deref()
-                != Some(owner.workspace.as_str())
+            || (owner.workspace.is_some()
+                && self
+                    .inspect_label(owner.container.as_str(), "wrix.workspace.hash")?
+                    .as_deref()
+                    != owner.workspace.as_ref().map(WorkspaceHash::as_str))
+            || (owner.workspace.is_none()
+                && self
+                    .inspect_label(owner.container.as_str(), "wrix.service.scope")?
+                    .as_deref()
+                    != Some("host"))
             || self
                 .inspect_label(owner.container.as_str(), CACHE_BACKEND_LABEL)?
                 .as_deref()
@@ -1522,38 +1538,6 @@ impl Runtime {
                 container: owner.container.as_str().into(),
                 reason: OwnershipFailure::Identity,
             });
-        }
-        Ok(())
-    }
-
-    /// Keep lifecycle exclusion through validation, stopped-container removal and subsequent readiness.
-    fn prepare_owner_recovery(&self, plan: &Plan, guard: &coordination::Guard) -> Result<()> {
-        let owner = plan.selected_owner.as_ref().ok_or(Error::RecoveryScope)?;
-        if !plan.cache_enabled()
-            || !owner.owns(plan)
-            || owner.runtime != self.kind
-            || owner::Selected::read(guard.root())?.as_ref() != Some(owner)
-        {
-            return Err(Error::RecoveryScope);
-        }
-        let status = self.status(&owner.container)?;
-        if status == RuntimeStatus::Running {
-            return self.ensure_cache_owner_compatible(plan);
-        }
-        let alternate = self.alternate();
-        if let Some(containers) = alternate.available_container_infos()? {
-            alternate.ensure_cache_inventory_compatible(plan, containers, false)?;
-        }
-        self.ensure_cache_inventory_compatible(plan, self.list_container_infos()?, true)?;
-        if status == RuntimeStatus::Stopped && !self.namespace_identity_matches(plan)? {
-            return Err(Error::IncompatibleService {
-                container: owner.container.as_str().into(),
-            });
-        }
-        // Recovery must not replace lost signing authority while reusing persistent cache data.
-        cache::prepare(plan, RuntimeStatus::Running)?;
-        if status == RuntimeStatus::Stopped {
-            self.remove(&owner.container)?;
         }
         Ok(())
     }
@@ -1944,6 +1928,10 @@ impl Runtime {
             .into_iter()
             .filter(|container| {
                 container.name != planned_name.as_str()
+                    && plan
+                        .selected_owner
+                        .as_ref()
+                        .is_none_or(|owner| container.name != owner.container.as_str())
                     && container.kind.as_deref() == Some("service")
                     && (container.belongs_to_workspace(plan)
                         || container.is_legacy_service_on_selected_port(&selected_ports))
@@ -2252,12 +2240,16 @@ impl Runtime {
     }
 
     fn ensure_image(&self, plan: &Plan) -> Result<PreparedImage> {
-        let candidate = self.binding.as_ref().ok_or(binding::Error::Missing)?;
         let root = plan
             .paths()
             .state_base()
             .and_then(Path::parent)
             .ok_or(binding::Error::Metadata("missing host state root"))?;
+        self.ensure_image_at(root)
+    }
+
+    fn ensure_image_at(&self, root: &Path) -> Result<PreparedImage> {
+        let candidate = self.binding.as_ref().ok_or(binding::Error::Missing)?;
         let roots = root.join("service-image-roots");
         let digest = candidate.realize(&roots)?;
         let runtime = match self.kind {

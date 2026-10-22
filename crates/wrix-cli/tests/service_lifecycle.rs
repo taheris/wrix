@@ -624,7 +624,7 @@ fn apple_start_preserves_stopped_legacy_tcp_services_pending_reconciliation() ->
 }
 
 #[test]
-fn fresh_combined_services_include_authenticated_sql_and_child_supervision() -> TestResult {
+fn fresh_services_keep_host_cache_separate_from_authenticated_workspace_sql() -> TestResult {
     let fixture = Fixture::new()?;
     fs::write(fixture.root.path().join("runtime.json"), "[]")?;
     let output = fixture.run("start")?;
@@ -632,13 +632,27 @@ fn fresh_combined_services_include_authenticated_sql_and_child_supervision() -> 
     let log = fs::read_to_string(fixture.root.path().join("runtime.log"))?;
     assert_eq!(
         log.lines().filter(|line| line.starts_with("run ")).count(),
-        1,
+        2,
         "{log}"
     );
+    let containers: Value =
+        serde_json::from_slice(&fs::read(fixture.root.path().join("runtime.json"))?)?;
+    let host = containers
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["configuration"]["labels"]["wrix.service.scope"] == "host")
+        .unwrap();
+    assert_eq!(host["configuration"]["id"], "wrix-host-service");
+    assert!(
+        host["configuration"]["labels"]
+            .get("wrix.workspace.hash")
+            .is_none()
+    );
     let args = fs::read_to_string(fixture.root.path().join("run.argv"))?;
-    assert!(args.contains("wrix.service.supervision=2"));
-    assert!(args.contains("exec wrix-service-supervisor serve"));
-    assert!(args.contains("/var/lib/wrix/service-supervisor"));
+    assert!(args.contains("wrix.cache.enabled=false"));
+    assert!(!args.contains("/var/lib/wrix/celler"));
+    assert!(!args.contains("/var/lib/wrix/service-supervisor"));
     assert!(args.lines().any(|arg| arg == "wrix.dolt.auth=tcp-root-v1"));
     assert!(
         args.lines()
@@ -1663,10 +1677,10 @@ fn host_lifecycle_lock_blocks_starts_from_unrelated_workspaces() -> TestResult {
         let state: PathBuf = serde_json::from_value(metadata["state_root"].clone())?;
         assert!(state.join("celler-publisher.json").is_file());
     } else {
-        let stderr = String::from_utf8(peer_output.stderr)?;
+        let diagnostic = String::from_utf8(peer_output.stderr)?;
         assert!(
-            stderr.contains("explicit host-wide maintenance"),
-            "{stderr}"
+            diagnostic.contains("explicit host-wide maintenance"),
+            "{diagnostic}"
         );
     }
     assert!(!fixture.root.path().join("run.argv").exists());
@@ -2001,15 +2015,15 @@ fn recovery_recreates_only_absent_or_stopped_selected_owner_and_preserves_data()
         assert_eq!(fs::read_to_string(&persistent)?, "retain data");
         assert_eq!(fs::read(&issuer)?, authority);
         let recovered: Value = serde_json::from_slice(&fs::read(&selection)?)?;
-        for field in [
-            "runtime",
-            "workspace_hash",
-            "container_name",
-            "cache_http_port",
-        ] {
+        for field in ["runtime", "container_name", "cache_http_port"] {
             assert_eq!(previous[field], recovered[field], "{field}");
         }
-        assert_eq!(recovered["schema_version"], 1);
+        assert_eq!(recovered["schema_version"], 3);
+        assert!(recovered.get("workspace_hash").is_none());
+        let args = fs::read_to_string(fixture.root.path().join("run.argv"))?;
+        assert!(args.contains("wrix.service.scope=host"));
+        assert!(!args.contains("/var/lib/wrix/beads"));
+        assert!(!args.contains("/run/wrix"));
         assert!(fixture.root.path().join("run.argv").exists());
         let output = fixture.run("start")?;
         assert!(output.status.success(), "{}", output.stderr);
@@ -2046,12 +2060,12 @@ fn recovery_guidance_executes_selected_wrapper_after_failed_entry_with_stale_glo
     let output = run_command(&mut entry)?;
     assert!(!output.status.success());
     assert!(
-        output.stderr.contains("original workspace"),
+        output.stderr.contains("from any directory"),
         "{}",
         output.stderr
     );
     assert!(
-        output
+        !output
             .stderr
             .contains(fixture.workspace.canonicalize()?.to_str().unwrap()),
         "{}",
@@ -2118,7 +2132,7 @@ fn recovery_rejects_competing_owners_in_either_runtime_without_mutation() -> Tes
 }
 
 #[test]
-fn unavailable_owner_guidance_identifies_foreign_workspace_without_claiming_it() -> TestResult {
+fn unavailable_owner_guidance_does_not_require_a_foreign_workspace() -> TestResult {
     let fixture = selected_inactive_owner(false)?;
     let other = fixture.root.path().join("other");
     fs::create_dir(&other)?;
@@ -2133,42 +2147,80 @@ fn unavailable_owner_guidance_identifies_foreign_workspace_without_claiming_it()
     )?;
     assert!(!output.status.success());
     assert!(
-        output.stderr.contains("not this checkout"),
+        output.stderr.contains("from any directory"),
         "{}",
         output.stderr
     );
-    assert!(
-        output
-            .stderr
-            .contains(fixture.metadata["workspace_hash"].as_str().unwrap())
-    );
+    assert!(output.stderr.contains("service recover"));
     assert_eq!(fs::read(&selection)?, before);
     assert!(!fixture.root.path().join("run.argv").exists());
     Ok(())
 }
 
 #[test]
-fn recovery_cannot_transfer_ownership_to_another_workspace() -> TestResult {
+fn recovery_is_host_scoped_without_the_original_repository_or_caller_cache_policy() -> TestResult {
     let fixture = selected_inactive_owner(false)?;
     let other = fixture.root.path().join("other");
     fs::create_dir(&other)?;
-    common::run_git(&other, &["init", "-q"])?;
+    fs::write(other.join("wrix.toml"), "this is not valid TOML [")?;
+    fixture.api()?;
+    fs::remove_dir_all(&fixture.workspace)?;
     let selection = owner_selection(&fixture)?;
-    let before = fs::read(&selection)?;
+    let before: Value = serde_json::from_slice(&fs::read(&selection)?)?;
     let output = run_command(
         fixture
             .command()?
             .current_dir(&other)
             .args(["service", "recover"]),
     )?;
+    assert!(output.status.success(), "{}", output.stderr);
+    let recovered: Value = serde_json::from_slice(&fs::read(&selection)?)?;
+    assert_eq!(recovered["container_name"], before["container_name"]);
+    assert_eq!(recovered["cache_http_port"], before["cache_http_port"]);
+    assert_eq!(recovered["schema_version"], 3);
+    assert!(recovered.get("workspace_hash").is_none());
+    assert!(fixture.root.path().join("run.argv").exists());
+    Ok(())
+}
+
+#[test]
+fn recovery_finishes_interrupted_initial_creation_without_the_original_repository() -> TestResult {
+    let mut fixture = Fixture::new()?;
+    fixture.disable_dolt()?;
+    fs::write(fixture.root.path().join("runtime.json"), "[]")?;
+    fs::write(fixture.root.path().join("celler-status"), "403")?;
+    let output = fixture.run("start")?;
     assert!(!output.status.success());
-    assert!(
-        output.stderr.contains("original workspace"),
-        "{}",
-        output.stderr
+    let selection = owner_selection(&fixture)?;
+    assert!(!selection.exists());
+    let candidate = selection
+        .parent()
+        .unwrap()
+        .join("celler-candidate/celler-owner.json");
+    assert!(candidate.exists());
+    let outside = fixture.root.path().join("outside");
+    fs::create_dir(&outside)?;
+    fs::remove_dir_all(&fixture.workspace)?;
+    fs::write(fixture.root.path().join("celler-status"), "200")?;
+    let output = run_command(
+        fixture
+            .command()?
+            .current_dir(&outside)
+            .args(["service", "recover"]),
+    )?;
+    assert!(output.status.success(), "{}", output.stderr);
+    assert!(!candidate.exists());
+    let selected: Value = serde_json::from_slice(&fs::read(selection)?)?;
+    assert_eq!(selected["container_name"], "wrix-host-service");
+    assert!(selected.get("workspace_hash").is_none());
+    let calls = fs::read_to_string(fixture.root.path().join("runtime.log"))?;
+    assert_eq!(
+        calls
+            .lines()
+            .filter(|line| line.starts_with("run "))
+            .count(),
+        1
     );
-    assert_eq!(fs::read(&selection)?, before);
-    assert!(!fixture.root.path().join("run.argv").exists());
     Ok(())
 }
 
@@ -2231,6 +2283,25 @@ fn recovery_preserves_selection_when_authenticated_readiness_fails() -> TestResu
     assert!(output.stderr.contains("readiness"), "{}", output.stderr);
     assert_eq!(fs::read(&selection)?, before);
     assert!(fixture.root.path().join("run.argv").exists());
+    let candidate = selection
+        .parent()
+        .unwrap()
+        .join("celler-candidate/celler-owner.json");
+    assert!(candidate.exists());
+    fs::write(fixture.root.path().join("celler-status"), "200")?;
+    let output = fixture.run("recover")?;
+    assert!(output.status.success(), "{}", output.stderr);
+    assert!(!candidate.exists());
+    let recovered: Value = serde_json::from_slice(&fs::read(&selection)?)?;
+    assert_eq!(recovered["schema_version"], 3);
+    let calls = fs::read_to_string(fixture.root.path().join("runtime.log"))?;
+    assert_eq!(
+        calls
+            .lines()
+            .filter(|line| line.starts_with("run "))
+            .count(),
+        1
+    );
     Ok(())
 }
 

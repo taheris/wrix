@@ -216,7 +216,7 @@ fn cache_start_bootstraps_host_private_issuer_without_static_fallback() -> TestR
     assert_eq!(
         requests,
         format!(
-            "GET /_api/v1/cache-config/{namespace}\nPATCH /_api/v1/cache-config/{namespace}\nGET /_api/v1/cache-config/{namespace}\nGET /_api/v1/cache-config/wrix-common-v1\nGET /_api/v1/cache-config/wrix-common-v1\nPATCH /_api/v1/cache-config/wrix-common-v1\nGET /_api/v1/cache-config/wrix-common-v1\n"
+            "GET /_api/v1/cache-config/wrix-common-v1\nGET /_api/v1/cache-config/wrix-common-v1\nPATCH /_api/v1/cache-config/wrix-common-v1\nGET /_api/v1/cache-config/wrix-common-v1\nGET /_api/v1/cache-config/{namespace}\nPATCH /_api/v1/cache-config/{namespace}\nGET /_api/v1/cache-config/{namespace}\nGET /_api/v1/cache-config/wrix-common-v1\nGET /_api/v1/cache-config/wrix-common-v1\nPATCH /_api/v1/cache-config/wrix-common-v1\nGET /_api/v1/cache-config/wrix-common-v1\n"
         )
     );
     Ok(())
@@ -856,15 +856,14 @@ fn selected_owner_preserves_its_record_when_the_callers_package_changes() -> Tes
         let inode = fs::metadata(&selection)?.ino();
         let key = fs::read(state.join("keys/cache.pub"))?;
         let selected: Value = serde_json::from_slice(&before)?;
+        assert_eq!(selected["schema_version"], 3);
         if runtime == "podman" {
-            assert_eq!(selected["schema_version"], 2);
             assert_eq!(selected["recipe"]["binding"]["image"], "wrix-service:test");
             assert_eq!(
                 selected["recipe"]["image_id"],
                 format!("sha256:{}", "a".repeat(64))
             );
         } else {
-            assert_eq!(selected["schema_version"], 1);
             assert!(selected.get("recipe").is_none());
         }
         let binding = fixture.root.path().join("binding.json");
@@ -922,6 +921,7 @@ fn podman_recovers_a_missing_legacy_selected_owner_and_records_new_provenance() 
         .join("host-lifecycle/celler-owner.json");
     let mut legacy: Value = serde_json::from_slice(&fs::read(&selection)?)?;
     legacy["schema_version"] = json!(1);
+    legacy["workspace_hash"] = metadata["workspace_hash"].clone();
     legacy.as_object_mut().unwrap().remove("recipe");
     fs::write(&selection, serde_json::to_vec(&legacy)?)?;
     fs::remove_file(fixture.root.path().join("running"))?;
@@ -936,17 +936,13 @@ fn podman_recovers_a_missing_legacy_selected_owner_and_records_new_provenance() 
     )?;
     assert!(output.status.success(), "{}", output.stderr);
     let recovered: Value = serde_json::from_slice(&fs::read(&selection)?)?;
-    assert_eq!(recovered["schema_version"], 2);
+    assert_eq!(recovered["schema_version"], 3);
     assert_eq!(
         recovered["recipe"]["image_id"],
         format!("sha256:{}", "a".repeat(64))
     );
-    for field in [
-        "runtime",
-        "workspace_hash",
-        "container_name",
-        "cache_http_port",
-    ] {
+    assert!(recovered.get("workspace_hash").is_none());
+    for field in ["runtime", "container_name", "cache_http_port"] {
         assert_eq!(legacy[field], recovered[field], "{field}");
     }
     let output = run_command(

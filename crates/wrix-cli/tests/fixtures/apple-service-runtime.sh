@@ -29,7 +29,7 @@ case "$*" in
   'run -d --name '*)
     printf '%s\n' "$@" >"${WRIX_TEST_RUN_ARGS:?}"
     printf '%s\0' "$@" >"${WRIX_TEST_RUN_ARGS}.nul"
-    "${WRIX_TEST_JQ_BIN:?}" --arg image "sha256:${WRIX_TEST_DIGEST:?}" -Rsc --slurpfile previous "${WRIX_TEST_RUNTIME_REPLACEMENT:?}" '
+    "${WRIX_TEST_JQ_BIN:?}" --arg image "sha256:${WRIX_TEST_DIGEST:?}" -Rsc --slurpfile previous "${WRIX_TEST_RUNTIME_REPLACEMENT:?}" --slurpfile current "${WRIX_TEST_RUNTIME_JSON:?}" '
       split("\u0000")[:-1] as $args |
       def values($flag): [range(0; ($args | length) - 1) as $i |
         select($args[$i] == $flag) | $args[$i + 1]];
@@ -40,11 +40,15 @@ case "$*" in
         hostAddress: .[0], hostPort: (.[1] | tonumber),
         containerPort: (.[2] | tonumber), proto: "tcp", count: 1
       })) as $ports |
-      $previous[0] | map(if .configuration.id == $name then
+      ([$current[0][] | select(.configuration.id != $name)] +
+        [($previous[0][] | select(.configuration.id == $name)) //
+          ($previous[0][0] | .configuration.id = $name)]) |
+      map(if .configuration.id == $name then
         .configuration.labels = $labels | .configuration.publishedPorts = $ports |
         .configuration.image = {descriptor: {digest: (if $args[-4] | startswith("sha256:") then $args[-4] else $image end)}} | .status.state = "running"
       else . end)
-    ' "${WRIX_TEST_RUN_ARGS}.nul" >"${WRIX_TEST_RUNTIME_JSON:?}"
+    ' "${WRIX_TEST_RUN_ARGS}.nul" >"${WRIX_TEST_RUNTIME_JSON:?}.new"
+    mv "${WRIX_TEST_RUNTIME_JSON}.new" "$WRIX_TEST_RUNTIME_JSON"
     exit 0
     ;;
   'exec '*)

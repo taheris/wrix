@@ -11,11 +11,26 @@ fn selected(root: &Path) -> Selected {
     let workspace = Workspace::from_path(root).unwrap();
     Selected {
         runtime: RuntimeKind::Podman,
-        workspace: workspace.hash().clone(),
+        workspace: Some(workspace.hash().clone()),
         container: workspace.container_name(),
         port: NonZeroU16::new(21_345).unwrap(),
         recipe: None,
     }
+}
+
+#[test]
+fn host_owner_roundtrips_without_a_workspace_identity() {
+    let root = tempfile::tempdir().unwrap();
+    let host = root.path().join("host-lifecycle");
+    let guard = coordination::acquire(&host).unwrap();
+    let mut owner = selected(root.path());
+    owner.workspace = None;
+    owner.record(&guard).unwrap();
+    assert_eq!(Selected::read(&host).unwrap(), Some(owner));
+    let wire: serde_json::Value =
+        serde_json::from_slice(&fs::read(host.join(FILE)).unwrap()).unwrap();
+    assert_eq!(wire["schema_version"], 3);
+    assert!(wire.get("workspace_hash").is_none());
 }
 
 #[test]
