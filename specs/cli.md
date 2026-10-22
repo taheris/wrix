@@ -240,9 +240,10 @@ rather than deleting the selection or claiming a running incompatibility.
 
 - Missing/stopped recovery preserves physical ownership and persistent data.
   [test](../crates/wrix-cli/tests/service_lifecycle.rs::recovery_recreates_only_absent_or_stopped_selected_owner_and_preserves_data)
-- Recovery rejects competing running owners in either runtime and incompatible
-  running backends without removing them.
+- Recovery rejects competing running owners in either runtime without removing
+  them.
   [test](../crates/wrix-cli/tests/service_lifecycle.rs::recovery_rejects_competing_owners_in_either_runtime_without_mutation)
+- Recovery refuses incompatible running backends without removing them.
   [test](../crates/wrix-cli/tests/service_lifecycle.rs::recovery_refuses_incompatible_running_backend)
 - Concurrent recovery creates only one owner.
   [test](../crates/wrix-cli/tests/service_lifecycle.rs::concurrent_recovery_creates_one_owner)
