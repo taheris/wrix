@@ -22,6 +22,8 @@ pub enum Error {
     Package,
     /// user supervision is unavailable; configure a systemd user manager or a launchd GUI session: {0}
     Supervisor(String),
+    /// host controller unit conflicts with existing user supervision; stop and reconcile the existing controller before retrying: {0}
+    UnitConflict(String),
     /// controller closure retention failed: {0}
     Root(String),
     /// controller lifecycle directory must be canonical and private
@@ -115,32 +117,37 @@ pub struct Native {
 }
 
 impl Native {
-    pub fn new(platform: Platform, uid: u32) -> Self {
+    pub const fn new(
+        platform: Platform,
+        uid: u32,
+        supervisor: PathBuf,
+        nix_store: PathBuf,
+    ) -> Self {
         Self {
             platform,
+            supervisor,
+            nix_store,
             uid,
-            supervisor: match platform {
-                Platform::Linux => "systemctl",
-                Platform::Darwin => "/bin/launchctl",
-            }
-            .into(),
-            nix_store: "nix-store".into(),
         }
     }
 
     pub fn for_package(platform: Platform, uid: u32, package: &Package) -> Self {
-        Self {
+        Self::new(
             platform,
             uid,
-            supervisor: match platform {
+            match platform {
                 Platform::Linux => package.runtime.join("bin/systemctl"),
                 Platform::Darwin => "/bin/launchctl".into(),
             },
-            nix_store: package.runtime.join("bin/nix-store"),
-        }
+            package.runtime.join("bin/nix-store"),
+        )
     }
 
     fn command(&self, args: &[&std::ffi::OsStr]) -> Result<(), Error> {
+        self.output(args).map(|_| ())
+    }
+
+    fn output(&self, args: &[&std::ffi::OsStr]) -> Result<String, Error> {
         let output = Command::new(&self.supervisor)
             .args(args)
             .output()
@@ -150,7 +157,38 @@ impl Native {
                 String::from_utf8_lossy(&output.stderr).into_owned(),
             ));
         }
-        Ok(())
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    }
+
+    fn link_unit(&self, unit: &Path) -> Result<(), Error> {
+        match self.command(&["--user".as_ref(), "link".as_ref(), unit.as_os_str()]) {
+            Ok(()) => Ok(()),
+            Err(Error::Supervisor(message)) => {
+                let state = self.output(&[
+                    "--user".as_ref(),
+                    "show".as_ref(),
+                    "--property=LoadState,ActiveState,FragmentPath".as_ref(),
+                    "wrix-host-controller.service".as_ref(),
+                ])?;
+                if ![
+                    "LoadState=not-found",
+                    "ActiveState=inactive",
+                    "FragmentPath=",
+                ]
+                .iter()
+                .all(|expected| state.lines().any(|line| line == *expected))
+                {
+                    return Err(Error::UnitConflict(message));
+                }
+                self.command(&[
+                    "--user".as_ref(),
+                    "link".as_ref(),
+                    "--force".as_ref(),
+                    unit.as_os_str(),
+                ])
+            }
+            Err(error) => Err(error),
+        }
     }
 
     fn check(&self) -> Result<(), Error> {
@@ -196,7 +234,7 @@ impl Native {
                     systemd_path(root)
                 );
                 fs::write(&unit, contents)?;
-                self.command(&["--user".as_ref(), "link".as_ref(), unit.as_os_str()])?;
+                self.link_unit(&unit)?;
                 self.command(&["--user".as_ref(), "daemon-reload".as_ref()])?;
                 self.command(&[
                     "--user".as_ref(),

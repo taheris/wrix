@@ -99,6 +99,89 @@ fn root_failure_never_changes_selection_or_stop_intent() {
     assert!(!lifecycle.root.join("package.json").exists());
 }
 
+fn linux_manager(directory: &Path, state: &str) -> Native {
+    fs::write(directory.join("state"), state).unwrap();
+    let supervisor = script(
+        directory,
+        "systemctl",
+        &format!(
+            r#"
+printf '%s\n' "$*" >> '{root}/commands'
+case "$2" in
+    link)
+        if [[ "$3" == --force ]]; then
+            ln -sfn -- "$4" '{root}/linked'
+        elif [[ -L '{root}/linked' ]]; then
+            [[ "$(readlink '{root}/linked')" == "$3" ]] || exit 1
+        else
+            ln -s -- "$3" '{root}/linked'
+        fi
+        ;;
+    show) < '{root}/state' head -c 4096 ;;
+    daemon-reload|start) ;;
+    *) exit 91 ;;
+esac
+"#,
+            root = directory.display()
+        ),
+    );
+    Native::new(Platform::Linux, 1000, supervisor, "/unused".into())
+}
+
+#[test]
+fn linux_start_recovers_a_dangling_unit_link() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::os::unix::fs::symlink(root.join("deleted/controller.service"), root.join("linked"))
+        .unwrap();
+    let native = linux_manager(
+        root,
+        "LoadState=not-found\nActiveState=inactive\nFragmentPath=\n",
+    );
+    native.start(root, &package("blue")).unwrap();
+    native.start(root, &package("blue")).unwrap();
+    assert_eq!(
+        fs::read_link(root.join("linked")).unwrap(),
+        root.join("wrix-host-controller.service")
+    );
+    let commands = fs::read_to_string(root.join("commands")).unwrap();
+    assert_eq!(commands.matches("--user link --force ").count(), 1);
+    assert_eq!(
+        commands
+            .matches("--user start wrix-host-controller.service")
+            .count(),
+        2
+    );
+    assert!(!commands.contains("stop"));
+}
+
+#[test]
+fn linux_start_preserves_existing_or_uncertain_controller_units() {
+    for state in [
+        "LoadState=loaded\nActiveState=active\nFragmentPath=/other/controller.service\n",
+        "LoadState=loaded\nActiveState=inactive\nFragmentPath=/other/controller.service\n",
+        "LoadState=not-found\nActiveState=active\nFragmentPath=\n",
+        "LoadState=masked\nActiveState=inactive\nFragmentPath=/dev/null\n",
+        "LoadState=not-found\nFragmentPath=\n",
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let existing = root.join("other/controller.service");
+        std::os::unix::fs::symlink(&existing, root.join("linked")).unwrap();
+        let native = linux_manager(root, state);
+        assert!(matches!(
+            native.start(root, &package("blue")),
+            Err(Error::UnitConflict(_))
+        ));
+        assert_eq!(fs::read_link(root.join("linked")).unwrap(), existing);
+        let commands = fs::read_to_string(root.join("commands")).unwrap();
+        assert!(!commands.contains("--force"));
+        assert!(!commands.contains("daemon-reload"));
+        assert!(!commands.contains("start"));
+        assert!(!commands.contains("stop"));
+    }
+}
+
 #[test]
 fn hostile_package_paths_are_rejected_before_supervision() {
     let directory = tempfile::tempdir().unwrap();

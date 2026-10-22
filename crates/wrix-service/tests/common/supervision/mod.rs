@@ -33,7 +33,12 @@ pub fn exercise() {
         let root = PathBuf::from(root);
         let package = Package::from_env().unwrap();
         let lifecycle = Lifecycle::lock(&root.join("controller")).unwrap();
-        let native = Native::new(Platform::Linux, 1000);
+        let native = Native::new(
+            Platform::Linux,
+            1000,
+            root.join("tools/systemctl"),
+            root.join("tools/nix-store"),
+        );
         let action = std::env::var("WRIX_TEST_ACTION").unwrap();
         match action.as_str() {
             "start" => {
@@ -83,8 +88,14 @@ printf '%s\n' "$2" >> "$WRIX_TEST_SUPERVISION_CHILD/closures"
 ln -sfn "${2%.drv}" "$4"
 "#,
     );
+    let ambient = root.join("ambient-tools");
+    fs::create_dir(&ambient).unwrap();
+    for name in ["systemctl", "nix-store"] {
+        script(&ambient.join(name), "exit 97");
+    }
     let path = std::env::join_paths(
-        std::iter::once(tools.clone())
+        [ambient, tools.clone()]
+            .into_iter()
             .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
     )
     .unwrap();
