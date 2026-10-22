@@ -1,4 +1,8 @@
-{ pkgs }:
+{
+  pkgs,
+  owner,
+  sshdConf,
+}:
 
 pkgs.writeShellScriptBin "wrix-nix-pool-daemon" ''
   set -euo pipefail
@@ -29,10 +33,16 @@ pkgs.writeShellScriptBin "wrix-nix-pool-daemon" ''
   fi
   printf '256\n' > "$base/pids.max"
   printf '+cpu +memory +pids\n' > "$base/cgroup.subtree_control"
-  mkdir "$base/work"
+  mkdir "$base/work" "$base/control"
+  printf '134217728\n' > "$base/control/memory.min"
+  printf '402653184\n' > "$base/control/memory.max"
+  printf '96\n' > "$base/control/pids.max"
   printf '536870912\n' > "$base/memory.min"
   printf '536870912\n' > "$base/work/memory.min"
-  mkdir -m 0700 /run/wrix-nix-pool
+  mkdir -m 0755 /run/wrix-nix-pool
+  printf '%s\n' "$BASHPID" > /run/wrix-nix-pool/supervisor.pid
+  exec 3<> /nix/var/nix/gc.lock
+  flock --shared 3
   (
     printf '%s\n' "$BASHPID" > "$base/work/cgroup.procs"
     exec nix-daemon --store local
@@ -57,5 +67,35 @@ pkgs.writeShellScriptBin "wrix-nix-pool-daemon" ''
     printf 'Native Nix cgroup resource admission did not complete.\n' >&2
     exit 1
   fi
-  wait "$daemon_pid"
+  (
+    printf '%s\n' "$BASHPID" > "$base/control/cgroup.procs"
+    exec ${owner}/bin/wrix-nix-pool-owner serve <&3
+  ) &
+  owner_pid=$!
+  printf '%s\n' "$owner_pid" > /run/wrix-nix-pool/owner.pid
+  protected=false
+  for _attempt in {1..200}; do
+    if [[ -S /run/wrix-nix-pool/admission.sock ]]; then
+      protected=true
+      break
+    fi
+    if ! kill -0 "$owner_pid"; then
+      wait "$owner_pid"
+      exit 1
+    fi
+    sleep 0.01
+  done
+  [[ "$protected" == true ]]
+  export_root=/var/lib/wrix/nix-pool/export-root
+  touch "$export_root/run/wrix-nix-pool/admission.sock"
+  mount --bind /run/wrix-nix-pool/admission.sock "$export_root/run/wrix-nix-pool/admission.sock"
+  install -m 0555 ${owner}/bin/wrix-nix-pool-owner /run/wrix-nix-pool/keys
+  (
+    printf '%s\n' "$BASHPID" > "$base/control/cgroup.procs"
+    exec ${pkgs.openssh}/bin/sshd -D -e -f ${sshdConf}
+  ) &
+  sshd_pid=$!
+  printf '%s\n' "$sshd_pid" > /run/wrix-nix-pool/transport.pid
+  printf '1\n' > /run/wrix-nix-pool/ready
+  wait -n "$daemon_pid" "$owner_pid" "$sshd_pid"
 ''

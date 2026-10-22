@@ -1,6 +1,7 @@
 //! Explicit host approval and fail-closed collection, without claiming an installed-store runtime.
 
 pub mod gc;
+pub mod native;
 
 use std::{
     io::{self, Write},

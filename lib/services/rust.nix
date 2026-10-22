@@ -280,6 +280,9 @@ in
         install -Dm755 "${workspace.bin}/bin/wrix-service-supervisor" "$out/bin/wrix-service-supervisor"
         install -Dm755 "${workspace.bin}/bin/wrix-shared-service" "$out/bin/wrix-shared-service"
       '';
+  nixPoolOwner = pkgs.runCommand "wrix-nix-pool-owner" { meta = binaryMeta "wrix-nix-pool-owner"; } ''
+    install -Dm755 "${workspace.bin}/bin/wrix-nix-pool-owner" "$out/bin/wrix-nix-pool-owner"
+  '';
   hostCachePolicy = mkBinaryPackage "wrix-host-cache-policy" [ ];
   cacheHook = mkBinaryPackage "wrix-cache-hook" [ ];
   cachePublish = mkBinaryPackage "wrix-cache-publish" [

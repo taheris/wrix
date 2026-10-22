@@ -178,7 +178,10 @@ let
   nixPoolImage = import ../services/image.nix {
     pkgs = linuxPkgs;
     hostPkgs = pkgs;
-    pool = import ../services/nix-pool { pkgs = linuxPkgs; };
+    pool = import ../services/nix-pool {
+      pkgs = linuxPkgs;
+      owner = imageRustCli.nixPoolOwner;
+    };
     asTarball = isDarwin;
   };
 

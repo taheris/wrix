@@ -5,6 +5,7 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
+base64 = { workspace = true }
 displaydoc = { workspace = true }
 fs2 = { workspace = true }
 libc = { workspace = true }
@@ -27,7 +28,6 @@ wrix-sandbox = { workspace = true }
 
 [dev-dependencies]
 attic = { workspace = true }
-base64 = { workspace = true }
 reqwest = { workspace = true }
 wrix-cli = { workspace = true }
 

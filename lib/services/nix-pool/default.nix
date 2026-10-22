@@ -1,4 +1,4 @@
-{ pkgs }:
+{ pkgs, owner }:
 
 let
   inherit (pkgs)
@@ -8,19 +8,50 @@ let
     writeShellScriptBin
     ;
   network = import ./network.nix { inherit pkgs; };
-  resources = import ./resources.nix { inherit pkgs; };
+  resources = import ./resources.nix { inherit pkgs owner sshdConf; };
+  sshdConf = writeText "nix-pool-sshd.conf" ''
+    Port 2222
+    ListenAddress 0.0.0.0
+    HostKey /var/lib/wrix/nix-pool/host-key
+    PidFile /run/wrix-nix-pool/sshd.pid
+    AuthorizedKeysFile none
+    AuthorizedKeysCommand /run/wrix-nix-pool/keys keys %u
+    AuthorizedKeysCommandUser root
+    AuthenticationMethods publickey
+    PasswordAuthentication no
+    KbdInteractiveAuthentication no
+    PermitRootLogin forced-commands-only
+    AllowUsers root nix-client nix-export
+    PermitUserEnvironment no
+    AllowAgentForwarding no
+    AllowTcpForwarding no
+    PermitTunnel no
+    X11Forwarding no
+    PermitTTY no
+    MaxAuthTries 2
+    MaxSessions 1
+    MaxStartups 16:30:32
+    UsePAM no
+    Subsystem sftp internal-sftp
+    Match User nix-export
+      ChrootDirectory /var/lib/wrix/nix-pool/export-root
+  '';
   passwd = writeText "nix-pool-passwd" ''
-    root:x:0:0:Pool administrator:/var/empty:/bin/false
-    nix-client:x:2000:2000:Native Nix client:/var/empty:/bin/false
+    root:x:0:0:Pool administrator:/var/empty:/bin/sh
+    nix-client:x:2000:2000:Native Nix client:/var/empty:/bin/sh
+    nix-export:x:2001:2001:Read-only Nix filesystem:/var/empty:/bin/sh
+    sshd:x:74:74:SSH privilege separation:/var/empty:/bin/false
     nixbld1:x:30001:30000:Nix build user:/var/empty:/bin/false
   '';
   group = writeText "nix-pool-group" ''
     root:x:0:
     nix-client:x:2000:
+    nix-export:x:2001:
+    sshd:x:74:
     nixbld:x:30000:nixbld1
   '';
   nixConf = writeText "nix-pool.conf" ''
-    experimental-features = nix-command cgroups
+    experimental-features = nix-command cgroups daemon-trust-override
     use-cgroups = true
     sandbox = true
     sandbox-fallback = false
@@ -42,6 +73,16 @@ let
     cp ${passwd} "$out/etc/passwd"
     cp ${group} "$out/etc/group"
     cp ${nixConf} "$out/etc/nix/nix.conf"
+    cp ${
+      writeText "nix-pool-native.json" (
+        builtins.toJSON {
+          nix_daemon = "${pkgs.nix}/bin/nix-daemon";
+          nix_store = "${pkgs.nix}/bin/nix-store";
+          sftp_server = "${pkgs.openssh}/libexec/sftp-server";
+          helper = "${owner}/bin/wrix-nix-pool-owner";
+        }
+      )
+    } "$out/etc/wrix/nix-pool-native.json"
     printf 'passwd: files\ngroup: files\nhosts: files dns\n' > "$out/etc/nsswitch.conf"
     printf '1\n' > "$out/etc/wrix/nix-pool-service"
   '';
@@ -53,6 +94,8 @@ let
       pkgs.nix
       pkgs.util-linux
       pkgs.cacert
+      pkgs.openssh
+      owner
       (pkgs.lib.getBin pkgs.e2fsprogs)
       network.install
       resources
@@ -83,11 +126,12 @@ let
 
     shopt -s nullglob dotglob
     for entry in "$root"/*; do
-      if [[ "$entry" != "$root/ownership.lock" ]]; then
+      if [[ "$entry" != "$root/ownership.lock" && "$entry" != "$root/bootstrap.json" ]]; then
         printf 'Retained Nix state or uncertain ownership requires explicit host reconciliation.\n' >&2
         exit 73
       fi
     done
+    ${owner}/bin/wrix-nix-pool-owner keys root > /dev/null
     if ! mkdir -m 0700 "$root/owner-active"; then
       printf 'Nix pool ownership is active or uncertain; explicit host reconciliation is required.\n' >&2
       exit 73
@@ -102,6 +146,8 @@ let
     device=$(losetup --find --show "$root/store.ext4")
     mount -t ext4 -o nodev,nosuid "$device" "$root/filesystem"
     storage="$root/filesystem"
+    install -d -m 0700 "$root/leases" "$root/incoming"
+    ssh-keygen -q -t ed25519 -N "" -C "" -f "$root/host-key"
     install -d -m 0755 "$storage/nix" "$storage/nix/var" "$storage/nix/var/nix"
     install -d -m 1775 -o 0 -g 30000 "$storage/nix/store"
     mapfile -t roots < ${seedClosure}/store-paths
@@ -117,6 +163,16 @@ let
     done
     sync "$storage/nix/var/nix/gcroots/bootstrap" "$storage/nix/var/nix"
     mount --bind "$storage/nix" /nix
+    install -d -m 0755 "$root/export-root/nix/store" "$root/export-root/bin" "$root/export-root/etc/wrix" "$root/export-root/run/wrix-nix-pool" "$root/export-root/var/empty"
+    install -d -m 0755 "$root/export-root/dev"
+    mknod -m 0666 "$root/export-root/dev/null" c 1 3
+    mount --bind /nix/store "$root/export-root/nix/store"
+    mount -o remount,bind,ro,nodev,nosuid "$root/export-root/nix/store"
+    ln -s ${pkgs.bash}/bin/sh "$root/export-root/bin/sh"
+    install -m 0444 ${filesystem}/etc/passwd "$root/export-root/etc/passwd"
+    install -m 0444 ${filesystem}/etc/group "$root/export-root/etc/group"
+    install -m 0444 ${filesystem}/etc/nsswitch.conf "$root/export-root/etc/nsswitch.conf"
+    install -m 0444 ${filesystem}/etc/wrix/nix-pool-native.json "$root/export-root/etc/wrix/nix-pool-native.json"
     exec ${resources}/bin/wrix-nix-pool-daemon
   '';
   bootstrap = writeShellScriptBin "wrix-nix-pool" ''
