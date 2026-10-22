@@ -172,6 +172,13 @@ let
     asTarball = isDarwin;
   };
 
+  nixPoolImage = import ../services/image.nix {
+    pkgs = linuxPkgs;
+    hostPkgs = pkgs;
+    pool = import ../services/nix-pool { pkgs = linuxPkgs; };
+    asTarball = isDarwin;
+  };
+
   sandboxToolPackages = [ (linuxPkgs.lib.hiPrio imageRustCli.wrix) ];
 
   # Claude config (~/.claude.json) - onboarding state and runtime flags
@@ -533,6 +540,7 @@ in
     profiles
     rustProfileFromFile
     serviceImage
+    nixPoolImage
     baseClaudeSettings
     validateRuntimeSecrets
     validateNetworkRules

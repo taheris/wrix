@@ -1,8 +1,9 @@
 {
   pkgs,
   hostPkgs ? pkgs,
-  celler,
-  supervisor,
+  celler ? null,
+  supervisor ? null,
+  pool ? null,
   asTarball ? false,
 }:
 
@@ -21,28 +22,45 @@ let
   imageBuilderPkgs = if asTarball then hostPkgs else pkgs;
 
   imageTagLib = import ../util/image-tag.nix { };
-  imageName = "wrix-service";
+  imageName = if pool == null then "wrix-service" else "wrix-nix-pool";
   labels = {
     "wrix.managed" = "true";
     "wrix.image.kind" = "service";
-    "wrix.service.supervision" = "2";
-  };
+  }
+  // (
+    if pool == null then
+      { "wrix.service.supervision" = "2"; }
+    else
+      { "wrix.nix-pool.bootstrap-version" = "1"; }
+  );
   contents = [
     dockerTools.binSh
     dockerTools.usrBinEnv
-    coreutils
-    dolt
-    celler
-    supervisor
-    util-linux
-  ];
+  ]
+  ++ (
+    if pool == null then
+      [
+        coreutils
+        dolt
+        celler
+        supervisor
+        util-linux
+      ]
+    else
+      [
+        pool.runtime
+        pool.filesystem
+        pool.bootstrap
+      ]
+  );
   imageConfig = {
     Env = [
-      "HOME=/tmp"
-      "PATH=/bin:/usr/bin"
+      "HOME=${if pool == null then "/tmp" else "/var/empty"}"
+      "PATH=${if pool == null then "/bin:/usr/bin" else "${pool.runtime}/bin:/bin:/usr/bin"}"
     ];
     Labels = labels;
-  };
+  }
+  // (if pool == null then { } else { Entrypoint = [ "${pool.bootstrap}/bin/wrix-nix-pool" ]; });
   buildImage =
     if asTarball then
       imageBuilderPkgs.dockerTools.buildLayeredImage
@@ -54,10 +72,12 @@ let
     architecture = pkgs.go.GOARCH;
 
     inherit contents;
+    includeNixDB = pool != null;
 
     extraCommands = ''
       mkdir -p tmp
       chmod 1777 tmp
+      ${if pool == null then "" else pool.imageCommands}
     '';
 
     config = imageConfig;
@@ -130,6 +150,7 @@ let
   imageTag = imageTagLib.mkImageTag rawImage;
   refPrefix = if asTarball then "" else "localhost/";
 in
+assert pool != null || (celler != null && supervisor != null);
 rawImage
 // {
   digest = digestFile;

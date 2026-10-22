@@ -116,6 +116,7 @@ _:
           wrix-cache-hook = wrix.rustPackage.cacheHook;
           wrix-cache-publish = wrix.rustPackage.cachePublish;
           wrix-service-image = wrix.serviceImage;
+          wrix-nix-pool-image = wrix.nixPoolImage;
           wrix-notify-host = import ../../lib/notify/client.nix {
             inherit pkgs;
             host = true;

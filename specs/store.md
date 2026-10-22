@@ -26,6 +26,22 @@ identity is independent of checkout paths, image versions and service colors.
 Separate pools retain separate stores, databases, daemon admission and roots,
 while using canonical `/nix/store` paths inside workers and build sandboxes.
 
+Each pool executes in its own service VM, as a backend role of the existing
+host-user deployment. The pool-service runtime is independent of the selected
+worker runtime: Podman workers remain Podman workers, and krun/Apple workers
+retain their separate VM boundaries. Missing service-VM capability is a shared
+admission failure, not permission to weaken sandboxing or migrate workers. Dolt,
+Celler, proxy and compiler placement is unchanged; their credentials and
+host-private authority are not pool-VM bootstrap inputs.
+
+`nixPoolImage` (the `wrix-nix-pool-image` package) is the independent factory
+service image, with service-only bootstrap and multi-user Nix configuration
+rather than a private worker or trusted-builder template. An image or VM alone
+grants neither pool approval nor native client/filesystem admission. Its
+bootstrap seeds and pins its immutable runtime before canonical activation;
+retained or uncertain ownership requires explicit reconciliation rather than
+ordinary-start repair.
+
 `wrix-service` owns pool authorization, the single active backend owner, build
 admission, persistent protection and native maintenance. `wrix-sandbox` owns
 launch preparation, read-only worker views and completion observations.
@@ -232,6 +248,11 @@ safe reconciliation before readmission.
 - Factory image and launch metadata agree on independent shared capability and
   exact seed closure while preserving private-Nix provisioning and layering.
   [check](test-ci:test-shared-nix-image-contract)
+- The dedicated pool-service image seeds and pins its runtime before canonical
+  activation, preserves those paths through native GC, enforces strict
+  multi-user builds despite inherited policy overrides, and refuses retained
+  ownership without changing the native database.
+  [system](test-ci:test-shared-nix-pool-bootstrap)
 
 ### Protection Acceptance
 
