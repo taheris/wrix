@@ -67,7 +67,12 @@ impl Fixture {
     }
 
     fn connect(&self, user: &str, password: &str, query: &str) -> TestResult<String> {
-        output(self.command("dolt").args([
+        output(&mut self.connection(user, password, query))
+    }
+
+    fn connection(&self, user: &str, password: &str, query: &str) -> Command {
+        let mut command = self.command("dolt");
+        command.args([
             "--host",
             "127.0.0.1",
             "--port",
@@ -82,7 +87,16 @@ impl Fixture {
             "csv",
             "-q",
             query,
-        ]))
+        ]);
+        command
+    }
+
+    fn scoped(&self) -> TestResult<Server> {
+        self.sql(
+            "CREATE DATABASE tenant; CREATE USER 'tenant'@'%' IDENTIFIED BY 'fixture'; \
+            GRANT ALL ON tenant.* TO 'tenant'@'%';",
+        )?;
+        self.start(DoltTransport::Tcp)
     }
 
     fn start(&self, transport: DoltTransport) -> TestResult<Server> {
@@ -249,6 +263,174 @@ fn sql_probe_times_out_when_a_tcp_listener_never_speaks_mysql() -> TestResult {
     let error = probe_tcp(listener.local_addr()?.port(), Duration::from_millis(100)).unwrap_err();
     assert!(error.to_string().contains("timed out"), "{error}");
     assert!(start.elapsed() < Duration::from_secs(2));
+    Ok(())
+}
+
+#[test]
+fn scoped_clients_cannot_read_server_files_with_load_file() -> TestResult {
+    let fixture = Fixture::new()?;
+    let secret = fixture.root.path().join("peer-secret");
+    fs::write(&secret, "peer authority must not reach SQL clients")?;
+    let _server = fixture.scoped()?;
+    assert_eq!(
+        fixture
+            .connect(
+                "tenant",
+                "fixture",
+                &format!(
+                    "SELECT LOAD_FILE('{}') IS NULL AS blocked",
+                    secret.display()
+                )
+            )?
+            .trim(),
+        "blocked\n1"
+    );
+    fixture.connect(
+        "tenant",
+        "fixture",
+        "USE tenant; CREATE TABLE marker (id INT PRIMARY KEY); INSERT INTO marker VALUES (42)",
+    )?;
+    assert_eq!(
+        fixture
+            .connect("tenant", "fixture", "SELECT id FROM tenant.marker")?
+            .trim(),
+        "id\n42"
+    );
+    Ok(())
+}
+
+#[test]
+fn scoped_clients_cannot_export_server_files() -> TestResult {
+    let fixture = Fixture::new()?;
+    let _server = fixture.scoped()?;
+    let destination = fixture.root.path().join("unexpected-file");
+    for path in [
+        destination.display().to_string(),
+        format!("/dev/null/../..{}", destination.display()),
+    ] {
+        let output = fixture
+            .connection(
+                "tenant",
+                "fixture",
+                &format!("SELECT 'unexpected' INTO OUTFILE '{path}'"),
+            )
+            .output()?;
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("secure-file-priv"));
+        assert!(!destination.exists());
+    }
+    Ok(())
+}
+
+#[test]
+fn sql_clients_cannot_reenable_server_filesystem_access() -> TestResult {
+    let fixture = Fixture::new()?;
+    let _server = fixture.scoped()?;
+    for scope in ["SESSION", "GLOBAL", "PERSIST", "PERSIST_ONLY"] {
+        let output = fixture
+            .connection(
+                "tenant",
+                "fixture",
+                &format!("SET {scope} secure_file_priv = ''"),
+            )
+            .output()?;
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("read only variable"));
+    }
+    assert_eq!(
+        fixture
+            .connect("tenant", "fixture", "SELECT @@secure_file_priv AS boundary")?
+            .trim(),
+        "boundary\n/dev/null"
+    );
+    Ok(())
+}
+
+#[test]
+fn scoped_clients_cannot_import_server_files() -> TestResult {
+    let fixture = Fixture::new()?;
+    let _server = fixture.scoped()?;
+    fixture.connect(
+        "tenant",
+        "fixture",
+        "USE tenant; CREATE TABLE imported (contents TEXT)",
+    )?;
+    let secret = fixture.root.path().join("peer-export");
+    fs::write(&secret, "peer private contents\n")?;
+    let output = fixture
+        .connection(
+            "tenant",
+            "fixture",
+            &format!(
+                "USE tenant; LOAD DATA INFILE '{}' INTO TABLE imported",
+                secret.display()
+            ),
+        )
+        .output()?;
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("command denied"));
+    assert_eq!(
+        fixture
+            .connect(
+                "tenant",
+                "fixture",
+                "SELECT COUNT(*) AS n FROM tenant.imported"
+            )?
+            .trim(),
+        "n\n0"
+    );
+    Ok(())
+}
+
+#[test]
+fn trusted_file_remote_sync_remains_available_with_filesystem_sql_disabled() -> TestResult {
+    let fixture = Fixture::new()?;
+    let _server = fixture.start(DoltTransport::Tcp)?;
+    let remote = fixture.root.path().join("canonical-remote");
+    fixture.connect(
+        "root",
+        "",
+        &format!(
+            "CREATE DATABASE tenant; USE tenant; CREATE TABLE marker (id INT PRIMARY KEY); \
+         INSERT INTO marker VALUES (42); CALL DOLT_ADD('.'); \
+         CALL DOLT_COMMIT('-m', 'fixture', '--author', 'Fixture <fixture@example.invalid>'); \
+         CALL DOLT_REMOTE('add', 'origin', 'file://{}'); CALL DOLT_PUSH('origin', 'main');",
+            remote.display()
+        ),
+    )?;
+    let restored = fixture.root.path().join("remote-reader");
+    output(
+        fixture
+            .command("dolt")
+            .args(["clone"])
+            .arg(format!("file://{}", remote.display()))
+            .arg(&restored),
+    )?;
+    assert_eq!(
+        output(
+            fixture
+                .command("dolt")
+                .arg("--data-dir")
+                .arg(&restored)
+                .args(["sql", "-r", "csv", "-q", "SELECT id FROM marker"])
+        )?
+        .trim(),
+        "id\n42"
+    );
+    Ok(())
+}
+
+#[test]
+fn server_configuration_preserves_dollar_and_control_characters_in_paths() -> TestResult {
+    let mut fixture = Fixture::new()?;
+    fixture.data = fixture
+        .root
+        .path()
+        .join("data ${UNSET_WRIX_CONFIG_VAR}\n\\\"");
+    fixture.socket_dir = fixture.root.path().join("socket ${UNSET_WRIX_CONFIG_VAR}");
+    fs::create_dir_all(&fixture.data)?;
+    let _server = fixture.start(DoltTransport::UnixSocket)?;
+    assert_eq!(fixture.connect("root", "", "SELECT 1 AS n")?.trim(), "n\n1");
     Ok(())
 }
 

@@ -17,9 +17,8 @@ pub(super) fn server_command(
     socket_dir: &Path,
     port: u16,
 ) -> String {
-    let data = shell_quote(data_dir);
-    let socket = shell_quote(&socket_dir.join("dolt.sock"));
-    let directory = shell_quote(socket_dir);
+    let data = shell_quote(&data_dir.display().to_string());
+    let directory = shell_quote(&socket_dir.display().to_string());
     let bootstrap = match transport {
         DoltTransport::UnixSocket => String::new(),
         DoltTransport::Tcp => {
@@ -30,10 +29,29 @@ pub(super) fn server_command(
         DoltTransport::UnixSocket => "127.0.0.1",
         DoltTransport::Tcp => "0.0.0.0",
     };
+    let configuration = shell_quote(&server_configuration(data_dir, socket_dir, host, port));
     format!(
-        "mkdir -p {directory} && {bootstrap}exec dolt sql-server \
-         --data-dir {data} --host {host} --port {port} --socket {socket}"
+        "mkdir -p {directory} && {bootstrap}configuration=$(mktemp /tmp/wrix-dolt.XXXXXXXXXX) && \
+         printf '%s' {configuration} >\"$configuration\" && \
+         exec 3<\"$configuration\" && rm -- \"$configuration\" && \
+         exec dolt sql-server --config /dev/fd/3"
     )
+}
+
+/// File SQL is disabled even when the native engine omits FILE privilege checks.
+fn server_configuration(data_dir: &Path, socket_dir: &Path, host: &str, port: u16) -> String {
+    serde_json::json!({
+        "data_dir": data_dir.display().to_string().replace('$', "$$"),
+        "listener": {
+            "host": host,
+            "port": port,
+            "socket": socket_dir.join("dolt.sock").display().to_string().replace('$', "$$"),
+        },
+        "system_variables": {
+            "secure_file_priv": "/dev/null",
+        },
+    })
+    .to_string()
 }
 
 pub(super) fn probe_tcp(port: u16, budget: Duration) -> io::Result<()> {
@@ -72,8 +90,8 @@ fn probe_tcp_with_client(port: u16, budget: Duration, client: &Path) -> io::Resu
     }))
 }
 
-fn shell_quote(path: &Path) -> String {
-    format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 #[cfg(test)]
