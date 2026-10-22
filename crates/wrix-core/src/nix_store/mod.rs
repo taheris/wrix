@@ -4,6 +4,49 @@ use displaydoc::Display;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+/// Installed-store choice, independent of archive and compiler caching.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Mode {
+    #[default]
+    Private,
+    Shared,
+}
+
+impl Mode {
+    pub fn parse(value: &str) -> Result<Self, ModeParseError> {
+        match value {
+            "private" => Ok(Self::Private),
+            "shared" => Ok(Self::Shared),
+            _ => Err(ModeParseError),
+        }
+    }
+}
+
+#[derive(Debug, Display, Error)]
+/// Nix store mode must be private or shared
+pub struct ModeParseError;
+
+/// Omission inherits; no field can name or authorize a pool.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Preference {
+    #[serde(default, deserialize_with = "deserialize_mode")]
+    pub mode: Option<Mode>,
+}
+
+impl Preference {
+    pub fn resolve(self, repository: Self) -> Mode {
+        self.mode.or(repository.mode).unwrap_or_default()
+    }
+}
+
+fn deserialize_mode<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Mode>, D::Error> {
+    Mode::deserialize(deserializer).map(Some)
+}
+
 /// A declared shared-store protocol version, not permission to use a pool.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)]

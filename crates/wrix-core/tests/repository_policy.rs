@@ -109,6 +109,7 @@ fn supported_key_remote_and_init_overrides_are_typed() {
         },
         cache: repository_policy::cache::Policy::default(),
         tool_caches: wrix_core::tool_cache::Preference::default(),
+        nix_store: wrix_core::nix_store::Preference::default(),
     };
     for content in [
         "[git]\ndeploy_key = 'repo.example-key_1'\ndeploy = true\nsign = false\nremote = 'upstream'\n[init]\nprek_hooks = false\nonline_verify = true\n",

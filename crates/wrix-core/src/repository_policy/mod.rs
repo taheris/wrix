@@ -20,6 +20,7 @@ pub struct Policy {
     pub init: Init,
     pub cache: cache::Policy,
     pub tool_caches: crate::tool_cache::Preference,
+    pub nix_store: crate::nix_store::Preference,
 }
 
 /// Key identity and independent credential grants; identity alone grants nothing.
@@ -107,6 +108,7 @@ pub fn parse(content: &str) -> Result<Policy, ParseError> {
         },
         cache: raw.cache,
         tool_caches: raw.tool_caches,
+        nix_store: raw.nix_store,
     })
 }
 
@@ -131,6 +133,8 @@ struct RawFile {
     cache: cache::Policy,
     #[serde(default, deserialize_with = "deserialize_table")]
     tool_caches: crate::tool_cache::Preference,
+    #[serde(default, deserialize_with = "deserialize_table")]
+    nix_store: crate::nix_store::Preference,
 }
 
 #[derive(Default, Deserialize)]

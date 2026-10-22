@@ -1,5 +1,6 @@
 mod execution_metadata;
 mod linux_terminal;
+mod nix_store;
 mod pi_auth;
 pub(super) mod preview;
 mod snapshot;
@@ -64,6 +65,7 @@ pub struct Run {
     pub git_deploy: Option<bool>,
     pub git_sign: Option<bool>,
     pub tool_caches: wrix_core::tool_cache::Preference,
+    pub nix_store: wrix_core::nix_store::Preference,
 }
 
 pub struct Spawn {
@@ -80,6 +82,8 @@ pub struct Spawn {
 )]
 #[derive(Debug, Display, Error)]
 pub enum LaunchError {
+    /// {reason}
+    NixStoreAdmission { reason: &'static str },
     /// workspace admission failed: {0}
     Admission(#[from] wrix_state::store::Error),
     /// WRIX_NETWORK must be 'open' or 'limit' (got: {value})
@@ -241,6 +245,14 @@ pub fn execute(
         .unwrap_or_default();
     // Static policy errors precede subprocesses; membership still precedes effects.
     let selection = wrix_state::context::Selection::inspect(workspace)?;
+    let nix_store = nix_store::resolve(request, &policy, network_mode);
+    if !preview.dry_run
+        && let Some(blocker) = nix_store.blockers.first()
+    {
+        return Err(LaunchError::NixStoreAdmission {
+            reason: blocker.message(),
+        });
+    }
     let tool_cache_mode = tool_cache::resolve(request, &policy);
     let conflict = tool_cache::restricted_conflict(request, network_mode, tool_cache_mode);
     if conflict && !preview.dry_run {
@@ -257,6 +269,7 @@ pub fn execute(
         credential_sources,
         tool_cache_mode,
         selection,
+        nix_store,
     )?;
     plan.recheck()?;
     if preview.dry_run {
@@ -307,6 +320,7 @@ struct Plan<'a> {
     host_podman_socket: Option<HostPodmanSocket>,
     network_mode: NetworkMode,
     tool_cache_mode: wrix_core::tool_cache::Mode,
+    nix_store: nix_store::Admission,
     git_identity: GitIdentity,
     focus_target: Option<FocusTarget>,
     host_tmux_target: Option<FocusTarget>,
@@ -894,6 +908,7 @@ impl<'a> Plan<'a> {
         credential_sources: Option<CredentialSources>,
         tool_cache_mode: wrix_core::tool_cache::Mode,
         selection: wrix_state::context::Selection,
+        nix_store: nix_store::Admission,
     ) -> Result<Self, LaunchError> {
         let profile = &request.profile_config;
         let source = match &request.kind {
@@ -1007,6 +1022,7 @@ impl<'a> Plan<'a> {
             host_podman_socket,
             network_mode,
             tool_cache_mode,
+            nix_store,
             git_identity: GitIdentity::load(),
             focus_target,
             host_tmux_target,

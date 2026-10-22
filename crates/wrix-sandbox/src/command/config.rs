@@ -331,6 +331,7 @@ pub struct SpawnConfig {
     pub agent_args: Vec<String>,
     pub git: GitGrants,
     pub tool_caches: wrix_core::tool_cache::Preference,
+    pub nix_store: wrix_core::nix_store::Preference,
     pub mounts: Vec<SpawnMount>,
 }
 
@@ -410,6 +411,8 @@ struct RawSpawnConfig {
     git: GitGrants,
     #[serde(default)]
     tool_caches: wrix_core::tool_cache::Preference,
+    #[serde(default)]
+    nix_store: wrix_core::nix_store::Preference,
     #[serde(default)]
     mounts: Vec<SpawnMount>,
     #[serde(default, rename = "extensions")]
@@ -717,6 +720,7 @@ fn parse_spawn(spawn: RawSpawnConfig, platform: Platform) -> Result<SpawnConfig,
         agent_args: spawn.agent_args,
         git: spawn.git,
         tool_caches: spawn.tool_caches,
+        nix_store: spawn.nix_store,
         mounts: spawn.mounts,
     })
 }

@@ -101,6 +101,7 @@ struct Mount {
 enum Code {
     InvalidInput,
     RestrictedRustSharedCaches,
+    NixStoreAdmission,
     CredentialMissing,
     PiAuthInitialization,
     PreparationRequired,
@@ -143,6 +144,7 @@ struct Summary<'a> {
     git_deploy: Grant,
     git_sign: Grant,
     tool_cache_mode: wrix_core::tool_cache::Mode,
+    nix_store: &'a super::nix_store::Admission,
     credentials: Vec<Credential>,
     service_endpoints: Option<()>,
     preparation_mounts: Option<()>,
@@ -201,6 +203,13 @@ impl<'a> Report<'a> {
         let sign = Grant::resolve(overrides.sign, policy.git.sign);
         let mut credentials = Vec::new();
         let mut findings = Vec::new();
+        for blocker in &plan.nix_store.blockers {
+            findings.push(Finding {
+                code: Code::NixStoreAdmission,
+                severity: Severity::Blocker,
+                message: blocker.message(),
+            });
+        }
         if conflict {
             findings.push(Finding { code: Code::RestrictedRustSharedCaches, severity: Severity::Blocker, message: "Restricted Rust requires private tool caches: use --no-cache or tool_caches.shared = false; Nix/Celler remains enabled." });
         }
@@ -335,6 +344,7 @@ impl<'a> Report<'a> {
                 git_deploy: deploy,
                 git_sign: sign,
                 tool_cache_mode: plan.tool_cache_mode,
+                nix_store: &plan.nix_store,
                 credentials,
                 service_endpoints: None,
                 preparation_mounts: None,

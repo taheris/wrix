@@ -7,13 +7,16 @@ Launcher options stop at DIR or --; after DIR, one optional -- is consumed.
 Remaining arguments are passed unchanged to the agent, including --help.
 Omitted Git options inherit repository policy, defaulting independently to false.
 Tool caches: explicit launch choice > repository tool_caches.shared > shared default.
-Private mode does not disable caching or separate Nix/Celler policy.
-Restricted Rust requires private mode; use --no-cache with WRIX_NETWORK=limit.
+Private tool-cache mode does not disable caching or separate Nix/Celler policy.
+Restricted Rust requires private tool caches; use --no-cache with WRIX_NETWORK=limit.
+Installed stores: explicit mode > repository nix_store.mode > private default.
+Shared installed-store execution is unavailable in this version.
 
 Options:
   --profile-config <file>  Override generated project launch data with <file>.
   --dry-run                Inspect without preparing or executing a launch.
   --json                   Render the dry-run report as versioned JSON.
+  --nix-store <mode>         Select private or shared installed Nix state.
   --cache                  Reuse shared worker tool caches for this launch.
   --no-cache               Use fresh private writable local tool caches for this launch.
   --git-deploy             Grant the deploy key for this launch; conflicts with --no-git-deploy.

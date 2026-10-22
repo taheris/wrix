@@ -53,6 +53,24 @@ This metadata neither selects shared mode nor certifies any runtime transport;
 shared launch still requires independent host approval and service/runtime
 acceptance. Private construction and startup remain the default.
 
+## Installed-store selection
+
+Run accepts `--nix-store private|shared` in its launcher-option prefix. Spawn
+accepts `nix_store.mode`; `wrix.toml` accepts
+`[nix_store] mode = "private"|"shared"`. Explicit choice wins over repository
+policy, then the default is `private`. Invalid owned fields still fail under an
+override. This choice is independent of archive caching and
+`--cache`/`--no-cache` tool-cache reuse; no environment variable selects it.
+
+`--dry-run --json` reports the resolved choice and admission blockers without
+preparing a pool. **Shared execution is unavailable in this version.** Every
+shared launch fails before services, credentials, execution metadata or worker
+startup; it never silently falls back. Image metadata and repository settings
+are not approval. Canonical repository/system approval, native pool ownership,
+strict build isolation, protected exports and installed reuse are not delivered
+by this selection interface. No host approval/collection command is exposed
+until that authority and its operations exist.
+
 ## Construction and execution
 
 `lib/sandbox/private-nix.nix` owns the contract version and construction-side

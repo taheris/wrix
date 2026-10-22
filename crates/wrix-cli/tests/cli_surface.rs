@@ -115,6 +115,7 @@ fn public_flags_have_descriptions() -> TestResult {
                 "--profile-config <file>",
                 "--dry-run",
                 "--json",
+                "--nix-store <mode>",
                 "--cache",
                 "--no-cache",
                 "--git-deploy",

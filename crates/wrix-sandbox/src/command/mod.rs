@@ -43,7 +43,7 @@ impl Command {
     }
 }
 
-pub const RUN_HELP: &str = "Run an interactive sandbox.\n\nUsage: wrix [--profile-config <file>] run [LAUNCH_OPTIONS] [DIR] [--] [AGENT_ARGS ...]\n\nDIR defaults to CWD; without DIR, use -- before agent arguments.\nLauncher options stop at DIR or --; after DIR, one optional -- is consumed.\nRemaining arguments are passed unchanged to the agent, including --help.\nOmitted Git options inherit repository policy, defaulting independently to false.\nTool caches: explicit launch choice > repository tool_caches.shared > shared default.\nPrivate mode does not disable caching or separate Nix/Celler policy.\nRestricted Rust requires private mode; use --no-cache with WRIX_NETWORK=limit.\n\nOptions:\n  --profile-config <file>  Override generated project launch data with <file>.\n  --dry-run                Inspect without preparing or executing a launch.\n  --json                   Render the dry-run report as versioned JSON.\n  --cache                  Reuse shared worker tool caches for this launch.\n  --no-cache               Use fresh private writable local tool caches for this launch.\n  --git-deploy             Grant the deploy key for this launch; conflicts with --no-git-deploy.\n  --no-git-deploy          Deny the deploy key for this launch; conflicts with --git-deploy.\n  --git-sign               Grant the signing key for this launch; conflicts with --no-git-sign.\n  --no-git-sign            Deny the signing key for this launch; conflicts with --git-sign.\n  -h, --help               Print launcher help before DIR or --.\n";
+pub const RUN_HELP: &str = "Run an interactive sandbox.\n\nUsage: wrix [--profile-config <file>] run [LAUNCH_OPTIONS] [DIR] [--] [AGENT_ARGS ...]\n\nDIR defaults to CWD; without DIR, use -- before agent arguments.\nLauncher options stop at DIR or --; after DIR, one optional -- is consumed.\nRemaining arguments are passed unchanged to the agent, including --help.\nOmitted Git options inherit repository policy, defaulting independently to false.\nTool caches: explicit launch choice > repository tool_caches.shared > shared default.\nPrivate tool-cache mode does not disable caching or separate Nix/Celler policy.\nRestricted Rust requires private tool caches; use --no-cache with WRIX_NETWORK=limit.\nInstalled stores: explicit mode > repository nix_store.mode > private default.\nShared installed-store execution is unavailable in this version.\n\nOptions:\n  --profile-config <file>  Override generated project launch data with <file>.\n  --dry-run                Inspect without preparing or executing a launch.\n  --json                   Render the dry-run report as versioned JSON.\n  --nix-store <mode>         Select private or shared installed Nix state.\n  --cache                  Reuse shared worker tool caches for this launch.\n  --no-cache               Use fresh private writable local tool caches for this launch.\n  --git-deploy             Grant the deploy key for this launch; conflicts with --no-git-deploy.\n  --no-git-deploy          Deny the deploy key for this launch; conflicts with --git-deploy.\n  --git-sign               Grant the signing key for this launch; conflicts with --no-git-sign.\n  --no-git-sign            Deny the signing key for this launch; conflicts with --git-sign.\n  -h, --help               Print launcher help before DIR or --.\n";
 pub const SPAWN_HELP: &str = "Spawn a programmatic sandbox.\n\nSpawnConfig.tool_caches.shared is an optional boolean: false uses fresh private writable local tool caches; true reuses shared worker tool caches.\nPrecedence: explicit launch choice > repository tool_caches.shared > shared default.\nOmission inherits; this does not disable caching or separate Nix/Celler policy.\nRestricted Rust requires private mode with WRIX_NETWORK=limit.\n\nUsage: wrix [--profile-config <file>] spawn --spawn-config <file> [--stdio]\n\nOptions:\n  --profile-config <file>  Override generated project launch data with <file>.\n  --spawn-config <file>    Read per-launch settings from <file> (required).\n  --dry-run                Inspect without preparing or executing a launch.\n  --json                   Render the dry-run report as versioned JSON.\n  --stdio                  Enable the selected agent's JSONL protocol on standard I/O (default: off).\n  --execution-ticket <id>  Bind a reserved host-only Linux execution ticket.\n  -h, --help               Print help.\n";
 
 pub fn write_run_help(stdout: &mut impl Write) -> io::Result<()> {
@@ -154,6 +154,7 @@ fn parse_run(args: &[String]) -> Result<Option<Run>, CliError> {
     let mut git_deploy = None;
     let mut git_sign = None;
     let mut shared = None;
+    let mut nix_store = None;
     let mut index = 0;
     while let Some(arg) = args.get(index) {
         match arg.as_str() {
@@ -165,6 +166,15 @@ fn parse_run(args: &[String]) -> Result<Option<Run>, CliError> {
                     return Err(CliError::ConflictingDeployFlags);
                 }
                 git_deploy = Some(enabled);
+            }
+            "--nix-store" => {
+                index += 1;
+                let value = args.get(index).ok_or(CliError::NixStoreValue)?;
+                let mode = wrix_core::nix_store::Mode::parse(value)?;
+                if nix_store.is_some_and(|previous| previous != mode) {
+                    return Err(CliError::ConflictingNixStoreModes);
+                }
+                nix_store = Some(mode);
             }
             "--cache" | "--no-cache" => {
                 let enabled = arg == "--cache";
@@ -209,6 +219,7 @@ fn parse_run(args: &[String]) -> Result<Option<Run>, CliError> {
         git_deploy,
         git_sign,
         tool_caches: wrix_core::tool_cache::Preference { shared },
+        nix_store: wrix_core::nix_store::Preference { mode: nix_store },
     }))
 }
 
@@ -294,6 +305,12 @@ fn parse_spawn(args: &[String]) -> Result<Spawn, CliError> {
 
 #[derive(Debug, displaydoc::Display, thiserror::Error)]
 pub(super) enum CliError {
+    /// --nix-store requires private or shared
+    NixStoreValue,
+    /// {0}
+    NixStoreMode(#[from] wrix_core::nix_store::ModeParseError),
+    /// conflicting --nix-store choices
+    ConflictingNixStoreModes,
     /// --json requires --dry-run
     JsonRequiresPreview,
     /// wrix requires --profile-config <Nix store ProfileConfig JSON> or generated project launch data from sandbox.devShell
@@ -347,6 +364,46 @@ mod test {
         let run = parse_run(&args).unwrap().unwrap();
         assert_eq!(run.workspace, std::path::PathBuf::from("/workspace"));
         assert_eq!(run.agent_args, vec![String::from("true")]);
+    }
+
+    #[test]
+    fn run_store_choice_is_strict_and_respects_the_launcher_prefix() {
+        let parse = |args: &[&str]| {
+            parse_run(
+                &args
+                    .iter()
+                    .map(|value| (*value).to_owned())
+                    .collect::<Vec<_>>(),
+            )
+        };
+        for args in [
+            vec!["--nix-store"],
+            vec!["--nix-store", "SHARED"],
+            vec!["--nix-store", "auto"],
+            vec!["--nix-store", "private", "--nix-store", "shared"],
+        ] {
+            assert!(parse(&args).is_err(), "{args:?}");
+        }
+        for flag in ["--cache", "--no-cache"] {
+            let run = parse(&["--nix-store", "shared", flag]).unwrap().unwrap();
+            assert_eq!(run.nix_store.mode, Some(wrix_core::nix_store::Mode::Shared));
+            assert_eq!(run.tool_caches.shared, Some(flag == "--cache"));
+        }
+        for args in [
+            vec!["/workspace", "--nix-store", "shared"],
+            vec!["--", "--nix-store", "shared"],
+        ] {
+            let run = parse(&args).unwrap().unwrap();
+            assert_eq!(run.nix_store.mode, None);
+            assert_eq!(run.agent_args, vec!["--nix-store", "shared"]);
+        }
+        let repeated = parse(&["--nix-store", "private", "--nix-store", "private"])
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            repeated.nix_store.mode,
+            Some(wrix_core::nix_store::Mode::Private)
+        );
     }
 
     #[test]

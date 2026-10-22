@@ -281,6 +281,7 @@ mod test {
             git_deploy: None,
             git_sign: None,
             tool_caches: wrix_core::tool_cache::Preference::default(),
+            nix_store: wrix_core::nix_store::Preference::default(),
         });
         let barrier = Barrier::new(2);
         let create = || {
