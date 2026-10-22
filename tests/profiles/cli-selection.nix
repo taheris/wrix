@@ -91,17 +91,27 @@ pkgs.runCommand "wrix-devshell-cli-selection" { nativeBuildInputs = [ pkgs.bash 
   [[ ! -s "$CALLS" ]]
   ${pkgs.gnugrep}/bin/grep -F 'nix profile add' "$TMPDIR/stale.err"
   ${pkgs.gnugrep}/bin/grep -F 'Home Manager, nix-darwin' "$TMPDIR/stale.err"
-  # Generated-project support alone must not admit the old two-container CLI.
-  : > "$CALLS"
-  if (
-    export WRIX_BIN=${legacy}/bin/legacy-wrix
+  # Service compatibility is required even without project launch data.
+  (
+    unset WRIX_PROJECT_PROFILE_CONFIG
+    export WRIX_BIN=${selected}/bin/consumer-launcher
     source ${hook}
-  ) 2> "$TMPDIR/legacy.err"; then
-    echo 'legacy service CLI was admitted' >&2
-    exit 1
-  fi
-  [[ ! -s "$CALLS" ]]
-  ${pkgs.gnugrep}/bin/grep -F 'lacks the shared-service protocol' "$TMPDIR/legacy.err"
-  ${pkgs.gnugrep}/bin/grep -F '${legacy}/bin/legacy-wrix' "$TMPDIR/legacy.err"
+  )
+
+  # Generated-project support alone must not admit the old two-container CLI.
+  for launch_data in generated absent; do
+    : > "$CALLS"
+    if (
+      [[ "$launch_data" != absent ]] || unset WRIX_PROJECT_PROFILE_CONFIG
+      export WRIX_BIN=${legacy}/bin/legacy-wrix
+      source ${hook}
+    ) 2> "$TMPDIR/legacy.err"; then
+      echo "legacy service CLI was admitted: $launch_data" >&2
+      exit 1
+    fi
+    [[ ! -s "$CALLS" ]]
+    ${pkgs.gnugrep}/bin/grep -F 'lacks the shared-service protocol' "$TMPDIR/legacy.err"
+    ${pkgs.gnugrep}/bin/grep -F '${legacy}/bin/legacy-wrix' "$TMPDIR/legacy.err"
+  done
   touch "$out"
 ''

@@ -123,6 +123,10 @@ SCRIPT
   cat > "$service_bin" <<'SCRIPT'
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ "${1:-}" = "service" && "${2:-}" = "capabilities" ]]; then
+  printf '%s\n' shared-services-v1
+  exit 0
+fi
 if [[ "${1:-}" = "service" && "${2:-}" = "start" ]]; then
   exit 0
 fi
