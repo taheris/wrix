@@ -22,6 +22,46 @@ Formatting disables discard and reestablishes allocation after metadata zeroing;
 filesystem logical size alone is not disk admission. These are preparation and
 guest-boundary checks, not production worker delivery or restart acceptance.
 
+## Recorded host VM ownership and native maintenance
+
+```bash
+nix run .#legacyPackages.x86_64-linux.ciApps.test-shared-nix-host-owner-linux
+```
+
+The checked controller API provisions a dedicated rootless krun VM from the
+package-selected pool image. Host tools are independently package-bound and
+GC-rooted. Rootless UID-mapping helpers and KVM are existing platform
+prerequisites; no worker runtime change, privileged container or host policy
+repair is performed. Only the selected pool's data leaf enters that VM;
+management private keys, software roots and ownership records remain outside.
+The manager records creation intent before runtime creation, native identity
+before start, and serving state only after pinned-host, forced-command SSH
+confirms the native protocol. It checks image configuration identity (not the
+OCI manifest digest), guest architecture, labels, exact runtime and mounts.
+Caller/controller object loss neither stops the VM nor permits a new owner.
+Ordinary reuse authenticates the recorded owner, not the newly invoked image.
+Unknown creation or ownership transitions remain fenced rather than repaired.
+
+The host API's drained stop requires native acknowledgement or uncertain
+transport followed by actual runtime exit zero, the synchronized guest release
+checkpoint and runtime removal before recording release. Resume retains the
+recorded image/runtime, verifies old-runtime absence and preserves the pinned
+server key. Unexpected exits do not authorize resume. Scoped CLI collection uses
+only recorded running owners through the same authenticated channel, retains
+host exclusion through native completion, retries busy acquisition within its
+per-pool budget and never realizes images or starts a VM. Native GC execution
+has no acquisition-derived running deadline. Information reports recorded phases
+without probing a runtime or claiming observed readiness.
+
+The native Rust live test provisions real storage and a VM, drops the
+controller, collects through a separate actual CLI even after approval is
+disabled, reuses the same native owner, confirms unavailable collection after
+stop, then resumes recorded software with a new runtime identity and drains it
+again. Failed tests retain their private fixture rather than deleting possibly
+live backing data. This does not yet establish production worker grants,
+filesystem delivery, host-wide update/recovery integration or platform worker
+acceptance.
+
 ## Explicit same-image guest resume
 
 Bootstrap version 3 adds a separate `resume` storage input. Normal allocation

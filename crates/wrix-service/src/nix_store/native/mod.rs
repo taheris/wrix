@@ -287,11 +287,17 @@ fn quiescent() -> Result<bool, Error> {
 }
 
 async fn receive<T: serde::de::DeserializeOwned>(stream: &mut UnixStream) -> Result<T, Error> {
+    timeout(IO_WAIT, receive_frame(stream))
+        .await
+        .map_err(|_| Error::Timeout)?
+}
+
+async fn receive_frame<T: serde::de::DeserializeOwned>(
+    stream: &mut UnixStream,
+) -> Result<T, Error> {
     let mut bytes = Vec::new();
     let mut reader = BufReader::new(stream.take(MAX_MESSAGE + 1));
-    timeout(IO_WAIT, reader.read_until(b'\n', &mut bytes))
-        .await
-        .map_err(|_| Error::Timeout)??;
+    reader.read_until(b'\n', &mut bytes).await?;
     if bytes.is_empty() || bytes.len() as u64 > MAX_MESSAGE || bytes.last() != Some(&b'\n') {
         return Err(Error::Invalid);
     }
@@ -669,7 +675,11 @@ pub async fn control() -> Result<(), Error> {
     let request: Operation = serde_json::from_slice(&bytes)?;
     let mut stream = UnixStream::connect(Path::new(RUN).join("control.sock")).await?;
     send(&mut stream, &request).await?;
-    let response: Reply = receive(&mut stream).await?;
+    let response: Reply = if matches!(request, Operation::Collect {}) {
+        receive_frame(&mut stream).await?
+    } else {
+        receive(&mut stream).await?
+    };
     let mut bytes = serde_json::to_vec(&response)?;
     bytes.push(b'\n');
     let mut stdout = tokio::io::stdout();

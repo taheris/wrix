@@ -75,6 +75,8 @@ pub enum Error {
     PoolAdmission(#[from] wrix_state::nix_store::Error),
     /// installed-store host preparation failed: {0}
     PoolStorage(#[from] crate::nix_store::owner::Error),
+    /// installed-store native owner failed: {0}
+    PoolOwner(#[from] crate::nix_store::owner::backend::Error),
 }
 
 /// Inspect a retained deployment without creating authority, locks or listeners.
@@ -607,6 +609,53 @@ impl Controller {
         )?;
         authorization.recheck()?;
         Ok(reservation)
+    }
+
+    /// Provision or authenticate the recorded VM; this does not deliver worker credentials or views.
+    pub fn ensure_nix_pool(
+        &self,
+        selection: &wrix_state::context::Selection,
+        system: wrix_core::nix_store::pool::System,
+    ) -> Result<crate::nix_store::owner::backend::Owner, Error> {
+        use crate::nix_store::{
+            image::Candidate,
+            owner::backend::{self, tools::Tools},
+        };
+        let candidate = Candidate::from_env().map_err(backend::Error::from)?;
+        let tools = Tools::from_env()?;
+        let authorization = self.authorize_nix_pool(selection, system)?;
+        let pool = authorization.pool().clone();
+        drop(authorization);
+        let host = wrix_state::host::Host::discover().map_err(io::Error::other)?;
+        let expected = host.roots().state().join("control/authority/control.sock");
+        if self.listener.local_addr()?.as_pathname() != Some(expected.as_path()) {
+            return Err(Error::PrivateRoot);
+        }
+        let root = host
+            .roots()
+            .state()
+            .join("control/nix")
+            .join(pool.repository.to_string())
+            .join(pool.system.as_str());
+        let owner = match fs::symlink_metadata(root) {
+            Ok(_) => {
+                let mut owner = backend::Owner::open(&host, &self.deployment, &pool)?;
+                owner.ensure_ready()?;
+                owner
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                tools.check(system)?;
+                self.reserve_nix_pool(selection, system)?
+                    .prepare(&tools)?
+                    .start(candidate, tools)?
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let authorization = self.authorize_nix_pool(selection, system)?;
+        if authorization.pool() != owner.pool() {
+            return Err(Error::PermissionDenied);
+        }
+        Ok(owner)
     }
 
     fn apply(&self, operation: Operation) -> Result<Reply, Error> {

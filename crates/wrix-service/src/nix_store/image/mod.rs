@@ -15,7 +15,8 @@ pub enum Error {
     Binding(#[from] binding::Error),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(transparent)]
 pub struct Candidate(binding::Candidate);
 
 impl Candidate {

@@ -1,5 +1,7 @@
 //! Scoped collection through already-running owners; acquisition never authorizes startup.
 
+pub(crate) mod installed;
+
 use std::{
     fmt, thread,
     time::{Duration, Instant},
@@ -159,27 +161,5 @@ fn collect(backend: &impl Backend, pool: &Key, wait: Wait) -> Outcome {
         if Instant::now() >= deadline {
             return Outcome::Incomplete(Failure::Contended);
         }
-    }
-}
-
-/// No native pool owner transport has been admitted by this package.
-pub(crate) struct Unavailable;
-
-impl Backend for Unavailable {
-    type Guard = std::convert::Infallible;
-    type Error = &'static str;
-
-    fn pools(&self, _repository: &Repository) -> Result<Vec<Key>, Self::Error> {
-        Err(
-            "no admitted running pool owner; installed-store collection is unavailable in this version",
-        )
-    }
-
-    fn acquire(&self, _pool: &Key) -> Attempt<Self::Guard, Self::Error> {
-        Attempt::Unavailable("no admitted running pool owner")
-    }
-
-    fn collect(&self, guard: Self::Guard) -> Result<(), Self::Error> {
-        match guard {}
     }
 }

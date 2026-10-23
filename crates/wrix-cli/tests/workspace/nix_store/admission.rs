@@ -376,6 +376,160 @@ fn controller_reservation_requires_checked_registration_and_retains_uncertainty_
 }
 
 #[test]
+#[ignore = "requires rootless Podman, KVM, package-bound pool artifacts and nine GiB of free storage"]
+fn native_host_owner_survives_controller_loss_collects_and_resumes_recorded_software() {
+    let system = if cfg!(target_arch = "x86_64") {
+        System::X86_64Linux
+    } else {
+        System::Aarch64Linux
+    };
+    if let Some(caller) = child() {
+        use wrix_service::{
+            control::{Access, Client, Controller, Namespace, Operation, Policy, Reply},
+            nix_store::native,
+        };
+        let selection = Selection::inspect(&caller).unwrap();
+        let host = wrix_state::host::Host::discover().unwrap();
+        let root = host.roots().state().join("control/authority");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let controller = {
+            let _entered = runtime.enter();
+            Controller::bind(&root).unwrap()
+        };
+        let client = Client::open(&root).unwrap();
+        let namespace = Namespace::from(selection.context().unwrap().key());
+        let policy = Policy {
+            dolt: Access::Denied,
+            private_cache_read: Access::Denied,
+            common_cache_read: Access::Denied,
+            egress: Access::Denied,
+            compiler: Access::Denied,
+        };
+        let (reply, serving) = runtime.block_on(async {
+            tokio::join!(
+                client.request(Operation::Register { namespace, policy }),
+                controller.serve_one()
+            )
+        });
+        assert_eq!(reply.unwrap(), Reply::Applied);
+        serving.unwrap();
+        let owner = controller.ensure_nix_pool(&selection, system).unwrap();
+        assert!(matches!(
+            owner.inspect().unwrap(),
+            native::Reply::Ready { version: 1, .. }
+        ));
+        let original = owner.runtime_identity().unwrap().to_owned();
+        drop(owner);
+        controller.close().unwrap();
+        ready_and_wait();
+        let controller = {
+            let _entered = runtime.enter();
+            Controller::bind(&root).unwrap()
+        };
+        let mut owner = controller.ensure_nix_pool(&selection, system).unwrap();
+        assert_eq!(owner.runtime_identity().unwrap(), original);
+        owner.shutdown().unwrap();
+        fs::write(caller.parent().unwrap().join("stopped"), b"released").unwrap();
+        wait_for(&caller.parent().unwrap().join("resume"));
+        owner.resume().unwrap();
+        assert_ne!(owner.runtime_identity().unwrap(), original);
+        assert!(matches!(
+            owner.inspect().unwrap(),
+            native::Reply::Ready { version: 1, .. }
+        ));
+        owner.collect().unwrap();
+        owner.shutdown().unwrap();
+        controller.close().unwrap();
+        fs::write(caller.parent().unwrap().join("finished"), b"released").unwrap();
+        return;
+    }
+    let (mut fixture, checkout) = setup();
+    assert!(
+        !fixture.isolated,
+        "native host VM acceptance cannot run inside a worker fixture"
+    );
+    fixture.root.disable_cleanup(true);
+    deployment(&fixture);
+    success(&fixture, &checkout, &["enable"]);
+    let runtime_directory = fixture.root.path().join("runtime");
+    fs::create_dir(&runtime_directory).unwrap();
+    fs::set_permissions(
+        &runtime_directory,
+        std::os::unix::fs::PermissionsExt::from_mode(0o700),
+    )
+    .unwrap();
+    let mut command = isolation::command(
+        fixture.root.path(),
+        false,
+        &std::env::current_exe().unwrap(),
+        &[
+            "--ignored",
+            "--exact",
+            "nix_store::admission::native_host_owner_survives_controller_loss_collects_and_resumes_recorded_software",
+            "--nocapture",
+        ],
+    );
+    command
+        .env(CALLER, &checkout)
+        .env(READY, fixture.root.path().join("ready"))
+        .env(RELEASE, fixture.root.path().join("release"))
+        .env("XDG_RUNTIME_DIR", &runtime_directory);
+    if let Some(address) = std::env::var_os("DBUS_SESSION_BUS_ADDRESS") {
+        command.env("DBUS_SESSION_BUS_ADDRESS", address);
+    }
+    for name in ["WRIX_NIX_POOL_PACKAGE_BINDING", "WRIX_NIX_POOL_HOST_TOOLS"] {
+        command.env(
+            name,
+            std::env::var_os(name).expect("package-selected native pool inputs required"),
+        );
+    }
+    let mut running = Running(command.spawn().unwrap());
+    let deadline = Instant::now() + BUDGET;
+    while !fixture.root.path().join("ready").exists() {
+        if let Some(status) = running.0.try_wait().unwrap() {
+            panic!(
+                "native owner probe exited {status}; retained fixture: {:?}",
+                fixture.root.path()
+            );
+        }
+        assert!(
+            Instant::now() < deadline,
+            "native owner readiness deadline; retained fixture: {:?}",
+            fixture.root.path()
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let information = success(&fixture, &checkout, &[]);
+    assert!(information.contains("recorded native owner serving; readiness not probed"));
+    success(&fixture, &checkout, &["disable"]);
+    let mut collect =
+        fixture.application_command(&checkout, &["service", "nix-store", "gc", "--wait", "0s"]);
+    collect.env("XDG_RUNTIME_DIR", &runtime_directory);
+    let output = collect.output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains(&format!("{}: collected", system.as_str()))
+    );
+    success(&fixture, &checkout, &["enable"]);
+    fs::write(fixture.root.path().join("release"), b"release").unwrap();
+    wait_for(&fixture.root.path().join("stopped"));
+    let output = collect.output().unwrap();
+    assert!(!output.status.success());
+    fs::write(fixture.root.path().join("resume"), b"resume").unwrap();
+    running.finish();
+    assert!(fixture.root.path().join("finished").exists());
+    fixture.root.disable_cleanup(false);
+}
+
+#[test]
 #[ignore = "requires the worker chroot fixture; run explicitly in the native guest"]
 fn worker_pool_issuance_denies_library_access_despite_forged_home_and_existing_approval() {
     if let Some(caller) = child() {

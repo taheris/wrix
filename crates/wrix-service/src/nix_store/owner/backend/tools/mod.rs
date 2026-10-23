@@ -1,0 +1,179 @@
+//! Fixed package-selected host programs; project and worker runtime selectors are not inputs.
+
+use super::{Error, transport};
+use crate::nix_store::native::image::StorePath;
+use serde::{Deserialize, Serialize};
+use std::{
+    path::{Path, PathBuf},
+    process::{Command, Output},
+    time::Duration,
+};
+use wrix_core::nix_store::pool::System;
+
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(try_from = "Wire", into = "Wire")]
+pub struct Tools {
+    root: StorePath,
+    system: System,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct Wire {
+    version: u16,
+    root: StorePath,
+    system: System,
+}
+
+impl TryFrom<Wire> for Tools {
+    type Error = Error;
+    fn try_from(wire: Wire) -> Result<Self, Error> {
+        if wire.version != 1 {
+            return Err(Error::Invalid);
+        }
+        Ok(Self {
+            root: wire.root,
+            system: wire.system,
+        })
+    }
+}
+
+impl From<Tools> for Wire {
+    fn from(tools: Tools) -> Self {
+        Self {
+            version: 1,
+            root: tools.root,
+            system: tools.system,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum Program {
+    Podman,
+    Ssh,
+    Keygen,
+    NixStore,
+}
+impl Program {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Podman => "podman",
+            Self::Ssh => "ssh",
+            Self::Keygen => "ssh-keygen",
+            Self::NixStore => "nix-store",
+        }
+    }
+}
+
+impl Tools {
+    pub fn from_env() -> Result<Self, Error> {
+        let path = std::env::var_os("WRIX_NIX_POOL_HOST_TOOLS").ok_or(Error::Unsupported)?;
+        Self::load(Path::new(&path))
+    }
+
+    pub fn load(path: &Path) -> Result<Self, Error> {
+        Ok(serde_json::from_slice(&std::fs::read(path)?)?)
+    }
+
+    pub(crate) fn check(&self, system: System) -> Result<(), Error> {
+        let native = if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            System::X86_64Linux
+        } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+            System::Aarch64Linux
+        } else {
+            return Err(Error::Unsupported);
+        };
+        if self.system != native || self.system != system {
+            return Err(Error::Unsupported);
+        }
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/kvm")?;
+        let mut command = self.command(Program::Podman);
+        command.args(["info", "--format", "json"]);
+        let bytes = super::success(self.run(command, None, Some(Duration::from_secs(15)))?)?;
+        let info: serde_json::Value = serde_json::from_slice(&bytes)?;
+        if info["host"]["security"]["rootless"] != true {
+            return Err(Error::Unsupported);
+        }
+        Ok(())
+    }
+
+    pub(super) fn vm(&self) -> PathBuf {
+        Path::new(self.root.as_str()).join("bin/krun")
+    }
+
+    pub(super) fn command(&self, program: Program) -> Command {
+        let mut command = Command::new(
+            Path::new(self.root.as_str())
+                .join("bin")
+                .join(program.name()),
+        );
+        command
+            .current_dir("/")
+            .env_clear()
+            .env(
+                "PATH",
+                format!("{}/bin:/run/wrappers/bin:/usr/bin:/bin", self.root.as_str()),
+            )
+            .env("LC_ALL", "C");
+        for name in [
+            "HOME",
+            "USER",
+            "LOGNAME",
+            "XDG_RUNTIME_DIR",
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+            "XDG_STATE_HOME",
+            "DBUS_SESSION_BUS_ADDRESS",
+        ] {
+            if let Some(value) = std::env::var_os(name) {
+                command.env(name, value);
+            }
+        }
+        command
+    }
+
+    pub(super) fn run(
+        &self,
+        command: Command,
+        input: Option<Vec<u8>>,
+        budget: Option<Duration>,
+    ) -> Result<Output, Error> {
+        if !Path::new(command.get_program()).starts_with(self.root.as_str()) {
+            return Err(Error::Invalid);
+        }
+        Ok(transport::capture(command, input, budget)?)
+    }
+
+    pub(super) fn pin(&self, root: &Path) -> Result<(), Error> {
+        let mut command = self.command(Program::NixStore);
+        command
+            .arg("--realise")
+            .arg(self.root.as_str())
+            .arg("--add-root")
+            .arg(root.join("host-runtime"))
+            .arg("--indirect");
+        super::success(self.run(command, None, None)?)?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    #[test]
+    fn host_program_definition_is_closed_and_does_not_accept_executables_or_mounts() {
+        let root = "/nix/store/00000000000000000000000000000000-runtime";
+        let value = serde_json::json!({"version":1,"root":root,"system":"x86_64-linux"});
+        let tools: Tools = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(tools.vm(), Path::new(root).join("bin/krun"));
+        for field in ["command", "podman", "mount", "endpoint"] {
+            let mut invalid = value.clone();
+            invalid[field] = serde_json::json!("/tmp/arbitrary");
+            assert!(serde_json::from_value::<Tools>(invalid).is_err());
+        }
+    }
+}

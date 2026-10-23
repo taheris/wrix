@@ -1,5 +1,7 @@
 //! Durable host preparation; allocation never establishes native readiness or restart permission.
 
+pub mod backend;
+
 #[cfg(test)]
 mod test;
 

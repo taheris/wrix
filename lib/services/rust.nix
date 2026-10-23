@@ -79,6 +79,13 @@ let
       (import ../sandbox/linux/krun-runtime.nix { linuxPkgs = pkgs; })
     ];
   };
+  poolHostTools = pkgs.writeText "wrix-nix-pool-host-tools.json" (
+    builtins.toJSON {
+      version = 1;
+      root = toString controllerRuntime;
+      system = pkgs.stdenv.hostPlatform.system;
+    }
+  );
   controllerPackage =
     pkgs.runCommand "wrix-host-controller"
       {
@@ -90,7 +97,15 @@ let
         mkdir -p "$out/bin"
         makeWrapper "${workspace.bin}/bin/wrix-host-controller" "$out/bin/wrix-host-controller" \
           --prefix PATH : "${controllerRuntime}/bin" ${
-            if nixPoolImage == null then "" else ''--set WRIX_NIX_POOL_PACKAGE_BINDING "${poolBinding}"''
+            if nixPoolImage == null then
+              ""
+            else
+              ''--set WRIX_NIX_POOL_PACKAGE_BINDING "${poolBinding}" ${
+                if pkgs.stdenv.hostPlatform.isLinux then
+                  ''--set WRIX_NIX_POOL_HOST_TOOLS "${poolHostTools}"''
+                else
+                  ""
+              }''
           }
       '';
   controllerBinding = import ./control-binding.nix {
@@ -122,6 +137,11 @@ let
       "--set"
       "WRIX_NIX_POOL_PACKAGE_BINDING"
       "${poolBinding}"
+    ]
+    ++ optionals (nixPoolImage != null && pkgs.stdenv.hostPlatform.isLinux) [
+      "--set"
+      "WRIX_NIX_POOL_HOST_TOOLS"
+      "${poolHostTools}"
     ]
     ++ optionals (serviceImage != null) [
       "--set"
@@ -285,7 +305,12 @@ in
   package = workspace.bin;
   wrix = wrixPackage;
   binding = serviceBinding;
-  inherit controllerBinding controllerPackage;
+  inherit
+    controllerBinding
+    controllerPackage
+    poolBinding
+    poolHostTools
+    ;
   focusNotification = mkBinaryPackage "wrix-focus-notification" [ ];
   celler = cellerPackage;
   supervisor =

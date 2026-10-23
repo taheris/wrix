@@ -45,7 +45,7 @@ impl Blocker {
                 "Shared installed Nix stores require an actual canonical Git repository; select private mode for scratch directories."
             }
             Self::RuntimeUnavailable => {
-                "Shared installed Nix execution is unavailable in this version; select private mode until strict build, protection and export acceptance is implemented."
+                "Shared installed Nix execution is unavailable in this version; select private mode until production worker delivery and lifetime acceptance is verified."
             }
         }
     }

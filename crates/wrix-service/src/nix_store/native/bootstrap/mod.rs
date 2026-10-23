@@ -48,6 +48,10 @@ impl Configuration {
         }
     }
 
+    pub const fn admin_key(&self) -> &Key {
+        &self.admin_key
+    }
+
     pub const fn storage(&self) -> Storage {
         self.storage
     }

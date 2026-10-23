@@ -520,6 +520,15 @@ let
     ]
     ++ optionals pkgs.stdenv.hostPlatform.isLinux [
       (
+        (mkCiApp (import ./store/pool-host-linux.nix {
+          inherit pkgs wrix;
+        }) "test-shared-nix-host-owner-linux")
+        // {
+          platforms = linux;
+          capabilities = [ "container-runtime" ];
+        }
+      )
+      (
         (mkCiApp (import ./store/pool-export-linux.nix {
           inherit pkgs wrix;
         }) "test-shared-nix-pool-export-linux")
