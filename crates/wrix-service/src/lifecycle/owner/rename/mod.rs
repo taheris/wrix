@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     fs,
     io::{self, Read},
-    os::unix::fs::{MetadataExt, OpenOptionsExt},
+    os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     path::Path,
     process::Command,
 };
@@ -84,6 +84,7 @@ impl Journal {
     fn persist(&self, root: &Path) -> Result<()> {
         let temporary = tempfile::Builder::new()
             .prefix(".owner-rename-")
+            .permissions(fs::Permissions::from_mode(0o700))
             .tempdir_in(root)?;
         self.previous.persist(temporary.path())?;
         let target = temporary.path().join("target");
@@ -237,6 +238,7 @@ fn finish(runtime: &Runtime, guard: &coordination::Guard, journal: &Journal) -> 
     // Atomically clear the fence before deleting only the completed journal.
     let completed = tempfile::Builder::new()
         .prefix(".renamed-owner-")
+        .permissions(fs::Permissions::from_mode(0o700))
         .tempdir_in(guard.root())?;
     fs::rename(
         guard.root().join(DIRECTORY),
