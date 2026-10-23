@@ -1,6 +1,7 @@
 //! Explicit host approval and fail-closed collection, without claiming an installed-store runtime.
 
 pub mod gc;
+pub mod image;
 pub mod native;
 
 use std::{
@@ -100,6 +101,20 @@ pub fn run(args: &[String], stdout: &mut impl Write) -> io::Result<ExitCode> {
                 if enabled { "enabled" } else { "disabled" }
             )?;
             writeln!(stdout, "canonical repository: {repository}")?;
+        }
+    }
+    if matches!(operation, Operation::Information) {
+        match image::Candidate::from_env() {
+            Ok(candidate) => writeln!(
+                stdout,
+                "pool service image: {} (package-selected; not provisioned)",
+                candidate.image().as_str()
+            )?,
+            Err(image::Error::Missing) => writeln!(
+                stdout,
+                "pool service image: unavailable; no host-package binding"
+            )?,
+            Err(error) => return Err(io::Error::other(error)),
         }
     }
     writeln!(

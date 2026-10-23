@@ -417,12 +417,30 @@ fn signal_shutdown() -> Result<(), Error> {
     Err(Error::Role)
 }
 
+async fn acquire<'a, T: Send>(
+    state: &'a Mutex<T>,
+    operation: &Operation,
+) -> Result<tokio::sync::MutexGuard<'a, T>, Error> {
+    if matches!(
+        operation,
+        Operation::Inspect {} | Operation::Collect {} | Operation::Shutdown {}
+    ) {
+        state.try_lock().map_err(|_| Error::Busy)
+    } else {
+        Ok(state.lock().await)
+    }
+}
+
 async fn administer(stream: &mut UnixStream, state: &Mutex<State>) -> Result<(), Error> {
     if stream.peer_cred()?.uid() != 0 {
         return Err(Error::Unauthorized);
     }
     let operation: Operation = receive(stream).await?;
-    let mut state = state.lock().await;
+    let mut state = match acquire(state, &operation).await {
+        Ok(state) => state,
+        Err(Error::Busy) => return send(stream, &Reply::Busy).await,
+        Err(error) => return Err(error),
+    };
     FileExt::try_lock_shared(&state.gc)?;
     if matches!(state.admission, AdmissionState::Stopping) {
         return send(stream, &Reply::Stopping).await;

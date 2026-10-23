@@ -3,6 +3,7 @@
   rustProfile,
   prekDevShellHook ? null,
   serviceImage ? null,
+  nixPoolImage ? null,
 }:
 
 let
@@ -59,12 +60,18 @@ let
     image = serviceImage;
   };
 
+  poolBinding = import ./binding.nix {
+    inherit pkgs;
+    image = nixPoolImage;
+  };
+
   controllerRuntime = pkgs.symlinkJoin {
     name = "wrix-controller-runtime";
     paths = [
       pkgs.nix
       pkgs.skopeo
       pkgs.openssl
+      pkgs.openssh
     ]
     ++ optionals pkgs.stdenv.hostPlatform.isLinux [
       pkgs.systemd
@@ -82,7 +89,9 @@ let
 
         mkdir -p "$out/bin"
         makeWrapper "${workspace.bin}/bin/wrix-host-controller" "$out/bin/wrix-host-controller" \
-          --prefix PATH : "${controllerRuntime}/bin"
+          --prefix PATH : "${controllerRuntime}/bin" ${
+            if nixPoolImage == null then "" else ''--set WRIX_NIX_POOL_PACKAGE_BINDING "${poolBinding}"''
+          }
       '';
   controllerBinding = import ./control-binding.nix {
     inherit pkgs;
@@ -108,6 +117,11 @@ let
         pkgs.dolt
         pkgs.openssl
       ]}"
+    ]
+    ++ optionals (nixPoolImage != null) [
+      "--set"
+      "WRIX_NIX_POOL_PACKAGE_BINDING"
+      "${poolBinding}"
     ]
     ++ optionals (serviceImage != null) [
       "--set"

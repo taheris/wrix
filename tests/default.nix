@@ -245,6 +245,7 @@ let
       profile-config-parser-agreement = profileConfigParserAgreement;
       devshell-cli-selection = devshellCliSelection;
       host-service-package-binding = import ./services/package-binding.nix { inherit pkgs wrix; };
+      shared-nix-host-binding = import ./store/pool-binding.nix { inherit pkgs wrix; };
     }
     // builtins.intersectAttrs { private-nix-artifacts = null; } loomTests.checks
     // {
@@ -487,6 +488,10 @@ let
         set -euo pipefail
         test -e ${ciChecks.cache-celler-packaging}
       '') "test-cache-celler-packaging")
+      (mkCiApp (writeShellScriptBin "test-shared-nix-host-binding" ''
+        set -euo pipefail
+        test -e ${ciChecks.shared-nix-host-binding}
+      '') "test-shared-nix-host-binding")
       (mkServiceCiApp testServicesDevshellStartIndependent "test-services-devshell-start-independent")
       (mkServiceCiApp testServicesLimitModeCacheEndpoint "test-services-limit-mode-cache-endpoint")
       (mkServiceCiApp testServicesDoltPlatformTransport "test-services-dolt-platform-transport")

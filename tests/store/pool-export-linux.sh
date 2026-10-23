@@ -22,6 +22,7 @@ cleanup() {
     fi
   fi
   if [[ "$started" == true ]]; then
+    podman inspect "$name" --format '{{json .State}}' > "$root/runtime-state.json" || status=1
     podman logs "$name" > "$root/service.log" 2>&1 || status=1
     if [[ "$unmounted" == true ]]; then
       podman stop --time=30 "$name" > "$root/stop.log" 2>&1 || status=1
@@ -107,6 +108,27 @@ view_path="$root/view/${output#/nix/store/}"
 [[ ! -e "$view_path" ]]
 nix-store -r "$drv" --option substituters '' > "$root/realization"
 [[ $(< "$view_path") == live ]]
+dns_output=$(nix-build --no-out-link --option substituters '' --argstr bash "$WRIX_TEST_POOL_BASH" --expr '
+  { bash }: builtins.derivation {
+    name = "wrix-pool-public-dns";
+    system = builtins.currentSystem;
+    builder = (builtins.storePath bash) + "/bin/bash";
+    args = [ "-c" "exec 3<>/dev/tcp/cache.nixos.org/443; printf dns-ok > $out" ];
+    outputHashMode = "flat";
+    outputHashAlgo = "sha256";
+    outputHash = builtins.hashString "sha256" "dns-ok";
+  }
+')
+[[ $(< "$root/view/${dns_output#/nix/store/}") == dns-ok ]]
+if timeout --kill-after=1s 3s nix-store --gc > "$root/client-gc.log" 2>&1; then
+  printf 'Native client collection bypassed live filesystem protection.\n' >&2
+  exit 1
+else
+  [[ "$?" == 124 ]]
+fi
+gc_output=$(< "$root/client-gc.log")
+[[ "$gc_output" == *'waiting for the big garbage collector lock'* ]]
+[[ $(< "$view_path") == live ]]
 if touch "$root/view/forbidden-write" > "$root/write.log" 2>&1; then
   printf 'The filesystem export permitted mutation.\n' >&2
   exit 1
@@ -130,17 +152,19 @@ done
 reply=$(printf '{"operation":"collect"}\n' | pool_control)
 [[ "$reply" == *'"result":"applied"'* ]]
 if reply=$(printf '{"operation":"shutdown"}\n' | pool_control 2> "$root/shutdown-ssh.log"); then
-  [[ "$reply" == *'"result":"stopping"'* ]]
+  if [[ -n "$reply" ]]; then
+    [[ "$reply" == *'"result":"stopping"'* ]]
+  else
+    printf 'Shutdown ended its transport before the acknowledgement; checking native release.\n'
+  fi
 else
   # Shutdown can close its own SSH transport; only observed VM exit proves completion.
   printf 'Shutdown transport closed; checking native release and runtime completion.\n'
 fi
-stopped=false
-for _attempt in {1..600}; do
-  state=$(podman inspect "$name" --format '{{.State.Status}} {{.State.ExitCode}}')
-  if [[ "$state" == 'exited 0' ]]; then stopped=true; break; fi
-  [[ "$state" == running* ]]
-  sleep 0.1
-done
-[[ "$stopped" == true && $(< "$root/data/released") == 1 ]]
+timeout --kill-after=1s 60s podman wait "$name" > "$root/runtime-exit"
+[[ $(< "$root/runtime-exit") == 0 ]]
+state=$(podman inspect "$name" --format '{{.State.Status}} {{.State.ExitCode}} {{.State.Running}}')
+printf '%s\n' "$state" > "$root/shutdown-observation"
+[[ "$state" == 'exited 0 false' || "$state" == 'stopped 0 false' ]]
+[[ $(< "$root/data/released") == 1 ]]
 printf 'Actual krun service VM, pinned SSH, read-only Host FUSE view, dynamic negative-lookup invalidation and drained shutdown passed.\n'

@@ -195,14 +195,15 @@ exec 3<>/dev/tcp/::1/18443
 IFS= read -r control <&3
 exec 3<&- 3>&-
 [[ "$control" == ok ]]
-for network_case in public private ipv6 ordinary; do
+for network_case in public named private named-private ipv6 ordinary; do
   export PROBE_NETWORK_CASE="$network_case"
   network_output=$(nix-build --no-out-link --option substituters '' --expr '
     let
       bash = builtins.storePath (builtins.getEnv "PROBE_BASH_STORE");
       kind = builtins.getEnv "PROBE_NETWORK_CASE";
-      target = if kind == "public" then "93.184.216.34" else if kind == "ipv6" then "::1" else "127.0.0.1";
-      command = if kind == "public"
+      public = builtins.elem kind [ "public" "named" ];
+      target = if kind == "public" then "93.184.216.34" else if kind == "named" then "pool-public.invalid" else if kind == "named-private" then "pool-private.invalid" else if kind == "ipv6" then "::1" else "127.0.0.1";
+      command = if public
         then "exec 3<>/dev/tcp/" + target + "/18443; IFS= read -r value <&3; [[ $value == ok ]]; printf ok > $out"
         else "if (exec 3<>/dev/tcp/" + target + "/18443) 2>denial; then exit 1; fi; [[ $(<denial) == *Operation?not?permitted* ]]; printf ok > $out";
       base = {
@@ -212,7 +213,7 @@ for network_case in public private ipv6 ordinary; do
         LC_ALL = "C";
         args = [ "-euc" command ];
       };
-    in assert builtins.elem kind [ "public" "private" "ipv6" "ordinary" ];
+    in assert builtins.elem kind [ "public" "named" "private" "named-private" "ipv6" "ordinary" ];
       builtins.derivation (base // (if kind == "ordinary" then {} else {
         outputHashMode = "flat";
         outputHashAlgo = "sha256";

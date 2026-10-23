@@ -2,6 +2,11 @@
 
 let
   image = wrix.nixPoolImage;
+  dnsFixtureCheck = pkgs.runCommand "pool-dns-fixture-conformance" { } ''
+    set -euo pipefail
+    ${pkgs.python3}/bin/python ${./egress-server.py} --test
+    touch "$out"
+  '';
   archive =
     if image.source_kind == "docker-archive" then
       image.source
@@ -113,7 +118,9 @@ pkgs.testers.runNixOSTest {
     machine.start()
     machine.wait_for_unit("multi-user.target")
     machine.wait_for_unit("pool-egress-control.service")
+    machine.succeed("test -e ${dnsFixtureCheck}")
     machine.succeed("ip address add 93.184.216.34/32 dev lo")
+    machine.succeed("ip address add 1.1.1.1/32 dev lo")
     machine.succeed("mkdir -p /srv/nix-pool-service; tar --same-permissions -xf ${bundle}/rootfs.tar -C /srv/nix-pool-service")
     print(machine.succeed(
         "unshare --pid --fork unshare --mount ${enter}",

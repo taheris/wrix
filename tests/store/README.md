@@ -1,5 +1,23 @@
 # Pool-service bootstrap and transport
 
+## Host package selection
+
+```bash
+nix run .#legacyPackages.x86_64-linux.ciApps.test-shared-nix-host-binding
+```
+
+The host package and its controller carry an explicit dedicated pool-image
+binding, separate from the core service image and project launch configuration.
+The actual packaged CLI reports this target passively through
+`service nix-store`; it does not realize the target, create control state or
+provision a pool. Missing bindings remain unavailable, and raw pool-image
+environment aliases are rejected rather than becoming alternative software
+selectors. The packaging verifier runs that binary from two different project
+directories/configurations and verifies the same target and absent host-state
+effects.
+
+## Guest bootstrap
+
 Run the dedicated image inside a disposable Linux VM:
 
 ```bash
@@ -23,7 +41,12 @@ and a cgroup OOM, then confirms the native daemon and existing output survived.
 Build-network policy attaches cgroup BPF hooks before native admission. Its UID
 selection uses the guest kernel's build identity, including inside Nix user and
 network namespaces. Live controls cover a reachable public-address fixed-output
-build and denied IPv4/IPv6 loopback in fixed-output and ordinary builds.
+build and denied IPv4/IPv6 loopback in fixed-output and ordinary builds. The
+service pins public DNS resolvers before work admission instead of inheriting a
+runtime's private resolver. A conformance-tested DNS fixture resolves owned
+public and loopback controls; the actual build can reach the public answer but
+cannot connect to the private answer. The live krun verifier also resolves a
+real public upstream from a fixed-output build.
 
 The image also runs a root-owned lease controller and public-key-only SSH on
 port 2222. Startup requires a private `bootstrap.json` in the service data root,
@@ -33,6 +56,10 @@ keys reach only forced-untrusted native Nix sessions or read-only SFTP inside a
 filesystem jail. SSH forwarding, PTYs, user configuration and passwords are
 disabled. Native GC exclusion covers outstanding leases; release first revokes
 new admission and refuses completion while native clients/builds remain.
+Inspection, collection and shutdown return busy immediately when native state is
+held by other work; they do not queue behind a seed import and consume an
+unbounded maintenance-acquisition budget. Acquired collection still has no GC
+execution deadline.
 
 The controller duplicates the supervisor's native GC-lock open description,
 rather than reopening its pathname. A live fault control stops the supervisor,
@@ -63,12 +90,15 @@ loopback-only runtime port publication, pinned SSH host authentication and a
 read-only Host FUSE view. A prior negative lookup becomes readable after native
 realization without remount or per-client import. Mutation fails, collection is
 blocked by the live lease, and release remains busy until the filesystem session
-closes. An authenticated shutdown is refused while a lease remains. After drain,
-it closes admission, targets the observed daemon through a pidfd, and waits for
-native work's kernel cgroup to become unpopulated. The supervisor stops control
-processes, synchronizes store state and records release. The verifier requires
-observed VM exit zero plus that checkpoint, not a `stopping` reply or a lost SSH
-connection. Ordinary startup still refuses retained state; this adds no implicit
+closes. An actual untrusted native GC request is observed waiting on the native
+GC lock, then cancelled; live data survives and subsequent native drain must
+confirm that no orphaned collection/client work remains. An authenticated
+shutdown is refused while a lease remains. After drain, it closes admission,
+targets the observed daemon through a pidfd, and waits for native work's kernel
+cgroup to become unpopulated. The supervisor stops control processes,
+synchronizes store state and records release. The verifier requires observed VM
+exit zero plus that checkpoint, not a `stopping` reply or a lost SSH connection.
+Ordinary startup still refuses retained state; this adds no implicit
 reconciliation or restart permission. The separate controller-loss fixture must
 not produce the successful-release checkpoint.
 

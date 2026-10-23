@@ -26,6 +26,7 @@ let
 
   rustCli = import ./services/rust.nix {
     inherit pkgs serviceImage;
+    inherit (sandboxLib) nixPoolImage;
     rustProfile = sandbox.profiles.rust;
     prekDevShellHook =
       (devshell.mkDevShell {

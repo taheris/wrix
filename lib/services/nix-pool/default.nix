@@ -73,6 +73,7 @@ let
     cp ${passwd} "$out/etc/passwd"
     cp ${group} "$out/etc/group"
     cp ${nixConf} "$out/etc/nix/nix.conf"
+    printf 'nameserver 1.1.1.1\nnameserver 9.9.9.9\noptions timeout:2 attempts:2\n' > "$out/etc/resolv.conf"
     cp ${
       writeText "nix-pool-native.json" (
         builtins.toJSON {
@@ -163,6 +164,9 @@ let
     done
     sync "$storage/nix/var/nix/gcroots/bootstrap" "$storage/nix/var/nix"
     mount --bind "$storage/nix" /nix
+    [[ -f /etc/resolv.conf && ! -L /etc/resolv.conf ]]
+    mount --bind ${filesystem}/etc/resolv.conf /etc/resolv.conf
+    mount -o remount,bind,ro /etc/resolv.conf
     install -d -m 0755 "$root/export-root/nix/store" "$root/export-root/bin" "$root/export-root/etc/wrix" "$root/export-root/run/wrix-nix-pool" "$root/export-root/var/empty"
     install -d -m 0755 "$root/export-root/dev"
     touch "$root/export-root/dev/null"
@@ -206,6 +210,7 @@ in
     seedClosure
     ;
   imageCommands = ''
+    cp --remove-destination ${filesystem}/etc/resolv.conf etc/resolv.conf
     mkdir -p run var/empty var/lib/wrix/nix-pool
     chmod 0700 var/lib/wrix/nix-pool
     chmod 0755 nix/var/nix nix/var/nix/db
