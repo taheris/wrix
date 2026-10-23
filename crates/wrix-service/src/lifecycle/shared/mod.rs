@@ -171,7 +171,7 @@ pub(super) fn register(plan: &Plan, runtime: &Runtime) -> Result<()> {
             .join(plan.workspace().hash().as_str()),
     )?;
     let credentials = manager.register()?;
-    install_client_identity(plan, &credentials)?;
+    super::managed::metadata::restore(plan.workspace().canonical_path(), credentials.database())?;
     fs::create_dir_all(plan.workspace().canonical_path().join(".beads/dolt"))?;
     super::managed::atomic_write(&plan.workspace().canonical_path().join(".beads/dolt/WRIX-MANAGED"), b"Host-managed shared Dolt namespace. Retained source is a recovery checkpoint, not a serving database.\n")?;
     Ok(())
@@ -617,22 +617,6 @@ fn git(repository: &Path, args: &[&str]) -> Result<()> {
             message: String::from_utf8_lossy(&output.stderr).into_owned(),
         });
     }
-    Ok(())
-}
-
-fn install_client_identity(plan: &Plan, credentials: &Credentials) -> Result<()> {
-    let path = plan
-        .workspace()
-        .canonical_path()
-        .join(".beads/metadata.json");
-    let mut metadata: serde_json::Value =
-        serde_json::from_slice(&fs::read(&path)?).map_err(io::Error::other)?;
-    metadata["dolt_database"] = credentials.database().into();
-    metadata["dolt_mode"] = "server".into();
-    super::managed::atomic_write(
-        &path,
-        &serde_json::to_vec_pretty(&metadata).map_err(io::Error::other)?,
-    )?;
     Ok(())
 }
 

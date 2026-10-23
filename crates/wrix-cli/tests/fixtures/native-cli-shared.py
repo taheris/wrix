@@ -66,22 +66,37 @@ try:
         run(['git', 'push', '-u', 'origin', 'beads'], worktree)
         (workspace / '.beads').mkdir()
         (workspace / '.beads/config.yaml').write_text('sync-branch: beads\n')
-        (workspace / '.beads/metadata.json').write_text('{"database":"dolt","backend":"dolt","dolt_database":"beads","dolt_mode":"server"}')
+        (workspace / '.beads/metadata.json').write_text('{"database":"dolt","backend":"dolt","dolt_database":"beads","dolt_mode":"embedded"}\n')
         seed = root / ('seed-' + workspace.name)
         seed.mkdir()
         run([env['WRIX_REAL_BD_BIN'], 'init', '--quiet', '--skip-hooks', '--skip-agents', '--non-interactive', '--prefix', 'fixture'], seed, {'BEADS_DOLT_MODE': 'embedded'})
+        ignore = (seed / '.beads/.gitignore').read_text()
+        (workspace / '.beads/.gitignore').write_text(ignore + '\n/config.local.yaml\n/dolt/\n')
+        run(['git', 'add', '.beads/metadata.json', '.beads/config.yaml', '.beads/.gitignore'], workspace)
+        run(['git', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'portable Beads configuration'], workspace)
         source = workspace / '.beads/dolt/beads'
         source.parent.mkdir()
         (seed / '.beads/embeddeddolt/fixture').rename(source)
         run(['dolt', 'config', '--global', '--add', 'user.name', 'Fixture'], source)
         run(['dolt', 'config', '--global', '--add', 'user.email', 'fixture@example.invalid'], source)
         run(['dolt', 'sql', '-q', "CREATE TABLE marker(id INT PRIMARY KEY); INSERT INTO marker VALUES(1); CALL DOLT_ADD('.'); CALL DOLT_COMMIT('-m','checkpoint'); CALL DOLT_BRANCH('retained'); CALL DOLT_TAG('retainedtag'); INSERT INTO marker VALUES(2); CALL DOLT_ADD('.'); INSERT INTO marker VALUES(3)"], source)
+    metadata_before = [(workspace / '.beads/metadata.json').read_bytes() for workspace in workspaces]
     cli(workspaces[0], 'workspace', 'acknowledge-scope', '--version', '1')
     clients = []
     for workspace in workspaces:
         cli(workspace, 'service', 'start', '--no-cache')
         clients.append(json.loads(cli(workspace, 'service', 'dolt', 'client').stdout))
     assert clients[0]['credentials']['database'] != clients[1]['credentials']['database']
+    for workspace, before in zip(workspaces, metadata_before):
+        assert (workspace / '.beads/metadata.json').read_bytes() == before
+        run(['git', 'diff', '--exit-code', '--', '.beads'], workspace)
+        assert run(['git', 'status', '--porcelain', '--', '.beads'], workspace).stdout == '', run(['git', 'status', '--porcelain', '--', '.beads'], workspace).stdout
+    # Exact old Wrix output is repaired from the index without changing staged config.
+    old = json.loads(metadata_before[0])
+    old.update(dolt_database=clients[0]['credentials']['database'], dolt_mode='server')
+    (workspaces[0] / '.beads/metadata.json').write_text(json.dumps(old, sort_keys=True, indent=2))
+    cli(workspaces[0], 'service', 'start', '--no-cache')
+    assert (workspaces[0] / '.beads/metadata.json').read_bytes() == metadata_before[0]
     # A genuinely adopted managed checkout must not revive JSONL import from
     # ambient native Git hooks; its independently chained hook still executes.
     workspace = workspaces[0]
@@ -109,6 +124,17 @@ try:
         assert len(json.loads(sql(client, 'SELECT staged FROM dolt_status').stdout)['rows']) == 2
         assert Path(client['git_common']).is_relative_to(root / 'state/wrix/host-control/beads-git')
         sql(client, 'INSERT INTO marker VALUES(4)')
+    # Native Beads reads AND writes use the scoped environment, not the tracked default.
+    user_status = {workspace: run(['git', 'status', '--porcelain', '--', '.beads'], workspace).stdout for workspace in workspaces}
+    for workspace in workspaces:
+        run(['bd', 'create', '--title', 'scope-' + workspace.name, '--type', 'task', '--json'], workspace)
+    for workspace, before in zip(workspaces, metadata_before):
+        issues = json.loads(run(['bd', 'list', '--all', '--json'], workspace).stdout)
+        assert [issue['title'] for issue in issues] == ['scope-' + workspace.name], issues
+        assert (workspace / '.beads/metadata.json').read_bytes() == before
+        run(['git', 'diff', '--exit-code', '--', '.beads'], workspace)
+        status = run(['git', 'status', '--porcelain', '--', '.beads'], workspace).stdout
+        assert status == user_status[workspace], (user_status[workspace], status)
     peer = clients[1]['credentials']['database']
     assert sql(clients[0], f'SELECT * FROM `{peer}`.marker', success=False).returncode != 0
     for user in ['root', 'wrixadmin']:

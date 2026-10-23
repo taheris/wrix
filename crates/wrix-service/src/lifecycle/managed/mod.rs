@@ -1,7 +1,8 @@
 use std::{
     fs,
     io::{self, Write},
-    path::Path,
+    path::{Path, PathBuf},
+    process::Command,
 };
 
 use displaydoc::Display;
@@ -16,6 +17,10 @@ pub enum Error {
     Yaml { source: serde_yaml_ng::Error },
     /// invalid Beads metadata: {source}
     Json { source: serde_json::Error },
+    /// cannot inspect tracked Beads metadata in the Git index; working file left untouched
+    Index,
+    /// cannot resolve local Git ignore policy for managed Beads configuration
+    Ignore,
     /// Beads configuration {key} must be a mapping
     Mapping { key: String },
 }
@@ -45,7 +50,7 @@ pub(super) fn configure(workspace: &Path) -> Result<(), Error> {
     if !beads.join("config.yaml").is_file() || !metadata_path.is_file() {
         return Ok(());
     }
-    let mut metadata: serde_json::Map<String, serde_json::Value> =
+    let metadata: serde_json::Map<String, serde_json::Value> =
         serde_json::from_slice(&fs::read(&metadata_path)?)?;
     if metadata.get("backend").and_then(serde_json::Value::as_str) != Some("dolt") {
         return Ok(());
@@ -65,38 +70,76 @@ pub(super) fn configure(workspace: &Path) -> Result<(), Error> {
     )?;
     set(&mut local, "import", "auto", Value::Bool(false))?;
     set(&mut local, "export", "auto", Value::Bool(false))?;
-    let ignore_path = beads.join(".gitignore");
-    let mut ignore = match fs::read_to_string(&ignore_path) {
+    ignore_local_config(workspace)?;
+    atomic_write(&local_path, serde_yaml_ng::to_string(&local)?.as_bytes())?;
+    Ok(())
+}
+
+fn ignore_local_config(workspace: &Path) -> Result<(), Error> {
+    let ignored = Command::new("git")
+        .args([
+            "check-ignore",
+            "--quiet",
+            "--no-index",
+            "--",
+            ".beads/config.local.yaml",
+        ])
+        .current_dir(workspace)
+        .output()?;
+    if ignored.status.success() {
+        return Ok(());
+    }
+    if ignored.status.code() != Some(1) {
+        return Err(Error::Ignore);
+    }
+    let location = Command::new("git")
+        .args([
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-path",
+            "info/exclude",
+        ])
+        .current_dir(workspace)
+        .output()?;
+    if !location.status.success() {
+        return Err(Error::Ignore);
+    }
+    let path = PathBuf::from(
+        String::from_utf8(location.stdout)
+            .map_err(|_| Error::Ignore)?
+            .trim(),
+    );
+    if !path.is_absolute() {
+        return Err(Error::Ignore);
+    }
+    let mut contents = match fs::read_to_string(&path) {
         Ok(text) => text,
         Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
         Err(error) => return Err(error.into()),
     };
-    if !ignore
-        .lines()
-        .any(|line| matches!(line.trim(), "config.local.yaml" | "/config.local.yaml"))
-    {
-        if !ignore.is_empty() && !ignore.ends_with('\n') {
-            ignore.push('\n');
-        }
-        ignore.push_str("/config.local.yaml\n");
-        atomic_write(&ignore_path, ignore.as_bytes())?;
+    if !contents.is_empty() && !contents.ends_with('\n') {
+        contents.push('\n');
     }
-    atomic_write(&local_path, serde_yaml_ng::to_string(&local)?.as_bytes())?;
-    if metadata
-        .get("dolt_mode")
-        .and_then(serde_json::Value::as_str)
-        != Some("server")
-    {
-        metadata.insert(
-            String::from("dolt_mode"),
-            serde_json::Value::String(String::from("server")),
-        );
-        let mut bytes = serde_json::to_vec_pretty(&metadata)?;
-        bytes.push(b'\n');
-        atomic_write(&metadata_path, &bytes)?;
+    contents.push_str("/.beads/config.local.yaml\n");
+    fs::create_dir_all(path.parent().ok_or(Error::Ignore)?)?;
+    atomic_write(&path, contents.as_bytes())?;
+    let checked = Command::new("git")
+        .args([
+            "check-ignore",
+            "--quiet",
+            "--no-index",
+            "--",
+            ".beads/config.local.yaml",
+        ])
+        .current_dir(workspace)
+        .output()?;
+    if !checked.status.success() {
+        return Err(Error::Ignore);
     }
     Ok(())
 }
+
+pub(super) mod metadata;
 
 #[cfg(test)]
 mod test;

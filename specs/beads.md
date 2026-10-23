@@ -75,6 +75,23 @@ The repository's main `.beads/` retains tracked ignore policy, `config.yaml` and
 `metadata.json`, plus non-authoritative backup/runtime artifacts. Live Dolt
 state belongs to the workspace namespace beneath the service-visible data root
 defined by `services.md`, not to a repository-local `.beads/dolt` directory.
+Startup preserves tracked metadata/configuration bytes, including their database
+default, mode, formatting and final newline. Managed namespace identity and
+credentials come from private registration and the scoped client environment,
+not a rewrite of `metadata.json`. Local hook policy remains ignored; a missing
+local ignore rule is added to Git's private exclude file, not tracked policy.
+Native Beads reads and writes select that environment's namespace even when
+tracked metadata declares embedded mode and a portable database default.
+[test](../crates/wrix-cli/tests/service_lifecycle.rs::public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql)
+[test](../crates/wrix-service/src/lifecycle/managed/test/mod.rs::managed_policy_preserves_sync_identity_and_unrelated_local_settings)
+
+An old Wrix-generated metadata projection is restored from indexed bytes only
+when it exactly matches the legacy renderer for the registered database; the
+index and additional user edits are not rewritten. This cleanup never replaces
+untracked metadata or infers an earlier project default from database names.
+[test](../crates/wrix-service/src/lifecycle/managed/metadata/test/mod.rs::legacy_runtime_projection_restores_exact_indexed_bytes_and_newline)
+[test](../crates/wrix-service/src/lifecycle/managed/metadata/test/mod.rs::legacy_cleanup_preserves_additional_user_edits_byte_for_byte)
+[test](../crates/wrix-service/src/lifecycle/managed/metadata/test/mod.rs::legacy_cleanup_does_not_replace_untracked_metadata)
 
 Within that managed namespace:
 

@@ -7,8 +7,15 @@ type TestResult = Result<(), Box<dyn std::error::Error>>;
 #[test]
 fn managed_policy_preserves_sync_identity_and_unrelated_local_settings() -> TestResult {
     let root = tempfile::tempdir()?;
+    let initialized = std::process::Command::new("git")
+        .args(["-c", "init.templateDir=", "init", "-q"])
+        .arg(root.path())
+        .output()?;
+    assert!(initialized.status.success());
     let beads = root.path().join(".beads");
     fs::create_dir(&beads)?;
+    let ignore = "*.log\n";
+    fs::write(beads.join(".gitignore"), ignore)?;
     let config = "sync:\n  mode: dolt-native\nsync-branch: custom/beads\n";
     fs::write(beads.join("config.yaml"), config)?;
     fs::write(
@@ -28,9 +35,19 @@ fn managed_policy_preserves_sync_identity_and_unrelated_local_settings() -> Test
     assert_eq!(parsed["import.auto"], false);
     assert_eq!(parsed["export.auto"], false);
     assert_eq!(fs::read_to_string(beads.join("config.yaml"))?, config);
+    assert_eq!(fs::read_to_string(beads.join(".gitignore"))?, ignore);
+    let ignored = std::process::Command::new("git")
+        .args(["check-ignore", "--quiet", "--", ".beads/config.local.yaml"])
+        .current_dir(root.path())
+        .output()?;
+    assert!(ignored.status.success());
     let metadata: serde_json::Value =
         serde_json::from_slice(&fs::read(beads.join("metadata.json"))?)?;
-    assert_eq!(metadata["dolt_mode"], "server");
+    assert_eq!(metadata["dolt_mode"], "embedded");
+    assert_eq!(
+        fs::read_to_string(beads.join("metadata.json"))?,
+        r#"{"backend":"dolt","dolt_mode":"embedded","dolt_database":"lm","project_id":"keep"}"#
+    );
     assert_eq!(metadata["dolt_database"], "lm");
     assert_eq!(metadata["project_id"], "keep");
     configure(root.path())?;
