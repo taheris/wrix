@@ -19,6 +19,7 @@ use crate::control::{Authorization, Permission};
 pub mod broker;
 pub mod server;
 mod snapshot;
+mod source;
 
 impl From<rustix::io::Errno> for Error {
     fn from(error: rustix::io::Errno) -> Self {
@@ -51,6 +52,12 @@ pub enum Error {
     UnsafePath,
     /// shared Dolt registration is incomplete or conflicts with retained native data; retain the database and registration backup for explicit host maintenance
     Incomplete,
+    /// no configured native Beads database was found beneath {root}; no source was moved
+    SourceMissing { root: PathBuf },
+    /// multiple or conflicting native databases beneath {root}; select the project database in .beads/metadata.json before migration; no source was moved
+    SourceAmbiguous { root: PathBuf },
+    /// native Dolt writer still owns {path}; quiesce the legacy server before migration; no serving database is replaced
+    SourceBusy { path: PathBuf },
     /// native Dolt management failed; no tenant administrator privilege was granted: {stderr}
     Native { stderr: String },
     /// shared Dolt query returned an unexpected result
@@ -209,7 +216,7 @@ pub struct Manager<'a> {
     branch: Branch,
     executor: Executor,
     _lock: File,
-    source_lock: std::sync::Mutex<Option<File>>,
+    source_lock: std::sync::Mutex<Vec<File>>,
 }
 
 impl<'a> Manager<'a> {
@@ -323,7 +330,7 @@ impl<'a> Manager<'a> {
             branch,
             executor,
             _lock: lock,
-            source_lock: std::sync::Mutex::new(None),
+            source_lock: std::sync::Mutex::new(Vec::new()),
         })
     }
 
@@ -339,32 +346,7 @@ impl<'a> Manager<'a> {
             }
             return self.prepare_source(&saved.source);
         }
-        let root = workspace.join(".beads/dolt");
-        check_directory(&root)?;
-        check_directory(&root.join(".dolt"))?;
-        if root.join(".dolt/noms").exists() {
-            return self.prepare_source(&root);
-        }
-        let mut found = None;
-        for entry in fs::read_dir(&root).map_err(|error| {
-            io::Error::new(
-                error.kind(),
-                format!("source directory {}: {error}", root.display()),
-            )
-        })? {
-            let path = entry?.path();
-            let metadata = fs::symlink_metadata(&path)?;
-            if metadata.file_type().is_symlink() {
-                return Err(Error::UnsafePath);
-            }
-            if path.join(".dolt/noms").exists() {
-                if found.is_some() {
-                    return Err(Error::Incomplete);
-                }
-                found = Some(path);
-            }
-        }
-        self.prepare_source(&found.ok_or(Error::Incomplete)?)
+        self.prepare_source(&source::locate(workspace)?)
     }
 
     fn source_record(&self) -> Result<Option<Source>, Error> {
@@ -420,6 +402,34 @@ impl<'a> Manager<'a> {
             source
         };
         check_storage_tree(&current.join(".dolt"))?;
+        let mut guards = Vec::new();
+        if let Some(parent) = source.parent()
+            && parent.join(".dolt/noms/LOCK").exists()
+        {
+            check_directory(&parent.join(".dolt/noms"))?;
+            let parent_lock = File::options()
+                .read(true)
+                .write(true)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                .open(parent.join(".dolt/noms/LOCK"))?;
+            let metadata = parent_lock.metadata()?;
+            if !metadata.is_file()
+                || metadata.nlink() != 1
+                || metadata.uid() != fs::metadata(&self.root)?.uid()
+            {
+                return Err(Error::UnsafePath);
+            }
+            parent_lock.try_lock_exclusive().map_err(|error| {
+                if error.kind() == io::ErrorKind::WouldBlock {
+                    Error::SourceBusy {
+                        path: parent.to_path_buf(),
+                    }
+                } else {
+                    Error::Io(error)
+                }
+            })?;
+            guards.push(parent_lock);
+        }
         let lock = File::options()
             .read(true)
             .write(true)
@@ -438,7 +448,15 @@ impl<'a> Manager<'a> {
         {
             return Err(Error::UnsafePath);
         }
-        lock.try_lock_exclusive().map_err(|_| Error::Incomplete)?;
+        lock.try_lock_exclusive().map_err(|error| {
+            if error.kind() == io::ErrorKind::WouldBlock {
+                Error::SourceBusy {
+                    path: current.to_path_buf(),
+                }
+            } else {
+                Error::Io(error)
+            }
+        })?;
         if !checkpoint.exists() {
             if saved.phase != SourcePhase::Moving {
                 return Err(Error::Incomplete);
@@ -511,7 +529,8 @@ impl<'a> Manager<'a> {
         saved.phase = SourcePhase::Exported;
         atomic_json(&provenance, &saved)?;
         // Keep the native writer guard until export and cutover are durable.
-        *self.source_lock.lock().map_err(|_| Error::Incomplete)? = Some(lock);
+        guards.push(lock);
+        *self.source_lock.lock().map_err(|_| Error::Incomplete)? = guards;
         Ok(())
     }
 

@@ -539,9 +539,138 @@ fn native_source_with_active_writer_is_rejected_before_journal_or_rename() -> Te
     }
     assert!(matches!(
         manager.prepare_source(&fixture.source),
-        Err(Error::Incomplete)
+        Err(Error::SourceBusy { .. })
     ));
     assert!(fixture.source.join(".dolt/noms/LOCK").is_file());
+    assert!(!manager.root.join("source.json").exists());
+    assert!(!manager.data.join("registration-backup").exists());
+    Ok(())
+}
+
+fn multi_database_source() -> TestResult<(Fixture, PathBuf)> {
+    let mut fixture = Fixture::new()?;
+    let workspace = fixture.root.path().join("workspace");
+    let data = workspace.join(".beads/dolt");
+    fs::create_dir_all(&data)?;
+    fs::write(
+        workspace.join(".beads/metadata.json"),
+        r#"{"backend":"dolt","dolt_database":"lm","dolt_mode":"server"}"#,
+    )?;
+    native(
+        &data,
+        &[
+            "init",
+            "--name",
+            "Fixture",
+            "--email",
+            "fixture@example.invalid",
+        ],
+    )?;
+    native(
+        &data,
+        &[
+            "sql",
+            "-q",
+            "CREATE TABLE root_only(id INT PRIMARY KEY); INSERT INTO root_only VALUES(77)",
+        ],
+    )?;
+    let named = data.join("lm");
+    fs::rename(&fixture.source, &named)?;
+    fixture.source = named;
+    let graph = data.join("graph");
+    fs::create_dir(&graph)?;
+    native(
+        &graph,
+        &[
+            "init",
+            "--name",
+            "Fixture",
+            "--email",
+            "fixture@example.invalid",
+        ],
+    )?;
+    native(
+        &graph,
+        &[
+            "sql",
+            "-q",
+            "CREATE TABLE graph_only(id INT PRIMARY KEY); INSERT INTO graph_only VALUES(88)",
+        ],
+    )?;
+    Ok((fixture, workspace))
+}
+
+#[test]
+fn multi_database_adoption_restores_only_configured_lm_and_preserves_root_and_graph() -> TestResult
+{
+    let (fixture, workspace) = multi_database_source()?;
+    let authorization = fixture
+        .controller
+        .authorize(&fixture.namespace, Permission::Sql)?;
+    {
+        let manager = fixture.manager(&authorization, Branch::parse("beads")?)?;
+        manager.prepare_workspace_source(&workspace)?;
+        let credentials = manager.register()?;
+        assert_eq!(
+            manager.query(
+                Some(&credentials),
+                Some(credentials.database()),
+                "SELECT * FROM marker ORDER BY id"
+            )?,
+            vec![
+                serde_json::json!({"id":"1"}),
+                serde_json::json!({"id":"2"}),
+                serde_json::json!({"id":"3"})
+            ]
+        );
+        for query in [
+            "SELECT COUNT(*) AS n FROM dolt_branches WHERE name='other'",
+            "SELECT COUNT(*) AS n FROM dolt_tags WHERE tag_name='checkpoint'",
+        ] {
+            assert_eq!(
+                manager.query(Some(&credentials), Some(credentials.database()), query)?,
+                vec![serde_json::json!({"n":"1"})]
+            );
+        }
+        assert_eq!(
+            manager.source_record()?.unwrap().source,
+            workspace.join(".beads/dolt/lm")
+        );
+        assert!(!workspace.join(".beads/dolt/lm").exists());
+        assert!(workspace.join(".beads/dolt/.dolt/noms").is_dir());
+        assert!(workspace.join(".beads/dolt/graph/.dolt/noms").is_dir());
+    }
+    assert!(
+        native(
+            &workspace.join(".beads/dolt"),
+            &["sql", "-r", "json", "-q", "SELECT * FROM root_only"]
+        )?
+        .contains("77")
+    );
+    assert!(
+        native(
+            &workspace.join(".beads/dolt/graph"),
+            &["sql", "-r", "json", "-q", "SELECT * FROM graph_only"]
+        )?
+        .contains("88")
+    );
+    Ok(())
+}
+
+#[test]
+fn multi_database_parent_writer_fences_migration_before_any_source_move() -> TestResult {
+    use fs2::FileExt;
+    let (fixture, workspace) = multi_database_source()?;
+    let authorization = fixture
+        .controller
+        .authorize(&fixture.namespace, Permission::Sql)?;
+    let manager = fixture.manager(&authorization, Branch::parse("beads")?)?;
+    let lock = fs::File::open(workspace.join(".beads/dolt/.dolt/noms/LOCK"))?;
+    lock.lock_exclusive()?;
+    assert!(
+        matches!(manager.prepare_workspace_source(&workspace), Err(Error::SourceBusy { path }) if path == workspace.join(".beads/dolt"))
+    );
+    assert!(fixture.source.join(".dolt/noms").is_dir());
     assert!(!manager.root.join("source.json").exists());
     assert!(!manager.data.join("registration-backup").exists());
     Ok(())

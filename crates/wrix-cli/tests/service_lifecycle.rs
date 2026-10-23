@@ -793,7 +793,9 @@ fn fresh_service_refuses_empty_dolt_source_without_discarding_it() -> TestResult
     let output = fixture.run("start")?;
     assert!(!output.status.success());
     assert!(
-        output.stderr.contains("registration is incomplete"),
+        output
+            .stderr
+            .contains("no configured native Beads database was found"),
         "{}",
         output.stderr
     );

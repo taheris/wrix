@@ -123,6 +123,20 @@ expose another workspace's managed data. Missing registered state or endpoints
 fail loudly rather than creating an unrelated empty database, embedding Dolt, or
 importing backups.
 
+Host-managed migration resolves a configured native database beneath
+`.beads/dolt/` before considering a legacy flat database. A multi-database
+server root, sibling databases and nested statistics are not substituted for the
+project's configured database; ambiguous or unsafe names fail before movement.
+Both the selected database and any native parent-database writer lock remain
+fenced through cutover. Active legacy writers yield an explicit source-busy
+error; migration does not kill unknown servers or replace their live database.
+[test](../crates/wrix-service/src/dolt/source/test/mod.rs::configured_database_wins_over_server_root_graph_and_nested_statistics)
+[test](../crates/wrix-service/src/dolt/source/test/mod.rs::missing_configured_database_does_not_import_an_unrelated_sibling)
+[test](../crates/wrix-service/src/dolt/source/test/mod.rs::server_root_and_sibling_are_ambiguous_without_project_identity)
+[test](../crates/wrix-service/src/dolt/source/test/mod.rs::configured_source_cannot_traverse_out_of_the_admitted_data_root)
+[test](../crates/wrix-service/src/dolt/test.rs::multi_database_adoption_restores_only_configured_lm_and_preserves_root_and_graph)
+[test](../crates/wrix-service/src/dolt/test.rs::multi_database_parent_writer_fences_migration_before_any_source_move)
+
 Host-managed migration preserves existing issue contents, Dolt history and
 remotes, configured sync branch, branch commits and uncommitted remote contents.
 It relocates live database and canonical worktree together, validates the new
