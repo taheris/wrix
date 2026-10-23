@@ -556,6 +556,7 @@ let
           profile-config-parser-agreement
           host-service-package-binding
           cache-celler-packaging
+          shared-nix-host-binding
           image-builds
           ${if ciChecks ? private-nix-artifacts then "private-nix-artifacts" else ""}
           linux-pasta-port-forwarding-disabled
