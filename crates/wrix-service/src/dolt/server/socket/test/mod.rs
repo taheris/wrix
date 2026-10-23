@@ -1,9 +1,11 @@
 use super::*;
-use std::os::unix::net::UnixListener;
+use std::os::unix::{fs::PermissionsExt, net::UnixListener};
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
 fn fixture() -> TestResult<tempfile::TempDir> {
-    let root = tempfile::tempdir()?;
+    let root = tempfile::Builder::new()
+        .permissions(fs::Permissions::from_mode(0o700))
+        .tempdir_in(std::env::temp_dir().canonicalize()?)?;
     crate::dolt::private_directory(&root.path().join("run"))?;
     fs::write(root.path().join("owner.lock"), b"")?;
     fs::write(root.path().join("retained-database"), b"retained")?;
