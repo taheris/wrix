@@ -126,6 +126,13 @@ impl Checkout {
             routing,
         })
     }
+    pub(crate) fn snapshot(&self) -> serde_json::Value {
+        serde_json::json!({
+            "root": encode(&self.root), "git": encode(&self.git), "common": encode(&self.common),
+            "evidence": self.evidence,
+            "routing": self.routing.iter().map(|(path, bytes)| (encode(path), bytes)).collect::<Vec<_>>(),
+        })
+    }
     pub fn root(&self) -> &Path {
         &self.root
     }

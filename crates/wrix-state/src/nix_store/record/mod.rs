@@ -37,6 +37,20 @@ impl Common {
         })
     }
 
+    pub(super) fn recheck(&self) -> Result<(), Error> {
+        self.check()?;
+        let path = PathBuf::from(OsString::from_vec(self.path.clone()));
+        let metadata = std::fs::symlink_metadata(&path)?;
+        if !metadata.is_dir()
+            || path.canonicalize()? != path
+            || metadata.dev() != self.device
+            || metadata.ino() != self.inode
+        {
+            return Err(Error::RepositoryChanged);
+        }
+        Ok(())
+    }
+
     const fn same_object(&self, other: &Self) -> bool {
         self.device == other.device && self.inode == other.inode
     }

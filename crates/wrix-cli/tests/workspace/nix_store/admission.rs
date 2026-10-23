@@ -1,5 +1,8 @@
 //! Checked host issuance, not production native endpoints or installed-store runtime proof.
 
+#[path = "admission/request/mod.rs"]
+mod request;
+
 use super::{deployment, setup, success};
 use crate::fixture::{Fixture, isolation};
 use fs2::FileExt;

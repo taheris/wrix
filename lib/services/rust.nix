@@ -70,6 +70,7 @@ let
     paths = [
       pkgs.nix
       pkgs.skopeo
+      pkgs.git
       pkgs.openssl
       pkgs.openssh
     ]

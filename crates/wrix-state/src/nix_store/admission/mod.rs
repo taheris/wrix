@@ -1,5 +1,7 @@
 //! A short host issuance window, not a native owner, endpoint, filesystem export or live-work lease.
 
+pub mod request;
+
 use super::{
     Error,
     record::{Catalog, Common},

@@ -4,6 +4,8 @@ mod assignment;
 pub mod cache;
 mod deployment;
 mod endpoint;
+mod pool;
+pub use pool::Status as PoolPreparation;
 pub(crate) mod maintenance;
 mod registration;
 pub mod serving;
@@ -71,6 +73,10 @@ pub enum Error {
     PermissionDenied,
     /// host cache credential issuance is unavailable; inspect host authorization and retained issuer state
     CacheUnavailable,
+    /// installed-store controller preparation interface is unavailable; start a compatible host controller
+    PoolInterface,
+    /// installed-store controller preparation request was rejected; inspect current approval and retained ownership
+    PoolRequest,
     /// installed-store admission failed: {0}
     PoolAdmission(#[from] wrix_state::nix_store::Error),
     /// installed-store host preparation failed: {0}
@@ -362,6 +368,13 @@ impl PoolAuthorization {
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Operation {
     Inspect {},
+    InspectNixPool {},
+    PrepareNixPool {
+        id: wrix_state::nix_store::admission::request::Id,
+    },
+    InspectNixPoolPreparation {
+        id: wrix_state::nix_store::admission::request::Id,
+    },
     Register {
         namespace: Namespace,
         policy: Policy,
@@ -424,6 +437,15 @@ pub enum Reply {
         namespaces: BTreeMap<Namespace, Policy>,
     },
     Applied,
+    PoolInterface {
+        version: u16,
+    },
+    PoolQueued {
+        id: wrix_state::nix_store::admission::request::Id,
+    },
+    PoolPreparation {
+        status: PoolPreparation,
+    },
     CacheIssued {
         expires_at: u64,
     },
@@ -443,6 +465,7 @@ pub struct Controller {
     deployment: crate::deployment::Id,
     assignments: assignment::Store,
     cache_issuer: Option<PathBuf>,
+    pool_jobs: pool::Jobs,
 }
 
 impl Controller {
@@ -486,6 +509,7 @@ impl Controller {
             deployment,
             assignments,
             cache_issuer: None,
+            pool_jobs: pool::Jobs::default(),
         })
     }
 
@@ -659,16 +683,29 @@ impl Controller {
     }
 
     fn apply(&self, operation: Operation) -> Result<Reply, Error> {
+        match operation {
+            Operation::InspectNixPool {} => return Ok(Reply::PoolInterface { version: 1 }),
+            Operation::PrepareNixPool { id } => return self.pool_jobs.prepare(self, id),
+            Operation::InspectNixPoolPreparation { id } => return self.pool_jobs.inspect(&id),
+            _ => (),
+        }
         // Namespace lease precedes the short global metadata transaction.
         let _lease = match &operation {
             Operation::Register { namespace, .. }
             | Operation::Retire { namespace }
             | Operation::AdmitCache { namespace } => Some(self.registrations.lease(namespace)?),
-            Operation::Inspect {} | Operation::IssueCache { .. } => None,
+            Operation::Inspect {}
+            | Operation::IssueCache { .. }
+            | Operation::InspectNixPool {}
+            | Operation::PrepareNixPool { .. }
+            | Operation::InspectNixPoolPreparation { .. } => None,
         };
         let mut namespaces = self.registrations.lock()?;
         Ok(match operation {
-            Operation::IssueCache { .. } => return Err(Error::PermissionDenied),
+            Operation::IssueCache { .. }
+            | Operation::InspectNixPool {}
+            | Operation::PrepareNixPool { .. }
+            | Operation::InspectNixPoolPreparation { .. } => return Err(Error::PermissionDenied),
             Operation::Inspect {} => Reply::Snapshot {
                 version: VERSION,
                 namespaces: (*namespaces).clone(),
@@ -780,6 +817,38 @@ impl Client {
             credential: Credential::read(root)?,
             uid: metadata.uid(),
         })
+    }
+
+    /// Probe before publishing a one-use checked request. Neither the job ID nor success grants a worker view.
+    pub async fn prepare_nix_pool(
+        &self,
+        selection: &wrix_state::context::Selection,
+        system: wrix_core::nix_store::pool::System,
+    ) -> Result<wrix_state::nix_store::admission::request::Id, Error> {
+        let host = wrix_state::host::Host::discover().map_err(io::Error::other)?;
+        if self.socket != host.roots().state().join("control/authority/control.sock") {
+            return Err(Error::PrivateRoot);
+        }
+        if self.request(Operation::InspectNixPool {}).await?
+            != (Reply::PoolInterface { version: 1 })
+        {
+            return Err(Error::PoolInterface);
+        }
+        let selection = selection.clone();
+        let request = tokio::task::spawn_blocking(move || {
+            wrix_state::nix_store::admission::Guard::acquire(&selection, system)?.request()
+        })
+        .await
+        .map_err(io::Error::other)??;
+        match self
+            .request(Operation::PrepareNixPool {
+                id: request.id().clone(),
+            })
+            .await?
+        {
+            Reply::PoolQueued { id } => Ok(id),
+            _ => Err(Error::PoolRequest),
+        }
     }
 
     pub async fn request(&self, operation: Operation) -> Result<Reply, Error> {

@@ -53,14 +53,39 @@ per-pool budget and never realizes images or starts a VM. Native GC execution
 has no acquisition-derived running deadline. Information reports recorded phases
 without probing a runtime or claiming observed readiness.
 
-The native Rust live test provisions real storage and a VM, drops the
+The local-API Rust live test provisions real storage and a VM, drops the
 controller, collects through a separate actual CLI even after approval is
 disabled, reuses the same native owner, confirms unavailable collection after
 stop, then resumes recorded software with a new runtime identity and drains it
-again. Failed tests retain their private fixture rather than deleting possibly
-live backing data. This does not yet establish production worker grants,
-filesystem delivery, host-wide update/recovery integration or platform worker
-acceptance.
+again.
+
+A second Rust live test starts the actual packaged host-controller process and
+uses its authenticated private protocol. A one-use request is published only
+under the original checked scope and approval; its private frozen observation
+includes the original primary, resolver selection/membership, Git
+administration, namespace and host generation. Re-attestation compares all
+retained observations; a namespace/hash or fresh path discovery alone cannot
+authorize provisioning. Consumption rechecks native approval and scope in a
+short host writer window. No host paths, pool selection, program or forwarding
+inputs cross the protocol. The client probes this separate preparation interface
+before publishing intent. Requests are not worker credentials, exports or
+lifetime evidence.
+
+The controller bounds outstanding jobs and runs scope re-attestation and native
+preparation outside its bounded request loop. Concurrent preparation for one
+pool serializes without blocking other pools or private status requests. A real
+host writer lock holds consumption while the requester queues and exits; status
+remains pending and no pool is allocated. After release, two independently
+checked requests prepare/authenticate the same owner. The ordinary async client
+API is also exercised. Stopping the actual controller process preserves that
+native owner for authenticated later maintenance. Finished-job eviction or
+controller restart can make a status unknown; neither releases native ownership
+nor proves that a worker or build exited. Interrupted native phases remain
+fenced.
+
+Failed tests retain their private fixture rather than deleting possibly live
+backing data. This does not yet establish production worker grants, filesystem
+delivery, host-wide update/recovery integration or platform worker acceptance.
 
 ## Explicit same-image guest resume
 

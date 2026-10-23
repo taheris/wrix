@@ -37,6 +37,10 @@ pub enum Error {
     Inconsistent,
     /// installed-store admission requires current explicit checked repository approval
     ApprovalRequired,
+    /// installed-store preparation request is missing, changed, or already consumed
+    PreparationRequest,
+    /// too many outstanding installed-store preparation requests; explicit host inspection is required
+    PreparationCapacity,
     /// installed-store approval requires an actual Git repository
     RepositoryRequired,
     /// approved repository administration changed; explicit host reconciliation is required

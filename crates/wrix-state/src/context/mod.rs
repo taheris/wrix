@@ -1,5 +1,7 @@
 //! Checked namespace selection; caller location remains separate from shared service scope.
 
+pub(crate) mod snapshot;
+
 use crate::{
     host::Host,
     resolver::{Checkout, Resolution, resolve},
