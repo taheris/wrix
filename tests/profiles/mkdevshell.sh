@@ -320,8 +320,10 @@ test_rust_host_env_uses_host_packages() {
 # profile.hostPackages ++ packages is visible through the dev env PATH
 # ============================================================================
 test_host_packages_source() {
-  local env_file result host_cmd extra_cmd image_found host_output extra_output
+  local env_file result host_cmd extra_cmd image_found host_output extra_output tool_bin
   env_file="$TMP_BASE/mkdevshell-host-packages-env.sh"
+  tool_bin="$TMP_BASE/host-packages-bin"
+  write_fake_devshell_tools "$tool_bin"
 
   if ! nix print-dev-env --impure --no-warn-dirty --expr "
     let
@@ -381,7 +383,7 @@ test_host_packages_source() {
   if ! result=$(
     set +u
     # shellcheck source=/dev/null
-    source "$env_file" >/dev/null
+    WRIX_BIN="$tool_bin/wrix" source "$env_file" >/dev/null || exit 1
     set -u
     host_cmd=$(command -v wrix-mkdevshell-host-tool)
     extra_cmd=$(command -v wrix-mkdevshell-extra-tool)
