@@ -165,7 +165,8 @@ let
     mount --bind "$storage/nix" /nix
     install -d -m 0755 "$root/export-root/nix/store" "$root/export-root/bin" "$root/export-root/etc/wrix" "$root/export-root/run/wrix-nix-pool" "$root/export-root/var/empty"
     install -d -m 0755 "$root/export-root/dev"
-    mknod -m 0666 "$root/export-root/dev/null" c 1 3
+    touch "$root/export-root/dev/null"
+    mount --bind /dev/null "$root/export-root/dev/null"
     mount --bind /nix/store "$root/export-root/nix/store"
     mount -o remount,bind,ro,nodev,nosuid "$root/export-root/nix/store"
     ln -s ${pkgs.bash}/bin/sh "$root/export-root/bin/sh"

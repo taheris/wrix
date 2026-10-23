@@ -48,6 +48,37 @@ can import an exact staged image archive and pin its declared paths; this is not
 a worker signature exception. Management and transport processes share the
 aggregate resource budget and have a bounded control subgroup.
 
+## Linux service-VM export
+
+```bash
+nix run .#legacyPackages.x86_64-linux.ciApps.test-shared-nix-pool-export-linux
+```
+
+This separate live verifier requires rootless Podman, KVM, `/dev/fuse` and an
+existing working `fusermount3`. It installs the public OCI descriptor under a
+fixture-only reference and boots krun without extra OCI capabilities, privilege
+or security-option overrides. Only the fixture's private data directory is bound
+into the VM; the physical host store and daemon are not mounted. It uses
+loopback-only runtime port publication, pinned SSH host authentication and a
+read-only Host FUSE view. A prior negative lookup becomes readable after native
+realization without remount or per-client import. Mutation fails, collection is
+blocked by the live lease, and release remains busy until the filesystem session
+closes. An authenticated shutdown is refused while a lease remains. After drain,
+it closes admission, targets the observed daemon through a pidfd, and waits for
+native work's kernel cgroup to become unpopulated. The supervisor stops control
+processes, synchronizes store state and records release. The verifier requires
+observed VM exit zero plus that checkpoint, not a `stopping` reply or a lost SSH
+connection. Ordinary startup still refuses retained state; this adds no implicit
+reconciliation or restart permission. The separate controller-loss fixture must
+not produce the successful-release checkpoint.
+
+The jail binds its VM's existing null device; VirtioFS cannot create character
+devices in the persistent data directory.
+
+This checks the real service-VM/export transport, not a production worker launch
+or Podman/krun worker acceptance. It neither supplies Mac evidence nor enables
+shared mode.
+
 This is a guest-service component verifier, not installed-store reuse, host
 launch authorization, host-owner disk admission/supervision, lifetime handoff,
 run/spawn delivery, or Podman/krun/Apple platform acceptance. Those contracts

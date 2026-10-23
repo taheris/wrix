@@ -3,6 +3,9 @@
 pub mod image;
 pub mod lease;
 
+#[cfg(test)]
+mod test;
+
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -81,7 +84,7 @@ impl Role {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Operation {
-    Inspect,
+    Inspect {},
     Register {
         id: lease::Id,
         key: lease::Key,
@@ -89,7 +92,8 @@ pub enum Operation {
     Release {
         id: lease::Id,
     },
-    Collect,
+    Collect {},
+    Shutdown {},
     Seed {
         image: image::Id,
         paths: Vec<image::StorePath>,
@@ -104,6 +108,7 @@ pub enum Reply {
     Busy,
     Rejected,
     Failed,
+    Stopping,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -139,7 +144,13 @@ struct Admission {
     role: Role,
 }
 
+enum AdmissionState {
+    Serving,
+    Stopping,
+}
+
 struct State {
+    admission: AdmissionState,
     leases: BTreeMap<lease::Id, Record>,
     gc: File,
     configuration: Configuration,
@@ -386,6 +397,26 @@ async fn seed(
     Ok(Reply::Applied)
 }
 
+#[cfg(target_os = "linux")]
+fn signal_shutdown() -> Result<(), Error> {
+    let pid =
+        rustix::process::Pid::from_raw(i32::try_from(daemon_pid()?).map_err(|_| Error::Invalid)?)
+            .ok_or(Error::Invalid)?;
+    let handle = rustix::process::pidfd_open(pid, rustix::process::PidfdFlags::empty())
+        .map_err(io::Error::from)?;
+    if !quiescent()? {
+        return Err(Error::Busy);
+    }
+    rustix::process::pidfd_send_signal(handle, rustix::process::Signal::TERM)
+        .map_err(io::Error::from)?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn signal_shutdown() -> Result<(), Error> {
+    Err(Error::Role)
+}
+
 async fn administer(stream: &mut UnixStream, state: &Mutex<State>) -> Result<(), Error> {
     if stream.peer_cred()?.uid() != 0 {
         return Err(Error::Unauthorized);
@@ -393,8 +424,11 @@ async fn administer(stream: &mut UnixStream, state: &Mutex<State>) -> Result<(),
     let operation: Operation = receive(stream).await?;
     let mut state = state.lock().await;
     FileExt::try_lock_shared(&state.gc)?;
+    if matches!(state.admission, AdmissionState::Stopping) {
+        return send(stream, &Reply::Stopping).await;
+    }
     let reply = match operation {
-        Operation::Inspect => Reply::Ready {
+        Operation::Inspect {} => Reply::Ready {
             version: 1,
             leases: state.leases.len(),
         },
@@ -434,8 +468,24 @@ async fn administer(stream: &mut UnixStream, state: &Mutex<State>) -> Result<(),
                 Reply::Rejected
             }
         }
+        Operation::Shutdown {} => {
+            if !state.leases.is_empty() || !quiescent()? {
+                Reply::Busy
+            } else {
+                state.admission = AdmissionState::Stopping;
+                let marker = OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .mode(0o600)
+                    .open(Path::new(RUN).join("stopping"))?;
+                marker.sync_all()?;
+                let response = send(stream, &Reply::Stopping).await;
+                signal_shutdown()?;
+                return response;
+            }
+        }
         Operation::Seed { image, paths } => seed(&state, &image, &paths).await?,
-        Operation::Collect => {
+        Operation::Collect {} => {
             if !state.leases.is_empty() || !quiescent()? {
                 Reply::Busy
             } else {
@@ -463,7 +513,8 @@ async fn admit(stream: &mut UnixStream, state: &Mutex<State>) -> Result<(), Erro
     let request: Admission = receive(stream).await?;
     let state = state.lock().await;
     FileExt::try_lock_shared(&state.gc)?;
-    let permitted = request.version == 1
+    let permitted = matches!(state.admission, AdmissionState::Serving)
+        && request.version == 1
         && peer.uid() == request.role.uid()
         && state
             .leases
@@ -499,6 +550,7 @@ pub async fn serve() -> Result<(), Error> {
     }
     FileExt::lock_shared(&gc)?;
     let state = Arc::new(Mutex::new(State {
+        admission: AdmissionState::Serving,
         leases,
         gc,
         configuration,

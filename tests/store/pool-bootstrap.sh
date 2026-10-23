@@ -336,6 +336,7 @@ else
 fi
 [[ $(stat -c %s /var/lib/wrix/nix-pool/store.ext4) == 8589934592 ]]
 [[ $(stat -f -c %T /nix/store) == ext2/ext3 ]]
+[[ ! -e /var/lib/wrix/nix-pool/released ]]
 before=$(sha256sum /nix/var/nix/db/db.sqlite)
 if "$entrypoint" > /tmp/pool-retry.log 2>&1; then
   printf 'Uncertain owner was incorrectly readmitted.\n' >&2

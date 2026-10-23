@@ -97,5 +97,26 @@ pkgs.writeShellScriptBin "wrix-nix-pool-daemon" ''
   sshd_pid=$!
   printf '%s\n' "$sshd_pid" > /run/wrix-nix-pool/transport.pid
   printf '1\n' > /run/wrix-nix-pool/ready
-  wait -n "$daemon_pid" "$owner_pid" "$sshd_pid"
+  if wait -n "$daemon_pid" "$owner_pid" "$sshd_pid"; then
+    status=0
+  else
+    status=$?
+  fi
+  work_events=$(<"$base/work/cgroup.events")
+  if [[ -f /run/wrix-nix-pool/stopping && "$work_events" == *'populated 0'* ]]; then
+    kill -TERM "$sshd_pid" "$owner_pid"
+    for child in "$sshd_pid" "$owner_pid"; do
+      if wait "$child"; then
+        :
+      else
+        [[ "$?" == 143 ]]
+      fi
+    done
+    sync -f /nix
+    printf '1\n' > /var/lib/wrix/nix-pool/released
+    sync -f /var/lib/wrix/nix-pool
+    exit 0
+  fi
+  if [[ "$status" == 0 ]]; then status=1; fi
+  exit "$status"
 ''

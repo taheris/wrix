@@ -424,93 +424,106 @@ let
         }
     );
 
-  ciApps = loomTests.ciApps ++ [
-    (mkDefinedCiApp piMcpTests.imageWiring "test-pi-mcp-image-wiring")
-    (mkTmuxCiApp "workflow")
-    (mkTmuxCiApp "exited-process")
-    (mkTmuxCiApp "targeted-cleanup")
-    (mkTmuxCiApp "container-cleanup")
-    (mkImageCiApp sandboxImageChecks.imageInstallRealSkopeoTest "test-image-install-real-skopeo")
-    (mkImageCiApp sandboxImageChecks.imageInstallDigestSkipTest "test-image-install-digest-skip")
-    (mkImageCiApp sandboxImageChecks.digestMatchesStoredIdTest "test-image-digest-matches-stored-id")
-    (mkImageCiApp sandboxImageChecks.linuxImageArchivelessSourceTest "test-linux-image-archiveless-source")
-    (mkImageCiApp sandboxImageChecks.imageDigestNoTarTest "test-image-digest-no-tar")
-    (mkImageCiApp sandboxImageChecks.imageTierGraphTest "test-image-tier-graph")
-    (mkImageCiApp sandboxImageChecks.imageNixConfigTest "test-image-nix-config")
-    (mkImageCiApp sandboxImageChecks.imageCaCertificatesTest "test-image-ca-certificates")
-    (mkImageCiApp sandboxImageChecks.imageEntrypointCommandTest "test-image-entrypoint-command")
-    (mkImageCiApp sandboxImageChecks.imageAgentMarkerTest "test-image-agent-marker")
-    (mkImageCiApp sandboxImageChecks.profilePackagesBundledTest "test-profile-packages-bundled")
-    (mkImageCiApp sandboxImageChecks.imageTierMembershipTest "test-image-tier-membership")
-    (mkImageCiApp sandboxImageChecks.wrixImagesSourceKindTest "test-wrix-images-source-kind")
-    (mkImageCiApp sandboxImageChecks.wrixImageLabelsTest "test-wrix-image-labels")
-    (mkImageCiApp sandboxImageChecks.agentDeclaredDirectRunnerTest "test-agent-declared-direct-runner")
-    (mkImageCiApp sandboxImageChecks.agentConsumerRuntimeClosuresTest "test-agent-consumer-runtime-closures")
-    (mkImageCiApp sandboxImageChecks.agentClaudeRuntimeTest "test-agent-claude-runtime")
-    (mkImageCiApp sandboxImageChecks.claudeRuntimeNoopTest "test-claude-runtime-noop")
-    (mkImageCiApp sandboxImageChecks.prekHooksClosureTest "test-prek-hooks-closure")
-    (mkImageCiApp sandboxImageChecks.baseImageUniversalTest "test-base-image-universal")
-    (mkImageCiApp sandboxImageChecks.entrypointResolverBaseTest "test-entrypoint-resolver-base")
-    (mkImageCiApp sandboxImageChecks.baseImageHashStableTest "test-base-image-hash-stable")
-    (mkImageCiApp sandboxImageChecks.stableProfileHashStableTest "test-stable-profile-hash-stable")
-    (mkImageCiApp sandboxImageChecks.stableProfileMembershipTest "test-stable-profile-membership")
-    (mkImageCiApp sandboxImageChecks.pinnedToolchainStableTest "test-pinned-toolchain-stable-tier")
-    (mkImageCiApp sandboxImageChecks.downstreamChangeLeafOnlyTest "test-downstream-change-leaf-only")
-    (mkImageCiApp sandboxImageChecks.archivelessGeneratedChangeTest "test-archiveless-generated-change")
-    (mkImageCiApp sandboxImageChecks.agentTierIsolatedTest "test-agent-tier-isolated")
-    (mkImageCiApp sandboxImageChecks.agentExclusiveTest "test-agent-exclusive")
-    (mkImageCiApp sandboxImageChecks.agentPkgThreadedTest "test-agent-pkg-threaded")
-    (mkImageCiApp sandboxImageChecks.iterationCostBoundedTest "test-iteration-cost-bounded")
-    (mkImageCiApp sandboxImageChecks.customisationLayerBoundedTest "test-customisation-layer-bounded")
-    (mkImageCiApp sandboxImageChecks.imageNixDbConsistentTest "test-image-nix-db-consistent")
-    (mkImageCiApp sandboxImageChecks.imageNixDbNoDanglingTest "test-image-nix-db-no-dangling")
-    (mkDefinedCiApp linuxBuilderChecks.sshdHardeningTest "test-linux-builder-sshd-hardening")
-    (mkDefinedCiApp linuxBuilderChecks.imageSourceKindTest "test-linux-builder-image-source-kind")
-    (mkDefinedCiApp linuxBuilderChecks.sourceKindLoadTransportTest "test-linux-builder-source-kind-load-transport")
-    (mkCiApp testProfilesBuildPackage "test-profiles-build-package")
-    (mkCiApp testProfileImagesManifestShape "test-profile-images-manifest-shape")
-    (mkCiApp testProfileConfigImageSourceKind "test-profile-config-image-source-kind")
-    (mkCiApp testProfileConfigWrapper "test-profile-config-wrapper")
-    (mkCiApp testProfileConfigParserAgreement "test-profile-config-parser-agreement")
-    (mkCiApp testContainerPreCommit "test-container-pre-commit")
-    (mkCiApp testContainerPrePush "test-container-pre-push")
-    (mkCiApp testWrixCliInProfile "test-wrix-cli-in-profile")
-    (mkCiApp testSandboxAgentSettings "test-sandbox-agent-settings")
-    (mkDefinedCiApp testPlaywrightChromiumClosure "test-playwright-chromium-closure")
-    (mkDefinedCiApp testPlaywrightChromiumExecutablePath "test-playwright-chromium-executable-path")
-    (mkDefinedCiApp testPlaywrightMandatoryFlags "test-playwright-mandatory-flags")
-    (mkDefinedCiApp testPlaywrightUserOptionsConfig "test-playwright-user-options-config")
-    (mkCiApp testBeadsLiveSystem "test-beads-live-system")
-    (mkCiApp (writeShellScriptBin "test-cache-celler-packaging" ''
-      set -euo pipefail
-      test -e ${ciChecks.cache-celler-packaging}
-    '') "test-cache-celler-packaging")
-    (mkServiceCiApp testServicesDevshellStartIndependent "test-services-devshell-start-independent")
-    (mkServiceCiApp testServicesLimitModeCacheEndpoint "test-services-limit-mode-cache-endpoint")
-    (mkServiceCiApp testServicesDoltPlatformTransport "test-services-dolt-platform-transport")
-    (mkLiveCiApp testSecurityExecutionMetadataLifecycle "test-security-execution-metadata-lifecycle")
-    (mkLiveCiApp testSecurityGitSshBootstrap "test-security-explicit-git-ssh-bootstrap")
-    (mkLiveCiApp testSecurityHostContainerLoomGitHelper "test-security-host-container-loom-git-helper")
-    ((mkCiApp testImageGitHelperParity "test-image-git-helper-parity") // { platforms = linux; })
-    (mkLiveCiApp testSecurityNestedKeyPropagation "test-security-explicit-nested-key-grants")
-    (mkLiveCiApp testSecurityGitGrantIsolation "test-security-git-grant-isolation")
-    (mkLiveCiApp testSecuritySessionLocalSigning "test-security-session-local-signing")
-    (mkLiveCiApp testSecurityPiAuthIsolation "test-security-pi-auth-isolation")
-    (
-      (mkLiveCiApp testSecurityProviderCredentialEnv "test-security-provider-credential-env")
-      // {
-        platforms = linux;
-      }
-    )
-    (
-      (mkCiApp (mkSystemTestCiApp "test-cache-celler-native-system" "cache-celler-native-system") "test-cache-celler-native-system")
-      // nixosVm
-    )
-    (
-      (mkCiApp (mkSystemTestCiApp "test-shared-nix-pool-bootstrap" "shared-nix-pool-bootstrap") "test-shared-nix-pool-bootstrap")
-      // nixosVm
-    )
-  ];
+  ciApps =
+    loomTests.ciApps
+    ++ [
+      (mkDefinedCiApp piMcpTests.imageWiring "test-pi-mcp-image-wiring")
+      (mkTmuxCiApp "workflow")
+      (mkTmuxCiApp "exited-process")
+      (mkTmuxCiApp "targeted-cleanup")
+      (mkTmuxCiApp "container-cleanup")
+      (mkImageCiApp sandboxImageChecks.imageInstallRealSkopeoTest "test-image-install-real-skopeo")
+      (mkImageCiApp sandboxImageChecks.imageInstallDigestSkipTest "test-image-install-digest-skip")
+      (mkImageCiApp sandboxImageChecks.digestMatchesStoredIdTest "test-image-digest-matches-stored-id")
+      (mkImageCiApp sandboxImageChecks.linuxImageArchivelessSourceTest "test-linux-image-archiveless-source")
+      (mkImageCiApp sandboxImageChecks.imageDigestNoTarTest "test-image-digest-no-tar")
+      (mkImageCiApp sandboxImageChecks.imageTierGraphTest "test-image-tier-graph")
+      (mkImageCiApp sandboxImageChecks.imageNixConfigTest "test-image-nix-config")
+      (mkImageCiApp sandboxImageChecks.imageCaCertificatesTest "test-image-ca-certificates")
+      (mkImageCiApp sandboxImageChecks.imageEntrypointCommandTest "test-image-entrypoint-command")
+      (mkImageCiApp sandboxImageChecks.imageAgentMarkerTest "test-image-agent-marker")
+      (mkImageCiApp sandboxImageChecks.profilePackagesBundledTest "test-profile-packages-bundled")
+      (mkImageCiApp sandboxImageChecks.imageTierMembershipTest "test-image-tier-membership")
+      (mkImageCiApp sandboxImageChecks.wrixImagesSourceKindTest "test-wrix-images-source-kind")
+      (mkImageCiApp sandboxImageChecks.wrixImageLabelsTest "test-wrix-image-labels")
+      (mkImageCiApp sandboxImageChecks.agentDeclaredDirectRunnerTest "test-agent-declared-direct-runner")
+      (mkImageCiApp sandboxImageChecks.agentConsumerRuntimeClosuresTest "test-agent-consumer-runtime-closures")
+      (mkImageCiApp sandboxImageChecks.agentClaudeRuntimeTest "test-agent-claude-runtime")
+      (mkImageCiApp sandboxImageChecks.claudeRuntimeNoopTest "test-claude-runtime-noop")
+      (mkImageCiApp sandboxImageChecks.prekHooksClosureTest "test-prek-hooks-closure")
+      (mkImageCiApp sandboxImageChecks.baseImageUniversalTest "test-base-image-universal")
+      (mkImageCiApp sandboxImageChecks.entrypointResolverBaseTest "test-entrypoint-resolver-base")
+      (mkImageCiApp sandboxImageChecks.baseImageHashStableTest "test-base-image-hash-stable")
+      (mkImageCiApp sandboxImageChecks.stableProfileHashStableTest "test-stable-profile-hash-stable")
+      (mkImageCiApp sandboxImageChecks.stableProfileMembershipTest "test-stable-profile-membership")
+      (mkImageCiApp sandboxImageChecks.pinnedToolchainStableTest "test-pinned-toolchain-stable-tier")
+      (mkImageCiApp sandboxImageChecks.downstreamChangeLeafOnlyTest "test-downstream-change-leaf-only")
+      (mkImageCiApp sandboxImageChecks.archivelessGeneratedChangeTest "test-archiveless-generated-change")
+      (mkImageCiApp sandboxImageChecks.agentTierIsolatedTest "test-agent-tier-isolated")
+      (mkImageCiApp sandboxImageChecks.agentExclusiveTest "test-agent-exclusive")
+      (mkImageCiApp sandboxImageChecks.agentPkgThreadedTest "test-agent-pkg-threaded")
+      (mkImageCiApp sandboxImageChecks.iterationCostBoundedTest "test-iteration-cost-bounded")
+      (mkImageCiApp sandboxImageChecks.customisationLayerBoundedTest "test-customisation-layer-bounded")
+      (mkImageCiApp sandboxImageChecks.imageNixDbConsistentTest "test-image-nix-db-consistent")
+      (mkImageCiApp sandboxImageChecks.imageNixDbNoDanglingTest "test-image-nix-db-no-dangling")
+      (mkDefinedCiApp linuxBuilderChecks.sshdHardeningTest "test-linux-builder-sshd-hardening")
+      (mkDefinedCiApp linuxBuilderChecks.imageSourceKindTest "test-linux-builder-image-source-kind")
+      (mkDefinedCiApp linuxBuilderChecks.sourceKindLoadTransportTest "test-linux-builder-source-kind-load-transport")
+      (mkCiApp testProfilesBuildPackage "test-profiles-build-package")
+      (mkCiApp testProfileImagesManifestShape "test-profile-images-manifest-shape")
+      (mkCiApp testProfileConfigImageSourceKind "test-profile-config-image-source-kind")
+      (mkCiApp testProfileConfigWrapper "test-profile-config-wrapper")
+      (mkCiApp testProfileConfigParserAgreement "test-profile-config-parser-agreement")
+      (mkCiApp testContainerPreCommit "test-container-pre-commit")
+      (mkCiApp testContainerPrePush "test-container-pre-push")
+      (mkCiApp testWrixCliInProfile "test-wrix-cli-in-profile")
+      (mkCiApp testSandboxAgentSettings "test-sandbox-agent-settings")
+      (mkDefinedCiApp testPlaywrightChromiumClosure "test-playwright-chromium-closure")
+      (mkDefinedCiApp testPlaywrightChromiumExecutablePath "test-playwright-chromium-executable-path")
+      (mkDefinedCiApp testPlaywrightMandatoryFlags "test-playwright-mandatory-flags")
+      (mkDefinedCiApp testPlaywrightUserOptionsConfig "test-playwright-user-options-config")
+      (mkCiApp testBeadsLiveSystem "test-beads-live-system")
+      (mkCiApp (writeShellScriptBin "test-cache-celler-packaging" ''
+        set -euo pipefail
+        test -e ${ciChecks.cache-celler-packaging}
+      '') "test-cache-celler-packaging")
+      (mkServiceCiApp testServicesDevshellStartIndependent "test-services-devshell-start-independent")
+      (mkServiceCiApp testServicesLimitModeCacheEndpoint "test-services-limit-mode-cache-endpoint")
+      (mkServiceCiApp testServicesDoltPlatformTransport "test-services-dolt-platform-transport")
+      (mkLiveCiApp testSecurityExecutionMetadataLifecycle "test-security-execution-metadata-lifecycle")
+      (mkLiveCiApp testSecurityGitSshBootstrap "test-security-explicit-git-ssh-bootstrap")
+      (mkLiveCiApp testSecurityHostContainerLoomGitHelper "test-security-host-container-loom-git-helper")
+      ((mkCiApp testImageGitHelperParity "test-image-git-helper-parity") // { platforms = linux; })
+      (mkLiveCiApp testSecurityNestedKeyPropagation "test-security-explicit-nested-key-grants")
+      (mkLiveCiApp testSecurityGitGrantIsolation "test-security-git-grant-isolation")
+      (mkLiveCiApp testSecuritySessionLocalSigning "test-security-session-local-signing")
+      (mkLiveCiApp testSecurityPiAuthIsolation "test-security-pi-auth-isolation")
+      (
+        (mkLiveCiApp testSecurityProviderCredentialEnv "test-security-provider-credential-env")
+        // {
+          platforms = linux;
+        }
+      )
+      (
+        (mkCiApp (mkSystemTestCiApp "test-cache-celler-native-system" "cache-celler-native-system") "test-cache-celler-native-system")
+        // nixosVm
+      )
+      (
+        (mkCiApp (mkSystemTestCiApp "test-shared-nix-pool-bootstrap" "shared-nix-pool-bootstrap") "test-shared-nix-pool-bootstrap")
+        // nixosVm
+      )
+    ]
+    ++ optionals pkgs.stdenv.hostPlatform.isLinux [
+      (
+        (mkCiApp (import ./store/pool-export-linux.nix {
+          inherit pkgs wrix;
+        }) "test-shared-nix-pool-export-linux")
+        // {
+          platforms = linux;
+          capabilities = [ "container-runtime" ];
+        }
+      )
+    ];
 
   ciAppNameLines = concatStringsSep "\n" (map (app: "      ${app.name}") ciApps);
   ciAppDerivations = builtins.listToAttrs (
