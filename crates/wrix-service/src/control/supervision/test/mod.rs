@@ -203,6 +203,10 @@ fn upgrade_manager(directory: &Path, root: &Path, foreign: bool) -> Native {
     } else {
         root.join("wrix-host-controller.service")
     };
+    upgrade_manager_fragment(directory, &fragment)
+}
+
+fn upgrade_manager_fragment(directory: &Path, fragment: &Path) -> Native {
     let supervisor = script(
         directory,
         "upgrade-systemctl",
@@ -265,6 +269,46 @@ fn explicit_upgrade_stops_verified_old_unit_before_migrating_then_selects_new_pa
     assert!(directory.path().join("native-started").exists());
     assert!(lifecycle.root.join("migrated").exists());
     assert!(!lifecycle.root.join("stopped").exists());
+}
+
+#[test]
+fn explicit_upgrade_accepts_systemd_user_link_but_rejects_identical_foreign_units() {
+    for foreign in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let lifecycle = Lifecycle::lock(&directory.path().join("controller")).unwrap();
+        let old = package("old");
+        let record = serde_json::to_vec(&old).unwrap();
+        fs::write(lifecycle.root.join("package.json"), &record).unwrap();
+        let unit = lifecycle.root.join("wrix-host-controller.service");
+        fs::write(&unit, unit_contents(&lifecycle.root, &old)).unwrap();
+        let user_units = directory.path().join("user config/systemd/user");
+        fs::create_dir_all(&user_units).unwrap();
+        let fragment = user_units.join("wrix-host-controller.service");
+        if foreign {
+            let copy = directory.path().join("foreign.service");
+            fs::copy(&unit, &copy).unwrap();
+            std::os::unix::fs::symlink(copy, &fragment).unwrap();
+        } else {
+            std::os::unix::fs::symlink(&unit, &fragment).unwrap();
+        }
+        let native = upgrade_manager_fragment(directory.path(), &fragment);
+        let result = lifecycle.upgrade(&native, &package("new"), || Ok(()));
+        if foreign {
+            assert!(matches!(result, Err(Error::UnitConflict(_))));
+            assert_eq!(
+                fs::read(lifecycle.root.join("package.json")).unwrap(),
+                record
+            );
+        } else {
+            result.unwrap();
+            assert_eq!(
+                Package::load(&lifecycle.root.join("package.json")).unwrap(),
+                package("new")
+            );
+        }
+        assert_eq!(directory.path().join("native-stopped").exists(), !foreign);
+        assert_eq!(directory.path().join("native-started").exists(), !foreign);
+    }
 }
 
 #[test]

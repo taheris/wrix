@@ -298,9 +298,21 @@ impl Native {
                     return Ok(false);
                 }
                 let unit = root.join("wrix-host-controller.service");
-                let fragment = format!("FragmentPath={}", unit.display());
+                // `systemctl link` normally reports the user-config symlink,
+                // not its retained private target. Verify that exact target,
+                // never accept another unit merely because its text matches.
+                let owned_fragment = state
+                    .lines()
+                    .find_map(|line| line.strip_prefix("FragmentPath="))
+                    .is_some_and(|path| {
+                        Path::new(path).is_absolute()
+                            && Path::new(path)
+                                .canonicalize()
+                                .is_ok_and(|target| target == unit)
+                    });
                 if !state.lines().any(|line| line == "LoadState=loaded")
-                    || !state.lines().any(|line| line == fragment)
+                    || !owned_fragment
+                    || !fs::symlink_metadata(&unit)?.is_file()
                     || fs::read_to_string(&unit)? != unit_contents(root, package)
                 {
                     return Err(Error::UnitConflict(state));

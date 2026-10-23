@@ -70,7 +70,7 @@ def serve(root, executable):
                 if args == ["--user", "show-environment"]:
                     pass
                 elif len(args) == 4 and args[:2] == ["--user", "show"]:
-                    output = "LoadState=loaded\nActiveState=active\nFragmentPath=" + str(root / "wrix-host-controller.service") + "\n"
+                    output = "LoadState=loaded\nActiveState=active\nFragmentPath=" + str(root / "user-units/wrix-host-controller.service") + "\n"
                 elif args == ["--user", "stop", "wrix-host-controller.service"]:
                     if child is not None:
                         child.terminate()
@@ -87,7 +87,10 @@ def serve(root, executable):
                 elif args == ["--user", "daemon-reload"]:
                     pass
                 elif len(args) == 3 and args[:2] == ["--user", "link"] and Path(args[2]) == root / "wrix-host-controller.service":
-                    pass
+                    linked = root / "user-units/wrix-host-controller.service"
+                    linked.parent.mkdir(exist_ok=True)
+                    linked.unlink(missing_ok=True)
+                    linked.symlink_to(Path(args[2]))
                 else:
                     code, error = 91, "unexpected fixture supervisor request: " + repr(args)
                 connection.sendall(json.dumps({"code": code, "stdout": output, "stderr": error}).encode())

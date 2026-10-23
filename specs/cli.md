@@ -264,6 +264,7 @@ exclusion; unrelated or unobservable units and other ownership-lock holders are
 never killed.
 [test](../crates/wrix-service/src/control/supervision/test/mod.rs::explicit_upgrade_stops_verified_old_unit_before_migrating_then_selects_new_package)
 [test](../crates/wrix-service/src/control/supervision/test/mod.rs::explicit_upgrade_never_stops_foreign_units_or_replaces_package_after_failed_migration)
+[test](../crates/wrix-service/src/control/supervision/test/mod.rs::explicit_upgrade_accepts_systemd_user_link_but_rejects_identical_foreign_units)
 [test](../crates/wrix-cli/tests/service_lifecycle.rs::repair_upgrades_cached_controller_and_recovers_backend_with_native_authenticated_readiness)
 
 `wrix service rename <name>` is host-user maintenance for an inactive selected
