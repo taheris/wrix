@@ -66,7 +66,12 @@ else
 fi
 grep -q 'installed-store guest input or retained state is invalid' "$root/sparse-refusal.log"
 [[ ! -e "$root/sparse/owner-active" && $(stat -c '%b' "$root/sparse/store.ext4") == 0 ]]
-podman run -d --name "$name" --runtime "$WRIX_TEST_POOL_RUNTIME" \
+pool_control() {
+  ssh "${ssh_options[@]}" -i "$root/admin" root@127.0.0.1 control
+}
+start_pool() {
+  local endpoint key_type key_blob _comment _attempt ready=false reply
+  podman run -d --name "$name" --runtime "$WRIX_TEST_POOL_RUNTIME" \
   --memory=2g --cpus=2 --pids-limit=256 --log-opt=max-size=16m \
   -p 127.0.0.1::2222 -v "$root/data:/var/lib/wrix/nix-pool:rw" "$ref" > "$root/container.id"
 started=true
@@ -84,9 +89,6 @@ printf '[127.0.0.1]:%s %s %s\n' "$port" "$key_type" "$key_blob" > "$root/hosts"
 ssh_options=(-F /dev/null -p "$port" -o BatchMode=yes -o IdentitiesOnly=yes \
   -o IdentityAgent=none -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$root/hosts" \
   -o ConnectTimeout=2 -o ConnectionAttempts=1)
-pool_control() {
-  ssh "${ssh_options[@]}" -i "$root/admin" root@127.0.0.1 control
-}
 ready=false
 for _attempt in {1..600}; do
   if reply=$(printf '{"operation":"inspect"}\n' | pool_control 2> "$root/startup-ssh.log"); then
@@ -98,6 +100,8 @@ for _attempt in {1..600}; do
   sleep 0.1
 done
 [[ "$ready" == true ]]
+}
+start_pool
 read -r key_type key_blob _comment < "$root/client.pub"
 reply=$(printf '{"operation":"register","id":"11111111111111111111111111111111","key":"%s %s"}\n' "$key_type" "$key_blob" | pool_control)
 [[ "$reply" == *'"result":"applied"'* ]]
@@ -105,11 +109,14 @@ export NIX_REMOTE=ssh-ng://nix-client@127.0.0.1
 export NIX_SSHOPTS="-F /dev/null -p $port -i $root/client -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$root/hosts"
 info=$(nix store info --json)
 jq -e '.trusted == false' <<< "$info" > "$root/trust-check"
-sshfs -p "$port" -o ro -o cache=no -o attr_timeout=0 -o entry_timeout=0 \
+mount_view() {
+  sshfs -p "$port" -o ro -o cache=no -o attr_timeout=0 -o entry_timeout=0 \
   -o negative_timeout=0 -o 'ssh_command=ssh -F /dev/null' -o "IdentityFile=$root/client" \
   -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none -o StrictHostKeyChecking=yes \
   -o "UserKnownHostsFile=$root/hosts" nix-export@127.0.0.1:/nix/store "$root/view"
 mountpoint -q "$root/view"
+}
+mount_view
 expr='{ bash }: builtins.derivation {
   name = "wrix-live-pool-export";
   system = builtins.currentSystem;
@@ -152,6 +159,7 @@ reply=$(printf '{"operation":"collect"}\n' | pool_control)
 [[ "$reply" == *'"result":"busy"'* ]]
 reply=$(printf '{"operation":"shutdown"}\n' | pool_control)
 [[ "$reply" == *'"result":"busy"'* ]]
+nix path-info --json "$drv" "$output" | jq -S . > "$root/before-resume.json"
 reply=$(printf '{"operation":"release","id":"11111111111111111111111111111111"}\n' | pool_control)
 [[ "$reply" == *'"result":"busy"'* ]]
 [[ $(< "$view_path") == live ]]
@@ -164,9 +172,9 @@ for _attempt in {1..200}; do
   sleep 0.05
 done
 [[ "$released" == true ]]
-reply=$(printf '{"operation":"collect"}\n' | pool_control)
-[[ "$reply" == *'"result":"applied"'* ]]
-if reply=$(printf '{"operation":"shutdown"}\n' | pool_control 2> "$root/shutdown-ssh.log"); then
+stop_pool() {
+  local reply state
+  if reply=$(printf '{"operation":"shutdown"}\n' | pool_control 2> "$root/shutdown-ssh.log"); then
   if [[ -n "$reply" ]]; then
     [[ "$reply" == *'"result":"stopping"'* ]]
   else
@@ -185,4 +193,88 @@ printf '%s\n' "$state" > "$root/shutdown-observation"
 [[ $(stat -c '%i' "$root/data/store.ext4") == "$disk_inode" ]]
 [[ $(stat -c '%s' "$root/data/store.ext4") == 8589934592 ]]
 [[ $(stat -c '%b' "$root/data/store.ext4") -ge 16777216 ]]
-printf 'Actual krun service VM, pinned SSH, read-only Host FUSE view, dynamic negative-lookup invalidation and drained shutdown passed.\n'
+}
+stop_pool
+podman logs "$name" > "$root/initial-service.log" 2>&1
+podman rm "$name" > "$root/initial-remove.log"
+started=false
+cp "$root/data/host-key.pub" "$root/initial-host-key.pub"
+jq '.version=3 | .storage="resume"' "$root/data/bootstrap.json" > "$root/bootstrap-resume.json"
+cp "$root/bootstrap-resume.json" "$root/data/bootstrap.json"
+cp "$root/data/released" "$root/release-checkpoint"
+rm "$root/data/released"
+if timeout --kill-after=1s 60s podman run --rm --runtime "$WRIX_TEST_POOL_RUNTIME" \
+  --memory=2g --cpus=2 --pids-limit=256 \
+  -v "$root/data:/var/lib/wrix/nix-pool:rw" "$ref" > "$root/missing-release-refusal.log" 2>&1; then
+  printf 'Resume accepted missing native release evidence.\n' >&2
+  exit 1
+else
+  [[ "$?" == 1 ]]
+fi
+[[ ! -e "$root/data/resuming" ]]
+cp "$root/release-checkpoint" "$root/data/released"
+cp "$root/data/owner-active/software" "$root/original-software"
+printf '/nix/store/00000000000000000000000000000000-wrong-software' > "$root/data/owner-active/software"
+if timeout --kill-after=1s 60s podman run --rm --runtime "$WRIX_TEST_POOL_RUNTIME" \
+  --memory=2g --cpus=2 --pids-limit=256 \
+  -v "$root/data:/var/lib/wrix/nix-pool:rw" "$ref" > "$root/changed-software-refusal.log" 2>&1; then
+  printf 'Resume accepted different immutable software.\n' >&2
+  exit 1
+else
+  [[ "$?" == 1 ]]
+fi
+[[ ! -e "$root/data/resuming" && $(< "$root/data/released") == 1 ]]
+cp "$root/original-software" "$root/data/owner-active/software"
+printf 'uncertain reader\n' > "$root/data/leases/ffffffffffffffffffffffffffffffff"
+if timeout --kill-after=1s 60s podman run --rm --runtime "$WRIX_TEST_POOL_RUNTIME" \
+  --memory=2g --cpus=2 --pids-limit=256 \
+  -v "$root/data:/var/lib/wrix/nix-pool:rw" "$ref" > "$root/retained-reader-refusal.log" 2>&1; then
+  printf 'Resume discarded an uncertain reader.\n' >&2
+  exit 1
+else
+  [[ "$?" == 1 ]]
+fi
+grep -q 'native work or readers have not drained' "$root/retained-reader-refusal.log"
+[[ ! -e "$root/data/resuming" && $(< "$root/data/released") == 1 ]]
+rm "$root/data/leases/ffffffffffffffffffffffffffffffff"
+start_pool
+[[ ! -e "$root/data/released" && -f "$root/data/resuming" ]]
+cmp "$root/initial-host-key.pub" "$root/data/host-key.pub"
+export NIX_SSHOPTS="-F /dev/null -p $port -i $root/client -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$root/hosts"
+if nix store info --json > "$root/revoked-client.log" 2>&1; then
+  printf 'Resume restored a previously released client grant.\n' >&2
+  exit 1
+fi
+read -r key_type key_blob _comment < "$root/client.pub"
+reply=$(printf '{"operation":"register","id":"22222222222222222222222222222222","key":"%s %s"}\n' "$key_type" "$key_blob" | pool_control)
+[[ "$reply" == *'"result":"applied"'* ]]
+nix store info --json | jq -e '.trusted == false' > "$root/resumed-trust-check"
+mount_view
+[[ $(< "$view_path") == live ]]
+nix path-info --json "$drv" "$output" | jq -S . > "$root/after-resume.json"
+cmp "$root/before-resume.json" "$root/after-resume.json"
+nix-store -r "$drv" --option substituters '' > "$root/resumed-realization"
+[[ $(< "$root/resumed-realization") == "$output" ]]
+new_output=$(nix-build --no-out-link --option substituters '' --argstr bash "$WRIX_TEST_POOL_BASH" --expr '
+  { bash }: builtins.derivation {
+    name = "wrix-pool-resumed-build";
+    system = builtins.currentSystem;
+    builder = (builtins.storePath bash) + "/bin/bash";
+    args = [ "-c" "test ! -e /var/lib/wrix/nix-pool/host-key; printf resumed > $out" ];
+  }
+')
+[[ $(< "$root/view/${new_output#/nix/store/}") == resumed ]]
+fusermount3 -u "$root/view"
+released=false
+for _attempt in {1..200}; do
+  reply=$(printf '{"operation":"release","id":"22222222222222222222222222222222"}\n' | pool_control)
+  if [[ "$reply" == *'"result":"applied"'* ]]; then released=true; break; fi
+  [[ "$reply" == *'"result":"busy"'* ]]
+  sleep 0.05
+done
+[[ "$released" == true ]]
+reply=$(printf '{"operation":"collect"}\n' | pool_control)
+[[ "$reply" == *'"result":"applied"'* ]]
+stop_pool
+[[ ! -e "$root/data/resuming" ]]
+printf 'Actual krun service VM, pinned SSH, read-only Host FUSE view, dynamic visibility, explicit same-image resume and drained shutdown passed.\n'

@@ -34,6 +34,22 @@ fn host_preallocation_has_an_explicit_versioned_startup_contract() {
 }
 
 #[test]
+fn retained_storage_requires_explicit_resume_version() {
+    let wire = json!({"version": 3, "admin_key": key(), "storage": "resume"});
+    let configuration: Configuration = serde_json::from_value(wire.clone()).unwrap();
+    assert_eq!(configuration.storage(), Storage::Resume);
+    assert_eq!(serde_json::to_value(configuration).unwrap(), wire);
+    for version in [1, 2, 4] {
+        assert!(
+            serde_json::from_value::<Configuration>(
+                json!({"version": version, "admin_key": key(), "storage": "resume"})
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
 fn storage_versions_unknown_fields_and_paths_cannot_change_disk_policy() {
     for (version, storage) in [
         (0, None),

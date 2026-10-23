@@ -3,6 +3,7 @@
 pub mod bootstrap;
 pub mod image;
 pub mod lease;
+mod restart;
 
 #[cfg(test)]
 mod test;
@@ -594,7 +595,7 @@ pub fn storage() -> Result<bootstrap::Storage, Error> {
     role_root()?;
     let configuration: bootstrap::Configuration =
         serde_json::from_slice(&private_file(&Path::new(DATA).join("bootstrap.json"))?)?;
-    if configuration.storage() == bootstrap::Storage::Preallocated {
+    if configuration.storage() != bootstrap::Storage::Allocate {
         let file = OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
@@ -611,6 +612,48 @@ pub fn storage() -> Result<bootstrap::Storage, Error> {
         }
     }
     Ok(configuration.storage())
+}
+
+fn startup_software() -> Result<image::StorePath, Error> {
+    let entrypoint = fs::canonicalize("/bin/wrix-nix-pool")?;
+    let software = entrypoint
+        .parent()
+        .and_then(Path::parent)
+        .ok_or(Error::Invalid)?;
+    let software = image::StorePath::try_from(software.to_str().ok_or(Error::Invalid)?.to_owned())?;
+    if entrypoint != Path::new(software.as_str()).join("bin/wrix-nix-pool") {
+        return Err(Error::Invalid);
+    }
+    Ok(software)
+}
+
+/// Seal the initial immutable software and administration identity without replacing old records.
+pub fn seal() -> Result<(), Error> {
+    role_root()?;
+    let configuration: bootstrap::Configuration =
+        serde_json::from_slice(&private_file(&Path::new(DATA).join("bootstrap.json"))?)?;
+    if configuration.storage() == bootstrap::Storage::Resume {
+        return Err(Error::Invalid);
+    }
+    restart::seal(
+        Path::new(DATA),
+        &startup_software()?,
+        &configuration.admin_key,
+    )
+}
+
+/// Consume a clean guest checkpoint before opening retained native state; never proves host release.
+pub fn resume() -> Result<(), Error> {
+    if storage()? != bootstrap::Storage::Resume {
+        return Err(Error::Invalid);
+    }
+    let configuration: bootstrap::Configuration =
+        serde_json::from_slice(&private_file(&Path::new(DATA).join("bootstrap.json"))?)?;
+    restart::begin(
+        Path::new(DATA),
+        &startup_software()?,
+        &configuration.admin_key,
+    )
 }
 
 pub async fn control() -> Result<(), Error> {

@@ -113,7 +113,13 @@ pkgs.writeShellScriptBin "wrix-nix-pool-daemon" ''
       fi
     done
     sync -f /nix
-    printf '1\n' > /var/lib/wrix/nix-pool/released
+    if [[ -e /var/lib/wrix/nix-pool/resuming || -L /var/lib/wrix/nix-pool/resuming ]]; then
+      [[ -f /var/lib/wrix/nix-pool/resuming && ! -L /var/lib/wrix/nix-pool/resuming ]]
+      [[ $(stat -c '%u:%g:%a:%h' /var/lib/wrix/nix-pool/resuming) == 0:0:600:1 ]]
+      [[ $(</var/lib/wrix/nix-pool/resuming) == 1 ]]
+      rm -- /var/lib/wrix/nix-pool/resuming
+    fi
+    (set -o noclobber; printf '1\n' > /var/lib/wrix/nix-pool/released)
     sync -f /var/lib/wrix/nix-pool
     exit 0
   fi

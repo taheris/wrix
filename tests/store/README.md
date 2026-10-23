@@ -22,6 +22,30 @@ Formatting disables discard and reestablishes allocation after metadata zeroing;
 filesystem logical size alone is not disk admission. These are preparation and
 guest-boundary checks, not production worker delivery or restart acceptance.
 
+## Explicit same-image guest resume
+
+Bootstrap version 3 adds a separate `resume` storage input. Normal allocation
+and preallocation still refuse retained installations. Resume requires the
+sealed original bootstrap closure and admin public key, the same Nix version,
+private canonical metadata, a clean release checkpoint, no lease records and no
+interrupted resume marker. It consumes release evidence before mounting the
+retained filesystem, verifies bootstrap pins, and neither formats, reseeds,
+rotates keys nor repairs ownership or export configuration. Failed/interrupted
+initialization cannot replay the old checkpoint. Only another drained shutdown
+publishes a new release checkpoint.
+
+The live krun verifier removes the old runtime after native exit zero and clean
+release, exercises missing-checkpoint and changed-software refusals, then starts
+the same image against the retained backing file. Native registration metadata,
+installed derivations/results and the pinned SSH host key survive; released
+client grants do not return. A newly admitted client uses the read-only export
+and existing realization before collection and a second drained shutdown.
+
+This is a guest restart primitive, not host reconciliation authority. The host
+must independently prove runtime/storage release before attachment; metadata or
+a quiet socket alone never permits concurrent VM access. Production supervision,
+worker delivery, update transitions and platform acceptance remain separate.
+
 ## Host package selection
 
 ```bash

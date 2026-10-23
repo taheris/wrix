@@ -10,6 +10,7 @@ pub const CAPACITY: u64 = 8 * 1024 * 1024 * 1024;
 pub enum Storage {
     Allocate,
     Preallocated,
+    Resume,
 }
 
 impl Storage {
@@ -17,6 +18,7 @@ impl Storage {
         match self {
             Self::Allocate => "allocate",
             Self::Preallocated => "preallocated",
+            Self::Resume => "resume",
         }
     }
 }
@@ -58,6 +60,7 @@ impl TryFrom<Wire> for Configuration {
         let storage = match (wire.version, wire.storage) {
             (1, None) => Storage::Allocate,
             (2, Some(Storage::Preallocated)) => Storage::Preallocated,
+            (3, Some(Storage::Resume)) => Storage::Resume,
             _ => return Err(Error::Invalid),
         };
         Ok(Self {
@@ -72,6 +75,7 @@ impl From<Configuration> for Wire {
         let (version, storage) = match configuration.storage {
             Storage::Allocate => (1, None),
             Storage::Preallocated => (2, Some(Storage::Preallocated)),
+            Storage::Resume => (3, Some(Storage::Resume)),
         };
         Self {
             version,

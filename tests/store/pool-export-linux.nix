@@ -10,6 +10,7 @@ pkgs.writeShellApplication {
   name = "test-shared-nix-pool-export-linux";
   runtimeInputs = [
     pkgs.coreutils
+    pkgs.diffutils
     pkgs.jq
     pkgs.nix
     pkgs.openssh

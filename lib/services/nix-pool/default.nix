@@ -92,6 +92,7 @@ let
     paths = [
       pkgs.bash
       pkgs.coreutils
+      pkgs.diffutils
       pkgs.nix
       pkgs.util-linux
       pkgs.cacert
@@ -131,67 +132,102 @@ let
     }
     shopt -s nullglob dotglob
     for entry in "$root"/*; do
-      if [[ "$entry" != "$root/ownership.lock" && "$entry" != "$root/bootstrap.json" && "$entry" != "$root/store.ext4" ]]; then
-        refuse_retained
-      fi
+      case "''${entry##*/}" in
+        ownership.lock|bootstrap.json|store.ext4|owner-active|filesystem|leases|incoming|host-key|host-key.pub|export-root|released) ;;
+        *) refuse_retained ;;
+      esac
     done
     if [[ ( -e "$root/store.ext4" || -L "$root/store.ext4" ) && ! -f "$root/bootstrap.json" ]]; then
       refuse_retained
     fi
     storage_mode=$(${owner}/bin/wrix-nix-pool-owner storage)
-    if [[ "$storage_mode" == allocate && ( -e "$root/store.ext4" || -L "$root/store.ext4" ) ]]; then
-      refuse_retained
-    fi
-    ${owner}/bin/wrix-nix-pool-owner keys root > /dev/null
-    if ! mkdir -m 0700 "$root/owner-active"; then
-      printf 'Nix pool ownership is active or uncertain; explicit host reconciliation is required.\n' >&2
-      exit 73
+    if [[ "$storage_mode" == resume ]]; then
+      [[ -f "$root/owner-active/version" && ! -L "$root/owner-active/version" ]]
+      [[ $(< "$root/owner-active/version") == '2:${pkgs.nix.version}:8589934592' ]]
+      ${owner}/bin/wrix-nix-pool-owner resume
+    else
+      for entry in "$root"/*; do
+        if [[ "$entry" != "$root/ownership.lock" && "$entry" != "$root/bootstrap.json" && "$entry" != "$root/store.ext4" ]]; then
+          refuse_retained
+        fi
+      done
+      if [[ "$storage_mode" == allocate && ( -e "$root/store.ext4" || -L "$root/store.ext4" ) ]]; then
+        refuse_retained
+      fi
+      ${owner}/bin/wrix-nix-pool-owner keys root > /dev/null
+      if ! mkdir -m 0700 "$root/owner-active"; then
+        refuse_retained
+      fi
+      printf '2:%s:8589934592\n' '${pkgs.nix.version}' > "$root/owner-active/version"
+      sync "$root/owner-active/version" "$root/owner-active" "$root"
+      if [[ "$storage_mode" == allocate ]]; then
+        fallocate --length=8589934592 "$root/store.ext4"
+      fi
+      mkfs.ext4 -q -F -m 0 -E nodiscard,lazy_itable_init=0,lazy_journal_init=0 "$root/store.ext4"
+      fallocate --length=8589934592 "$root/store.ext4"
+      sync "$root/store.ext4"
+      install -d -m 0700 "$root/filesystem" "$root/leases" "$root/incoming"
+      ssh-keygen -q -t ed25519 -N "" -C "" -f "$root/host-key"
     fi
     ${network.install}/bin/wrix-nix-pool-egress
-    printf '2:%s:8589934592\n' '${pkgs.nix.version}' > "$root/owner-active/version"
-    sync "$root/owner-active/version" "$root/owner-active" "$root"
-
-    if [[ "$storage_mode" == allocate ]]; then
-      fallocate --length=8589934592 "$root/store.ext4"
-    fi
-    mkfs.ext4 -q -F -m 0 -E nodiscard,lazy_itable_init=0,lazy_journal_init=0 "$root/store.ext4"
-    fallocate --length=8589934592 "$root/store.ext4"
-    sync "$root/store.ext4"
-    install -d -m 0700 "$root/filesystem"
     device=$(losetup --find --show "$root/store.ext4")
     mount -t ext4 -o nodev,nosuid "$device" "$root/filesystem"
     storage="$root/filesystem"
-    install -d -m 0700 "$root/leases" "$root/incoming"
-    ssh-keygen -q -t ed25519 -N "" -C "" -f "$root/host-key"
-    install -d -m 0755 "$storage/nix" "$storage/nix/var" "$storage/nix/var/nix"
-    install -d -m 1775 -o 0 -g 30000 "$storage/nix/store"
-    mapfile -t roots < ${seedClosure}/store-paths
-    entrypoint=$(readlink -e /bin/wrix-nix-pool)
-    [[ "$entrypoint" == /nix/store/*/bin/wrix-nix-pool ]]
-    tail=''${entrypoint#/nix/store/}
-    bootstrap_root=/nix/store/''${tail%%/*}
-    roots+=("$bootstrap_root")
-    nix copy --no-check-sigs --from local --to "local?root=$storage" "''${roots[@]}"
-    install -d -m 0755 "$storage/nix/var/nix/gcroots/bootstrap" "$storage/nix/var/nix/daemon-socket" "$storage/nix/var/nix/builds"
-    for path in "''${roots[@]}"; do
-      ln -s "$path" "$storage/nix/var/nix/gcroots/bootstrap/''${path##*/}"
-    done
-    sync "$storage/nix/var/nix/gcroots/bootstrap" "$storage/nix/var/nix"
+    if [[ "$storage_mode" == resume ]]; then
+      [[ -d "$storage/nix/store" && ! -L "$storage/nix" && ! -L "$storage/nix/store" ]]
+      [[ $(stat -c '%u:%g:%a' "$storage/nix/store") == 0:30000:1775 ]]
+      [[ -f "$storage/nix/var/nix/db/db.sqlite" && ! -L "$storage/nix/var/nix/db/db.sqlite" ]]
+      mapfile -t roots < ${seedClosure}/store-paths
+      roots+=("$(< "$root/owner-active/software")")
+      for path in "''${roots[@]}"; do
+        [[ -e "$storage$path" && $(readlink "$storage/nix/var/nix/gcroots/bootstrap/''${path##*/}") == "$path" ]]
+      done
+    else
+      install -d -m 0755 "$storage/nix" "$storage/nix/var" "$storage/nix/var/nix"
+      install -d -m 1775 -o 0 -g 30000 "$storage/nix/store"
+      mapfile -t roots < ${seedClosure}/store-paths
+      entrypoint=$(readlink -e /bin/wrix-nix-pool)
+      [[ "$entrypoint" == /nix/store/*/bin/wrix-nix-pool ]]
+      tail=''${entrypoint#/nix/store/}
+      bootstrap_root=/nix/store/''${tail%%/*}
+      roots+=("$bootstrap_root")
+      nix copy --no-check-sigs --from local --to "local?root=$storage" "''${roots[@]}"
+      install -d -m 0755 "$storage/nix/var/nix/gcroots/bootstrap" "$storage/nix/var/nix/daemon-socket" "$storage/nix/var/nix/builds"
+      for path in "''${roots[@]}"; do
+        ln -s "$path" "$storage/nix/var/nix/gcroots/bootstrap/''${path##*/}"
+      done
+      sync "$storage/nix/var/nix/gcroots/bootstrap" "$storage/nix/var/nix"
+      ${owner}/bin/wrix-nix-pool-owner seal
+    fi
     mount --bind "$storage/nix" /nix
     [[ -f /etc/resolv.conf && ! -L /etc/resolv.conf ]]
     mount --bind ${filesystem}/etc/resolv.conf /etc/resolv.conf
     mount -o remount,bind,ro /etc/resolv.conf
-    install -d -m 0755 "$root/export-root/nix/store" "$root/export-root/bin" "$root/export-root/etc/wrix" "$root/export-root/run/wrix-nix-pool" "$root/export-root/var/empty"
-    install -d -m 0755 "$root/export-root/dev"
-    touch "$root/export-root/dev/null"
+    if [[ "$storage_mode" == resume ]]; then
+      for directory in nix nix/store bin etc etc/wrix run run/wrix-nix-pool var var/empty dev; do
+        path="$root/export-root/$directory"
+        [[ -d "$path" && ! -L "$path" && $(stat -c '%u:%g:%a' "$path") == 0:0:755 ]]
+      done
+      [[ -f "$root/export-root/dev/null" && ! -L "$root/export-root/dev/null" ]]
+      [[ $(readlink "$root/export-root/bin/sh") == '${pkgs.bash}/bin/sh' ]]
+      for file in passwd group nsswitch.conf wrix/nix-pool-native.json; do
+        path="$root/export-root/etc/$file"
+        [[ -f "$path" && ! -L "$path" && $(stat -c '%u:%g:%a:%h' "$path") == 0:0:444:1 ]]
+        cmp -- "${filesystem}/etc/$file" "$path"
+      done
+    else
+      install -d -m 0755 "$root/export-root/nix/store" "$root/export-root/bin" "$root/export-root/etc/wrix" "$root/export-root/run/wrix-nix-pool" "$root/export-root/var/empty"
+      install -d -m 0755 "$root/export-root/dev"
+      touch "$root/export-root/dev/null"
+      ln -s ${pkgs.bash}/bin/sh "$root/export-root/bin/sh"
+      install -m 0444 ${filesystem}/etc/passwd "$root/export-root/etc/passwd"
+      install -m 0444 ${filesystem}/etc/group "$root/export-root/etc/group"
+      install -m 0444 ${filesystem}/etc/nsswitch.conf "$root/export-root/etc/nsswitch.conf"
+      install -m 0444 ${filesystem}/etc/wrix/nix-pool-native.json "$root/export-root/etc/wrix/nix-pool-native.json"
+    fi
     mount --bind /dev/null "$root/export-root/dev/null"
     mount --bind /nix/store "$root/export-root/nix/store"
     mount -o remount,bind,ro,nodev,nosuid "$root/export-root/nix/store"
-    ln -s ${pkgs.bash}/bin/sh "$root/export-root/bin/sh"
-    install -m 0444 ${filesystem}/etc/passwd "$root/export-root/etc/passwd"
-    install -m 0444 ${filesystem}/etc/group "$root/export-root/etc/group"
-    install -m 0444 ${filesystem}/etc/nsswitch.conf "$root/export-root/etc/nsswitch.conf"
-    install -m 0444 ${filesystem}/etc/wrix/nix-pool-native.json "$root/export-root/etc/wrix/nix-pool-native.json"
     exec ${resources}/bin/wrix-nix-pool-daemon
   '';
   bootstrap = writeShellScriptBin "wrix-nix-pool" ''
