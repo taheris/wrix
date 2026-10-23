@@ -4,6 +4,7 @@ mod assignment;
 pub mod cache;
 mod deployment;
 mod endpoint;
+pub(crate) mod maintenance;
 mod registration;
 pub mod serving;
 pub mod supervision;
@@ -60,8 +61,10 @@ pub enum Error {
     LockPoisoned,
     /// persisted namespace registration has an unsupported version, duplicate identity or excess entries
     InvalidRegistration,
-    /// controller registry requires maintenance: stop the old host controller, then run `wrix service recover` with the updated package; never remove ownership or policy files
+    /// controller registry requires maintenance: run `wrix service repair` with the updated host package to stop the verified old controller and upgrade it; never remove ownership or policy files
     RegistryUpgrade,
+    /// updated host controller did not confirm compatible authenticated readiness
+    ControllerReadiness,
     /// workspace namespace is not registered
     UnknownNamespace,
     /// workspace policy denies the requested permission

@@ -14,6 +14,7 @@ use thiserror::Error as ThisError;
 use wrix_core::path::{ContainerName, WorkspaceHash};
 
 pub(super) mod host;
+pub(super) mod rename;
 
 use super::{CACHE_BACKEND_VERSION, Plan, RuntimeKind, binding, coordination};
 use wrix_sandbox::image::Digest;
@@ -37,6 +38,8 @@ pub enum Error {
     Conflict,
     /// selected Celler ownership was recorded, but durability could not be confirmed: {0}
     Committed(io::Error),
+    /// service owner rename is pending; rerun `wrix service rename <same-name>` before ordinary lifecycle operations
+    RenamePending,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -80,6 +83,13 @@ impl Selected {
 
     /// Passive lookup never creates state, selects a backend or repairs metadata.
     pub fn read(root: &Path) -> Result<Option<Self>, Error> {
+        if rename::pending(root)? {
+            return Err(Error::RenamePending);
+        }
+        Self::read_during_rename(root)
+    }
+
+    fn read_during_rename(root: &Path) -> Result<Option<Self>, Error> {
         let file = match OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)

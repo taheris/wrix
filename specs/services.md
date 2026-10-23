@@ -111,9 +111,20 @@ installation or a particular profile path.
 Clients admit the versioned private control interface and required capabilities
 before effects. Package installation does not replace an active controller.
 Compatible backend updates preserve it. Incompatible running-controller
-replacement fails with explicit maintenance guidance: `wrix service stop --host`
-then `wrix service update`. Updating that stopped existing deployment selects
-the invoked package's controller and bound service image; ordinary start resumes
+replacement requires explicit maintenance, never ordinary startup. The retained
+cached-policy epoch upgrade has an implemented `wrix service repair` operation:
+it verifies the recorded native unit, stops only that controller, holds the
+original ownership inode while migrating policy, selects the updated immutable
+controller closure, and authenticates readiness before backend recovery. It
+retains namespace policies and management/issuer keys; foreign or uncertain
+units and other ownership holders fail closed. Ordinary `service recover` checks
+this compatibility before creating or starting backend containers.
+[test](../crates/wrix-cli/tests/service_lifecycle.rs::repair_upgrades_cached_controller_and_recovers_backend_with_native_authenticated_readiness)
+[test](../crates/wrix-cli/tests/service_lifecycle.rs::recovery_checks_legacy_controller_before_starting_or_creating_backend)
+
+Whole-deployment handoff follows `wrix service stop --host` then
+`wrix service update`. Updating that stopped existing deployment selects the
+invoked package's controller and bound service image; ordinary start resumes
 recorded controller/backend versions, not the caller's newer package. Controller
 replacement/restart is not transparently stream-preserving.
 

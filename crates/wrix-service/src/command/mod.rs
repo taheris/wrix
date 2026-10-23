@@ -10,6 +10,8 @@ pub enum Top {
     Capabilities,
     Start,
     Recover,
+    Repair,
+    Rename,
     Stop,
     Status,
     Logs,
@@ -39,6 +41,8 @@ impl Top {
             "capabilities" => Some(Self::Capabilities),
             "start" => Some(Self::Start),
             "recover" => Some(Self::Recover),
+            "repair" => Some(Self::Repair),
+            "rename" => Some(Self::Rename),
             "stop" => Some(Self::Stop),
             "status" => Some(Self::Status),
             "logs" => Some(Self::Logs),
@@ -71,7 +75,7 @@ impl Dolt {
 
 pub const CAPABILITIES: &str = "shared-services-v1\n";
 
-pub const HELP: &str = "Manage workspace services.\n\nUsage: wrix service <command> [options]\n\nCommands:\n  capabilities  Print the passive shared-service protocol marker.\n  start      Start the workspace services.\n  recover    Recover the absent or stopped selected cache owner without deleting data.\n  stop       Stop the workspace services.\n  status     Show workspace service status.\n  logs       Print workspace service logs.\n  endpoints  Print workspace service endpoints.\n  dolt <status|socket|port|host|sandbox-endpoint|attach|gc|wait>       Manage the workspace Dolt service.\n  cache <config|status|publish|warm|rotate-key>        Manage the workspace project cache.\n  nix-store [enable|disable|gc]  Inspect approval or request scoped installed-store collection.\n\nOptions:\n  --no-cache  Disable project-cache handling for top-level service commands.\n  --sandbox-cache  Resolve the project-cache endpoint for sandbox reads (endpoints only).\n  -h, --help  Print help.\n";
+pub const HELP: &str = "Manage workspace services.\n\nUsage: wrix service <command> [options]\n\nCommands:\n  capabilities  Print the passive shared-service protocol marker.\n  start      Start the workspace services.\n  recover    Recover the absent or stopped selected cache owner without deleting data.\n  repair     Explicitly upgrade the recorded host controller, then recover services.\n  rename <name>  Rename an inactive selected owner without resetting its data.\n  stop       Stop the workspace services.\n  status     Show workspace service status.\n  logs       Print workspace service logs.\n  endpoints  Print workspace service endpoints.\n  dolt <status|socket|port|host|sandbox-endpoint|attach|gc|wait>       Manage the workspace Dolt service.\n  cache <config|status|publish|warm|rotate-key>        Manage the workspace project cache.\n  nix-store [enable|disable|gc]  Inspect approval or request scoped installed-store collection.\n\nOptions:\n  --no-cache  Disable project-cache handling for top-level service commands.\n  --sandbox-cache  Resolve the project-cache endpoint for sandbox reads (endpoints only).\n  -h, --help  Print help.\n";
 pub const DOLT_HELP: &str = "Manage the workspace Dolt service.\n\nUsage: wrix service dolt <command>\n\nCommands:\n  status  Show Dolt service status and connection details.\n  socket  Print the Dolt Unix-socket path.\n  port    Print the Dolt TCP port.\n  host    Print the Dolt TCP host.\n  sandbox-endpoint  Print the sandbox-visible Dolt TCP endpoint.\n  attach  Print a command that connects to Dolt.\n  gc      Print the Dolt garbage-collection target.\n  wait    Wait until the Dolt service is ready.\n\nOptions:\n  -h, --help  Print help.\n";
 
 pub fn write_help(stdout: &mut impl Write) -> io::Result<()> {
@@ -83,7 +87,12 @@ pub fn write_dolt_help(stdout: &mut impl Write) -> io::Result<()> {
 }
 
 pub fn run_top(command: Top, args: &[String], stdout: &mut impl Write) -> io::Result<ExitCode> {
-    let (cache_mode, endpoint_view) = parse_options(command, args)?;
+    let options = if command == Top::Rename {
+        &[][..]
+    } else {
+        args
+    };
+    let (cache_mode, endpoint_view) = parse_options(command, options)?;
     match command {
         Top::Capabilities => stdout.write_all(CAPABILITIES.as_bytes())?,
         Top::Start => {
@@ -92,6 +101,33 @@ pub fn run_top(command: Top, args: &[String], stdout: &mut impl Write) -> io::Re
         }
         Top::Recover => {
             let report = lifecycle::recover().map_err(io::Error::other)?;
+            stdout.write_all(report.as_bytes())?;
+        }
+        Top::Repair => {
+            let report = lifecycle::repair().map_err(io::Error::other)?;
+            stdout.write_all(report.as_bytes())?;
+        }
+        Top::Rename => {
+            let [name] = args else {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "expected: wrix service rename <name>",
+                ));
+            };
+            let name = wrix_core::path::ContainerName::from_persisted(name.clone())
+                .filter(|name| {
+                    name.as_str().len() <= 128
+                        && name
+                            .as_str()
+                            .starts_with(|ch: char| ch.is_ascii_alphanumeric())
+                })
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "invalid service container name",
+                    )
+                })?;
+            let report = lifecycle::rename(&name).map_err(io::Error::other)?;
             stdout.write_all(report.as_bytes())?;
         }
         Top::Stop => {
@@ -299,7 +335,12 @@ fn parse_options(command: Top, args: &[String]) -> io::Result<(CacheMode, Endpoi
     let mut endpoint_view = EndpointView::Host;
     for arg in args {
         match arg.as_str() {
-            "--no-cache" if !matches!(command, Top::Recover | Top::Capabilities) => {
+            "--no-cache"
+                if !matches!(
+                    command,
+                    Top::Recover | Top::Repair | Top::Rename | Top::Capabilities
+                ) =>
+            {
                 cache_mode = CacheMode::Disabled;
             }
             "--sandbox-cache" if command == Top::Endpoints => {
@@ -326,6 +367,8 @@ mod test {
         assert_eq!(Top::parse("capabilities"), Some(Top::Capabilities));
         assert_eq!(Top::parse("start"), Some(Top::Start));
         assert_eq!(Top::parse("recover"), Some(Top::Recover));
+        assert_eq!(Top::parse("repair"), Some(Top::Repair));
+        assert_eq!(Top::parse("rename"), Some(Top::Rename));
         assert_eq!(Top::parse("stop"), Some(Top::Stop));
         assert_eq!(Top::parse("status"), Some(Top::Status));
         assert_eq!(Top::parse("logs"), Some(Top::Logs));
@@ -345,8 +388,10 @@ mod test {
 
     #[test]
     fn recovery_rejects_cache_opt_out_and_scope_overrides() {
-        for option in ["--no-cache", "--host", "--sandbox-cache", "unexpected"] {
-            assert!(parse_options(Top::Recover, &[option.into()]).is_err());
+        for command in [Top::Recover, Top::Repair, Top::Rename] {
+            for option in ["--no-cache", "--host", "--sandbox-cache", "unexpected"] {
+                assert!(parse_options(command, &[option.into()]).is_err());
+            }
         }
     }
 

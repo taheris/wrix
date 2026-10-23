@@ -249,6 +249,39 @@ owners and uncertain runtime observations. Ordinary startup reports
 missing/stopped ownership with this command's recovery guidance rather than
 deleting the selection or claiming a running incompatibility.
 
+Recovery checks the controller policy epoch before starting or creating any
+backend. An old live controller produces actionable `service repair` guidance
+without backend side effects.
+[test](../crates/wrix-cli/tests/service_lifecycle.rs::recovery_checks_legacy_controller_before_starting_or_creating_backend)
+
+`wrix service repair` is an explicit host-user controller maintenance operation.
+It verifies native unit ownership against the retained controller/package, stops
+only that unit, upgrades policy under the original kernel ownership lock,
+selects the invoked host package's controller closure, and requires
+authenticated current-protocol readiness before backend recovery. It retains
+issuer keys and namespace policy. Closure preparation precedes lifecycle
+exclusion; unrelated or unobservable units and other ownership-lock holders are
+never killed.
+[test](../crates/wrix-service/src/control/supervision/test/mod.rs::explicit_upgrade_stops_verified_old_unit_before_migrating_then_selects_new_package)
+[test](../crates/wrix-service/src/control/supervision/test/mod.rs::explicit_upgrade_never_stops_foreign_units_or_replaces_package_after_failed_migration)
+[test](../crates/wrix-cli/tests/service_lifecycle.rs::repair_upgrades_cached_controller_and_recovers_backend_with_native_authenticated_readiness)
+
+`wrix service rename <name>` is host-user maintenance for an inactive selected
+owner. It preserves data, authority, port and image provenance, requires no
+repository, and refuses collisions in both runtimes. Stopped Podman owners use
+native rename with exact container-ID verification; missing owners can be
+retargeted in either runtime. Existing Apple containers are refused rather than
+recreated or deleted. A durable journal fences ordinary lifecycle operations
+until interrupted rename has been resumed with the same target name. No running
+owner is automatically stopped. Unrelated stopped legacy services are retained
+without blocking ordinary shared-backend startup.
+[test](../crates/wrix-cli/tests/service_lifecycle.rs::missing_historical_owner_can_be_renamed_then_recovered_without_resetting_authority)
+[test](../crates/wrix-cli/tests/service_lifecycle.rs::running_owner_rename_is_refused_before_any_ownership_change)
+[test](../crates/wrix-cli/tests/service_lifecycle.rs::unrelated_stopped_legacy_service_does_not_block_shared_owner_reentry)
+[test](../crates/wrix-cli/tests/service_lifecycle.rs::unrelated_stopped_legacy_service_does_not_block_fresh_shared_bootstrap)
+[test](../crates/wrix-service/src/lifecycle/owner/rename/test.rs::stopped_native_rename_preserves_container_identity_and_retries_after_runtime_commit)
+[test](../crates/wrix-service/src/lifecycle/owner/rename/test.rs::rename_never_adopts_a_different_container_or_changes_running_owners)
+
 - Missing/stopped recovery guidance pins the invoked package wrapper and
   recorded runtime and remains executable after failed shell entry leaves an
   older global Wrix on PATH, without requiring the original workspace.

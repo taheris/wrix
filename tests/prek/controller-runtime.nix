@@ -2,6 +2,9 @@
 let
   manager = pkgs.writeShellScriptBin "systemctl" ''
     set -euo pipefail
+    if [[ -n "''${WRIX_TEST_CONTROLLER_MANAGER:-}" ]]; then
+      exec "$WRIX_TEST_CONTROLLER_MANAGER" "$@"
+    fi
     case "$*" in
       "--user show-environment"|"--user daemon-reload") ;;
       "--user start wrix-host-controller.service")
@@ -16,7 +19,8 @@ let
   retention = pkgs.writeShellScriptBin "nix-store" ''
     set -euo pipefail
     [[ "$#" -eq 5 && "$1" == --realise && "$3" == --add-root && "$5" == --indirect ]]
-    [[ "$2" == /nix/store/* && "$4" == /*/roots/* ]]
+    [[ "$2" == /nix/store/* ]]
+    [[ "$4" == /*/roots/* || "$4" == /*/maintenance-roots/* ]]
     ${pkgs.coreutils}/bin/ln -sfn -- "$2" "$4"
     printf '%s\n' "$*" >>"''${WRIX_TEST_CONTROLLER_CALLS:?}"
   '';

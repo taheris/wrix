@@ -84,12 +84,55 @@ migration.
 
 The shared SQL lifecycle uses controller policy epoch 2. An older running
 controller can retain cached epoch-1 policy, so ordinary startup refuses to
-modify that registry. Stop the old host-controller user service, then run
-`wrix service recover` with the updated package. Recovery and updated-controller
-startup migrate the existing policies only while holding the original kernel
-ownership lock. Existing policies and private issuer keys are retained; do not
+modify that registry. Use the updated host package's explicit maintenance
+command:
+
+```bash
+"${WRIX_BIN:-wrix}" service repair
+```
+
+Repair verifies that native supervision belongs to the recorded controller,
+retains the updated package closure, stops only that verified controller,
+migrates policy while holding the original kernel ownership lock, updates the
+frozen controller package, and confirms authenticated epoch-2 readiness before
+recovering the backend. This briefly interrupts controller requests, not native
+SQL data service. A foreign unit or an unknown process retaining the ownership
+lock is refused, not killed. Ordinary `recover` now checks registry
+compatibility **before** creating or starting a backend; it never replaces a
+live controller. Existing policies and private issuer keys are retained; do not
 remove the ownership file, registry, or keys to bypass this check. An old binary
 cannot reopen the upgraded registry.
+
+## Changing the historical container name
+
+This is explicit host-wide maintenance, not a directory-specific setting. First
+pause Beads writers and stop the selected backend using its recorded runtime. Do
+not remove the container or its volumes. On Podman, for example:
+
+```bash
+podman stop loom-398ceb6dac09-service
+"${WRIX_BIN:-wrix}" service rename wrix-host-service
+"${WRIX_BIN:-wrix}" service repair
+```
+
+Rename refuses running owners, name collisions in either runtime, and unresolved
+backend recovery candidates. It preserves the runtime, workspace provenance,
+image provenance, ports, persistent data and signing authority. A stopped Podman
+container is renamed natively, preserving its exact container ID and writable
+layer; a missing owner can be retargeted without creating anything. An existing
+Apple container is currently refused rather than removed or recreated for a
+rename. Backend recovery remains a separate explicit step; use `recover` instead
+of `repair` when no controller upgrade is needed.
+
+The transaction records a private journal before touching the runtime. If it is
+interrupted, rerun `service rename` with the same target name. Ordinary
+lifecycle operations refuse the pending rename rather than accidentally
+recreating the old owner. Retry verifies the original native container ID before
+committing metadata. Do not delete the rename journal to bypass this check.
+
+Unrelated stopped legacy containers, such as another project's retained service,
+are left untouched and no longer block ordinary shared-backend startup. Running
+competitors and an inactive selected owner still require explicit maintenance.
 
 ## Workspace SQL cutover
 

@@ -841,6 +841,14 @@ pub fn recover() -> Result<String> {
     owner::host::recover()
 }
 
+pub fn repair() -> Result<String> {
+    owner::host::repair()
+}
+
+pub fn rename(name: &ContainerName) -> Result<String> {
+    owner::rename::run(name)
+}
+
 pub fn start(cache_mode: CacheMode) -> Result<Status> {
     wrix_state::host::Host::discover().map_err(io::Error::other)?;
     let (mut plan, _lock) = locked_plan(cache_mode)?;
@@ -853,8 +861,12 @@ pub fn start(cache_mode: CacheMode) -> Result<Status> {
         plan.reconcile_owner(guard)?;
         let runtime = Runtime::from_env()?;
         runtime.binding.as_ref().ok_or(binding::Error::Missing)?;
-        let retained_shared = plan.selected_owner.is_some() && shared::is_managed(&plan)?;
-        shared::check_inventory(&runtime, plan.selected_owner.as_ref(), retained_shared)?;
+        let legacy_namespace = if plan.selected_owner.is_some() && shared::is_managed(&plan)? {
+            None
+        } else {
+            Some(plan.workspace().hash())
+        };
+        shared::check_inventory(&runtime, plan.selected_owner.as_ref(), legacy_namespace)?;
         let selected =
             owner::host::ensure(&runtime, guard, plan.selected_owner.as_ref(), None, false)?;
         plan.reconcile_owner(guard)?;

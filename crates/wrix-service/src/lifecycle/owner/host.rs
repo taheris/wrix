@@ -36,12 +36,23 @@ pub(in crate::lifecycle) fn recover() -> Result<String> {
         }
         .into();
     }
-    let selected = ensure(&runtime, &guard, previous.as_ref(), None, true)?;
+    // Policy compatibility must be admitted before creating or starting any backend.
     crate::control::recover_registry(&host).map_err(std::io::Error::other)?;
+    let selected = ensure(&runtime, &guard, previous.as_ref(), None, true)?;
     Ok(format!(
         "Celler owner: {}\nruntime: Running\n",
         selected.container
     ))
+}
+
+pub(in crate::lifecycle) fn repair() -> Result<String> {
+    let host = wrix_state::host::Host::discover().map_err(std::io::Error::other)?;
+    Runtime::from_env()?;
+    // Controller maintenance has its own lifecycle/kernel/registry exclusion.
+    // Do not retain the backend lock across closure builds or controller startup.
+    crate::control::maintenance::repair(&host).map_err(std::io::Error::other)?;
+    // Recovery revalidates inventory and selection under its own host transaction.
+    recover()
 }
 
 /// The caller retains host lifecycle exclusion through readiness and selection commit.
@@ -147,11 +158,7 @@ pub(in crate::lifecycle) fn ensure(
             command: super::super::recovery_command(runtime.kind)?,
         });
     }
-    super::super::shared::check_inventory(
-        runtime,
-        Some(&selected),
-        maintenance || (shared.is_some() && shared_runtime),
-    )?;
+    super::super::shared::check_inventory(runtime, Some(&selected), None)?;
     let layout = Layout::current()?;
     let issuer = root.join("host-control/celler-issuer");
     if previous.is_some() || candidate.is_some() {
@@ -306,7 +313,7 @@ fn commit(
     Ok(())
 }
 
-fn validate(runtime: &Runtime, owner: &Selected, status: RuntimeStatus) -> Result<()> {
+pub(super) fn validate(runtime: &Runtime, owner: &Selected, status: RuntimeStatus) -> Result<()> {
     let identity = match &owner.workspace {
         Some(workspace) => {
             runtime

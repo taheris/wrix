@@ -750,7 +750,7 @@ pub(super) fn retire(plan: &Plan, runtime: &Runtime) -> Result<()> {
 pub(super) fn check_inventory(
     runtime: &Runtime,
     selected: Option<&super::owner::Selected>,
-    maintenance: bool,
+    legacy_namespace: Option<&wrix_core::path::WorkspaceHash>,
 ) -> Result<()> {
     for backend in [&runtime.alternate(), runtime] {
         if let Some(containers) = backend.available_container_infos()? {
@@ -772,10 +772,14 @@ pub(super) fn check_inventory(
                             container: container.name,
                         });
                     }
-                    RuntimeStatus::Stopped if !maintenance => {
+                    RuntimeStatus::Stopped
+                        if legacy_namespace.is_some_and(|namespace| {
+                            container.workspace_hash.as_deref() == Some(namespace.as_str())
+                        }) =>
+                    {
                         return Err(Error::Operation {
                             message: format!(
-                                "legacy service {} is stopped; run `wrix service recover` explicitly before converting it. Persistent data and signing state will be retained",
+                                "legacy workspace service {} is stopped; run `wrix service recover` explicitly before converting this namespace. Persistent data and signing state will be retained",
                                 container.name
                             ),
                         });

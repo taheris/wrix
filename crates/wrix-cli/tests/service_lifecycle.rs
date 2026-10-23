@@ -6,6 +6,9 @@ mod common;
 mod component;
 #[path = "common/controller.rs"]
 mod controller;
+#[cfg(target_os = "linux")]
+#[path = "common/maintenance.rs"]
+mod maintenance;
 #[path = "common/peer_runtime.rs"]
 mod peer_runtime;
 #[path = "common/service_binding.rs"]
@@ -2158,6 +2161,229 @@ fn recovery_recreates_only_absent_or_stopped_selected_owner_and_preserves_data()
         let output = fixture.run("start")?;
         assert!(output.status.success(), "{}", output.stderr);
     }
+    Ok(())
+}
+
+#[test]
+fn missing_historical_owner_can_be_renamed_then_recovered_without_resetting_authority() -> TestResult
+{
+    let fixture = selected_inactive_owner(false)?;
+    let selection = owner_selection(&fixture)?;
+    let mut previous: Value = serde_json::from_slice(&fs::read(&selection)?)?;
+    previous["container_name"] = json!("loom-historical-service");
+    fs::write(&selection, serde_json::to_vec(&previous)?)?;
+    let host = selection.parent().unwrap().parent().unwrap();
+    let key = host.join("host-control/celler-issuer/issuer.pem");
+    let authority = fs::read(&key)?;
+    let persistent = host.join("service-data/celler/retained-rename-test");
+    fs::write(&persistent, b"persistent history")?;
+    let output = run_command(
+        fixture
+            .command()?
+            .args(["service", "rename", "wrix-host-service"]),
+    )?;
+    assert!(output.status.success(), "{}", output.stderr);
+    assert!(output.stdout.contains("renamed to wrix-host-service"));
+    assert!(!fixture.root.path().join("run.argv").exists());
+    let renamed: Value = serde_json::from_slice(&fs::read(&selection)?)?;
+    previous["container_name"] = json!("wrix-host-service");
+    assert_eq!(renamed, previous);
+    let output = fixture.run("recover")?;
+    assert!(output.status.success(), "{}", output.stderr);
+    assert_eq!(fs::read(&key)?, authority);
+    assert_eq!(fs::read(&persistent)?, b"persistent history");
+    let args = fs::read_to_string(fixture.root.path().join("run.argv"))?;
+    assert!(args.contains("wrix-host-service"));
+    Ok(())
+}
+
+#[test]
+fn invalid_rename_arguments_fail_before_host_state_or_runtime_access() -> TestResult {
+    let root = tempfile::tempdir()?;
+    for arguments in [
+        vec!["service", "rename"],
+        vec!["service", "rename", "../escape"],
+        vec!["service", "rename", "--host"],
+        vec!["service", "rename", "valid", "extra"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_wrix"))
+            .args(arguments)
+            .current_dir(root.path())
+            .env("HOME", root.path().join("home"))
+            .env("XDG_STATE_HOME", root.path().join("state"))
+            .env("WRIX_CONTAINER_RUNTIME", "/missing/runtime")
+            .output()?;
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("rename <name>")
+                || String::from_utf8_lossy(&output.stderr)
+                    .contains("invalid service container name")
+        );
+        assert!(fs::read_dir(root.path())?.next().is_none());
+    }
+    Ok(())
+}
+
+#[test]
+fn running_owner_rename_is_refused_before_any_ownership_change() -> TestResult {
+    let fixture = Fixture::shared_cache()?;
+    let selection = owner_selection(&fixture)?;
+    let before = fs::read(&selection)?;
+    let output = run_command(
+        fixture
+            .command()?
+            .args(["service", "rename", "renamed-service"]),
+    )?;
+    assert!(!output.status.success());
+    assert!(output.stderr.contains("is running"), "{}", output.stderr);
+    assert_eq!(fs::read(&selection)?, before);
+    assert!(!selection.parent().unwrap().join("owner-rename").exists());
+    assert!(!fixture.root.path().join("run.argv").exists());
+    Ok(())
+}
+
+#[test]
+fn unrelated_stopped_legacy_service_does_not_block_shared_owner_reentry() -> TestResult {
+    let fixture = Fixture::shared_cache()?;
+    let mut snapshot: Vec<Value> =
+        serde_json::from_slice(&fs::read(fixture.root.path().join("runtime.json"))?)?;
+    let mut peer = snapshot[0].clone();
+    peer["configuration"]["id"] = json!("openwrt-service");
+    peer["status"]["state"] = json!("stopped");
+    assert!(
+        peer["configuration"]["labels"]
+            .as_object_mut()
+            .ok_or("missing labels")?
+            .remove("wrix.dolt.shared")
+            .is_some()
+    );
+    snapshot.push(peer.clone());
+    fs::write(
+        fixture.root.path().join("runtime.json"),
+        serde_json::to_vec(&snapshot)?,
+    )?;
+    let output = fixture.run("start")?;
+    assert!(output.status.success(), "{}", output.stderr);
+    let after: Vec<Value> =
+        serde_json::from_slice(&fs::read(fixture.root.path().join("runtime.json"))?)?;
+    assert!(after.iter().any(|entry| entry == &peer));
+    assert!(!fixture.root.path().join("run.argv").exists());
+    Ok(())
+}
+
+#[test]
+fn unrelated_stopped_legacy_service_does_not_block_fresh_shared_bootstrap() -> TestResult {
+    let mut fixture = Fixture::new()?;
+    fixture.disable_dolt()?;
+    let mut peer = fixture.snapshot[0].clone();
+    peer["configuration"]["id"] = json!("openwrt-service");
+    peer["configuration"]["labels"]["wrix.workspace.hash"] = json!("b".repeat(64));
+    peer["status"]["state"] = json!("stopped");
+    fixture.snapshot = json!([peer.clone()]);
+    fixture.write_snapshot()?;
+    let output = fixture.run("start")?;
+    assert!(output.status.success(), "{}", output.stderr);
+    let after: Vec<Value> =
+        serde_json::from_slice(&fs::read(fixture.root.path().join("runtime.json"))?)?;
+    assert!(after.iter().any(|entry| entry == &peer));
+    assert!(
+        after
+            .iter()
+            .any(|entry| entry["configuration"]["id"] == "wrix-host-service"
+                && entry["status"]["state"] == "running")
+    );
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn repair_upgrades_cached_controller_and_recovers_backend_with_native_authenticated_readiness()
+-> TestResult {
+    let fixture = Fixture::shared_cache()?;
+    // The old controller established its frontend endpoints while its backend
+    // was live; only afterward did that backend disappear, as on the host.
+    let manager = maintenance::Maintenance::start(fixture.root.path())?;
+    fixture.server.borrow_mut().take();
+    fs::write(fixture.root.path().join("runtime.json"), b"[]")?;
+    let registry = manager.control.join("authority/namespaces.json");
+    let before: Value = serde_json::from_slice(&fs::read(&registry)?)?;
+    assert_eq!(before["version"], 1);
+    let management = manager.control.join("authority/management.key");
+    let management_key = fs::read(&management)?;
+    let host = manager.control.parent().unwrap();
+    let issuer = host.join("host-control/celler-issuer/issuer.pem");
+    let issuer_key = fs::read(&issuer)?;
+    let mut command = fixture.command()?;
+    manager.configure(&mut command);
+    let output = run_command(command.args(["service", "recover"]))?;
+    assert!(!output.status.success());
+    assert!(
+        output.stderr.contains("service repair"),
+        "{}",
+        output.stderr
+    );
+    assert!(!fixture.root.path().join("run.argv").exists());
+    fixture.api()?;
+    let mut command = fixture.command()?;
+    manager.configure(&mut command);
+    let output = run_command(command.args(["service", "repair"]))?;
+    assert!(
+        output.status.success(),
+        "{}; controller: {}; supervisor: {}",
+        output.stderr,
+        fs::read_to_string(manager.control.join("new-controller.stderr"))?,
+        fs::read_to_string(manager.control.join("manager.calls"))?
+    );
+    assert!(output.stdout.contains("runtime: Running"));
+    let after: Value = serde_json::from_slice(&fs::read(&registry)?)?;
+    assert_eq!(after["version"], 2);
+    assert_eq!(after["entries"], before["entries"]);
+    assert_eq!(fs::read(&management)?, management_key);
+    assert_eq!(fs::read(&issuer)?, issuer_key);
+    assert_eq!(
+        wrix_service::control::supervision::Package::load(&manager.control.join("package.json"))?,
+        manager.package
+    );
+    let output = fixture.run("recover")?;
+    assert!(output.status.success(), "{}", output.stderr);
+    Ok(())
+}
+
+#[test]
+fn recovery_checks_legacy_controller_before_starting_or_creating_backend() -> TestResult {
+    let fixture = selected_inactive_owner(false)?;
+    fixture.controller.borrow_mut().take();
+    let selection = owner_selection(&fixture)?;
+    let before = fs::read(&selection)?;
+    let host = selection.parent().unwrap().parent().unwrap();
+    let authority = host.join("control/authority");
+    wrix_core::private_directory::prepare_with_parents(&authority)?;
+    let policy = serde_json::to_vec(&json!({"version": 1, "entries": []}))?;
+    fs::write(authority.join("namespaces.json"), &policy)?;
+    set_mode(&authority.join("namespaces.json"), 0o600)?;
+    let fence = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(authority.join("ownership"))?;
+    set_mode(&authority.join("ownership"), 0o600)?;
+    fence.lock_exclusive()?;
+    let output = fixture.run("recover")?;
+    assert!(!output.status.success());
+    assert!(
+        output.stderr.contains("wrix service repair"),
+        "{}",
+        output.stderr
+    );
+    assert!(!fixture.root.path().join("run.argv").exists());
+    assert_eq!(fs::read(&selection)?, before);
+    assert_eq!(fs::read(authority.join("namespaces.json"))?, policy);
+    assert!(
+        !host
+            .join("host-lifecycle/celler-candidate/celler-owner.json")
+            .exists()
+    );
     Ok(())
 }
 

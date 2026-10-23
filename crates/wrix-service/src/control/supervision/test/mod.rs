@@ -197,6 +197,106 @@ fn hostile_package_paths_are_rejected_before_supervision() {
     }
 }
 
+fn upgrade_manager(directory: &Path, root: &Path, foreign: bool) -> Native {
+    let fragment = if foreign {
+        directory.join("foreign.service")
+    } else {
+        root.join("wrix-host-controller.service")
+    };
+    let supervisor = script(
+        directory,
+        "upgrade-systemctl",
+        &format!(
+            r#"
+printf '%s\n' "$*" >> '{directory}/upgrade-commands'
+case "$2" in
+  show-environment|link|daemon-reload) ;;
+  show) printf '%s\n' LoadState=loaded ActiveState=active 'FragmentPath={fragment}' ;;
+  stop) touch '{directory}/native-stopped' ;;
+  start) touch '{directory}/native-started' ;;
+  *) exit 91 ;;
+esac
+"#,
+            directory = directory.display(),
+            fragment = fragment.display()
+        ),
+    );
+    let pin = script(directory, "upgrade-nix-store", "exit 0");
+    Native::new(Platform::Linux, 1000, supervisor, pin)
+}
+
+#[test]
+fn explicit_upgrade_stops_verified_old_unit_before_migrating_then_selects_new_package() {
+    let directory = tempfile::tempdir().unwrap();
+    let lifecycle = Lifecycle::lock(&directory.path().join("controller")).unwrap();
+    let old = package("old");
+    let new = package("new");
+    fs::write(
+        lifecycle.root.join("package.json"),
+        serde_json::to_vec(&old).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        lifecycle.root.join("wrix-host-controller.service"),
+        unit_contents(&lifecycle.root, &old),
+    )
+    .unwrap();
+    fs::write(lifecycle.root.join("retained-key"), b"private authority").unwrap();
+    let native = upgrade_manager(directory.path(), &lifecycle.root, false);
+    lifecycle
+        .upgrade(&native, &new, || {
+            assert!(directory.path().join("native-stopped").exists());
+            assert!(!directory.path().join("native-started").exists());
+            assert_eq!(
+                Package::load(&lifecycle.root.join("package.json")).unwrap(),
+                old
+            );
+            fs::write(lifecycle.root.join("migrated"), b"v2 policy")
+        })
+        .unwrap();
+    assert_eq!(
+        Package::load(&lifecycle.root.join("package.json")).unwrap(),
+        new
+    );
+    assert_eq!(
+        fs::read(lifecycle.root.join("retained-key")).unwrap(),
+        b"private authority"
+    );
+    assert!(directory.path().join("native-started").exists());
+    assert!(lifecycle.root.join("migrated").exists());
+    assert!(!lifecycle.root.join("stopped").exists());
+}
+
+#[test]
+fn explicit_upgrade_never_stops_foreign_units_or_replaces_package_after_failed_migration() {
+    for foreign in [true, false] {
+        let directory = tempfile::tempdir().unwrap();
+        let lifecycle = Lifecycle::lock(&directory.path().join("controller")).unwrap();
+        let old = package("old");
+        let record = serde_json::to_vec(&old).unwrap();
+        fs::write(lifecycle.root.join("package.json"), &record).unwrap();
+        fs::write(
+            lifecycle.root.join("wrix-host-controller.service"),
+            unit_contents(&lifecycle.root, &old),
+        )
+        .unwrap();
+        let native = upgrade_manager(directory.path(), &lifecycle.root, foreign);
+        assert!(
+            lifecycle
+                .upgrade(&native, &package("new"), || Err(io::Error::other(
+                    "ownership still held"
+                )))
+                .is_err()
+        );
+        assert_eq!(
+            fs::read(lifecycle.root.join("package.json")).unwrap(),
+            record
+        );
+        assert_eq!(directory.path().join("native-stopped").exists(), !foreign);
+        assert!(!directory.path().join("native-started").exists());
+    }
+}
+
 #[test]
 fn unit_paths_escape_specifiers_and_shell_metacharacters_without_a_shell() {
     assert_eq!(

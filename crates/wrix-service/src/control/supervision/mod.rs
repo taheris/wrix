@@ -200,6 +200,21 @@ impl Native {
         }
     }
 
+    /// Materialize the new closure before taking controller lifecycle exclusion:
+    /// a host post-build hook may itself require the still-running controller.
+    pub fn prepare_upgrade(&self, root: &Path, package: &Package) -> Result<(), Error> {
+        use std::os::unix::fs::PermissionsExt;
+        let metadata = fs::symlink_metadata(root)?;
+        if !metadata.is_dir()
+            || root.canonicalize()? != root
+            || metadata.permissions().mode() & 0o077 != 0
+        {
+            return Err(Error::PrivateRoot);
+        }
+        self.check()?;
+        self.pin(&root.join("maintenance-roots"), package)
+    }
+
     fn pin(&self, root: &Path, package: &Package) -> Result<(), Error> {
         fs::create_dir_all(root)?;
         for (name, closure) in [
@@ -228,11 +243,7 @@ impl Native {
         match self.platform {
             Platform::Linux => {
                 let unit = root.join("wrix-host-controller.service");
-                let contents = format!(
-                    "[Unit]\nDescription=Wrix host controller\n[Service]\nType=exec\nExecStart={} {}\nRestart=on-failure\nRestartSec=1\n",
-                    systemd_path(&executable),
-                    systemd_path(root)
-                );
+                let contents = unit_contents(root, package);
                 fs::write(&unit, contents)?;
                 self.link_unit(&unit)?;
                 self.command(&["--user".as_ref(), "daemon-reload".as_ref()])?;
@@ -267,6 +278,64 @@ impl Native {
         }
     }
 
+    fn verify_owned(&self, root: &Path, package: &Package) -> Result<bool, Error> {
+        match self.platform {
+            Platform::Linux => {
+                let state = self.output(&[
+                    "--user".as_ref(),
+                    "show".as_ref(),
+                    "--property=LoadState,ActiveState,FragmentPath".as_ref(),
+                    "wrix-host-controller.service".as_ref(),
+                ])?;
+                if [
+                    "LoadState=not-found",
+                    "ActiveState=inactive",
+                    "FragmentPath=",
+                ]
+                .iter()
+                .all(|expected| state.lines().any(|line| line == *expected))
+                {
+                    return Ok(false);
+                }
+                let unit = root.join("wrix-host-controller.service");
+                let fragment = format!("FragmentPath={}", unit.display());
+                if !state.lines().any(|line| line == "LoadState=loaded")
+                    || !state.lines().any(|line| line == fragment)
+                    || fs::read_to_string(&unit)? != unit_contents(root, package)
+                {
+                    return Err(Error::UnitConflict(state));
+                }
+            }
+            Platform::Darwin => {
+                let service = format!("gui/{}/org.wrix.host-controller", self.uid);
+                let output = Command::new(&self.supervisor)
+                    .args(["print", &service])
+                    .output()?;
+                if !output.status.success() {
+                    let message = String::from_utf8_lossy(&output.stderr);
+                    if message.contains("Could not find service") {
+                        self.check()?;
+                        return Ok(false);
+                    }
+                    return Err(Error::Supervisor(message.into_owned()));
+                }
+                let state = String::from_utf8_lossy(&output.stdout);
+                let path = format!(
+                    "path = {}",
+                    root.join("org.wrix.host-controller.plist").display()
+                );
+                let program = format!("program = {}", package.executable().display());
+                if ![path, program]
+                    .iter()
+                    .all(|expected| state.lines().any(|line| line.trim() == expected))
+                {
+                    return Err(Error::UnitConflict(state.into_owned()));
+                }
+            }
+        }
+        Ok(true)
+    }
+
     fn stop(&self) -> Result<(), Error> {
         match self.platform {
             Platform::Linux => self.command(&[
@@ -280,6 +349,14 @@ impl Native {
             ]),
         }
     }
+}
+
+fn unit_contents(root: &Path, package: &Package) -> String {
+    format!(
+        "[Unit]\nDescription=Wrix host controller\n[Service]\nType=exec\nExecStart={} {}\nRestart=on-failure\nRestartSec=1\n",
+        systemd_path(&package.executable()),
+        systemd_path(root)
+    )
 }
 
 fn systemd_path(path: &Path) -> String {
@@ -378,6 +455,39 @@ impl Lifecycle {
         }
         native.start(&self.root, &package)?;
         Ok(package)
+    }
+
+    /// Explicit maintenance only: retain the old package until native stop and
+    /// policy migration succeed. Ordinary admission never calls this operation.
+    pub fn upgrade(
+        &self,
+        native: &Native,
+        candidate: &Package,
+        migrate: impl FnOnce() -> io::Result<()>,
+    ) -> Result<(), Error> {
+        native.check()?;
+        let previous = match Package::load(&self.root.join("package.json")) {
+            Ok(package) => package,
+            Err(Error::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
+                migrate()?;
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
+        native.pin(&self.root.join("maintenance-roots"), candidate)?;
+        if native.verify_owned(&self.root, &previous)? {
+            self.stop(native)?;
+        }
+        migrate()?;
+        let mut record = tempfile::NamedTempFile::new_in(&self.root)?;
+        record.write_all(&serde_json::to_vec(candidate)?)?;
+        record.as_file().sync_all()?;
+        record
+            .persist(self.root.join("package.json"))
+            .map_err(|error| error.error)?;
+        File::open(&self.root)?.sync_all()?;
+        self.start(native, candidate)?;
+        Ok(())
     }
 
     /// Persist intent before contacting supervision, including when its control plane fails.
