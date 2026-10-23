@@ -2445,12 +2445,14 @@ fn recovery_guidance_executes_selected_wrapper_after_failed_entry_with_stale_glo
             "/tests/fixtures/host-command.sh"
         ))
         .arg("sh")
-        .current_dir(&fixture.workspace)
-        .envs(
-            environment
-                .get_envs()
-                .filter_map(|(key, value)| value.map(|value| (key, value))),
-        )
+        .current_dir(&fixture.workspace);
+    for (key, value) in environment.get_envs() {
+        match value {
+            Some(value) => recovery.env(key, value),
+            None => recovery.env_remove(key),
+        };
+    }
+    recovery
         .env_remove("WRIX_SERVICE_PACKAGE_BINDING")
         .env_remove("WRIX_INVOKED_BIN")
         .env_remove("WRIX_BIN")
