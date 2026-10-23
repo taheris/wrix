@@ -103,7 +103,11 @@ case "${1:-} ${2:-}" in
       printf 'Error: no such object\n' >&2
       exit 1
     fi
-    if ! snapshot | "${WRIX_TEST_JQ_BIN:?}" -e --arg name "${!#}" 'any(.[]; .configuration.id == $name)' >/dev/null; then
+    name="${!#}"
+    if [[ "$name" == --type=container ]]; then
+      name="$4"
+    fi
+    if ! snapshot | "${WRIX_TEST_JQ_BIN:?}" -e --arg name "$name" 'any(.[]; .configuration.id == $name)' >/dev/null; then
       printf 'Error: no such object\n' >&2
       exit 1
     fi

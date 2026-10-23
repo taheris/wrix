@@ -109,6 +109,8 @@ pub enum LaunchError {
     InvalidDoltPort { port: String },
     /// Dolt socket endpoint is empty
     MissingDoltSocket,
+    /// managed Beads client identity or paths are invalid
+    InvalidBeadsClient,
     /// service command failed: {stderr}
     ServiceFailed { stderr: String },
     /// command failed: {program}: {stderr}
@@ -429,6 +431,52 @@ struct BeadsClient {
     git_common: PathBuf,
     git_admin: PathBuf,
     lock: PathBuf,
+}
+
+impl BeadsClient {
+    fn validate(&self) -> Result<(), LaunchError> {
+        let database = &self.credentials.database;
+        let first = *database
+            .as_bytes()
+            .first()
+            .ok_or(LaunchError::InvalidBeadsClient)?;
+        if !(b'a'..=b'p').contains(&first) || database.len() != 64 || !database.is_ascii() {
+            return Err(LaunchError::InvalidBeadsClient);
+        }
+        let namespace = format!("{:x}{}", first - b'a', &database[1..]);
+        let namespace = wrix_core::path::WorkspaceHash::parse(&namespace)
+            .map_err(|_| LaunchError::InvalidBeadsClient)?;
+        let root = self
+            .git_common
+            .parent()
+            .ok_or(LaunchError::InvalidBeadsClient)?;
+        let branch = self
+            .worktree
+            .strip_prefix(root.join("beads-sync"))
+            .map_err(|_| LaunchError::InvalidBeadsClient)?;
+        wrix_core::git::Branch::parse(&branch.to_string_lossy())
+            .map_err(|_| LaunchError::InvalidBeadsClient)?;
+        if self.credentials.user != namespace.as_str()[..32]
+            || self.credentials.password.len() != 64
+            || !self
+                .credentials
+                .password
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+            || !self.worktree.is_absolute()
+            || root.file_name().and_then(|name| name.to_str()) != Some(namespace.as_str())
+            || self.git_common != root.join("guest-git")
+            || !self.git_admin.as_os_str().is_empty()
+            || self.lock != root.join("git-sync.lock")
+            || self
+                .worktree
+                .components()
+                .any(|component| matches!(component, std::path::Component::ParentDir))
+        {
+            return Err(LaunchError::InvalidBeadsClient);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Deserialize)]
@@ -2013,30 +2061,7 @@ impl ServicesState {
             let output = run_service(workspace, &["service", "dolt", "sandbox-client"])?;
             let mut client: BeadsClient = serde_json::from_slice(&output.stdout)
                 .map_err(|source| LaunchError::ServiceJson { source })?;
-            wrix_core::path::WorkspaceHash::parse(&client.credentials.database)
-                .map_err(|_| LaunchError::MissingDoltSocket)?;
-            if client.credentials.user != client.credentials.database[..32]
-                || client.credentials.password.len() != 64
-                || !client
-                    .credentials
-                    .password
-                    .bytes()
-                    .all(|byte| byte.is_ascii_hexdigit())
-            {
-                return Err(LaunchError::MissingDoltSocket);
-            }
-            if !client.worktree.is_absolute()
-                || !client.git_common.is_absolute()
-                || !client.lock.is_absolute()
-                || client.git_common != client.worktree.join(".git")
-                || !client.git_admin.as_os_str().is_empty()
-                || client
-                    .git_admin
-                    .components()
-                    .any(|component| !matches!(component, std::path::Component::Normal(_)))
-            {
-                return Err(LaunchError::MissingDoltSocket);
-            }
+            client.validate()?;
             if let BeadsSync::Unix { path } = &mut client.sync {
                 *path = PathBuf::from("/run/wrix/dolt/sync.sock");
             }
@@ -3076,6 +3101,73 @@ mod test {
         vmnet_interface,
     };
     use crate::command::config::{MountMode, Platform, ProfileMount, SpawnMount};
+
+    #[test]
+    fn managed_beads_client_accepts_encoded_database_and_namespace_private_git() {
+        for nibble in 0_u8..16 {
+            let namespace = format!("{nibble:x}{}", "a".repeat(63));
+            let root = PathBuf::from("/service/namespaces").join(&namespace);
+            let mut client = super::BeadsClient {
+                credentials: super::BeadsCredentials {
+                    database: format!("{}{}", char::from(b'a' + nibble), &namespace[1..]),
+                    user: namespace[..32].into(),
+                    password: "b".repeat(64),
+                },
+                sync: super::BeadsSync::Unix {
+                    path: "/service/sync.sock".into(),
+                },
+                worktree: root.join("beads-sync/team/beads"),
+                git_common: root.join("guest-git"),
+                git_admin: PathBuf::new(),
+                lock: root.join("git-sync.lock"),
+            };
+            client.validate().unwrap();
+            client.credentials.user = client.credentials.database[..32].into();
+            if client.credentials.user != namespace[..32] {
+                assert!(client.validate().is_err());
+            }
+            client.credentials.user = namespace[..32].into();
+            client.git_common = client.worktree.join(".git");
+            assert!(client.validate().is_err());
+        }
+    }
+
+    #[test]
+    fn managed_beads_client_rejects_malformed_identity_and_peer_paths() {
+        let namespace = "a".repeat(64);
+        let root = PathBuf::from("/service/namespaces").join(&namespace);
+        let value = serde_json::json!({
+            "credentials": { "database": format!("k{}", &namespace[1..]), "user": &namespace[..32], "password": "b".repeat(64) },
+            "sync": { "transport": "unix", "path": "/service/sync.sock" },
+            "worktree": root.join("beads-sync/beads"), "git_common": root.join("guest-git"),
+            "git_admin": "", "lock": root.join("git-sync.lock")
+        });
+        for (field, invalid) in [
+            ("database", ""),
+            ("database", "a"),
+            (
+                "database",
+                "qaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ),
+            (
+                "database",
+                "kAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            ),
+            ("user", "peer"),
+            ("password", "invalid"),
+        ] {
+            let mut changed = value.clone();
+            changed["credentials"][field] = invalid.into();
+            let client: super::BeadsClient = serde_json::from_value(changed).unwrap();
+            assert!(client.validate().is_err(), "{field}");
+        }
+        for field in ["worktree", "git_common", "git_admin", "lock"] {
+            let mut changed = value.clone();
+            changed[field] = "/peer/path".into();
+            let client: super::BeadsClient = serde_json::from_value(changed).unwrap();
+            assert!(client.validate().is_err(), "{field}");
+        }
+    }
 
     #[test]
     fn managed_beads_mounts_only_own_private_git_and_readonly_shared_sockets() {

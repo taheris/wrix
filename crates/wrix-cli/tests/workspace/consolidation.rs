@@ -29,7 +29,7 @@ fn prepare(fixture: &Fixture, checkout: &Path) {
     );
     let runtime = fixture.root.path().join("podman");
     let bash = fixture.install("bash");
-    fs::write(&runtime, format!("#!{}\nset -euo pipefail\nif [[ \"$#\" == 4 && \"$1\" == inspect && \"$2\" == --format && \"$3\" == '{{{{.State.Running}}}}' && \"$4\" == checkout-service ]]; then printf 'Error: no such container\\n' >&2; exit 125; fi\nprintf 'unexpected runtime arguments: %s\\n' \"$*\" >&2\nexit 64\n", bash.display())).unwrap();
+    fs::write(&runtime, format!("#!{}\nset -euo pipefail\nif [[ \"$#\" == 5 && \"$5\" == --type=container && \"$1\" == inspect && \"$2\" == --format && \"$3\" == '{{{{.State.Running}}}}' && \"$4\" == checkout-service ]]; then printf 'Error: no such container\\n' >&2; exit 125; fi\nprintf 'unexpected runtime arguments: %s\\n' \"$*\" >&2\nexit 64\n", bash.display())).unwrap();
     fs::set_permissions(runtime, fs::Permissions::from_mode(0o700)).unwrap();
 }
 

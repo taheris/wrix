@@ -32,7 +32,7 @@ elif args == ['ps', '-a', '--format', '{{.Names}}']:
     if state:
         print(state['name'])
 elif args[0] == 'inspect':
-    if not state or args[-1] != state['name']:
+    if not state or args[3:] != [state['name'], '--type=container']:
         print('no such container', file=sys.stderr)
         sys.exit(1)
     template = args[2]

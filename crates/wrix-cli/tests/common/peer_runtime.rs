@@ -17,7 +17,7 @@ case "$*" in
     ;;
   "port $name") ;;
   *)
-    if [[ $# != 4 || $1 != inspect || $2 != --format || $4 != "$name" ]]; then
+    if [[ $# != 5 || $1 != inspect || $2 != --format || $4 != "$name" || $5 != --type=container ]]; then
       printf 'unexpected peer runtime command: %s\n' "$*" >&2
       exit 64
     fi
@@ -92,7 +92,13 @@ fn fixture_implements_native_podman_inventory_and_inspection() -> TestResult {
     for (args, expected) in [
         (vec!["ps", "-a", "--format", "{{.Names}}"], "peer"),
         (
-            vec!["inspect", "--format", "{{.State.Running}}", "peer"],
+            vec![
+                "inspect",
+                "--format",
+                "{{.State.Running}}",
+                "peer",
+                "--type=container",
+            ],
             "true",
         ),
         (
@@ -101,6 +107,7 @@ fn fixture_implements_native_podman_inventory_and_inspection() -> TestResult {
                 "--format",
                 "{{ index .Config.Labels \"wrix.cache.backend\" }}",
                 "peer",
+                "--type=container",
             ],
             "celler-v2",
         ),

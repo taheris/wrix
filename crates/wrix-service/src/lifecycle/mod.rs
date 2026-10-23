@@ -1897,6 +1897,7 @@ impl Runtime {
             .arg("--format")
             .arg(template)
             .arg(name)
+            .arg("--type=container")
             .stdin(Stdio::null())
             .output()?;
         if !output.status.success() {
@@ -2080,7 +2081,13 @@ impl Runtime {
                 .map_or(RuntimeStatus::Missing, apple::Snapshot::runtime_status));
         }
         let output = Command::new(&self.binary)
-            .args(["inspect", "--format", "{{.State.Running}}", name])
+            .args([
+                "inspect",
+                "--format",
+                "{{.State.Running}}",
+                name,
+                "--type=container",
+            ])
             .stdin(Stdio::null())
             .output()?;
         if !output.status.success() {
@@ -2525,7 +2532,7 @@ mod test {
         std::fs::write(
             &binary,
             format!(
-                "#!/usr/bin/env bash\nset -euo pipefail\n[[ \"$*\" == 'inspect --format {{{{.State.Running}}}} owner' ]] || exit 64\n{body}\n"
+                "#!/usr/bin/env bash\nset -euo pipefail\n[[ \"$*\" == 'inspect --format {{{{.State.Running}}}} owner --type=container' ]] || exit 64\n{body}\n"
             ),
         )
         .unwrap();
@@ -2551,6 +2558,29 @@ mod test {
             let (_root, runtime) = inspection_fixture(body);
             assert_eq!(runtime.status_identifier("owner").unwrap(), expected);
         }
+    }
+
+    #[test]
+    fn container_inspection_does_not_fall_back_to_a_same_named_image() {
+        let (root, runtime) = inspection_fixture("");
+        std::fs::write(
+            root.path().join("podman"),
+            "#!/usr/bin/env bash\nset -euo pipefail\nif [[ ${!#} == --type=container ]]; then\n  printf 'Error: no such container: owner\\n' >&2\n  exit 125\nfi\nprintf 'image metadata is not container state\\n'\n",
+        )
+        .unwrap();
+        assert_eq!(
+            runtime.status_identifier("owner").unwrap(),
+            super::RuntimeStatus::Missing
+        );
+        assert_eq!(runtime.inspect_label("owner", "wrix.kind").unwrap(), None);
+        assert_eq!(
+            runtime
+                .container_image_id(
+                    &wrix_core::path::ContainerName::from_persisted("owner".into()).unwrap()
+                )
+                .unwrap(),
+            None
+        );
     }
 
     #[test]
