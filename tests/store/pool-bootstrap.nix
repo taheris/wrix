@@ -43,7 +43,7 @@ let
           (.config.Entrypoint | length) == 1 and
           (.config.Entrypoint[0] | startswith("/nix/store/") and endswith("/bin/wrix-nix-pool")) and
           .config.Labels["wrix.image.kind"] == "service" and
-          .config.Labels["wrix.nix-pool.bootstrap-version"] == "1"
+          .config.Labels["wrix.nix-pool.bootstrap-version"] == "2"
         ' "archive/$config"
         jq -r '.[0].Layers[]' archive/manifest.json > layers
         while IFS= read -r layer; do

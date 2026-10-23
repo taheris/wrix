@@ -45,12 +45,27 @@ trap cleanup EXIT
 ssh-keygen -q -t ed25519 -N '' -f "$root/admin"
 ssh-keygen -q -t ed25519 -N '' -f "$root/client"
 read -r key_type key_blob _comment < "$root/admin.pub"
-jq -n --arg key "$key_type $key_blob" '{version:1,admin_key:$key}' > "$root/data/bootstrap.json"
+jq -n --arg key "$key_type $key_blob" '{version:2,storage:"preallocated",admin_key:$key}' > "$root/data/bootstrap.json"
+fallocate --length=8589934592 "$root/data/store.ext4"
+disk_inode=$(stat -c '%i' "$root/data/store.ext4")
 layout=$(jq -er .oci_layout "$WRIX_TEST_POOL_SOURCE")
 oci_ref=$(jq -er .oci_ref "$WRIX_TEST_POOL_SOURCE")
 skopeo --insecure-policy copy --quiet "oci:$layout:$oci_ref" "docker-archive:$root/image.tar:$ref"
 podman load -i "$root/image.tar" > "$root/load.log" 2>&1
 loaded=true
+mkdir -m 0700 "$root/sparse"
+cp "$root/data/bootstrap.json" "$root/sparse/bootstrap.json"
+truncate --size=8589934592 "$root/sparse/store.ext4"
+if timeout --kill-after=1s 60s podman run --rm --runtime "$WRIX_TEST_POOL_RUNTIME" \
+  --memory=2g --cpus=2 --pids-limit=256 \
+  -v "$root/sparse:/var/lib/wrix/nix-pool:rw" "$ref" > "$root/sparse-refusal.log" 2>&1; then
+  printf 'A sparse file was accepted as reserved native storage.\n' >&2
+  exit 1
+else
+  [[ "$?" == 1 ]]
+fi
+grep -q 'installed-store guest input or retained state is invalid' "$root/sparse-refusal.log"
+[[ ! -e "$root/sparse/owner-active" && $(stat -c '%b' "$root/sparse/store.ext4") == 0 ]]
 podman run -d --name "$name" --runtime "$WRIX_TEST_POOL_RUNTIME" \
   --memory=2g --cpus=2 --pids-limit=256 --log-opt=max-size=16m \
   -p 127.0.0.1::2222 -v "$root/data:/var/lib/wrix/nix-pool:rw" "$ref" > "$root/container.id"
@@ -167,4 +182,7 @@ state=$(podman inspect "$name" --format '{{.State.Status}} {{.State.ExitCode}} {
 printf '%s\n' "$state" > "$root/shutdown-observation"
 [[ "$state" == 'exited 0 false' || "$state" == 'stopped 0 false' ]]
 [[ $(< "$root/data/released") == 1 ]]
+[[ $(stat -c '%i' "$root/data/store.ext4") == "$disk_inode" ]]
+[[ $(stat -c '%s' "$root/data/store.ext4") == 8589934592 ]]
+[[ $(stat -c '%b' "$root/data/store.ext4") -ge 16777216 ]]
 printf 'Actual krun service VM, pinned SSH, read-only Host FUSE view, dynamic negative-lookup invalidation and drained shutdown passed.\n'

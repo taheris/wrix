@@ -23,6 +23,14 @@ async fn run() -> Result<ExitCode, native::Error> {
     match args.as_slice() {
         [command] if command == "serve" => native::serve().await?,
         [command] if command == "control" => native::control().await?,
+        [command] if command == "storage" => {
+            let storage = native::storage()?;
+            let mut stdout = tokio::io::stdout();
+            stdout
+                .write_all(format!("{}\n", storage.as_str()).as_bytes())
+                .await?;
+            stdout.flush().await?;
+        }
         [command, user] if command == "keys" => {
             let mut stdout = tokio::io::stdout();
             for key in native::keys(user)? {

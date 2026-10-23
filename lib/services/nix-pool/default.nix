@@ -125,13 +125,23 @@ let
     export NIX_DAEMON_SOCKET_PATH=/nix/var/nix/daemon-socket/socket
     export SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
 
+    refuse_retained() {
+      printf 'Retained Nix state or uncertain ownership requires explicit host reconciliation.\n' >&2
+      exit 73
+    }
     shopt -s nullglob dotglob
     for entry in "$root"/*; do
-      if [[ "$entry" != "$root/ownership.lock" && "$entry" != "$root/bootstrap.json" ]]; then
-        printf 'Retained Nix state or uncertain ownership requires explicit host reconciliation.\n' >&2
-        exit 73
+      if [[ "$entry" != "$root/ownership.lock" && "$entry" != "$root/bootstrap.json" && "$entry" != "$root/store.ext4" ]]; then
+        refuse_retained
       fi
     done
+    if [[ ( -e "$root/store.ext4" || -L "$root/store.ext4" ) && ! -f "$root/bootstrap.json" ]]; then
+      refuse_retained
+    fi
+    storage_mode=$(${owner}/bin/wrix-nix-pool-owner storage)
+    if [[ "$storage_mode" == allocate && ( -e "$root/store.ext4" || -L "$root/store.ext4" ) ]]; then
+      refuse_retained
+    fi
     ${owner}/bin/wrix-nix-pool-owner keys root > /dev/null
     if ! mkdir -m 0700 "$root/owner-active"; then
       printf 'Nix pool ownership is active or uncertain; explicit host reconciliation is required.\n' >&2
@@ -141,8 +151,12 @@ let
     printf '2:%s:8589934592\n' '${pkgs.nix.version}' > "$root/owner-active/version"
     sync "$root/owner-active/version" "$root/owner-active" "$root"
 
+    if [[ "$storage_mode" == allocate ]]; then
+      fallocate --length=8589934592 "$root/store.ext4"
+    fi
+    mkfs.ext4 -q -F -m 0 -E nodiscard,lazy_itable_init=0,lazy_journal_init=0 "$root/store.ext4"
     fallocate --length=8589934592 "$root/store.ext4"
-    mkfs.ext4 -q -F -m 0 "$root/store.ext4"
+    sync "$root/store.ext4"
     install -d -m 0700 "$root/filesystem"
     device=$(losetup --find --show "$root/store.ext4")
     mount -t ext4 -o nodev,nosuid "$device" "$root/filesystem"

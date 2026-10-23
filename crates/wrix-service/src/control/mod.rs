@@ -73,6 +73,8 @@ pub enum Error {
     CacheUnavailable,
     /// installed-store admission failed: {0}
     PoolAdmission(#[from] wrix_state::nix_store::Error),
+    /// installed-store host preparation failed: {0}
+    PoolStorage(#[from] crate::nix_store::owner::Error),
 }
 
 /// Inspect a retained deployment without creating authority, locks or listeners.
@@ -583,6 +585,28 @@ impl Controller {
             _lease: lease,
             admission,
         })
+    }
+
+    /// Reserve a fresh pool under checked approval; no VM, credentials or worker view is issued.
+    pub fn reserve_nix_pool(
+        &self,
+        selection: &wrix_state::context::Selection,
+        system: wrix_core::nix_store::pool::System,
+    ) -> Result<crate::nix_store::owner::Reservation, Error> {
+        let authorization = self.authorize_nix_pool(selection, system)?;
+        let host = wrix_state::host::Host::discover().map_err(io::Error::other)?;
+        let expected = host.roots().state().join("control/authority/control.sock");
+        if self.listener.local_addr()?.as_pathname() != Some(expected.as_path()) {
+            return Err(Error::PrivateRoot);
+        }
+        authorization.recheck()?;
+        let reservation = crate::nix_store::owner::Reservation::reserve(
+            &host,
+            &self.deployment,
+            authorization.pool(),
+        )?;
+        authorization.recheck()?;
+        Ok(reservation)
     }
 
     fn apply(&self, operation: Operation) -> Result<Reply, Error> {

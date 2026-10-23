@@ -1,5 +1,27 @@
 # Pool-service bootstrap and transport
 
+## Host storage preparation
+
+Host preparation uses checked controller registration and repository approval to
+reserve a private per-pool slot. Its durable reservation and native lock do not
+claim VM readiness. Disk allocation happens after the short approval guard is
+released, reserves eight GiB through native preallocation with one GiB of free
+headroom, and writes the versioned public bootstrap input only after sync.
+Caller loss, partial allocation and retained or substituted paths require
+explicit reconciliation; ordinary preparation never adopts or erases them. The
+resource-intensive Rust allocation test is executed explicitly:
+
+```bash
+cargo test -p wrix-service native_allocation_reserves_full_capacity_and_retains_single_owner_metadata -- --ignored
+```
+
+The live krun verifier rejects a sparse backing file before initialization, then
+boots with host-preallocated storage. It checks that formatting, native builds,
+GC and drained shutdown preserve the backing inode and full allocated capacity.
+Formatting disables discard and reestablishes allocation after metadata zeroing;
+filesystem logical size alone is not disk admission. These are preparation and
+guest-boundary checks, not production worker delivery or restart acceptance.
+
 ## Host package selection
 
 ```bash

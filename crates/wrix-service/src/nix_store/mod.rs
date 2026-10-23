@@ -3,6 +3,7 @@
 pub mod gc;
 pub mod image;
 pub mod native;
+pub mod owner;
 
 use std::{
     io::{self, Write},
@@ -101,6 +102,20 @@ pub fn run(args: &[String], stdout: &mut impl Write) -> io::Result<ExitCode> {
                 if enabled { "enabled" } else { "disabled" }
             )?;
             writeln!(stdout, "canonical repository: {repository}")?;
+            if matches!(operation, Operation::Information) {
+                let deployment =
+                    crate::control::existing_deployment(&host).map_err(io::Error::other)?;
+                for (pool, phase) in owner::inspect(&host, &repository, deployment.as_ref())
+                    .map_err(io::Error::other)?
+                {
+                    writeln!(
+                        stdout,
+                        "{}: host storage {}; native ownership/readiness not established",
+                        pool.system.as_str(),
+                        phase.as_str()
+                    )?;
+                }
+            }
         }
     }
     if matches!(operation, Operation::Information) {

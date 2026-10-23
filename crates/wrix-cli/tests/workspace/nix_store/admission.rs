@@ -275,6 +275,107 @@ fn controller_pool_issuance_requires_registration_and_keeps_repository_system_sc
 }
 
 #[test]
+fn controller_reservation_requires_checked_registration_and_retains_uncertainty_after_restart() {
+    if let Some(caller) = child() {
+        use wrix_service::control::{
+            Access, Client, Controller, Error, Namespace, Operation, Policy, Reply,
+        };
+        let selection = Selection::inspect(&caller).unwrap();
+        let host = wrix_state::host::Host::discover().unwrap();
+        let root = host.roots().state().join("control/authority");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let controller = {
+            let _entered = runtime.enter();
+            Controller::bind(&root).unwrap()
+        };
+        assert!(matches!(
+            controller.reserve_nix_pool(&selection, System::X86_64Linux),
+            Err(Error::UnknownNamespace)
+        ));
+        assert!(!host.roots().state().join("service-data/nix").exists());
+        let client = Client::open(&root).unwrap();
+        let policy = Policy {
+            dolt: Access::Denied,
+            private_cache_read: Access::Denied,
+            common_cache_read: Access::Denied,
+            egress: Access::Denied,
+            compiler: Access::Denied,
+        };
+        let namespace = Namespace::from(selection.context().unwrap().key());
+        let (reply, serving) = runtime.block_on(async {
+            tokio::join!(
+                client.request(Operation::Register { namespace, policy }),
+                controller.serve_one()
+            )
+        });
+        assert_eq!(reply.unwrap(), Reply::Applied);
+        serving.unwrap();
+        let reservation = controller
+            .reserve_nix_pool(&selection, System::X86_64Linux)
+            .unwrap();
+        let pool = reservation.pool().clone();
+        let control = host
+            .roots()
+            .state()
+            .join("control/nix")
+            .join(pool.repository.to_string())
+            .join(pool.system.as_str());
+        let before = fs::read(control.join("reservation.json")).unwrap();
+        let lock = fs::File::open(control.join("ownership")).unwrap();
+        assert_eq!(
+            FileExt::try_lock_exclusive(&lock).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        wrix_state::nix_store::set(&host, selection.context().unwrap(), false).unwrap();
+        assert!(matches!(
+            controller.reserve_nix_pool(&selection, System::Aarch64Linux),
+            Err(Error::PoolAdmission(_))
+        ));
+        wrix_state::nix_store::set(&host, selection.context().unwrap(), true).unwrap();
+        drop(reservation);
+        controller.close().unwrap();
+        let controller = {
+            let _entered = runtime.enter();
+            Controller::bind(&root).unwrap()
+        };
+        assert!(matches!(
+            controller.reserve_nix_pool(&selection, System::X86_64Linux),
+            Err(Error::PoolStorage(
+                wrix_service::nix_store::owner::Error::Retained
+            ))
+        ));
+        assert_eq!(fs::read(control.join("reservation.json")).unwrap(), before);
+        assert!(
+            !host
+                .roots()
+                .state()
+                .join("service-data/nix")
+                .join(pool.repository.to_string())
+                .join(pool.system.as_str())
+                .join("store.ext4")
+                .exists()
+        );
+        controller.close().unwrap();
+        fs::write(std::env::var_os(READY).unwrap(), b"retained").unwrap();
+        return;
+    }
+    let (fixture, checkout) = setup();
+    deployment(&fixture);
+    success(&fixture, &checkout, &["enable"]);
+    start(&fixture, &checkout, "nix_store::admission::controller_reservation_requires_checked_registration_and_retains_uncertainty_after_restart").finish();
+    assert!(fixture.root.path().join("ready").exists());
+    let before = super::snapshot(&fixture.state());
+    let information = success(&fixture, &checkout, &[]);
+    assert!(information.contains(
+        "x86_64-linux: host storage reserved; native ownership/readiness not established"
+    ));
+    assert_eq!(super::snapshot(&fixture.state()), before);
+}
+
+#[test]
 #[ignore = "requires the worker chroot fixture; run explicitly in the native guest"]
 fn worker_pool_issuance_denies_library_access_despite_forged_home_and_existing_approval() {
     if let Some(caller) = child() {

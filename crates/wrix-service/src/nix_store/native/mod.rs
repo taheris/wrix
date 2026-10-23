@@ -1,5 +1,6 @@
 //! Fixed guest-side Nix and read-only filesystem sessions with durable pool protection.
 
+pub mod bootstrap;
 pub mod image;
 pub mod lease;
 
@@ -127,13 +128,6 @@ struct Configuration {
     nix_store: PathBuf,
     sftp_server: PathBuf,
     helper: PathBuf,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Bootstrap {
-    version: u16,
-    admin_key: lease::Key,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -552,11 +546,8 @@ async fn admit(stream: &mut UnixStream, state: &Mutex<State>) -> Result<(), Erro
 pub async fn serve() -> Result<(), Error> {
     role_root()?;
     let configuration = configuration()?;
-    let bootstrap: Bootstrap =
+    let _: bootstrap::Configuration =
         serde_json::from_slice(&private_file(&Path::new(DATA).join("bootstrap.json"))?)?;
-    if bootstrap.version != 1 {
-        return Err(Error::Invalid);
-    }
     let leases = records()?;
     // Duplicate the supervisor's open-file description; reopening its path would
     // lose protection when this controller dies before the supervisor stops Nix.
@@ -598,6 +589,30 @@ pub async fn serve() -> Result<(), Error> {
     }
 }
 
+/// Validate fixed startup storage without formatting, resizing or repairing retained data.
+pub fn storage() -> Result<bootstrap::Storage, Error> {
+    role_root()?;
+    let configuration: bootstrap::Configuration =
+        serde_json::from_slice(&private_file(&Path::new(DATA).join("bootstrap.json"))?)?;
+    if configuration.storage() == bootstrap::Storage::Preallocated {
+        let file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(Path::new(DATA).join("store.ext4"))?;
+        let metadata = file.metadata()?;
+        if !metadata.is_file()
+            || metadata.uid() != 0
+            || metadata.nlink() != 1
+            || metadata.mode() & 0o777 != 0o600
+            || metadata.len() != bootstrap::CAPACITY
+            || FileExt::allocated_size(&file)? < bootstrap::CAPACITY
+        {
+            return Err(Error::Invalid);
+        }
+    }
+    Ok(configuration.storage())
+}
+
 pub async fn control() -> Result<(), Error> {
     role_root()?;
     let mut bytes = Vec::new();
@@ -633,11 +648,8 @@ pub fn keys(user: &str) -> Result<Vec<String>, Error> {
         return Err(Error::Invalid);
     }
     if user == "root" {
-        let bootstrap: Bootstrap =
+        let bootstrap: bootstrap::Configuration =
             serde_json::from_slice(&private_file(&Path::new(DATA).join("bootstrap.json"))?)?;
-        if bootstrap.version != 1 {
-            return Err(Error::Invalid);
-        }
         return Ok(vec![format!(
             "restrict,command=\"{text} control\" {}",
             bootstrap.admin_key.as_str()
