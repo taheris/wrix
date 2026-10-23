@@ -6,6 +6,15 @@ type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 #[test]
 fn interrupted_linked_worktree_cutover_repairs_to_private_git_without_losing_staged_state()
 -> TestResult {
+    exercise_linked_worktree_cutover(false)
+}
+
+#[test]
+fn interrupted_relative_linked_worktree_cutover_preserves_staged_and_dirty_state() -> TestResult {
+    exercise_linked_worktree_cutover(true)
+}
+
+fn exercise_linked_worktree_cutover(relative: bool) -> TestResult {
     let temporary = tempfile::tempdir()?;
     let repository = temporary.path().join("repository");
     fs::create_dir(&repository)?;
@@ -36,10 +45,12 @@ fn interrupted_linked_worktree_cutover_repairs_to_private_git_without_losing_sta
         ],
     )?;
     let source = repository.join(".git/beads-worktrees/beads");
-    git(
-        &repository,
-        &["worktree", "add", "-qb", "beads", source.to_str().unwrap()],
-    )?;
+    let mut arguments = vec!["worktree", "add"];
+    if relative {
+        arguments.push("--relative-paths");
+    }
+    arguments.extend(["-qb", "beads", source.to_str().unwrap()]);
+    git(&repository, &arguments)?;
     fs::write(source.join("tracked"), "staged")?;
     git(&source, &["add", "tracked"])?;
     git(&source, &["update-index", "--split-index"])?;
@@ -58,6 +69,24 @@ fn interrupted_linked_worktree_cutover_repairs_to_private_git_without_losing_sta
     // into the authoritative commonDir. The retry must convert it, not return.
     fs::rename(&source, &destination)?;
     let private = temporary.path().join("private");
+    if relative {
+        // Retain the same partial private clone as a failed host attempt, not
+        // just the initial moved worktree. Retry must finish without resetting it.
+        crate::dolt::private_directory(&private)?;
+        git(
+            &repository,
+            &[
+                "clone",
+                "--no-local",
+                "--single-branch",
+                "--no-checkout",
+                "--branch",
+                "beads",
+                repository.to_str().unwrap(),
+                private.join("git-import").to_str().unwrap(),
+            ],
+        )?;
+    }
     migrate_worktree(&repository, &Branch::parse("beads")?, &namespace, &private)?;
     let host_git = private.join("repository");
     let host_output = |args: &[&str]| -> Result<String> {
@@ -112,6 +141,25 @@ fn interrupted_linked_worktree_cutover_repairs_to_private_git_without_losing_sta
         "worker metadata must not write canonical refs"
     );
     assert_eq!(fs::read_to_string(repository.join("tracked"))?, "committed");
+    Ok(())
+}
+
+#[test]
+fn moved_backend_git_pointer_cannot_select_unrelated_host_administration() -> TestResult {
+    let temporary = tempfile::tempdir()?;
+    let repository = temporary.path().join("repository");
+    let admin = repository.join(".git/worktrees/other");
+    fs::create_dir_all(&admin)?;
+    fs::write(admin.join("gitdir"), "../../../unrelated/.git\n")?;
+    let source = repository.join(".git/beads-worktrees/beads");
+    let destination = temporary.path().join("namespace/beads-sync/beads");
+    fs::create_dir_all(&destination)?;
+    fs::write(
+        destination.join(".git"),
+        format!("gitdir: {}\n", admin.display()),
+    )?;
+    assert!(linked_admin(&repository, &source, &destination)?.is_none());
+    assert!(lexical_absolute(Path::new("/../../escape")).is_none());
     Ok(())
 }
 

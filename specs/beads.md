@@ -113,6 +113,13 @@ view before switching clients, coordinates concurrent users, and never exposes
 two independently writable authoritative databases. Interrupted migration is
 recoverable without overwriting newer state. Normal operation does not maintain
 a second synchronized remote snapshot merely to preserve the old layout.
+Linked-worktree cutover resolves absolute and relative host-side administration
+back-pointers even after the original worktree path has moved. It does not trust
+the moved backend-visible `.git` pointer to select host metadata. Retrying a
+partial private Git import preserves committed, staged, unstaged and untracked
+state without copying unrelated canonical objects.
+[test](../crates/wrix-service/src/lifecycle/shared/test.rs::interrupted_relative_linked_worktree_cutover_preserves_staged_and_dirty_state)
+[test](../crates/wrix-service/src/lifecycle/shared/test.rs::moved_backend_git_pointer_cannot_select_unrelated_host_administration)
 
 ## Configuration
 
