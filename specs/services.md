@@ -122,6 +122,22 @@ this compatibility before creating or starting backend containers.
 [test](../crates/wrix-cli/tests/service_lifecycle.rs::repair_upgrades_cached_controller_and_recovers_backend_with_native_authenticated_readiness)
 [test](../crates/wrix-cli/tests/service_lifecycle.rs::recovery_checks_legacy_controller_before_starting_or_creating_backend)
 
+Shared-backend readiness includes the selected transport: authenticated private
+TCP management alone cannot admit a Unix-socket client endpoint. A failed Unix
+endpoint on a running backend requires explicit host-wide recovery. Recovery
+holds lifecycle exclusion, gracefully stops only the verified selected backend,
+and acquires its original data ownership lock before retiring a dead socket.
+Only a refused, owned, single-link socket with unchanged identity may be
+unlinked; live endpoints, symlinks and regular files fail closed. Recovery
+resumes the retained backend and rechecks readiness without changing databases,
+scoped credentials, signing authority or endpoints. New service startup uses the
+same stale-endpoint check under its original ownership lock.
+[test](../crates/wrix-cli/tests/service_lifecycle.rs::public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql)
+[test](../crates/wrix-service/src/dolt/server/socket/test/mod.rs::dead_socket_is_retired_without_replacing_ownership_or_data)
+[test](../crates/wrix-service/src/dolt/server/socket/test/mod.rs::live_endpoint_is_not_unlinked)
+[test](../crates/wrix-service/src/dolt/server/socket/test/mod.rs::regular_files_and_symlinks_are_not_retired_as_sockets)
+[test](../crates/wrix-service/src/dolt/server/socket/test/mod.rs::original_owner_lock_excludes_endpoint_retirement)
+
 Whole-deployment handoff follows `wrix service stop --host` then
 `wrix service update`. Updating that stopped existing deployment selects the
 invoked package's controller and bound service image; ordinary start resumes

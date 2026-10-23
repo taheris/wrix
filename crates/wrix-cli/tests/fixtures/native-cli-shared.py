@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -91,6 +92,18 @@ try:
         assert (workspace / '.beads/metadata.json').read_bytes() == before
         run(['git', 'diff', '--exit-code', '--', '.beads'], workspace)
         assert run(['git', 'status', '--porcelain', '--', '.beads'], workspace).stdout == '', run(['git', 'status', '--porcelain', '--', '.beads'], workspace).stdout
+    # TCP remains alive after Unix endpoint damage: reentry must not call this healthy.
+    endpoint = root / 'state/wrix/service-data/dolt/run/dolt.sock'
+    endpoint.unlink()
+    with socket.socket(socket.AF_UNIX) as stale:
+        stale.bind(str(endpoint))
+    before_registration = sorted((root / 'state/wrix/host-control/dolt').glob('*/registration.json'))
+    retained = {path: path.read_bytes() for path in before_registration}
+    failed = cli(workspaces[0], 'service', 'start', success=False)
+    assert failed.returncode != 0 and 'Unix endpoint is not accepting connections' in failed.stderr, failed.stderr
+    cli(workspaces[0], 'service', 'recover')
+    assert {path: path.read_bytes() for path in before_registration} == retained
+    cli(workspaces[0], 'service', 'start')
     # Exact old Wrix output is repaired from the index without changing staged config.
     old = json.loads(metadata_before[0])
     old.update(dolt_database=clients[0]['credentials']['database'], dolt_mode='server')

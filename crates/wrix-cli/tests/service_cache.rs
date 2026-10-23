@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 
 struct Fixture {
     server: celler::Server,
+    sql: std::os::unix::net::UnixListener,
     root: tempfile::TempDir,
     workspace: PathBuf,
     bin: PathBuf,
@@ -42,8 +43,16 @@ impl Fixture {
         fs::write(root.path().join("image"), "installed")?;
         let server = celler::Server::watch(root.path(), None);
         common::initialize_host_scope(root.path())?;
+        // The external SQL fixture models TCP management and a live Unix client endpoint.
+        let data = root.path().join("state/wrix/service-data/dolt");
+        fs::create_dir_all(data.join("run"))?;
+        set_mode(&data, 0o700)?;
+        set_mode(&data.join("run"), 0o700)?;
+        let sql = std::os::unix::net::UnixListener::bind(data.join("run/dolt.sock"))?;
+        sql.set_nonblocking(true)?;
         Ok(Self {
             server,
+            sql,
             root,
             workspace,
             bin,
@@ -51,6 +60,7 @@ impl Fixture {
     }
 
     fn command(&self, runtime: &str) -> TestResult<Command> {
+        while self.sql.accept().is_ok() {}
         let mut command = host_wrix_command_with_path(&self.workspace, &[&self.bin])?;
         command
             .env(
@@ -245,20 +255,37 @@ fn retired_cache_prune_fails_without_state_or_runtime_access() -> TestResult {
     Ok(())
 }
 
+#[derive(Debug, Eq, PartialEq)]
+enum SnapshotEntry {
+    Directory,
+    File(Vec<u8>),
+    Socket { device: u64, inode: u64 },
+}
+
 fn fixture_snapshot(
     root: &std::path::Path,
-) -> TestResult<std::collections::BTreeMap<PathBuf, Option<Vec<u8>>>> {
+) -> TestResult<std::collections::BTreeMap<PathBuf, SnapshotEntry>> {
     fn visit(
         path: &std::path::Path,
-        files: &mut std::collections::BTreeMap<PathBuf, Option<Vec<u8>>>,
+        files: &mut std::collections::BTreeMap<PathBuf, SnapshotEntry>,
     ) -> TestResult {
-        if path.is_dir() {
-            files.insert(path.to_path_buf(), None);
+        use std::os::unix::fs::{FileTypeExt, MetadataExt};
+        let metadata = fs::symlink_metadata(path)?;
+        if metadata.file_type().is_socket() {
+            files.insert(
+                path.to_path_buf(),
+                SnapshotEntry::Socket {
+                    device: metadata.dev(),
+                    inode: metadata.ino(),
+                },
+            );
+        } else if path.is_dir() {
+            files.insert(path.to_path_buf(), SnapshotEntry::Directory);
             for entry in fs::read_dir(path)? {
                 visit(&entry?.path(), files)?;
             }
         } else {
-            files.insert(path.to_path_buf(), Some(fs::read(path)?));
+            files.insert(path.to_path_buf(), SnapshotEntry::File(fs::read(path)?));
         }
         Ok(())
     }

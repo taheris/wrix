@@ -53,6 +53,15 @@ runtime and holds host lifecycle exclusion while checking both runtimes,
 recreating the selected container using the invoked package's service image,
 confirming authenticated readiness, and recording provenance.
 
+`runtime: Running` in status describes the container, not Dolt endpoint health.
+If Dolt logs `unix socket set up failed: file already in use` while TCP remains
+available, use the updated CLI's `service recover` as well. It briefly stops the
+verified shared backend under lifecycle exclusion, retires only a verified dead
+Unix socket under the original ownership lock, then resumes it and checks the
+selected transport. This interrupts cache and SQL clients during recovery; do
+not manually delete socket, database, registration or ownership files. A live or
+foreign endpoint is refused, not unlinked.
+
 Recovery preserves the container name, endpoint port, cache data, signing
 authority and other persistent service data. An inactive legacy workspace owner
 becomes the host-scoped shared backend: recovery does not mount its repository

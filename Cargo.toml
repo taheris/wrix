@@ -37,7 +37,7 @@ rama-net = { version = "=0.4.0", default-features = false, features = ["std"] }
 rama-tcp = { version = "=0.4.0", default-features = false }
 tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "net", "sync", "time", "io-util", "io-std", "signal", "process"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
-rustix = { version = "1.1.5", features = ["process", "fs"] }
+rustix = { version = "1.1.5", features = ["process", "fs", "net"] }
 getrandom = { version = "0.4.3" }
 wait-timeout = "0.2.1"
 serde = { version = "1.0.228", features = ["derive"] }

@@ -167,6 +167,14 @@ pub(in crate::lifecycle) fn ensure(
     layout.prepare()?;
     Authority::provision(&issuer, layout.metadata()).map_err(super::super::cache::Error::from)?;
     if status == RuntimeStatus::Running {
+        if maintenance
+            && unix_endpoint(root)?
+            && !crate::dolt::server::socket::ready(&root.join("service-data/dolt"))
+        {
+            backend_operation(runtime, &selected, "stop")?;
+            crate::dolt::server::socket::retire(&root.join("service-data/dolt"))?;
+            backend_operation(runtime, &selected, "start")?;
+        }
         ready(root, &issuer, selected.port)?;
         sql_ready(runtime, &selected, root)?;
         if candidate.is_some() {
@@ -176,6 +184,9 @@ pub(in crate::lifecycle) fn ensure(
         return Ok(selected);
     }
     if shared_runtime && status == RuntimeStatus::Stopped {
+        if unix_endpoint(root)? {
+            crate::dolt::server::socket::retire(&root.join("service-data/dolt"))?;
+        }
         let output = Command::new(&runtime.binary)
             .args(["start", selected.container.as_str()])
             .output()?;
@@ -270,20 +281,55 @@ pub(in crate::lifecycle) fn ensure(
     Ok(recovered)
 }
 
+fn unix_endpoint(root: &Path) -> Result<bool> {
+    let record = super::super::shared::Record::at(&root.join("host-lifecycle"))?
+        .ok_or(super::Error::Invalid)?;
+    Ok(matches!(
+        record.endpoint(root),
+        super::super::DoltEndpoint::UnixSocket { .. }
+    ))
+}
+
+fn backend_operation(runtime: &Runtime, selected: &Selected, operation: &str) -> Result<()> {
+    let mut command = Command::new(&runtime.binary);
+    command.arg(operation);
+    if operation == "stop" {
+        command.args(["--time", "30"]);
+    }
+    let output = command.arg(selected.container.as_str()).output()?;
+    if !output.status.success() {
+        return Err(Error::Operation {
+            message: String::from_utf8_lossy(&output.stderr).into_owned(),
+        });
+    }
+    Ok(())
+}
+
 fn sql_ready(runtime: &Runtime, selected: &Selected, root: &Path) -> Result<()> {
+    let unix = unix_endpoint(root)?;
     let deadline = std::time::Instant::now() + Duration::from_secs(15);
     loop {
         let data = root.join("service-data/dolt");
         let output = Command::new("timeout").args(["--signal=KILL", "2"]).arg(&runtime.binary)
             .args(["exec", selected.container.as_str(), "sh", "-c", "export DOLT_CLI_PASSWORD=\"$(cat -- \"$1/admin.password\")\"; exec dolt --host 127.0.0.1 --port 3306 --no-tls --password \"$DOLT_CLI_PASSWORD\" --user wrixadmin --use-db controller sql -r json -q 'SELECT @@GLOBAL.secure_file_priv AS secure_file_priv'", "wrix-ready"])
-            .arg(data).output()?;
+            .arg(&data).output()?;
         if output.status.success() {
             let value: serde_json::Value =
                 serde_json::from_slice(&output.stdout).map_err(std::io::Error::other)?;
-            if value["rows"][0]["secure_file_priv"] == "/dev/null" {
+            if value["rows"][0]["secure_file_priv"] != "/dev/null" {
+                return Err(crate::dolt::Error::UnsafeServer.into());
+            }
+            if !unix || crate::dolt::server::socket::ready(&data) {
                 return Ok(());
             }
-            return Err(crate::dolt::Error::UnsafeServer.into());
+            if std::time::Instant::now() >= deadline {
+                return Err(crate::dolt::Error::SocketUnavailable {
+                    path: data.join("run/dolt.sock"),
+                }
+                .into());
+            }
+            std::thread::sleep(Duration::from_millis(100));
+            continue;
         }
         if std::time::Instant::now() >= deadline {
             return Err(crate::dolt::Error::Native {

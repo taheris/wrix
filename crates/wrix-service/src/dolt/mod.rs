@@ -58,6 +58,10 @@ pub enum Error {
     SourceAmbiguous { root: PathBuf },
     /// native Dolt writer still owns {path}; quiesce the legacy server before migration; no serving database is replaced
     SourceBusy { path: PathBuf },
+    /// shared Dolt Unix endpoint is not accepting connections at {path}; run wrix service recover for coordinated endpoint recovery
+    SocketUnavailable { path: PathBuf },
+    /// shared Dolt Unix endpoint at {path} is still live; refusing to unlink it
+    SocketBusy { path: PathBuf },
     /// native Dolt management failed; no tenant administrator privilege was granted: {stderr}
     Native { stderr: String },
     /// shared Dolt query returned an unexpected result

@@ -11,6 +11,8 @@ use std::{
     time::Duration,
 };
 
+pub(crate) mod socket;
+
 /// The root credential remains inside the narrow service data mount, never a tenant export.
 pub async fn run(data: &Path, tcp: bool) -> Result<(), Error> {
     super::private_directory(data)?;
@@ -25,6 +27,7 @@ pub async fn run(data: &Path, tcp: bool) -> Result<(), Error> {
     ownership.try_lock_exclusive()?;
     super::private_directory(&data.join("databases"))?;
     super::private_directory(&data.join("run"))?;
+    socket::clear(data)?;
     initialize(data)?;
     let configuration = data.join("server.yaml");
     super::atomic_json(&configuration, &configuration_value(data, tcp))?;

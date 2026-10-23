@@ -72,7 +72,20 @@ elif args[0] == 'start':
     state['running'] = True
     save()
 elif args[0] == 'stop':
+    import fcntl
+    import time
     os.killpg(state['pid'], signal.SIGTERM)
+    deadline = time.monotonic() + 30
+    with (Path(state['data']) / 'owner.lock').open('r+b') as owner:
+        while True:
+            try:
+                fcntl.flock(owner.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(owner.fileno(), fcntl.LOCK_UN)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError('native service did not finish its graceful stop')
+                time.sleep(0.02)
     state['running'] = False
     save()
 elif args[0] == 'rm':

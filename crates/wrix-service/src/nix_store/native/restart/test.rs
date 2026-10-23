@@ -41,6 +41,12 @@ fn fixture() -> tempfile::TempDir {
         .mode(0o755)
         .create(root.path().join("export-root"))
         .unwrap();
+    // DirBuilder's requested public mode is masked by a restrictive caller umask.
+    fs::set_permissions(
+        root.path().join("export-root"),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
     private(
         &root.path().join("owner-active/version"),
         b"2:test:8589934592\n",
