@@ -6,15 +6,28 @@ type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 #[test]
 fn interrupted_linked_worktree_cutover_repairs_to_private_git_without_losing_staged_state()
 -> TestResult {
-    exercise_linked_worktree_cutover(false)
+    exercise_linked_worktree_cutover(WorktreeView::HostAbsolute)
 }
 
 #[test]
 fn interrupted_relative_linked_worktree_cutover_preserves_staged_and_dirty_state() -> TestResult {
-    exercise_linked_worktree_cutover(true)
+    exercise_linked_worktree_cutover(WorktreeView::HostRelative)
 }
 
-fn exercise_linked_worktree_cutover(relative: bool) -> TestResult {
+#[test]
+fn interrupted_container_path_worktree_cutover_preserves_private_import_and_dirty_state()
+-> TestResult {
+    exercise_linked_worktree_cutover(WorktreeView::ContainerAbsolute)
+}
+
+#[derive(Clone, Copy)]
+enum WorktreeView {
+    HostAbsolute,
+    HostRelative,
+    ContainerAbsolute,
+}
+
+fn exercise_linked_worktree_cutover(view: WorktreeView) -> TestResult {
     let temporary = tempfile::tempdir()?;
     let repository = temporary.path().join("repository");
     fs::create_dir(&repository)?;
@@ -46,7 +59,7 @@ fn exercise_linked_worktree_cutover(relative: bool) -> TestResult {
     )?;
     let source = repository.join(".git/beads-worktrees/beads");
     let mut arguments = vec!["worktree", "add"];
-    if relative {
+    if matches!(view, WorktreeView::HostRelative) {
         arguments.push("--relative-paths");
     }
     arguments.extend(["-qb", "beads", source.to_str().unwrap()]);
@@ -65,11 +78,30 @@ fn exercise_linked_worktree_cutover(relative: bool) -> TestResult {
     let namespace = temporary.path().join("namespace");
     let destination = namespace.join("beads-sync/beads");
     fs::create_dir_all(destination.parent().unwrap())?;
+    if matches!(view, WorktreeView::ContainerAbsolute) {
+        // Actual retained host state: a worker's Git repaired both directions
+        // through its /workspace mount. Never open this backend-visible pointer.
+        fs::write(
+            repository.join(".git/worktrees/beads/gitdir"),
+            "/workspace/.git/beads-worktrees/beads/.git\n",
+        )?;
+        fs::write(
+            source.join(".git"),
+            "gitdir: /workspace/.git/worktrees/beads\n",
+        )?;
+        let unrelated = repository.join(".git/worktrees/active-host-bead");
+        fs::create_dir_all(&unrelated)?;
+        fs::write(unrelated.join("gitdir"), "/host/active-bead/.git\n")?;
+        fs::write(
+            unrelated.join("locked"),
+            "Active host worktree; preserve registration across container path views\n",
+        )?;
+    }
     // This is exactly the interrupted rename state, with .git still pointing
     // into the authoritative commonDir. The retry must convert it, not return.
     fs::rename(&source, &destination)?;
     let private = temporary.path().join("private");
-    if relative {
+    if !matches!(view, WorktreeView::HostAbsolute) {
         // Retain the same partial private clone as a failed host attempt, not
         // just the initial moved worktree. Retry must finish without resetting it.
         crate::dolt::private_directory(&private)?;
@@ -141,6 +173,16 @@ fn exercise_linked_worktree_cutover(relative: bool) -> TestResult {
         "worker metadata must not write canonical refs"
     );
     assert_eq!(fs::read_to_string(repository.join("tracked"))?, "committed");
+    if matches!(view, WorktreeView::ContainerAbsolute) {
+        assert_eq!(
+            fs::read_to_string(repository.join(".git/worktrees/active-host-bead/gitdir"))?,
+            "/host/active-bead/.git\n"
+        );
+        assert_eq!(
+            fs::read_to_string(repository.join(".git/worktrees/active-host-bead/locked"))?,
+            "Active host worktree; preserve registration across container path views\n"
+        );
+    }
     Ok(())
 }
 
@@ -158,8 +200,48 @@ fn moved_backend_git_pointer_cannot_select_unrelated_host_administration() -> Te
         destination.join(".git"),
         format!("gitdir: {}\n", admin.display()),
     )?;
-    assert!(linked_admin(&repository, &source, &destination)?.is_none());
+    assert!(linked_admin(&repository, &source, &destination, "beads")?.is_none());
     assert!(lexical_absolute(Path::new("/../../escape")).is_none());
+    Ok(())
+}
+
+#[test]
+fn container_path_admin_selection_rejects_wrong_branch_and_duplicate_claims() -> TestResult {
+    for duplicate in [false, true] {
+        let temporary = tempfile::tempdir()?;
+        let repository = temporary.path().join("repository");
+        let base = repository.join(".git/worktrees");
+        let admin = base.join("beads");
+        fs::create_dir_all(&admin)?;
+        fs::write(
+            admin.join("gitdir"),
+            "/workspace/.git/beads-worktrees/beads/.git\n",
+        )?;
+        fs::write(
+            admin.join("HEAD"),
+            if duplicate {
+                "ref: refs/heads/beads\n"
+            } else {
+                "ref: refs/heads/other\n"
+            },
+        )?;
+        if duplicate {
+            let other = base.join("duplicate");
+            fs::create_dir_all(&other)?;
+            fs::write(
+                other.join("gitdir"),
+                "/workspace/.git/beads-worktrees/beads/.git\n",
+            )?;
+            fs::write(other.join("HEAD"), "ref: refs/heads/beads\n")?;
+        }
+        let source = repository.join(".git/beads-worktrees/beads");
+        let destination = temporary.path().join("namespace/beads-sync/beads");
+        assert!(linked_admin(&repository, &source, &destination, "beads").is_err());
+        assert_eq!(
+            fs::read_to_string(admin.join("gitdir"))?,
+            "/workspace/.git/beads-worktrees/beads/.git\n"
+        );
+    }
     Ok(())
 }
 

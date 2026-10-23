@@ -289,7 +289,7 @@ fn migrate_worktree(
     // changes. Copy it before replacing the pointer, without checkout/reset.
     if destination.join(".git").is_file() {
         // Never open Git configuration/pointers in backend-writable data.
-        let admin = linked_admin(repository, &source, &destination)?
+        let admin = linked_admin(repository, &source, &destination, branch)?
             .ok_or_else(|| Error::Operation {
                 message: "Beads Git migration cannot match the retained worktree to its canonical Git administration record; native backup and private import retained".into(),
             })?;
@@ -395,12 +395,25 @@ fn migrate_worktree(
     prepare_guest_git(namespace, &host_git)
 }
 
-fn linked_admin(repository: &Path, source: &Path, destination: &Path) -> Result<Option<PathBuf>> {
+fn linked_admin(
+    repository: &Path,
+    source: &Path,
+    destination: &Path,
+    branch: &str,
+) -> Result<Option<PathBuf>> {
     let base = repository.join(".git/worktrees");
     crate::dolt::check_directory(&base)?;
     if !base.exists() {
         return Ok(None);
     }
+    // Old workers shared canonical Git administration through this fixed mount.
+    // Recognize only the admitted branch's exact legacy path view, never a
+    // caller-supplied alias or the moved backend-visible .git file.
+    let guest = Path::new("/workspace/.git/beads-worktrees")
+        .join(branch)
+        .join(".git");
+    let expected_head = format!("ref: refs/heads/{branch}");
+    let mut found = None;
     for entry in fs::read_dir(base)? {
         let admin = entry?.path();
         crate::dolt::check_directory(&admin)?;
@@ -415,14 +428,19 @@ fn linked_admin(repository: &Path, source: &Path, destination: &Path) -> Result<
             // exist after cutover, so filesystem canonicalization cannot work.
             admin.join(pointer)
         };
-        let path = lexical_absolute(&path);
-        if path.as_ref() == Some(&source.join(".git"))
-            || path.as_ref() == Some(&destination.join(".git"))
-        {
-            return Ok(Some(admin));
+        let Some(path) = lexical_absolute(&path) else {
+            continue;
+        };
+        if path == source.join(".git") || path == destination.join(".git") || path == guest {
+            if fs::read_to_string(admin.join("HEAD"))?.trim() != expected_head {
+                return Err(Error::Operation { message: "retained Beads Git administration branch conflicts with the admitted sync branch; native backup and private import retained".into() });
+            }
+            if found.replace(admin).is_some() {
+                return Err(Error::Operation { message: "multiple retained Git administration records claim the Beads worktree; explicit host reconciliation required, no record selected".into() });
+            }
         }
     }
-    Ok(None)
+    Ok(found)
 }
 
 fn lexical_absolute(path: &Path) -> Option<std::path::PathBuf> {

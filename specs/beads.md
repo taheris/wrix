@@ -117,7 +117,14 @@ Linked-worktree cutover resolves absolute and relative host-side administration
 back-pointers even after the original worktree path has moved. It does not trust
 the moved backend-visible `.git` pointer to select host metadata. Retrying a
 partial private Git import preserves committed, staged, unstaged and untracked
-state without copying unrelated canonical objects.
+state without copying unrelated canonical objects. Legacy canonical records
+written through the fixed `/workspace` mount are recognized only for the exact
+admitted sync branch and a unique matching host-side administration record.
+Conflicting branches or duplicate claims fail closed; unrelated active/locked
+worktree records are neither repaired, pruned nor removed. Normal managed sync
+uses isolated private Git metadata, not the old cross-path shared registration.
+[test](../crates/wrix-service/src/lifecycle/shared/test.rs::interrupted_container_path_worktree_cutover_preserves_private_import_and_dirty_state)
+[test](../crates/wrix-service/src/lifecycle/shared/test.rs::container_path_admin_selection_rejects_wrong_branch_and_duplicate_claims)
 [test](../crates/wrix-service/src/lifecycle/shared/test.rs::interrupted_relative_linked_worktree_cutover_preserves_staged_and_dirty_state)
 [test](../crates/wrix-service/src/lifecycle/shared/test.rs::moved_backend_git_pointer_cannot_select_unrelated_host_administration)
 
