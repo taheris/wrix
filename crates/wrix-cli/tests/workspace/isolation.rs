@@ -34,15 +34,20 @@ pub fn command_as(
     use std::os::unix::process::CommandExt;
     let mut command = if isolated {
         let mut command = Command::new(parent_binary("unshare"));
+        command.arg("--user");
+        // Preserve delegated identities for real fixture ownership and privilege drops.
+        for (flag, path) in [
+            ("--map-users", "/proc/self/uid_map"),
+            ("--map-groups", "/proc/self/gid_map"),
+        ] {
+            for line in fs::read_to_string(path).unwrap().lines() {
+                let fields: Vec<_> = line.split_whitespace().collect();
+                assert_eq!(fields.len(), 3);
+                command.arg(format!("{flag}={}:{}:{}", fields[0], fields[0], fields[2]));
+            }
+        }
         command
-            .args([
-                "--user",
-                "--map-root-user",
-                "--mount",
-                "--propagation",
-                "private",
-                "--",
-            ])
+            .args(["--mount", "--propagation", "private", "--"])
             .arg(parent_binary("bash"))
             .arg("-c")
             .arg(include_str!("../fixtures/workspace-chroot.sh"))
