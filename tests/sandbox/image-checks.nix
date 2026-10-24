@@ -29,8 +29,8 @@ let
     "aarch64-linux"
   ];
 
-  resources = import ../lib/browser-resources.nix { };
-  sandboxLib = import (resources.library.path + "/sandbox") {
+  resources = import ../lib/image-resources.nix { };
+  sandboxLib = import resources.sandbox.path {
     inherit
       pkgs
       system
@@ -179,16 +179,7 @@ let
         local archive_dir="$1"
         local layers_file="$2"
         local output="$3"
-        local layer digest
-        : >"$output"
-        while IFS= read -r layer; do
-            [[ -n "$layer" ]] || continue
-            case "$layer" in
-                blobs/sha256/*) digest="''${layer##*/}" ;;
-                *) digest=$(sha256sum "$archive_dir/$layer" | cut -d ' ' -f 1) ;;
-            esac
-            printf 'sha256:%s\n' "$digest" >>"$output"
-        done <"$layers_file"
+        image_query digests "$archive_dir" "$layers_file" >"$output"
     }
 
     write_owned_layers() {
@@ -2956,7 +2947,7 @@ let
 
 in
 {
-  inherit (resources) inputs;
+  inherit (resources) inputs runtimeInputs;
   inherit
     imageInstallRealSkopeoTest
     imageInstallDigestSkipTest

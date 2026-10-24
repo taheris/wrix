@@ -8,6 +8,7 @@ let
     tryEval
     ;
   definitions = import ./inputs.nix { };
+  imageResources = import ./image-resources.nix { };
   builders = import ../builder/checks.nix {
     pkgs = throw "input discovery evaluated builder tools";
     linuxPkgs = throw "input discovery evaluated an image";
@@ -78,6 +79,13 @@ let
     treefmt = throw "CI inventory evaluated formatting tools";
     src = ../..;
   };
+  darwinBrowser = import ../verify/playwright-mcp.nix {
+    pkgs = {
+      inherit (pkgs) lib;
+      stdenv.hostPlatform.isDarwin = true;
+    };
+    system = "aarch64-darwin";
+  };
   browserChecks = import ../mcp/playwright/check.nix {
     pkgs = throw "description evaluated browser tools";
     linuxPkgs = throw "description evaluated browser packages";
@@ -91,7 +99,19 @@ assert builtins.length (builtins.attrNames loomInputs) == builtins.length loom.c
 assert deepSeq lazyVerifier.package.drvPath true;
 assert deepSeq lazyCi.testCi.drvPath true;
 assert deepSeq browserChecks.chromiumImageCheck.inputs true;
-assert elem "/specs/" browserChecks.executablePathCheck.inputs;
+assert elem "/specs/playwright-mcp.md" browserChecks.executablePathCheck.inputs;
+assert !(elem "/crates/" browserChecks.executablePathCheck.inputs);
+assert !(elem "/specs/" browserChecks.executablePathCheck.inputs);
+assert elem "/crates/" imageResources.runtimeInputs;
+assert elem "/crates/" darwinBrowser."playwright-mcp.screenshot".inputs;
+assert elem "/lib/sandbox/" darwinBrowser."playwright-mcp.smoke".inputs;
+assert !(elem "/crates/" darwinBrowser."playwright-mcp.registry-triple".inputs);
+assert elem "/lib/services/" imageResources.runtimeInputs;
+assert !(elem "/crates/" imageResources.imageInputs);
+assert !(elem "/specs/" imageResources.imageInputs);
+assert elem "/tests/sandbox/" imageResources.imageInputs;
+assert elem "/specs/image-builder.md" imageResources.imageInputs;
+assert elem "/lib/sandbox/" browserChecks.chromiumImageCheck.inputs;
 assert declared == { known = [ "/resource" ]; };
 assert !malformed "not-an-array";
 assert !malformed [ null ];

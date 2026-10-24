@@ -121,30 +121,14 @@ verifier_emit() {
     '
 }
 
-verifier_run() {
+verifier_admit() {
   local target="$1" requirements="$2"
-  shift 2
   local platform directory status evidence reason
   platform="$(verifier_platform)"
   directory="$(mktemp -d -t wrix-verifier.XXXXXX)"
   if verifier_preflight "$platform" "$requirements" >"$directory/reason" 2>"$directory/log"; then
-    if "$@" >"$directory/log" 2>&1; then
-      verifier_emit "$target" passed passed "$platform" "$requirements"
-      rm -rf "$directory"
-      return 0
-    else
-      status="$?"
-    fi
-    evidence="$(head -c 4000 "$directory/log")"
-    [[ -n "$evidence" ]] || evidence="verifier exited $status"
-    cat "$directory/log" >&2
-    if [[ "$status" -eq 77 ]]; then
-      jq -cn --arg target "$target" --arg evidence "unexpected skip: $evidence" \
-        --arg platform "$platform" --argjson requirements "$requirements" \
-        '{target:$target,pass:false,skipped:true,evidence:$evidence,execution:($requirements + {platform:$platform})}'
-      rm -rf "$directory"
-      return 77
-    fi
+    rm -rf "$directory"
+    return 0
   else
     status="$?"
     cat "$directory/log" >&2
@@ -158,6 +142,35 @@ verifier_run() {
     fi
     evidence="$(head -c 4000 "$directory/log")"
     [[ -n "$evidence" ]] || evidence="preflight exited $status"
+  fi
+  verifier_emit "$target" failed "$evidence" "$platform" "$requirements"
+  rm -rf "$directory"
+  return 1
+}
+
+verifier_run() {
+  local target="$1" requirements="$2"
+  shift 2
+  verifier_admit "$target" "$requirements" || return "$?"
+  local platform directory status evidence
+  platform="$(verifier_platform)"
+  directory="$(mktemp -d -t wrix-verifier.XXXXXX)"
+  if "$@" >"$directory/log" 2>&1; then
+    verifier_emit "$target" passed passed "$platform" "$requirements"
+    rm -rf "$directory"
+    return 0
+  else
+    status="$?"
+  fi
+  evidence="$(head -c 4000 "$directory/log")"
+  [[ -n "$evidence" ]] || evidence="verifier exited $status"
+  cat "$directory/log" >&2
+  if [[ "$status" -eq 77 ]]; then
+    jq -cn --arg target "$target" --arg evidence "unexpected skip: $evidence" \
+      --arg platform "$platform" --argjson requirements "$requirements" \
+      '{target:$target,pass:false,skipped:true,evidence:$evidence,execution:($requirements + {platform:$platform})}'
+    rm -rf "$directory"
+    return 77
   fi
   verifier_emit "$target" failed "$evidence" "$platform" "$requirements"
   rm -rf "$directory"

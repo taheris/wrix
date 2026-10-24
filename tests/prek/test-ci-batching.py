@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import uuid
 
 
 RUNNER, SYSTEM, BASH, COREUTILS, LIBRARY, LOOM = sys.argv[1:]
@@ -18,7 +19,7 @@ VM = "test-services-devshell-start-independent"
 VM_BROKEN = "test-services-limit-mode-cache-endpoint"
 VM_REQUIREMENTS = {
     "platforms": ["aarch64-linux", "x86_64-linux"],
-    "capabilities": ["virtiofsd-capabilities"],
+    "capabilities": [],
 }
 GIT_LOCAL_ENV = subprocess.check_output(["git", "rev-parse", "--local-env-vars"], text=True).splitlines()
 
@@ -36,6 +37,7 @@ class CiBatching(unittest.TestCase):
     def setUpClass(cls):
         cls.temp = tempfile.TemporaryDirectory(prefix="wrix-ci-batching-", dir="/tmp")
         cls.root = Path(cls.temp.name)
+        cls.boundary = "ci-realization-" + uuid.uuid4().hex
         (cls.root / "flake.nix").write_text(f'''{{
           inputs.bash = {{ url = {json.dumps('path:' + BASH)}; flake = false; }};
           inputs.coreutils = {{ url = {json.dumps('path:' + COREUTILS)}; flake = false; }};
@@ -80,16 +82,16 @@ class CiBatching(unittest.TestCase):
                 printf '%s\\n' '{VM}' >>"$WRIX_TEST_CI_CALLS"
               '';
               {VM_BROKEN} = derivation {{
-                name = "ci-fixture-vm-runner-build-failure";
+                name = "{cls.boundary}-vm-failure";
                 system = "{SYSTEM}";
                 builder = "${{bash}}/bin/bash";
-                args = [ "-c" "echo vm-runner-build-failure >&2; exit 77" ];
+                args = [ "-c" "echo BUILD_BOUNDARY >&2; echo vm-runner-build-failure >&2; exit 77" ];
               }};
               {LIVE_BROKEN} = derivation {{
-                name = "ci-fixture-live-build-failure";
+                name = "{cls.boundary}-live-failure";
                 system = "{SYSTEM}";
                 builder = "${{bash}}/bin/bash";
-                args = [ "-c" "exit 77" ];
+                args = [ "-c" "echo BUILD_BOUNDARY >&2; exit 77" ];
               }};
               {BROKEN} = derivation {{
                 name = "ci-fixture-build-failure";
@@ -122,6 +124,23 @@ class CiBatching(unittest.TestCase):
         verdicts = [json.loads(line) for line in result.stdout.splitlines()]
         self.assertEqual([v["target"] for v in verdicts], list(apps), result.stderr)
         return result, verdicts, calls.read_text().splitlines()
+
+    def test_image_scopes_retain_only_genuine_rust_runtime_dependencies(self):
+        runtime = ["test-image-install-real-skopeo", "test-image-install-digest-skip",
+                   "test-wrix-images-source-kind", "test-wrix-image-labels"]
+        image_only = ["test-image-tier-graph", "test-shared-nix-image-contract",
+                      "test-loom-agent-images", "test-playwright-chromium-closure",
+                      "test-playwright-mandatory-flags"]
+        result = command(RUNNER, "--print-inputs", *runtime, *image_only, cwd=self.root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        inputs = json.loads(result.stdout)["inputs"]
+        for target in runtime + image_only:
+            self.assertIn("/**/*.nix", inputs[target])
+            self.assertIn("/flake.lock", inputs[target])
+            self.assertEqual("/crates/" in inputs[target], target in runtime)
+            self.assertNotIn("/specs/", inputs[target])
+        self.assertIn("/lib/sandbox/", inputs["test-playwright-chromium-closure"])
+        self.assertNotIn("/lib/sandbox/", inputs["test-playwright-mandatory-flags"])
 
     def test_positional_app_names_require_json_without_running_the_full_suite(self):
         result = command(RUNNER, PASS, cwd=self.root)
@@ -188,13 +207,31 @@ class CiBatching(unittest.TestCase):
         self.assertEqual(verdicts[1]["execution"]["capabilities"], [])
         self.assertEqual(calls, [PASS, OFFLINE_HOOK])
 
-    def test_missing_runtime_cannot_conceal_a_failed_live_app_build(self):
-        result, verdicts, calls = self.run_apps(PASS, LIVE_BROKEN)
-        self.assertEqual(result.returncode, 1)
-        self.assertEqual([v["outcome"] for v in verdicts], ["passed", "failed"])
-        self.assertIn("CI app build failed", verdicts[1]["evidence"])
-        self.assertNotIn("skip_reason", verdicts[1])
-        self.assertEqual(calls, [PASS])
+    def assert_not_built(self, app):
+        drv = command("nix", "eval", "--raw", f".#legacyPackages.{SYSTEM}.ciApps.{app}.drvPath", cwd=self.root)
+        self.assertEqual(drv.returncode, 0, drv.stderr)
+        log = command("nix", "log", drv.stdout, cwd=self.root)
+        self.assertNotIn("BUILD_BOUNDARY", log.stdout + log.stderr)
+
+    def test_unavailable_live_app_is_not_built_before_a_classified_skip(self):
+        requirements = {"platforms": ["aarch64-darwin", "x86_64-darwin", "aarch64-linux", "x86_64-linux"],
+                        "capabilities": ["container-runtime"]}
+        probe = command("bash", "-c", 'source "$1"; verifier_preflight "$2" "$3"',
+                        "fixture", LIBRARY, SYSTEM, json.dumps(requirements))
+        self.assertIn(probe.returncode, (0, 77), probe.stderr)
+        for apps in [(LIVE_BROKEN,), (PASS, STATUS, LIVE_BROKEN)]:
+            with self.subTest(apps=apps):
+                result, verdicts, calls = self.run_apps(*apps)
+                self.assertEqual(calls, list(apps[:-1]))
+                if probe.returncode == 77:
+                    self.assertEqual(result.returncode, 77, result.stderr)
+                    self.assertEqual(verdicts[-1]["outcome"], "skipped")
+                    self.assertIn("skip_reason", verdicts[-1])
+                    self.assert_not_built(LIVE_BROKEN)
+                else:
+                    self.assertEqual(result.returncode, 1, result.stderr)
+                    self.assertEqual(verdicts[-1]["outcome"], "failed")
+                    self.assertIn("CI app build failed", verdicts[-1]["evidence"])
 
     def test_failed_batch_falls_back_to_individual_build_verdicts(self):
         result, verdicts, calls = self.run_apps(PASS, BROKEN)
@@ -225,14 +262,22 @@ class CiBatching(unittest.TestCase):
                 self.assertEqual(verdict["skip_reason"], json.loads(probe.stdout))
 
     @unittest.skipUnless(SYSTEM.endswith("-linux"), "Linux VM prerequisite")
-    def test_vm_runner_build_failure_dominates_a_supported_capability_skip(self):
-        result, verdicts, _ = self.run_apps(VM, VM_BROKEN)
-        self.assertEqual(result.returncode, 1, result.stderr)
-        self.assertIn(verdicts[0]["outcome"], ("passed", "skipped"))
-        self.assertEqual(verdicts[1]["outcome"], "failed")
-        self.assertEqual(verdicts[1]["execution"], dict(VM_REQUIREMENTS, platform=SYSTEM))
-        self.assertIn("CI app build failed", verdicts[1]["evidence"])
-        self.assertNotIn("skip_reason", verdicts[1])
+    def test_vm_capability_admission_precedes_batch_and_single_runner_builds(self):
+        probe = command("bash", "-c", 'source "$1"; verifier_preflight "$2" "$3"',
+                        "fixture", LIBRARY, SYSTEM, json.dumps(VM_REQUIREMENTS))
+        for apps in [(VM_BROKEN,), (VM, VM_BROKEN)]:
+            with self.subTest(apps=apps):
+                result, verdicts, _ = self.run_apps(*apps)
+                self.assertEqual(verdicts[-1]["execution"], dict(VM_REQUIREMENTS, platform=SYSTEM))
+                if probe.returncode == 77:
+                    self.assertEqual(result.returncode, 77, result.stderr)
+                    self.assertTrue(all(v["outcome"] == "skipped" for v in verdicts))
+                    self.assert_not_built(VM_BROKEN)
+                else:
+                    self.assertEqual(probe.returncode, 0, probe.stderr)
+                    self.assertEqual(result.returncode, 1, result.stderr)
+                    self.assertEqual(verdicts[-1]["outcome"], "failed")
+                    self.assertIn("CI app build failed", verdicts[-1]["evidence"])
 
     def gate_apps(self, *apps, worker=True, status="pass"):
         (self.root / "specs").mkdir(exist_ok=True)

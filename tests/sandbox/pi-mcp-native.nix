@@ -6,9 +6,9 @@
 let
   inherit (builtins) fromJSON readFile unsafeDiscardStringContext;
   inherit (pkgs.lib) getExe last;
-  resources = import ../lib/browser-resources.nix { };
-  pi = import (resources.library.path + "/sandbox/pi.nix") { inherit pkgs; };
-  runner = import (resources.fixtures.path + "/sandbox/fixtures/command-runner.nix") {
+  resources = import ../lib/image-resources.nix { };
+  pi = import (resources.sandbox.path + "/pi.nix") { inherit pkgs; };
+  runner = import (resources.sandboxFixtures.path + "/fixtures/command-runner.nix") {
     inherit pkgs;
   };
   inherit ((wrix.mkSandbox { })) image;
@@ -45,13 +45,13 @@ let
         export REPO_ROOT=${src}
         export PI_TEST_BASH=${getExe pkgs.bash}
         export PI_TEST_PACKAGE=${pi}/lib/node_modules/pi-monorepo
-        export PI_TEST_ENTRYPOINT=${resources.fixtures.path + "/sandbox/pi-mcp-entrypoint.sh"}
-        export PI_TEST_MCP_FIXTURE=${resources.fixtures.path + "/sandbox/fixtures/mcp-server.mjs"}
-        export PI_TEST_MODEL_FIXTURE=${resources.fixtures.path + "/sandbox/fixtures/model-server.mjs"}
+        export PI_TEST_ENTRYPOINT=${resources.sandboxFixtures.path + "/pi-mcp-entrypoint.sh"}
+        export PI_TEST_MCP_FIXTURE=${resources.sandboxFixtures.path + "/fixtures/mcp-server.mjs"}
+        export PI_TEST_MODEL_FIXTURE=${resources.sandboxFixtures.path + "/fixtures/model-server.mjs"}
         export PI_TEST_SETTINGS=${(wrix.mkSandbox { }).image.piSettingsJson}
         bash "$REPO_ROOT/tests/sandbox/entrypoint-contract.sh" test_runtime_fixtures_do_not_need_env_or_path
         bash "$REPO_ROOT/tests/sandbox/entrypoint-contract.sh" test_tool_cache_mounts_are_fixture_local_both
-        node --test ${resources.fixtures.path + "/sandbox/pi-mcp-native.mjs"}
+        node --test ${resources.sandboxFixtures.path + "/pi-mcp-native.mjs"}
         touch "$out"
       '';
 in

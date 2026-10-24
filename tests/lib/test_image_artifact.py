@@ -182,24 +182,111 @@ class ImageArtifact(unittest.TestCase):
             artifact.prepare(self.layout, self.root / "unsafe")
         self.assertFalse((self.root / "outside").exists())
 
-    def test_docker_archive_fallback_has_the_same_query_contract(self):
-        archive_path = self.root / "image.tar.gz"
-        with tarfile.open(archive_path, "w:gz") as archive:
-            files = {"manifest.json": json.dumps([{"Config": "original-config.json", "Layers": ["layer.tar"]}]).encode(),
-                     "original-config.json": b'{"config":{}}', "layer.tar": self.layer_data[0]}
+    def docker_archive(self, mode="w:gz", extra=None):
+        source = self.root / "image.tar.gz"
+        names = [f"layer-{i}" for i in range(len(self.layer_data))]
+        files = dict(zip(names, self.layer_data))
+        files["original-config.json"] = b'{"config":{}}'
+        # Producers may put the manifest after every layer; do not assume order.
+        files["manifest.json"] = json.dumps([{"Config": "original-config.json", "Layers": names}]).encode()
+        files.update(extra or {})
+        with tarfile.open(source, mode) as archive:
             for name, data in files.items():
                 info = tarfile.TarInfo(name)
-                info.size = len(data)
-                archive.addfile(info, io.BytesIO(data))
-        self.image = self.root / "docker-inspection"
-        artifact.prepare(archive_path, self.image)
-        self.layers.write_text("layer.tar\n")
-        result = self.query("paths")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout, "/" + STORE + "\n")
-        output = self.root / "docker-runner"
-        self.assertEqual(self.query("extract", STORE + "/bin/runner", output).returncode, 0)
-        self.assertEqual(output.read_text(), "#!/bin/sh\necho original\n")
+                if isinstance(data, tuple):
+                    info.type, info.linkname = data
+                    archive.addfile(info)
+                else:
+                    info.size = len(data)
+                    archive.addfile(info, io.BytesIO(data))
+        return source, names
+
+    def test_docker_archives_keep_payloads_in_the_original_source(self):
+        for mode in ("w", "w:gz"):
+            with self.subTest(mode=mode):
+                source, names = self.docker_archive(mode)
+                self.image = self.root / ("docker-" + mode.replace(":", "-"))
+                artifact.prepare(source, self.image)
+                self.layers.write_text("\n".join(names) + "\n")
+                self.assertTrue(all(not (self.image / name).exists() for name in names))
+                self.assertLess(sum(p.stat().st_size for p in self.image.iterdir()), 8192)
+                self.assertEqual(self.query("paths").stdout, "/" + STORE + "\n")
+                result = self.query("digests")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.splitlines(),
+                                 ["sha256:" + hashlib.sha256(data).hexdigest() for data in self.layer_data])
+                output = self.root / "docker-runner"
+                result = self.query("extract", STORE + "/bin/runner", output)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(output.read_text(), "#!/bin/sh\necho original\n")
+                self.assertEqual(output.stat().st_mode & 0o777, 0o755)
+                self.assertEqual(self.query("extract", "etc/marker-link", output).returncode, 0)
+                self.assertEqual(output.read_text(), "new\n")
+                self.assertEqual(self.query("exists", "etc/removed").returncode, 1)
+                self.assertEqual(self.query("exists", "opt/hidden/file").returncode, 1)
+                self.assertEqual(self.query("link", "bin/runner").stdout, "/" + STORE + "/bin/runner\n")
+
+    def test_archive_inspection_disk_does_not_grow_with_layer_payload(self):
+        self.layer_data = [layer_bytes([("large", "x" * (4 * 1024 * 1024), 0o444)])]
+        source, names = self.docker_archive()
+        image = self.root / "bounded"
+        artifact.prepare(source, image)
+        self.assertLess(sum(p.stat().st_size for p in image.iterdir()), 8192)
+        self.assertFalse((image / names[0]).exists())
+
+    def test_docker_outer_path_traversal_is_rejected_without_writing_payloads(self):
+        source, _ = self.docker_archive(extra={"../outside": b"bad"})
+        with self.assertRaisesRegex(ValueError, "unsafe archive member"):
+            artifact.prepare(source, self.root / "unsafe-docker")
+        self.assertFalse((self.root / "outside").exists())
+
+    def test_docker_inner_path_traversal_is_rejected(self):
+        self.layer_data = [layer_bytes([("../outside", "bad", 0o444)])]
+        source, _ = self.docker_archive()
+        with self.assertRaisesRegex(ValueError, "unsafe archive member"):
+            artifact.prepare(source, self.root / "unsafe-docker")
+        self.assertFalse((self.root / "outside").exists())
+
+    def test_nonregular_docker_metadata_and_layers_are_rejected(self):
+        for name, message in [("original-config.json", "invalid or oversized"),
+                              ("layer-0", "not a regular Docker layer")]:
+            with self.subTest(name=name):
+                source, _ = self.docker_archive(extra={name: (tarfile.SYMTYPE, "/etc/passwd")})
+                with self.assertRaisesRegex(ValueError, message):
+                    artifact.prepare(source, self.root / name)
+
+    def test_missing_docker_layer_is_rejected(self):
+        source, _ = self.docker_archive(extra={"manifest.json": json.dumps([
+            {"Config": "original-config.json", "Layers": ["missing-layer"]}]).encode()})
+        with self.assertRaisesRegex(ValueError, "missing Docker image layer"):
+            artifact.prepare(source, self.root / "missing-layer")
+
+    def test_multiple_docker_manifests_are_rejected(self):
+        source, _ = self.docker_archive(extra={"manifest.json": b"[{},{}]"})
+        with self.assertRaisesRegex(ValueError, "exactly one Docker manifest"):
+            artifact.prepare(source, self.root / "multiple")
+
+    def test_oversized_docker_metadata_is_rejected(self):
+        source, _ = self.docker_archive(extra={"original-config.json": b" " * (16 * 1024 * 1024 + 1)})
+        with self.assertRaisesRegex(ValueError, "oversized image metadata"):
+            artifact.prepare(source, self.root / "oversized")
+
+    def test_stream_producer_is_snapshotted_once_without_unpacking_layers(self):
+        source, names = self.docker_archive()
+        counter = self.root / "producer-count"
+        producer = self.root / "producer"
+        producer.write_text(f'#!{sys.executable}\nfrom pathlib import Path\nimport sys\n'
+                            f'with Path({str(counter)!r}).open("a") as count: count.write("run\\n")\n'
+                            f'sys.stdout.buffer.write(Path({str(source)!r}).read_bytes())\n')
+        producer.chmod(0o755)
+        self.image = self.root / "stream-inspection"
+        artifact.prepare(producer, self.image)
+        self.layers.write_text("\n".join(names) + "\n")
+        self.assertEqual(self.query("extract", "etc/marker", self.root / "stream-marker").returncode, 0)
+        self.assertEqual((self.root / "stream-marker").read_text(), "new\n")
+        self.assertEqual(counter.read_text(), "run\n")
+        self.assertTrue((self.image / "archive.tar").is_file())
+        self.assertTrue(all(not (self.image / name).exists() for name in names))
 
 
 if __name__ == "__main__":

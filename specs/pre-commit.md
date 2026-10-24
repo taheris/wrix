@@ -327,6 +327,10 @@ marker. [system](verify:prek.ci-platform-policy)
 - Positional app names and unknown options to `test-ci` fail before any checks
   or runners execute; named app selection requires `--json`
   [system](verify:prek.ci-batching)
+- Platform and capability admission precedes both batched and single CI runner
+  realization. Unavailable targets emit classified exit-77 skips without
+  building; build failures for admitted targets remain failures, never
+  capability skips. [system](verify:prek.ci-batching)
 - Batched `test-ci:` execution resolves only the selected app runners together
   while keeping each invocation and verdict independent, including duplicate
   targets, script failures, exit-77 results, unknown apps, and partial build

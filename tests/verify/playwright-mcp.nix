@@ -2,25 +2,28 @@
 
 let
   inherit (pkgs.lib) concatMapStringsSep escapeShellArg;
-  resources = import ../lib/browser-resources.nix { };
+  resources = import ../lib/image-resources.nix { };
   defined = script: {
     inherit script;
-    inherit (resources) inputs;
+    inputs = resources.browserInputs;
   };
 
   playwrightScriptFunctions =
     script: functions:
     defined ''
-      run_repo_script ${escapeShellArg "${resources.fixtures.relative}/mcp/playwright/${script}.sh"} ${
+      run_repo_script ${escapeShellArg "${resources.browserFixtures.relative}/playwright/${script}.sh"} ${
         concatMapStringsSep " " escapeShellArg functions
       }
     '';
   playwrightGuestFunctions =
     script: functions:
-    defined ''
-      run_repo_script ${escapeShellArg "${resources.fixtures.relative}/mcp/playwright/darwin-guest.sh"} \
+    (defined ''
+      run_repo_script ${escapeShellArg "${resources.browserFixtures.relative}/playwright/darwin-guest.sh"} \
         ${escapeShellArg "${script}.sh"} ${concatMapStringsSep " " escapeShellArg functions}
-    '';
+    '')
+    // {
+      inputs = resources.runtimeInputs ++ resources.browserInputs;
+    };
   playwrightFunctions =
     if pkgs.stdenv.hostPlatform.isDarwin then playwrightGuestFunctions else playwrightScriptFunctions;
   playwrightAll = script: playwrightFunctions script [ ];

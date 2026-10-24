@@ -358,6 +358,12 @@ let
       inherit package;
       inherit (sandboxImageChecks) inputs;
     } executable;
+  mkRuntimeImageCiApp =
+    package: executable:
+    mkDefinedCiApp {
+      inherit package;
+      inputs = sandboxImageChecks.runtimeInputs;
+    } executable;
   mkLiveCiApp =
     package: executable:
     (mkCiApp package executable)
@@ -433,8 +439,8 @@ let
       (mkTmuxCiApp "exited-process")
       (mkTmuxCiApp "targeted-cleanup")
       (mkTmuxCiApp "container-cleanup")
-      (mkImageCiApp sandboxImageChecks.imageInstallRealSkopeoTest "test-image-install-real-skopeo")
-      (mkImageCiApp sandboxImageChecks.imageInstallDigestSkipTest "test-image-install-digest-skip")
+      (mkRuntimeImageCiApp sandboxImageChecks.imageInstallRealSkopeoTest "test-image-install-real-skopeo")
+      (mkRuntimeImageCiApp sandboxImageChecks.imageInstallDigestSkipTest "test-image-install-digest-skip")
       (mkImageCiApp sandboxImageChecks.digestMatchesStoredIdTest "test-image-digest-matches-stored-id")
       (mkImageCiApp sandboxImageChecks.linuxImageArchivelessSourceTest "test-linux-image-archiveless-source")
       (mkImageCiApp sandboxImageChecks.imageDigestNoTarTest "test-image-digest-no-tar")
@@ -445,8 +451,8 @@ let
       (mkImageCiApp sandboxImageChecks.imageAgentMarkerTest "test-image-agent-marker")
       (mkImageCiApp sandboxImageChecks.profilePackagesBundledTest "test-profile-packages-bundled")
       (mkImageCiApp sandboxImageChecks.imageTierMembershipTest "test-image-tier-membership")
-      (mkImageCiApp sandboxImageChecks.wrixImagesSourceKindTest "test-wrix-images-source-kind")
-      (mkImageCiApp sandboxImageChecks.wrixImageLabelsTest "test-wrix-image-labels")
+      (mkRuntimeImageCiApp sandboxImageChecks.wrixImagesSourceKindTest "test-wrix-images-source-kind")
+      (mkRuntimeImageCiApp sandboxImageChecks.wrixImageLabelsTest "test-wrix-image-labels")
       (mkImageCiApp sandboxImageChecks.agentDeclaredDirectRunnerTest "test-agent-declared-direct-runner")
       (mkImageCiApp sandboxImageChecks.agentConsumerRuntimeClosuresTest "test-agent-consumer-runtime-closures")
       (mkImageCiApp sandboxImageChecks.agentClaudeRuntimeTest "test-agent-claude-runtime")
@@ -612,8 +618,20 @@ let
         fi
 
         batch_dir=""
-        declare -A ci_runners=()
+        declare -A ci_runners=() ci_admission_status=() ci_admission_records=()
         trap 'if [[ -n "$batch_dir" ]]; then rm -rf "$batch_dir"; fi' EXIT
+
+        admit_ci_app() {
+          local app="$1" requirements record status
+          requirements=$(jq -c --arg target "$app" '.[$target]' ${ciRequirements})
+          if record=$(verifier_admit "$app" "$requirements"); then
+            ci_admission_status["$app"]=0
+          else
+            status="$?"
+            ci_admission_status["$app"]="$status"
+            ci_admission_records["$app"]="$record"
+          fi
+        }
 
         prepare_ci_apps() {
           local app runner index
@@ -621,9 +639,12 @@ let
           local -A seen=()
           for app in "$@"; do
             if is_ci_app "$app" && [[ ! -v "seen[$app]" ]]; then
-              selected+=("$app")
-              installables+=(".#legacyPackages.${system}.ciApps.$app")
               seen["$app"]=1
+              admit_ci_app "$app"
+              if [[ "''${ci_admission_status[$app]}" -eq 0 ]]; then
+                selected+=("$app")
+                installables+=(".#legacyPackages.${system}.ciApps.$app")
+              fi
             fi
           done
           if [[ "''${#selected[@]}" -lt 2 ]]; then
@@ -669,6 +690,10 @@ let
         run_ci_json_app() {
           local app="$1" runner requirements build_log evidence
           requirements=$(jq -c --arg target "$app" '.[$target]' ${ciRequirements})
+          if [[ "''${ci_admission_status[$app]}" -ne 0 ]]; then
+            printf '%s\n' "''${ci_admission_records[$app]}"
+            return "''${ci_admission_status[$app]}"
+          fi
           build_log=$(mktemp -t wrix-ci-build.XXXXXX)
           if runner=$(resolve_ci_app "$app" 2>"$build_log"); then
             rm -f "$build_log"

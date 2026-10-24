@@ -12,7 +12,7 @@ let
     toJSON
     toString
     ;
-  resources = import ../lib/browser-resources.nix { };
+  resources = import ../lib/image-resources.nix { };
   configOnly = linuxPkgs.writeText "configuration-only-extension.js" ''
     export default function () {}
   '';
@@ -41,8 +41,10 @@ let
     env.WRIX_CONFIGURATION_REFERENCE = "${configOnly}";
     env.WRIX_PLAINTEXT_VARIANT = "does-not-change-the-installed-store";
   };
-  configurationRoots = import ../../lib/sandbox/configuration-roots.nix { inherit (pkgs) lib; };
-  archive = import ../../lib/sandbox/image.nix {
+  configurationRoots = import (resources.sandbox.path + "/configuration-roots.nix") {
+    inherit (pkgs) lib;
+  };
+  archive = import (resources.sandbox.path + "/image.nix") {
     pkgs = linuxPkgs;
     hostPkgs = pkgs;
     asTarball = true;

@@ -445,6 +445,12 @@ missing tools on `PATH`, or maintain a hook-id skip list.
 - Both entrypoints configure `core.hooksPath` when `/workspace` is a linked
   worktree represented by a `.git` file
   [system](verify:images.linked-worktree-core-hooks-path)
+- Image-verifier archive inspection retains headers, digests and bounded config
+  metadata, not unpacked layer payloads. Docker archive queries read requested
+  files from the original source; native stream producers require only one
+  snapshot. Inspection preserves emitted bytes, executable modes, hardlinks,
+  ordered layers and whiteouts, and rejects unsafe archive paths.
+  [check](verify:images.inspection-artifacts)
 - Every wrix-managed Nix-built image source covered by this spec exposes the
   platform source kind (`nix-descriptor` on Linux, `docker-archive` on Darwin),
   including service/support images such as `wrix-builder`

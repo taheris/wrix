@@ -10,7 +10,6 @@ import re
 import shutil
 import subprocess
 import tarfile
-import tempfile
 
 
 STORE_PATH = re.compile(r"(?:^|/)nix/store/[a-z0-9]{32}-[^/]+")
@@ -34,6 +33,96 @@ def blob(layout, digest):
     return filename
 
 
+def index_layer(stream, mode="r:"):
+    entries = {}
+    with tarfile.open(fileobj=stream, mode=mode) as archive:
+        for info in archive:
+            entries[normalized(info.name)] = {
+                "name": info.name,
+                "type": info.type.decode("ascii"),
+                "mode": info.mode,
+                "size": info.size,
+                "offset": info.offset,
+                "offset_data": info.offset_data,
+                "linkname": info.linkname,
+                "sparse": info.sparse,
+            }
+    return entries
+
+
+class DigestReader:
+    def __init__(self, stream):
+        self.stream = stream
+        self.digest = hashlib.sha256()
+
+    def read(self, size):
+        data = self.stream.read(size)
+        self.digest.update(data)
+        return data
+
+
+def read_metadata(archive, info):
+    if not info.isfile() or info.size > 16 * 1024 * 1024:
+        raise ValueError(f"invalid or oversized image metadata: {info.name}")
+    with archive.extractfile(info) as stream:
+        return stream.read()
+
+
+def prepare_docker(source, output):
+    # Native stream producers need one snapshot. Darwin tarballs are inspected
+    # in place: neither their layer payloads nor a decompressed archive is saved.
+    if os.access(source, os.X_OK):
+        snapshot = output / "archive.tar"
+        try:
+            with snapshot.open("wb") as stream:
+                subprocess.run([str(source)], stdout=stream, check=True)
+        except BaseException:
+            snapshot.unlink()
+            raise
+        source = snapshot
+    source = source.resolve()
+    manifest, headers = None, set()
+    with tarfile.open(source, mode="r|*") as archive:
+        for info in archive:
+            name = normalized(info.name)
+            if name in headers:
+                raise ValueError(f"duplicate Docker archive member: {name}")
+            headers.add(name)
+            if name == "manifest.json":
+                manifest = json.loads(read_metadata(archive, info))
+    if manifest is None or len(manifest) != 1:
+        raise ValueError("image inspection requires exactly one Docker manifest")
+    manifest = manifest[0]
+    config = normalized(manifest["Config"])
+    layers = [normalized(layer) for layer in manifest["Layers"]]
+    if len(layers) != len(set(layers)):
+        raise ValueError("duplicate Docker image layer")
+    if config not in headers or config in layers or config == "manifest.json":
+        raise ValueError("invalid Docker config member")
+    members, sources, digests = {}, {}, {}
+    with tarfile.open(source, mode="r|*") as archive:
+        for info in archive:
+            name = normalized(info.name)
+            if name == config:
+                (output / "config.json").write_bytes(read_metadata(archive, info))
+            if name not in layers:
+                continue
+            if not info.isfile():
+                raise ValueError(f"not a regular Docker layer: {name}")
+            with archive.extractfile(info) as stream:
+                reader = DigestReader(stream)
+                members[name] = index_layer(reader, mode="r|")
+                # Include tar padding, not just the blocks consumed by indexing.
+                while reader.read(1024 * 1024):
+                    pass
+                digests[name] = "sha256:" + reader.digest.hexdigest()
+            sources[name] = {"offset": info.offset_data, "size": info.size}
+    if set(members) != set(layers):
+        raise ValueError("missing Docker image layer")
+    (output / "archive.json").write_text(json.dumps({"source": str(source), "layers": sources}))
+    return layers, members, digests
+
+
 def prepare(source, output):
     output.mkdir(parents=True)
     if source.is_dir() or source.suffix == ".json":
@@ -44,49 +133,24 @@ def prepare(source, output):
         manifest = json.loads(blob(layout, index["manifests"][0]["digest"]).read_text())
         (output / "config.json").symlink_to(blob(layout, manifest["config"]["digest"]))
         (output / "blobs").symlink_to(layout / "blobs", target_is_directory=True)
-        layers = []
+        layers, members, digests = [], {}, {}
         for layer in manifest["layers"]:
             filename = blob(layout, layer["digest"])
             if layer["mediaType"] != "application/vnd.oci.image.layer.v1.tar":
                 raise ValueError("image inspection requires uncompressed OCI layers")
             if filename.stat().st_size != layer["size"]:
                 raise ValueError(f"layer size mismatch: {filename}")
-            layers.append(str(filename.relative_to(layout)))
+            name = str(filename.relative_to(layout))
+            layers.append(name)
+            digests[name] = layer["digest"]
+            with filename.open("rb") as stream:
+                members[name] = index_layer(stream)
     else:
-        with tempfile.TemporaryFile() as stream:
-            if os.access(source, os.X_OK):
-                subprocess.run([str(source)], stdout=stream, check=True)
-                stream.seek(0)
-                archive = tarfile.open(fileobj=stream)
-            else:
-                archive = tarfile.open(source)
-            with archive:
-                archive.extractall(output, filter="data")
-        manifest = json.loads((output / "manifest.json").read_text())[0]
-        layers = manifest["Layers"]
-        config = normalized(manifest["Config"])
-        if config != "config.json":
-            (output / "config.json").symlink_to(config)
+        layers, members, digests = prepare_docker(source, output)
 
-    members = {}
-    for layer in layers:
-        layer = normalized(layer)
-        entries = {}
-        with tarfile.open(output / layer, mode="r:") as archive:
-            for info in archive:
-                entries[normalized(info.name)] = {
-                    "name": info.name,
-                    "type": info.type.decode("ascii"),
-                    "mode": info.mode,
-                    "size": info.size,
-                    "offset": info.offset,
-                    "offset_data": info.offset_data,
-                    "linkname": info.linkname,
-                    "sparse": info.sparse,
-                }
-        members[layer] = entries
     (output / "manifest.json").write_text(json.dumps([{"Config": "config.json", "Layers": layers}]))
     (output / "members.json").write_text(json.dumps(members, separators=(",", ":")))
+    (output / "layer-digests.json").write_text(json.dumps(digests))
 
 
 def selected(image, layers_file):
@@ -127,7 +191,18 @@ def extract(image, found, output):
     info.type = entry["type"].encode("ascii")
     if not info.isfile():
         raise ValueError(f"not a regular file: {info.name}")
-    with tarfile.open(image / layer, mode="r:") as archive:
+    source = image / layer
+    mode = "r:"
+    if (image / "archive.json").exists():
+        archive_source = json.loads((image / "archive.json").read_text())
+        location = archive_source["layers"][layer]
+        if info.offset_data + info.size > location["size"]:
+            raise ValueError("member exceeds Docker layer bounds")
+        info.offset += location["offset"]
+        info.offset_data += location["offset"]
+        source = Path(archive_source["source"])
+        mode = "r:*"
+    with tarfile.open(source, mode=mode) as archive:
         with archive.extractfile(info) as stream, output.open("wb") as destination:
             shutil.copyfileobj(stream, destination)
     output.chmod(info.mode & 0o777)
@@ -139,17 +214,23 @@ def main():
     command = commands.add_parser("prepare")
     command.add_argument("source", type=Path)
     command.add_argument("output", type=Path)
-    for operation in ("paths", "extract", "exists", "link", "find"):
+    for operation in ("paths", "digests", "extract", "exists", "link", "find"):
         command = commands.add_parser(operation)
         command.add_argument("image", type=Path)
         command.add_argument("layers", type=Path)
-        if operation != "paths":
+        if operation not in ("paths", "digests"):
             command.add_argument("member")
         if operation == "extract":
             command.add_argument("output", type=Path)
     args = parser.parse_args()
     if args.operation == "prepare":
         prepare(args.source, args.output)
+        return 0
+    if args.operation == "digests":
+        digests = json.loads((args.image / "layer-digests.json").read_text())
+        for layer in args.layers.read_text().splitlines():
+            if layer:
+                print(digests[layer])
         return 0
     layers = selected(args.image, args.layers)
     if args.operation == "paths":

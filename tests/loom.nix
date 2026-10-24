@@ -12,7 +12,12 @@
 let
   inherit (builtins) all attrNames elem;
   inherit (pkgs.lib) concatMapStrings hasPrefix optionalString;
-  resources = import ./lib/browser-resources.nix { };
+  resources = import ./lib/image-resources.nix { };
+  inputs = resources.imageInputs ++ [
+    "/lib/devshell/"
+    "/tests/profiles/"
+    "/specs/cli.md"
+  ];
   sourceNode = lock.nodes.${lock.nodes.root.inputs.loom-src};
   sandboxNames = builtins.filter (hasPrefix "image-") (attrNames packages);
   environmentFor = name: packages.${name}.image.profileEnv;
@@ -154,8 +159,7 @@ let
   };
 
   ciApp = name: check: {
-    inherit name;
-    inherit (resources) inputs;
+    inherit name inputs;
     executable = name;
     package = pkgs.writeShellScriptBin name ''
       set -euo pipefail
@@ -184,7 +188,7 @@ in
     (ciApp "test-loom-agent-images" agentImages)
     {
       name = "test-loom-native-readiness";
-      inherit (resources) inputs;
+      inherit inputs;
       executable = "test-loom-native-readiness";
       package = nativeReadiness;
       platforms = (import ./lib/verifier.nix).linux;

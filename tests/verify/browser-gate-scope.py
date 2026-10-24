@@ -42,6 +42,10 @@ class BrowserGateScope(unittest.TestCase):
           outputs = { upstream, ... }: {
             inherit (upstream) lib;
             legacyPackages.SYSTEM = upstream.legacyPackages.SYSTEM.extend (final: prev: {
+              pi-coding-agent = final.runCommand "pi-image-boundary" { boundary = SENTINEL; } ''
+                echo IMAGE_RUNTIME_REALIZED >&2
+                exit 1
+              '';
               playwright-mcp = final.runCommand "playwright-mcp" { boundary = SENTINEL; } ''
                 echo BROWSER_RUNTIME_REALIZED >&2
                 exit 1
@@ -93,7 +97,7 @@ class BrowserGateScope(unittest.TestCase):
               test-ci = test.apps.ci;
             };
             legacyPackages.${system} = {
-              browserBoundaries = [ pkgs.playwright-driver.browsers.drvPath pkgs.playwright-mcp.drvPath ];
+              browserBoundaries = [ pkgs.playwright-driver.browsers.drvPath pkgs.playwright-mcp.drvPath pkgs.pi-coding-agent.drvPath ];
               verifyScripts = test.verify.scripts;
               ciApps = test.ciAppDerivations;
               testApps = test.testAppDerivations;
@@ -130,8 +134,10 @@ exec bin/test-ci-verifiers "$@"
         ) + "".join(f"- Opaque information [{tier}](verify:beads.tracked-files)\n" for tier in ("check", "system")))
         for path in ("docs/README.md", "specs/playwright-mcp.md", "tests/mcp/playwright/screenshot-test.sh",
                      "tests/sandbox/pi-mcp-native.mjs", "lib/sandbox/image.nix", "tests/verify/default.nix"):
-            self.write(path, "# Overview\n\n| Spec | Code | Beads | Purpose |\n| --- | --- | --- | --- |\n| [fixture](../specs/fixture.md) | tests/ | — | Scope fixture |\n| [playwright-mcp](../specs/playwright-mcp.md) | lib/mcp/ | — | Browser |\n" if path == "docs/README.md" else (Path(SOURCE) / path).read_text())
+            self.write(path, "# Overview\n\n| Spec | Code | Beads | Purpose |\n| --- | --- | --- | --- |\n| [fixture](../specs/fixture.md) | tests/ | — | Scope fixture |\n| [playwright-mcp](../specs/playwright-mcp.md) | lib/mcp/ | — | Browser |\n| [cache](../specs/cache.md) | crates/wrix-cache/ | — | Cache |\n" if path == "docs/README.md" else (Path(SOURCE) / path).read_text())
         self.write("specs/playwright-mcp.md", "# Browser owning contract fixture\n")
+        self.write("specs/cache.md", "# Cache owning contract fixture\n")
+        self.write("crates/wrix-cache/src/recovery.rs", "// Cache recovery source fixture\n")
         for path in (".beads/.gitignore", ".beads/config.yaml", ".beads/metadata.json"):
             self.write(path, (Path(SOURCE) / path).read_text())
         self.run_ok("git", "init", "-q")
@@ -182,7 +188,7 @@ exec bin/test-ci-verifiers "$@"
                     "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false",
                     "commit", "-qm", "Record scoped subject")
 
-    def gate(self, lane, path):
+    def scoped_gate(self, lane, path):
         changed = self.root / path
         changed.write_text(changed.read_text() + "\n")
         self.commit()
@@ -191,11 +197,15 @@ exec bin/test-ci-verifiers "$@"
         self.write("query-calls", "")
         result = self.run_command(LOOM, "gate", lane, "--diff", "HEAD^..HEAD")
         queries = (self.root / "query-calls").read_text().splitlines()
+        records = [json.loads(line) for line in receipts.read_text().splitlines()] if receipts.exists() else []
+        return result, records, queries
+
+    def gate(self, lane, path):
+        result, records, queries = self.scoped_gate(lane, path)
         groups = 2 if lane == "verify" else 1
         self.assertEqual(len(queries), 2 * groups, result.stdout + result.stderr + repr(queries))
         for kind in ("verify", "test-ci"):
             self.assertEqual(sum(query.startswith(kind + " ") for query in queries), groups, queries)
-        records = [json.loads(line) for line in receipts.read_text().splitlines()] if receipts.exists() else []
         return result, records
 
     def boundary_logs(self):
@@ -209,7 +219,9 @@ exec bin/test-ci-verifiers "$@"
         return "\n".join(logs)
 
     def assert_cold(self):
-        self.assertNotIn("BROWSER_RUNTIME_REALIZED", self.boundary_logs())
+        logs = self.boundary_logs()
+        self.assertNotIn("BROWSER_RUNTIME_REALIZED", logs)
+        self.assertNotIn("IMAGE_RUNTIME_REALIZED", logs)
 
     def assert_realized(self, count=1):
         self.assertGreaterEqual(self.boundary_logs().count("BROWSER_RUNTIME_REALIZED"), count)
@@ -261,6 +273,24 @@ exec bin/test-ci-verifiers "$@"
             self.assertNotIn(self.sentinel, result.stdout + result.stderr)
             self.assertTrue(any(record["target"] == "verify:beads.tracked-files" for record in records))
         self.assert_cold()
+
+    def test_cache_changes_leave_browser_and_profile_image_boundaries_cold(self):
+        contract = self.root / "specs/fixture.md"
+        contract.write_text(contract.read_text() + "".join(
+            f"- Image graph [{tier}](test-ci:test-image-tier-graph)\n" for tier in ("check", "system")))
+        self.commit()
+        for lane in ("verify", "system"):
+            for path in ("crates/wrix-cache/src/recovery.rs", "specs/cache.md"):
+                with self.subTest(lane=lane, path=path):
+                    result, records, queries = self.scoped_gate(lane, path)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertTrue(queries)
+                    self.assertTrue(records)
+                    targets = {record["target"] for record in records}
+                    self.assertNotIn("test-ci:test-image-tier-graph", targets)
+                    self.assertNotIn("verify:playwright-mcp.screenshot", targets)
+                    self.assertNotIn("test-ci:test-playwright-chromium-executable-path", targets)
+                    self.assert_cold()
 
     def test_relevant_changes_reach_cold_browser_runtime_in_both_lanes(self):
         paths = ("tests/mcp/playwright/screenshot-test.sh", "tests/sandbox/pi-mcp-native.mjs",
