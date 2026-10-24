@@ -215,7 +215,7 @@ class ImageArtifact(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout.splitlines(),
                                  ["sha256:" + hashlib.sha256(data).hexdigest() for data in self.layer_data])
-                output = self.root / "docker-runner"
+                output = self.root / ("docker-runner-" + mode.replace(":", "-"))
                 result = self.query("extract", STORE + "/bin/runner", output)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(output.read_text(), "#!/bin/sh\necho original\n")
