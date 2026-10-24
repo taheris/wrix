@@ -89,6 +89,7 @@ write_verify_targets() {
     "$VERIFY_TARGETS" > "$HEAVY_GENERIC_VERIFY_TARGETS"
   cat > "$EXPECTED_IMAGE_VERIFY_TARGETS" <<'TARGETS'
 verify:images.darwin-entrypoint-core-hooks-path
+verify:images.inspection-artifacts
 verify:images.linked-worktree-core-hooks-path
 verify:images.linux-entrypoint-core-hooks-path
 verify:images.missing-hook-runtime-blocks-agent
