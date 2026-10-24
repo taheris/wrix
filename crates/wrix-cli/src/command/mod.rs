@@ -279,6 +279,17 @@ fn run_cache(
         return Ok(ExitCode::SUCCESS);
     }
     if let Some(command) = wrix_cache::command::Command::parse(&args[0]) {
+        if command == wrix_cache::command::Command::RotateKey {
+            if let Err(error) = parse_no_arguments("wrix service cache rotate-key", &args[1..]) {
+                return render_clap_error(&error, stdout, stderr);
+            }
+            wrix_service::lifecycle::rotate_cache_key().map_err(io::Error::other)?;
+            writeln!(
+                stdout,
+                "completed project cache key rotation; republish to populate the private view if needed"
+            )?;
+            return Ok(ExitCode::SUCCESS);
+        }
         return wrix_cache::command::run(command, &args[1..], stdout).map_err(io::Error::other);
     }
     writeln!(stderr, "unknown cache command: {}", args[0])?;

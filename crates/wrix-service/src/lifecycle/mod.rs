@@ -889,6 +889,26 @@ pub fn start(cache_mode: CacheMode) -> Result<Status> {
     status_for_plan(plan)
 }
 
+/// Rotates only the admitted workspace's private view on the verified selected running backend.
+pub fn rotate_cache_key() -> Result<()> {
+    wrix_state::host::Host::discover().map_err(io::Error::other)?;
+    let (mut plan, _registration) = locked_plan(CacheMode::Enabled)?;
+    plan.authorize()?;
+    let guard = host_lifecycle_lock(plan.paths())?;
+    plan.reconcile_owner(&guard)?;
+    supervisor::transition::ensure_clear(plan.paths().state_root(), plan.workspace().hash())?;
+    if plan.selected_owner.is_none() || !plan.cache_enabled() {
+        return Err(Error::Operation {
+            message: "cache rotation requires a selected running cache backend and enabled workspace cache".into(),
+        });
+    }
+    let runtime = Runtime::from_env()?;
+    runtime.validate_selected_owner(&plan)?;
+    shared::check_inventory(&runtime, plan.selected_owner.as_ref(), None)?;
+    cache::rotate(&plan)?;
+    Ok(())
+}
+
 fn locked_plan(cache_mode: CacheMode) -> Result<(Plan, Registration)> {
     let selection = wrix_state::context::Selection::inspect(&env::current_dir()?)?;
     let workspace = selection.workspace().clone();

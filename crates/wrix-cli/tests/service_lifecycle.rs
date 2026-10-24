@@ -9,6 +9,8 @@ mod controller;
 #[cfg(target_os = "linux")]
 #[path = "common/maintenance.rs"]
 mod maintenance;
+#[path = "common/native_celler.rs"]
+mod native_celler;
 #[path = "common/peer_runtime.rs"]
 mod peer_runtime;
 #[path = "common/service_binding.rs"]
@@ -1277,6 +1279,84 @@ fn cache_endpoint_generates_only_an_exact_tcp_network_exception() -> TestResult 
             assert_eq!(String::from_utf8(output.stdout)?, expected);
         }
     }
+    Ok(())
+}
+
+#[test]
+fn explicit_cache_rotation_refuses_unverified_selected_owner_before_key_mutation() -> TestResult {
+    let mut fixture = Fixture::shared_cache()?;
+    let root = fixture.state_root()?;
+    let before = fs::read(root.join("keys/cache.pub"))?;
+    fixture.snapshot[0]["configuration"]["labels"]["wrix.service.scope"] = json!("foreign");
+    fixture.write_snapshot()?;
+    let output = run_command(fixture.command()?.args(["service", "cache", "rotate-key"]))?;
+    assert!(!output.status.success());
+    assert!(output.stderr.contains("ownership"), "{}", output.stderr);
+    assert_eq!(fs::read(root.join("keys/cache.pub"))?, before);
+    assert!(!root.join("celler-rotation.json").exists());
+    Ok(())
+}
+
+#[test]
+fn explicit_cache_rotation_restores_missing_publication_binding_after_key_conflict() -> TestResult {
+    let fixture = Fixture::shared_cache()?;
+    let root = fixture.state_root()?;
+    drop(fixture.server.borrow_mut().take());
+    let _native = native_celler::Server::start(fixture.root.path(), fixture.port("cache_http")?)?;
+    let workspace = wrix_core::path::WorkspaceHash::parse(
+        fixture.metadata["workspace_hash"]
+            .as_str()
+            .ok_or("missing workspace hash")?,
+    )?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let publisher = wrix_cache::backend::publication::Publisher::load(&root, &workspace)?;
+    let original_backend_key = runtime.block_on(publisher.register())?;
+    let binding: Value = serde_json::from_slice(&fs::read(root.join("celler-publisher.json"))?)?;
+    let common_key = runtime.block_on(
+        wrix_cache::backend::publication::registration::provision_common(
+            &fixture.root.path().join("native-common-bootstrap"),
+            binding["endpoint"].as_str().ok_or("missing endpoint")?,
+            Path::new(
+                binding["issuer_root"]
+                    .as_str()
+                    .ok_or("missing issuer path")?,
+            ),
+            Duration::from_hours(720),
+            Duration::from_secs(1),
+        ),
+    )?;
+    fs::write(
+        root.parent()
+            .ok_or("missing state base")?
+            .join("common/keys/cache.pub"),
+        common_key.as_str(),
+    )?;
+    let public = root.join("keys/cache.pub");
+    let retained = "retained:PUAXw+hDiVqStwqnTRt+vJyYLM8uxJaMwM1V8Sr0Zgw=";
+    fs::write(&public, retained)?;
+    fs::remove_file(root.join("celler-publisher.json"))?;
+    let output = run_command(fixture.command()?.args(["service", "start"]))?;
+    assert!(!output.status.success());
+    assert!(
+        output.stderr.contains("explicit key reconciliation"),
+        "{}",
+        output.stderr
+    );
+    assert_eq!(fs::read_to_string(&public)?, retained);
+    let secret = fs::read(root.join("keys/cache.secret"))?;
+    let output = run_command(fixture.command()?.args(["service", "cache", "rotate-key"]))?;
+    assert!(output.status.success(), "{}", output.stderr);
+    let key_text = fs::read_to_string(&public)?;
+    let key = wrix_core::cache_key::CachePublicKey::parse(key_text.trim())?;
+    assert_ne!(key, original_backend_key);
+    let publisher = wrix_cache::backend::publication::Publisher::load(&root, &workspace)?;
+    assert_eq!(runtime.block_on(publisher.register())?, key);
+    assert_eq!(fs::read(root.join("keys/cache.secret"))?, secret);
+    assert!(!root.join("celler-rotation.json").exists());
+    let output = run_command(fixture.command()?.args(["service", "start"]))?;
+    assert!(output.status.success(), "{}", output.stderr);
     Ok(())
 }
 

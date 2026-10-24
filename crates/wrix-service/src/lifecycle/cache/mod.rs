@@ -29,6 +29,8 @@ pub enum Error {
     Issuer(#[from] wrix_cache::backend::issuer::Error),
     /// authenticated Celler namespace readiness failed; runtime startup may have succeeded: {0}
     Registration(#[from] wrix_cache::backend::publication::Error),
+    /// explicit Celler namespace rotation failed: {0}
+    Rotation(wrix_cache::backend::publication::Error),
     /// cannot initialize authenticated Celler readiness: {0}
     Runtime(#[from] io::Error),
     /// authenticated Celler readiness exceeded its deadline; backend or local registration may have changed, but readiness is unconfirmed
@@ -133,6 +135,28 @@ pub(super) fn activate(plan: &Plan, prepared: &Prepared) -> Result<(), Error> {
         .await
         .map_err(|_| Error::Deadline)?
     })
+}
+
+pub(super) fn rotate(plan: &Plan) -> Result<(), Error> {
+    let prepared = prepare(plan, RuntimeStatus::Running)?;
+    let port = plan.cache_port().ok_or(Error::Location)?;
+    let endpoint = format!("http://127.0.0.1:{port}/");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    runtime
+        .block_on(
+            wrix_cache::backend::publication::registration::rotate_private(
+                plan.paths().state_root(),
+                plan.workspace().hash(),
+                &endpoint,
+                &prepared.issuer,
+                prepared.retention,
+                prepared.lock_timeout,
+            ),
+        )
+        .map_err(Error::Rotation)?;
+    Ok(())
 }
 
 pub(super) fn retire(plan: &Plan) -> Result<(), Error> {

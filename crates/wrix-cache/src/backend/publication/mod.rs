@@ -64,8 +64,14 @@ pub enum Error {
     Directory(#[from] wrix_core::private_directory::Error),
     /// namespace lock and public key must be single-link regular files owned by the control directory owner, without group/other write access
     UnsafeRegistrationFile,
-    /// native registration reported a different key from retained valid namespace metadata; explicit key reconciliation is required
+    /// native registration reported a different key from retained valid namespace metadata; explicit key reconciliation is required; `wrix service cache rotate-key` clears this private view and generates a new key
     RetainedKeyConflict,
+    /// interrupted explicit cache rotation requires retrying `wrix service cache rotate-key`; ordinary publication and startup are refused
+    PendingRotation,
+    /// explicit namespace rotation may have changed backend state; retry `wrix service cache rotate-key` to finish recording without deleting a replacement view: {source}
+    RotationIncomplete { source: Box<Error> },
+    /// rotation key and publication authority are recorded and its journal removed, but final directory durability is unconfirmed; do not retry rotation unless another invalidation is intended: {0}
+    RotationRecorded(io::Error),
     /// timed out waiting for the namespace publication lock; no backend request was dispatched
     LockTimeout,
     /// Celler registration succeeded, but local key or publication authority recording failed; backend changes remain active: {source}
@@ -221,6 +227,7 @@ impl Publisher {
 
     /// Reads only host control state; no environment, repository configuration or service mounts.
     pub fn load(state_root: &Path, workspace: &WorkspaceHash) -> Result<Self> {
+        registration::rotation::ensure_clear(state_root)?;
         if retirement::is_retired(state_root, workspace)? {
             return Err(Error::Retired);
         }

@@ -664,7 +664,18 @@ compatibility alias or a workspace collection bypass.
 `wrix service cache rotate-key` takes the namespace lock, invalidates/wipes only
 that repository-private Celler view, creates a new keypair and updates metadata.
 Repopulation is by publishing/warm, without old+new trust overlap or in-place
-new-key re-signing. Same-valid-key unsigned-entry repair follows
+new-key re-signing. Explicit rotation can recover a missing publication binding
+using the verified selected running backend and existing host-private issuer; it
+does not adopt a conflicting backend key as a non-destructive repair. A durable
+pending rotation blocks ordinary startup/publication. Retrying the same command
+finishes recording an already-created replacement view without invalidating it
+again. Unsafe metadata or mismatched workspace, endpoint, namespace or issuer
+bindings are refused before invalidation.
+[test](../crates/wrix-cache/tests/celler_backend.rs::rotation::missing_binding_conflict_is_recoverable_by_explicit_native_rotation_only)
+[test](../crates/wrix-cache/tests/celler_backend.rs::rotation::interrupted_native_rotation_finishes_recording_without_invalidating_replacement_content)
+[test](../crates/wrix-cli/tests/service_lifecycle.rs::explicit_cache_rotation_restores_missing_publication_binding_after_key_conflict)
+
+Same-valid-key unsigned-entry repair follows
 [Signing and Repair](#signing-and-repair), not rotation.
 
 `wrix service cache status` reports namespace size, pending count/age,

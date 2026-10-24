@@ -22,6 +22,9 @@ mod registration;
 const PUBLIC_KEY: &str = "fixture:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
 const RETENTION: Duration = Duration::from_hours(720);
 
+#[path = "common/registration/rotation.rs"]
+mod rotation;
+
 #[tokio::test]
 async fn native_common_readiness_preserves_retention_key_and_separate_publication_admission() {
     use std::os::unix::fs::MetadataExt;

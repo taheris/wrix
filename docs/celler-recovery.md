@@ -89,6 +89,47 @@ candidate record supports recovery after interrupted initial creation. Recovery
 is not a reset, cache prune, signing-key rotation or workspace database
 migration.
 
+## Conflicting workspace cache keys
+
+Host-wide `service recover` does not reconcile workspace trust metadata. If
+ordinary workspace startup reports a different key from retained valid namespace
+metadata, it deliberately leaves that retained key unchanged. The retained
+`cache.secret` file is not authority to replace Celler's current signing state.
+
+The explicit rotation command also works when `celler-publisher.json` was never
+installed because startup stopped at that conflict. With the updated host CLI,
+run this **from the affected workspace**, only after authorizing loss of that
+workspace's existing private cache view:
+
+```bash
+cd /path/to/affected/workspace
+"${WRIX_BIN:-wrix}" service cache rotate-key
+"${WRIX_BIN:-wrix}" service start
+```
+
+Rotation invalidates the selected workspace's private view and generates a new
+backend signing key. It does not merely adopt the backend key, import a retained
+secret key, clear common/peer views, or delete installed store paths. Republish
+or warm the private view as needed. Zero pending records or publication roots is
+not proof that the backend contains no useful content.
+
+This command requires a selected, identity-verified running backend, existing
+host-private issuer authority and admitted workspace scope. If the backend is
+absent/stopped, recover it separately first. Missing issuer authority, unsafe
+files or bindings to different authority coordinates are refused; do not delete
+or edit control metadata to bypass those checks.
+
+If rotation fails after recording its durable intent, backend mutation may have
+succeeded. Ordinary startup and automatic publication refuse that pending state.
+Resolve the reported filesystem/backend condition and rerun the same command; it
+finishes local recording without deleting an already-created replacement view.
+Keep the journal and original namespace lock intact. A separate final durability
+error can report that the key and authority are already recorded and the journal
+removed: do not blindly rotate again in that case. Try ordinary `service start`;
+retry rotation only if startup reports a pending rotation. Once rotation
+succeeds, a later invocation starts a new rotation and invalidates the view
+again.
+
 ## Controller policy upgrade
 
 The shared SQL lifecycle uses controller policy epoch 2. An older running

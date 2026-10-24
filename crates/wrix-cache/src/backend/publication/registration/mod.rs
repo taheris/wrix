@@ -17,6 +17,9 @@ use wrix_core::{cache_key::CachePublicKey, path::WorkspaceHash};
 use super::{Error, Publisher, Result, private_directory};
 use crate::backend::{Client, issuer::Authority};
 
+pub(super) mod rotation;
+pub use rotation::rotate_private;
+
 /// Confirms and records a private view's key, native policy and issuer-backed publication authority.
 ///
 /// Callers provide host-controlled paths and lifecycle coordination; success is not substitution proof.
@@ -34,6 +37,7 @@ pub async fn provision_private(
     let client = Client::new(endpoint, namespace.clone(), &token)?;
     wrix_core::private_directory::prepare_with_parents(state_root)?;
     let _lock = acquire(state_root, lock_timeout).await?;
+    rotation::ensure_clear(state_root)?;
     let key = client.register(retention).await?;
     let record = || {
         record_key(state_root, &key)?;
@@ -130,7 +134,7 @@ pub(super) async fn acquire(state_root: &Path, timeout: Duration) -> Result<File
     }
 }
 
-fn record_key(state_root: &Path, key: &CachePublicKey) -> Result<()> {
+fn retained_key(state_root: &Path) -> Result<Option<CachePublicKey>> {
     let keys = state_root.join("keys");
     wrix_core::private_directory::prepare_with_parents(&keys)?;
     let directory = private_directory(&keys)?;
@@ -148,20 +152,33 @@ fn record_key(state_root: &Path, key: &CachePublicKey) -> Result<()> {
             if bytes.len() as u64 > super::MAX_BINDING_BYTES {
                 return Err(Error::Binding);
             }
-            // Only malformed public metadata is repairable from authenticated native state.
             if let Ok(text) = std::str::from_utf8(&bytes)
                 && let Ok(retained) = CachePublicKey::parse(text.trim())
             {
-                return if &retained == key {
-                    Ok(())
-                } else {
-                    Err(Error::RetainedKeyConflict)
-                };
+                return Ok(Some(retained));
             }
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => (),
         Err(error) => return Err(error.into()),
     }
+    Ok(None)
+}
+
+fn record_key(state_root: &Path, key: &CachePublicKey) -> Result<()> {
+    if let Some(retained) = retained_key(state_root)? {
+        return if &retained == key {
+            Ok(())
+        } else {
+            Err(Error::RetainedKeyConflict)
+        };
+    }
+    replace_key(state_root, key)
+}
+
+fn replace_key(state_root: &Path, key: &CachePublicKey) -> Result<()> {
+    retained_key(state_root)?;
+    let keys = state_root.join("keys");
+    let destination = keys.join("cache.pub");
     let mut temporary = tempfile::NamedTempFile::new_in(&keys)?;
     writeln!(temporary, "{}", key.as_str())?;
     temporary.as_file().sync_all()?;
