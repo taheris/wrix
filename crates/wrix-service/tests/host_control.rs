@@ -652,12 +652,19 @@ async fn private_control_rejects_oversized_frames_before_allocation() {
             .await
             .unwrap();
         stream.write_u32(u32::MAX).await.unwrap();
+        // Darwin peer credentials require the connecting process to retain its endpoint.
+        std::future::pending::<()>().await;
     };
-    let (served, ()) = tokio::join!(controller.serve_one(), exchange);
-    assert!(matches!(
-        served,
-        Err(wrix_service::control::Error::FrameLimit)
-    ));
+    tokio::select! {
+        served = controller.serve_one() => {
+            assert!(
+                matches!(served, Err(wrix_service::control::Error::FrameLimit)),
+                "{served:?}"
+            );
+        }
+        () = exchange => panic!("oversized-frame peer must remain connected"),
+        () = tokio::time::sleep(BUDGET) => panic!("oversized frame was not rejected"),
+    }
 }
 
 #[tokio::test]

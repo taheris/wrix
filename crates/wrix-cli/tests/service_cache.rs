@@ -21,7 +21,7 @@ impl Fixture {
     fn new() -> TestResult<Self> {
         let root = tempfile::Builder::new()
             .prefix("service-cache")
-            .tempdir_in("/tmp")?;
+            .tempdir_in(fs::canonicalize("/tmp")?)?;
         let workspace = root.path().join("workspace");
         let bin = root.path().join("bin");
         fs::create_dir_all(&workspace)?;

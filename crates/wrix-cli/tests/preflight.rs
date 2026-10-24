@@ -295,13 +295,22 @@ fn dry_run_reports_launch_policy_and_provenance() -> TestResult {
     let argv = String::from_utf8(fs::read(fixture.root.path().join("argv"))?)?;
     for expected in [
         "localhost/wrix-test:latest",
-        "--cpus=2",
-        "--memory=1234m",
-        "--pids-limit=99",
         "WRIX_EFFECTIVE_GIT_SIGN=1",
         "WRIX_NETWORK=open",
     ] {
         assert!(argv.contains(expected), "{expected}: {argv}");
+    }
+    let arguments: Vec<_> = argv.split('\0').collect();
+    let resources = if cfg!(target_os = "macos") {
+        &["-c2", "-m1234M"][..]
+    } else {
+        &["--cpus=2", "--memory=1234m", "--pids-limit=99"][..]
+    };
+    for expected in resources {
+        assert!(arguments.contains(expected), "{expected}: {argv}");
+    }
+    if cfg!(target_os = "macos") {
+        assert!(!argv.contains("--pids-limit"));
     }
     assert!(!argv.contains("WRIX_DEPLOY_KEY="));
     Ok(())

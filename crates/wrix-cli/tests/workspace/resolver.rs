@@ -93,11 +93,18 @@ fn non_utf8_checkout_paths_roundtrip_through_cli_and_protocol_without_loss() {
     fixture.initialize();
     fixture.repository("original");
     let name = std::ffi::OsString::from_vec(b"native-\xff".to_vec());
-    fs::rename(
+    match fs::rename(
         fixture.root.path().join("original"),
         fixture.root.path().join(&name),
-    )
-    .unwrap();
+    ) {
+        Ok(()) => {}
+        #[cfg(target_os = "macos")]
+        Err(error) if error.raw_os_error() == Some(libc::EILSEQ) => {
+            eprintln!("filesystem cannot represent non-UTF8 checkout names: {error}");
+            return;
+        }
+        Err(error) => panic!("creating non-UTF8 checkout fixture: {error}"),
+    }
     let checkout = fixture.inside("/").join(&name);
     let checkout = if fixture.isolated {
         checkout

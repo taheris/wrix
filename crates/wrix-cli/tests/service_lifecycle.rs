@@ -40,7 +40,7 @@ const APPLE_RUNTIME: &str = concat!(
 fn public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql() -> TestResult {
     let root = tempfile::Builder::new()
         .prefix("cli-native-")
-        .tempdir_in("/tmp")?;
+        .tempdir_in(fs::canonicalize("/tmp")?)?;
     let lock = fs::File::options()
         .create(true)
         .truncate(false)
@@ -318,7 +318,7 @@ impl Fixture {
         // Repository-local TMPDIR paths inherit the enclosing checkout's service identity.
         let root = tempfile::Builder::new()
             .prefix("apple-service")
-            .tempdir_in("/tmp")?;
+            .tempdir_in(fs::canonicalize("/tmp")?)?;
         Self::from_root(root)
     }
 
@@ -668,7 +668,7 @@ fn initialize_repository(path: &Path) -> TestResult {
 fn enclosing_repository_does_not_change_service_fixture_identity() -> TestResult {
     let outer = tempfile::Builder::new()
         .prefix("service-fixture-enclosing-repository")
-        .tempdir_in("/tmp")?;
+        .tempdir_in(fs::canonicalize("/tmp")?)?;
     initialize_repository(outer.path())?;
     let root = tempfile::Builder::new()
         .prefix("apple-service")
@@ -689,7 +689,7 @@ fn enclosing_repository_does_not_change_service_fixture_identity() -> TestResult
 fn repository_local_tempdir_does_not_change_service_fixture_identity() -> TestResult {
     let outer = tempfile::Builder::new()
         .prefix("service-fixture-repository")
-        .tempdir_in("/tmp")?;
+        .tempdir_in(fs::canonicalize("/tmp")?)?;
     initialize_repository(outer.path())?;
     let tmpdir = outer.path().join(".loom/scratch");
     fs::create_dir_all(&tmpdir)?;
@@ -1120,7 +1120,8 @@ fn workspace_stop_retires_current_native_read_issuance_without_stopping_controll
 fn cache_guest_endpoint_and_key_reach_both_launch_commands() -> TestResult {
     for mode in [LaunchCommand::Run, LaunchCommand::Spawn] {
         for layout in ["", ".loom/beads/cache-route", ".loom/integration"] {
-            let mut fixture = Fixture::from_root_at(tempfile::tempdir_in("/tmp")?, layout)?;
+            let mut fixture =
+                Fixture::from_root_at(tempfile::tempdir_in(fs::canonicalize("/tmp")?)?, layout)?;
             fixture.disable_dolt()?;
             let workspace = fixture.workspace.clone();
             let output = run_command(&mut fixture.launch_command(mode, &workspace)?)?;

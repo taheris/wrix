@@ -22,6 +22,8 @@ pub const CLIENT_FORMAT: &str =
     "#{client_name}|#{client_pid}|#{client_tty}|#{session_id}|#{window_id}|#{pane_id}";
 
 mod omniwm;
+#[cfg(test)]
+mod test;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Outcome {
@@ -550,9 +552,26 @@ fn discover_process(
     {
         return Ok(Vec::new());
     }
+    discover_sockets(
+        fs::read_dir(path.join("fd"))?.map(|entry| entry.map(|entry| entry.path())),
+        unix,
+    )
+}
+
+fn discover_sockets(
+    descriptors: impl IntoIterator<Item = std::io::Result<PathBuf>>,
+    unix: &std::collections::HashMap<&str, &str>,
+) -> std::io::Result<Vec<String>> {
     let mut paths = Vec::new();
-    for fd in fs::read_dir(path.join("fd"))? {
-        let link = fs::read_link(fd?.path())?;
+    for fd in descriptors {
+        let link = match fs::read_link(fd?) {
+            Ok(link) => link,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                tracing::debug!(%error, "descriptor closed during discovery");
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
         if let Some(inode) = link
             .to_str()
             .and_then(|s| s.strip_prefix("socket:["))
