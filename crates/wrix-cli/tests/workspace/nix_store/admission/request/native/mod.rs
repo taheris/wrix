@@ -1,5 +1,6 @@
 //! Actual supervised controller, private IPC and caller-independent native provisioning.
 mod client;
+mod seed;
 
 use super::*;
 use wrix_service::control::{
@@ -264,6 +265,11 @@ fn supervised_controller_prepares_after_requester_exit_and_preserves_native_owne
         .unwrap();
         owner.release_execution(&proof).unwrap();
         owner.collect().unwrap();
+        seed::retained(&owner, &selection, &host);
+        owner.shutdown().unwrap();
+        owner.resume().unwrap();
+        seed::retained(&owner, &selection, &host);
+        owner.collect().unwrap();
         owner.shutdown().unwrap();
         local.close().unwrap();
         fs::write(directory.join("native-finished"), b"released").unwrap();
@@ -302,6 +308,7 @@ fn supervised_controller_prepares_after_requester_exit_and_preserves_native_owne
         "WRIX_TEST_POOL_CONTROLLER",
         "WRIX_TEST_POOL_NIX",
         "WRIX_TEST_POOL_BASH",
+        "WRIX_TEST_POOL_WORKER_IMAGE",
     ] {
         command.env(
             name,

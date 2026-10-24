@@ -50,6 +50,10 @@ pub enum Purpose {
     Execution {
         ticket: crate::execution::Ticket,
     },
+    Worker {
+        ticket: crate::execution::Ticket,
+        image: wrix_core::nix_store::binding::Binding,
+    },
 }
 
 impl Purpose {
@@ -57,8 +61,15 @@ impl Purpose {
         matches!(self, Self::Preparation)
     }
     fn recheck(&self, store: &Store, context: &crate::context::Context) -> Result<(), Error> {
-        if let Self::Execution { ticket } = self {
+        if let Self::Execution { ticket } | Self::Worker { ticket, .. } = self {
             crate::execution::require_reserved(store, context, ticket)?;
+        }
+        if let Self::Worker { image, .. } = self {
+            image
+                .metadata()
+                .version
+                .require_supported()
+                .map_err(|_| Error::Unsupported)?;
         }
         Ok(())
     }
@@ -148,6 +159,14 @@ impl Guard {
 
     pub fn request_execution(self, ticket: crate::execution::Ticket) -> Result<Request, Error> {
         self.issue(Purpose::Execution { ticket })
+    }
+
+    pub fn request_worker(
+        self,
+        ticket: crate::execution::Ticket,
+        image: wrix_core::nix_store::binding::Binding,
+    ) -> Result<Request, Error> {
+        self.issue(Purpose::Worker { ticket, image })
     }
 
     fn issue(self, purpose: Purpose) -> Result<Request, Error> {

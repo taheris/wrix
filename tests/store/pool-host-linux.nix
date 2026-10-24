@@ -1,5 +1,34 @@
 { pkgs, wrix }:
 
+let
+  worker = wrix.mkSandbox {
+    agent = "direct";
+    agentPkg = pkgs.hello;
+  };
+  nextWorker = wrix.mkSandbox {
+    agent = "direct";
+    agentPkg = pkgs.hello;
+    profile = wrix.profiles.base // {
+      env = (wrix.profiles.base.env or { }) // {
+        WRIX_SEED_VARIANT = "next";
+      };
+    };
+  };
+  imageCase = { image, ... }: {
+    source = toString image.source;
+    inherit (image) source_kind;
+    digest_file = toString image.digest;
+    shared = image.sharedNix;
+  };
+  seedImage =
+    assert worker.image.sharedNix == nextWorker.image.sharedNix;
+    pkgs.writeText "wrix-pool-worker-seed.json" (
+      builtins.toJSON {
+        primary = imageCase worker;
+        next = imageCase nextWorker;
+      }
+    );
+in
 assert pkgs.stdenv.hostPlatform.isLinux;
 pkgs.writeShellApplication {
   name = "test-shared-nix-host-owner-linux";
@@ -19,6 +48,7 @@ pkgs.writeShellApplication {
     export WRIX_NIX_POOL_HOST_TOOLS=${wrix.rustPackage.poolHostTools}
     export WRIX_TEST_POOL_NIX=${pkgs.nix}/bin/nix
     export WRIX_TEST_POOL_BASH=${pkgs.bashInteractive}
+    export WRIX_TEST_POOL_WORKER_IMAGE=${seedImage}
     export WRIX_TEST_POOL_CONTROLLER=${wrix.rustPackage.controllerPackage}/bin/wrix-host-controller
     ${wrix.rustPackage.cacheBackendTests}/bin/workspace-admission-tests \
       --ignored --exact \

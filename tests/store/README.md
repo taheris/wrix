@@ -119,10 +119,35 @@ with a surviving projection, same-owner reuse and proof-gated drain/revocation.
 No worker runtime is substituted. These are host/client/projection component
 checks, not production run/spawn or two-worker acceptance.
 
+Worker preparation adds a separately probed private interface and freezes the
+selected immutable image configuration digest and shared-Nix metadata alongside
+the original reserved ticket. Actual installed image architecture, Linux OS,
+managed/profile/private/shared labels and the exact immutable closure metadata
+hash are checked before provisioning. Seeding completes and is authenticated
+again before any worker-purpose key or projection is issued. A requested image
+is descriptive input, never a caller-selected endpoint, mount or program.
+
+Authenticated image inspection distinguishes missing registration from a
+complete exact durable pin set. Interrupted records, altered/extra/missing pins,
+substituted state and unexpected native validity refuse; they are never adopted
+or repaired. Only genuinely missing native paths are exported and imported.
+Already installed paths receive the new image's exact durable pins without any
+archive staging or import, while an already complete image returns before host
+root/archive creation. A bounded native importer disk-buffers individual NARs;
+upstream legacy import buffers whole NARs in memory. The fixed trusted startup
+role uses native trusted-import semantics, never a worker signature exception.
+
+The real packaged-controller test seeds an actual factory worker-image closure
+before returning its client/view, reuses it for another checked request, pins a
+distinct actual image with the same closure without any transfer/import, and
+preserves both complete registrations through native GC and sealed VM resume.
+These remain component checks: no normal launched-worker or runtime/platform
+acceptance is inferred.
+
 Failed tests retain their private fixture rather than deleting possibly live
-backing data. Exact worker-image seeding, worker ingress/bootstrap and run/spawn
-delivery, full host-wide update/recovery integration, and independent
-platform-worker acceptance remain outstanding; shared launches stay disabled.
+backing data. Worker ingress/bootstrap and production run/spawn delivery, full
+host-wide update/recovery integration, and independent platform-worker
+acceptance remain outstanding; shared launches stay disabled.
 
 ## Explicit same-image guest resume
 
@@ -221,7 +246,11 @@ denials, fixed-command enforcement, read-only export, a readable outside-jail
 control, live-lease GC refusal, release and native collection. Trusted startup
 can import an exact staged image archive and pin its declared paths; this is not
 a worker signature exception. Management and transport processes share the
-aggregate resource budget and have a bounded control subgroup.
+aggregate resource budget and have a bounded control subgroup. The VM has 4 GiB
+memory; the native aggregate limit is 3 GiB/256 PIDs, with work limited to 1.5
+GiB/144 PIDs, trusted seeding to 768 MiB/16 PIDs and control to 384 MiB/96 PIDs.
+Seeding OOM is group-local, and seed activity participates in quiescence and
+clean-release checks.
 
 ## Linux service-VM export
 

@@ -1,5 +1,20 @@
 //! Bounded helper I/O; cancelling a helper never proves native work or VM completion.
 
+mod archive;
+
+pub(super) struct Archive {
+    pub status: std::process::ExitStatus,
+    pub bytes: u64,
+    pub stderr: Vec<u8>,
+}
+pub(super) fn export(
+    command: std::process::Command,
+    file: std::fs::File,
+    limit: u64,
+) -> std::io::Result<Archive> {
+    archive::capture(command, file, limit)
+}
+
 use std::{
     io,
     process::{Command, Output, Stdio},

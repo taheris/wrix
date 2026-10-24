@@ -1,5 +1,6 @@
 //! Protected, one-use transport of the original checked context, not a namespace/path surrogate.
 mod native;
+mod worker;
 
 use super::*;
 use wrix_state::nix_store::admission::request;

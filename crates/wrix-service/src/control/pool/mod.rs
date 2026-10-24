@@ -21,6 +21,12 @@ use wrix_state::nix_store::admission::request::{self, Accepted, Id, Purpose};
 pub(super) enum Action {
     Pool,
     Execution,
+    Worker,
+}
+enum Preparation {
+    Pool,
+    Execution,
+    Worker(backend::seed::Image),
 }
 
 const LIMIT: usize = 128;
@@ -145,10 +151,11 @@ impl Queue {
                     (action, accepted.purpose()),
                     (Action::Pool, Purpose::Preparation)
                         | (Action::Execution, Purpose::Execution { .. })
+                        | (Action::Worker, Purpose::Worker { .. })
                 ) {
                     return Err(Error::PermissionDenied);
                 }
-                if matches!(action, Action::Execution) {
+                if matches!(action, Action::Execution | Action::Worker) {
                     tools.export_check()?;
                 }
                 let namespace = Namespace::from(accepted.namespace());
@@ -159,6 +166,19 @@ impl Queue {
                         return Err(Error::UnknownNamespace);
                     }
                 }
+                let preparation = match accepted.purpose() {
+                    Purpose::Preparation => Preparation::Pool,
+                    Purpose::Execution { .. } => Preparation::Execution,
+                    Purpose::Worker { image, .. } => {
+                        let digest = wrix_sandbox::image::Digest::parse(image.digest().as_str())
+                            .map_err(|_| Error::PoolRequest)?;
+                        Preparation::Worker(backend::seed::Image::inspect(
+                            accepted.pool().system,
+                            &digest,
+                            image.metadata(),
+                        )?)
+                    }
+                };
                 let window = coordination.window(accepted.pool())?;
                 let _window = window.lock().map_err(|_| Error::LockPoisoned)?;
                 let deadline = Instant::now() + ACQUISITION;
@@ -169,9 +189,12 @@ impl Queue {
                         }
                         Ok(mut owner) => {
                             supervisor.recover(&accepted.host_handle(), &deployment, &owner)?;
-                            return match action {
-                                Action::Pool => Ok(Prepared::Pool),
-                                Action::Execution => {
+                            return match &preparation {
+                                Preparation::Pool => Ok(Prepared::Pool),
+                                Preparation::Execution | Preparation::Worker(_) => {
+                                    if let Preparation::Worker(image) = &preparation {
+                                        owner.seed_execution(&accepted, image)?;
+                                    }
                                     let delivery = owner.admit_execution(&accepted)?;
                                     supervisor.start(
                                         accepted.host_handle(),

@@ -8,6 +8,7 @@ let
     writeShellScriptBin
     ;
   network = import ./network.nix { inherit pkgs; };
+  importer = import ./import.nix { inherit pkgs; };
   resources = import ./resources.nix { inherit pkgs owner sshdConf; };
   sshdConf = writeText "nix-pool-sshd.conf" ''
     Port 2222
@@ -79,6 +80,7 @@ let
         builtins.toJSON {
           nix_daemon = "${pkgs.nix}/bin/nix-daemon";
           nix_store = "${pkgs.nix}/bin/nix-store";
+          seed_importer = "${importer}/bin/wrix-nix-pool-import";
           sftp_server = "${pkgs.openssh}/libexec/sftp-server";
           helper = "${owner}/bin/wrix-nix-pool-owner";
         }

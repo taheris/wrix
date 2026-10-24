@@ -11,10 +11,11 @@ pub(super) fn prepare(
     wrix_service::nix_store::owner::backend::client::Delivery,
 ) {
     let ticket = wrix_state::execution::reserve(host, selection.context().unwrap()).unwrap();
+    let binding = super::seed::binding();
     let id = runtime
-        .block_on(client.prepare_nix_execution(selection, system(), &ticket))
+        .block_on(client.prepare_nix_worker(selection, system(), &ticket, &binding))
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + Duration::from_secs(180);
     loop {
         match runtime
             .block_on(client.request(Operation::InspectNixExecutionDelivery { id: id.clone() }))
@@ -48,6 +49,7 @@ pub(super) fn exercise(
         .request_execution(ticket.clone())
         .unwrap();
     let accepted = request::claim(request.id()).unwrap();
+    super::seed::exercise(owner, &accepted, delivery);
     assert_eq!(&owner.admit_execution(&accepted).unwrap(), delivery);
     assert_eq!(delivery.ticket(), ticket);
     assert!(

@@ -370,6 +370,10 @@ pub enum Operation {
     Inspect {},
     InspectNixPool {},
     InspectNixExecution {},
+    InspectNixWorker {},
+    PrepareNixWorker {
+        id: wrix_state::nix_store::admission::request::Id,
+    },
     PrepareNixExecution {
         id: wrix_state::nix_store::admission::request::Id,
     },
@@ -696,7 +700,9 @@ impl Controller {
 
     fn apply(&self, operation: Operation) -> Result<Reply, Error> {
         match operation {
-            Operation::InspectNixPool {} | Operation::InspectNixExecution {} => {
+            Operation::InspectNixPool {}
+            | Operation::InspectNixExecution {}
+            | Operation::InspectNixWorker {} => {
                 return Ok(Reply::PoolInterface { version: 1 });
             }
             Operation::PrepareNixPool { id } => {
@@ -704,6 +710,9 @@ impl Controller {
             }
             Operation::PrepareNixExecution { id } => {
                 return self.pool_jobs.prepare(self, id, pool::Action::Execution);
+            }
+            Operation::PrepareNixWorker { id } => {
+                return self.pool_jobs.prepare(self, id, pool::Action::Worker);
             }
             Operation::InspectNixExecutionDelivery { id } => return self.pool_jobs.delivery(&id),
             Operation::InspectNixPoolPreparation { id } => return self.pool_jobs.inspect(&id),
@@ -721,7 +730,9 @@ impl Controller {
             | Operation::InspectNixPoolPreparation { .. }
             | Operation::InspectNixExecution {}
             | Operation::PrepareNixExecution { .. }
-            | Operation::InspectNixExecutionDelivery { .. } => None,
+            | Operation::InspectNixExecutionDelivery { .. }
+            | Operation::InspectNixWorker {}
+            | Operation::PrepareNixWorker { .. } => None,
         };
         let mut namespaces = self.registrations.lock()?;
         Ok(match operation {
@@ -731,7 +742,9 @@ impl Controller {
             | Operation::InspectNixPoolPreparation { .. }
             | Operation::InspectNixExecution {}
             | Operation::PrepareNixExecution { .. }
-            | Operation::InspectNixExecutionDelivery { .. } => return Err(Error::PermissionDenied),
+            | Operation::InspectNixExecutionDelivery { .. }
+            | Operation::InspectNixWorker {}
+            | Operation::PrepareNixWorker { .. } => return Err(Error::PermissionDenied),
             Operation::Inspect {} => Reply::Snapshot {
                 version: VERSION,
                 namespaces: (*namespaces).clone(),
@@ -903,6 +916,43 @@ impl Client {
         .map_err(io::Error::other)??;
         match self
             .request(Operation::PrepareNixExecution {
+                id: request.id().clone(),
+            })
+            .await?
+        {
+            Reply::PoolQueued { id } => Ok(id),
+            _ => Err(Error::PoolRequest),
+        }
+    }
+
+    /// Prepare the exact installed image before issuing execution-scoped clients/views; runtime start is a separate handoff.
+    pub async fn prepare_nix_worker(
+        &self,
+        selection: &wrix_state::context::Selection,
+        system: wrix_core::nix_store::pool::System,
+        ticket: &wrix_state::execution::Ticket,
+        image: &wrix_core::nix_store::binding::Binding,
+    ) -> Result<wrix_state::nix_store::admission::request::Id, Error> {
+        let host = wrix_state::host::Host::discover().map_err(io::Error::other)?;
+        if self.socket != host.roots().state().join("control/authority/control.sock") {
+            return Err(Error::PrivateRoot);
+        }
+        if self.request(Operation::InspectNixWorker {}).await?
+            != (Reply::PoolInterface { version: 1 })
+        {
+            return Err(Error::PoolInterface);
+        }
+        let selection = selection.clone();
+        let ticket = ticket.clone();
+        let image = image.clone();
+        let request = tokio::task::spawn_blocking(move || {
+            wrix_state::nix_store::admission::Guard::acquire(&selection, system)?
+                .request_worker(ticket, image)
+        })
+        .await
+        .map_err(io::Error::other)??;
+        match self
+            .request(Operation::PrepareNixWorker {
                 id: request.id().clone(),
             })
             .await?

@@ -93,7 +93,7 @@ pkgs.testers.runNixOSTest {
   nodes.machine = {
     imports = [ (import ../lib/userspace-vm.nix { inherit pkgs; }) ];
     virtualisation = {
-      memorySize = 2048;
+      memorySize = 4096;
       diskSize = 12288;
       cores = 2;
     };

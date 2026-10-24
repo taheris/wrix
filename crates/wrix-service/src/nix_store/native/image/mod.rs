@@ -1,5 +1,7 @@
 //! Exact immutable image inputs admitted by trusted startup, not worker store administration.
 
+pub(super) mod seed;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

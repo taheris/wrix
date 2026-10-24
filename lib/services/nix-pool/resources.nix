@@ -17,7 +17,7 @@ pkgs.writeShellScriptBin "wrix-nix-pool-daemon" ''
   printf '+cpu +memory +pids\n' > /sys/fs/cgroup/cgroup.subtree_control
   mkdir "$base"
   printf '200000 100000\n' > "$base/cpu.max"
-  printf '1610612736\n' > "$base/memory.max"
+  printf '3221225472\n' > "$base/memory.max"
   if [[ -e "$base/memory.swap.max" ]]; then
     printf '0\n' > "$base/memory.swap.max"
   else
@@ -33,7 +33,12 @@ pkgs.writeShellScriptBin "wrix-nix-pool-daemon" ''
   fi
   printf '256\n' > "$base/pids.max"
   printf '+cpu +memory +pids\n' > "$base/cgroup.subtree_control"
-  mkdir "$base/work" "$base/control"
+  mkdir "$base/work" "$base/control" "$base/seed"
+  printf '1610612736\n' > "$base/work/memory.max"
+  printf '144\n' > "$base/work/pids.max"
+  printf '805306368\n' > "$base/seed/memory.max"
+  printf '16\n' > "$base/seed/pids.max"
+  printf '1\n' > "$base/seed/memory.oom.group"
   printf '134217728\n' > "$base/control/memory.min"
   printf '402653184\n' > "$base/control/memory.max"
   printf '96\n' > "$base/control/pids.max"
@@ -103,7 +108,8 @@ pkgs.writeShellScriptBin "wrix-nix-pool-daemon" ''
     status=$?
   fi
   work_events=$(<"$base/work/cgroup.events")
-  if [[ -f /run/wrix-nix-pool/stopping && "$work_events" == *'populated 0'* ]]; then
+  seed_events=$(<"$base/seed/cgroup.events")
+  if [[ -f /run/wrix-nix-pool/stopping && "$work_events" == *'populated 0'* && "$seed_events" == *'populated 0'* ]]; then
     kill -TERM "$sshd_pid" "$owner_pid"
     for child in "$sshd_pid" "$owner_pid"; do
       if wait "$child"; then

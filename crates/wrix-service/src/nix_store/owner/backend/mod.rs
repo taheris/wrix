@@ -1,6 +1,7 @@
 //! Recorded service-VM ownership and authenticated fixed-operation management.
 
 pub mod client;
+pub mod seed;
 pub mod tools;
 mod transport;
 
@@ -55,6 +56,8 @@ pub enum Error {
     Software(#[from] crate::nix_store::image::Error),
     /// pool image installation failed: {0}
     Image(#[from] image::Error),
+    /// pool immutable image input failed: {0}
+    ImageInput(#[from] native::image::Error),
     /// pool native identity failed: {0}
     Identity(#[from] native::lease::Error),
     /// pool host operation requires its package-selected Linux service VM runtime
@@ -825,7 +828,7 @@ impl Owner {
         arguments.push(tools.vm().into_os_string());
         arguments.extend(
             [
-                "--memory=2g",
+                "--memory=4g",
                 "--cpus=2",
                 "--pids-limit=256",
                 "--log-opt=max-size=16m",

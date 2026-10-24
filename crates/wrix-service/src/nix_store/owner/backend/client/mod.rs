@@ -165,11 +165,33 @@ impl Owner {
         if issued.pool() != self.pool() {
             return Err(Error::Invalid);
         }
-        let Purpose::Execution { ticket } = issued.purpose() else {
-            return Err(Error::Invalid);
+        let ticket = match issued.purpose() {
+            Purpose::Execution { ticket } | Purpose::Worker { ticket, .. } => ticket,
+            Purpose::Preparation => return Err(Error::Invalid),
         };
         if !matches!(self.record.state, super::State::Serving { .. }) {
             return Err(Error::Retained);
+        }
+        if let Purpose::Worker { image: binding, .. } = issued.purpose() {
+            let digest = wrix_sandbox::image::Digest::parse(binding.digest().as_str())
+                .map_err(|_| Error::Invalid)?;
+            let image =
+                super::seed::Image::inspect(self.pool().system, &digest, binding.metadata())?;
+            if !matches!(
+                self.rpc(
+                    self.connection()?,
+                    &native::Operation::InspectImage {
+                        image: image.id().clone(),
+                        paths: image.closure_paths().to_vec()
+                    },
+                    Some(COMMAND_BUDGET)
+                )?,
+                native::Reply::Image {
+                    status: native::ImageStatus::Pinned
+                }
+            ) {
+                return Err(Error::Retained);
+            }
         }
         protected(
             &self.prepared.reservation.paths.control,

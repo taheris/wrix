@@ -230,7 +230,12 @@ fn descendant_held_pipes_do_not_escape_the_overall_execution_deadline() {
                     std::thread::sleep(Duration::from_millis(10));
                 }
                 Err(error) => {
-                    assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+                    // Linux may report ESRCH when the task exits during the procfs read.
+                    assert!(
+                        error.kind() == std::io::ErrorKind::NotFound
+                            || error.raw_os_error() == Some(libc::ESRCH),
+                        "unexpected native process observation: {error}"
+                    );
                     break;
                 }
             }

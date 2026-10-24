@@ -208,6 +208,21 @@ impl Tools {
         Ok(transport::capture(command, input, budget)?)
     }
 
+    pub(super) fn export(
+        &self,
+        paths: &[StorePath],
+        file: &std::fs::File,
+        limit: u64,
+    ) -> Result<(std::process::ExitStatus, u64), Error> {
+        let mut command = self.command(Program::NixStore);
+        command
+            .arg("--export")
+            .args(paths.iter().map(StorePath::as_str));
+        let archive = transport::export(command, file.try_clone()?, limit)?;
+        tracing::debug!(operation = "nix_image_export", diagnostic_bytes = archive.stderr.len(), status = %archive.status, "fixed image export finished");
+        Ok((archive.status, archive.bytes))
+    }
+
     pub(super) fn pin(&self, root: &Path) -> Result<(), Error> {
         let mut command = self.command(Program::NixStore);
         command

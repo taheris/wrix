@@ -8,6 +8,15 @@ async fn maintenance_acquisition_is_immediate_when_native_work_holds_state() {
     let _held = state.lock().await;
     for operation in [
         Operation::Inspect {},
+        Operation::InspectImage {
+            image: "a".repeat(64).try_into().unwrap(),
+            paths: vec![
+                "/nix/store/00000000000000000000000000000000-software"
+                    .to_owned()
+                    .try_into()
+                    .unwrap(),
+            ],
+        },
         Operation::Collect {},
         Operation::Shutdown {},
     ] {

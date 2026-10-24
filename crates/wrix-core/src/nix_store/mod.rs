@@ -1,3 +1,4 @@
+pub mod binding;
 pub mod pool;
 
 use std::{fmt, num::NonZeroU32, path::Path};

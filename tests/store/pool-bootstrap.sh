@@ -109,12 +109,34 @@ if [[ "$ssh_ready" != true ]]; then
   exit 1
 fi
 seed_image=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+status=$(printf '{"operation":"inspect_image","image":"%s","paths":["%s"]}\n' "$seed_image" "$bash_store" | pool_control)
+[[ "$status" == *'"status":"missing"'* ]]
 nix-store --export "$bash_store" > "/var/lib/wrix/nix-pool/incoming/$seed_image.nar"
 chmod 0600 "/var/lib/wrix/nix-pool/incoming/$seed_image.nar"
 seed_reply=$(printf '{"operation":"seed","image":"%s","paths":["%s"]}\n' "$seed_image" "$bash_store" | pool_control)
 [[ "$seed_reply" == *applied* ]]
 [[ $(readlink "/nix/var/nix/gcroots/images/$seed_image/$(basename "$bash_store")") == "$bash_store" ]]
 rm "/var/lib/wrix/nix-pool/incoming/$seed_image.nar"
+pin_record="/nix/var/nix/wrix-images/$seed_image"
+pin_inode=$(stat -c '%i' "$pin_record")
+status=$(printf '{"operation":"inspect_image","image":"%s","paths":["%s"]}\n' "$seed_image" "$bash_store" | pool_control)
+[[ "$status" == *'"status":"pinned"'* ]]
+seed_reply=$(printf '{"operation":"seed","image":"%s","paths":["%s"]}\n' "$seed_image" "$bash_store" | pool_control)
+[[ "$seed_reply" == *applied* && $(stat -c '%i' "$pin_record") == "$pin_inode" ]]
+if printf '{"operation":"inspect_image","image":"%s","paths":["/nix/store/00000000000000000000000000000000-wrong"]}\n' "$seed_image" | pool_control; then
+  printf 'Changed image closure was accepted as pinned.\n' >&2
+  exit 1
+fi
+interrupted_image=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+printf invalid > "/var/lib/wrix/nix-pool/incoming/$interrupted_image.nar"
+chmod 0600 "/var/lib/wrix/nix-pool/incoming/$interrupted_image.nar"
+reply=$(printf '{"operation":"seed","image":"%s","paths":["%s"]}\n' "$interrupted_image" "$bash_store" | pool_control)
+[[ "$reply" == *failed* ]]
+if printf '{"operation":"inspect_image","image":"%s","paths":["%s"]}\n' "$interrupted_image" "$bash_store" | pool_control; then
+  printf 'Interrupted image import was accepted as complete or absent.\n' >&2
+  exit 1
+fi
+rm "/var/lib/wrix/nix-pool/incoming/$interrupted_image.nar"
 unsigned_output=$(nix-build --no-out-link --option substituters '' --argstr bash "$bash_store" --expr '
   { bash }: builtins.derivation {
     name = "wrix-pool-unsigned-input-addressed";
@@ -300,7 +322,12 @@ nix-store --check-validity "$output"
 reply=$(printf '{"operation":"collect"}\n' | pool_control)
 [[ "$reply" == *applied* ]]
 nix-store --check-validity "$output" "$bash_store" "$core_store" "$unsigned_output"
-[[ $(</sys/fs/cgroup/wrix-nix-pool/memory.max) == 1610612736 ]]
+[[ $(</sys/fs/cgroup/wrix-nix-pool/memory.max) == 3221225472 ]]
+[[ $(</sys/fs/cgroup/wrix-nix-pool/work/memory.max) == 1610612736 ]]
+[[ $(</sys/fs/cgroup/wrix-nix-pool/work/pids.max) == 144 ]]
+[[ $(</sys/fs/cgroup/wrix-nix-pool/seed/memory.max) == 805306368 ]]
+[[ $(</sys/fs/cgroup/wrix-nix-pool/seed/pids.max) == 16 ]]
+[[ $(</sys/fs/cgroup/wrix-nix-pool/seed/memory.oom.group) == 1 ]]
 [[ $(</sys/fs/cgroup/wrix-nix-pool/pids.max) == 256 ]]
 [[ $(</sys/fs/cgroup/wrix-nix-pool/control/pids.max) == 96 ]]
 [[ $(</sys/fs/cgroup/wrix-nix-pool/control/memory.max) == 402653184 ]]

@@ -14,7 +14,7 @@ use std::{
     collections::BTreeMap,
     fs::{self, File, OpenOptions},
     io,
-    os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
+    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -29,6 +29,8 @@ use tokio::{
 const DATA: &str = "/var/lib/wrix/nix-pool";
 const RUN: &str = "/run/wrix-nix-pool";
 const CONFIG: &str = "/etc/wrix/nix-pool-native.json";
+pub use image::seed::Status as ImageStatus;
+
 const MAX_MESSAGE: u64 = 1_048_576;
 const IO_WAIT: Duration = Duration::from_secs(30);
 
@@ -96,6 +98,19 @@ pub enum Operation {
     },
     Collect {},
     Shutdown {},
+    InspectImage {
+        image: image::Id,
+        paths: Vec<image::StorePath>,
+    },
+    InspectImageMissing {
+        image: image::Id,
+        paths: Vec<image::StorePath>,
+    },
+    SeedImage {
+        image: image::Id,
+        paths: Vec<image::StorePath>,
+        imports: Vec<image::StorePath>,
+    },
     Seed {
         image: image::Id,
         paths: Vec<image::StorePath>,
@@ -106,6 +121,8 @@ pub enum Operation {
 #[serde(tag = "result", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Reply {
     Ready { version: u16, leases: usize },
+    Image { status: ImageStatus },
+    MissingPaths { paths: Vec<image::StorePath> },
     Applied,
     Busy,
     Rejected,
@@ -127,6 +144,7 @@ struct Record {
 struct Configuration {
     nix_daemon: PathBuf,
     nix_store: PathBuf,
+    seed_importer: PathBuf,
     sftp_server: PathBuf,
     helper: PathBuf,
 }
@@ -180,6 +198,7 @@ fn configuration() -> Result<Configuration, Error> {
     for (path, suffix) in [
         (&config.nix_daemon, "/bin/nix-daemon"),
         (&config.nix_store, "/bin/nix-store"),
+        (&config.seed_importer, "/bin/wrix-nix-pool-import"),
         (&config.sftp_server, "/libexec/sftp-server"),
         (&config.helper, "/bin/wrix-nix-pool-owner"),
     ] {
@@ -233,6 +252,10 @@ fn daemon_pid() -> Result<u32, Error> {
 }
 
 fn quiescent() -> Result<bool, Error> {
+    let seed = fs::read_to_string("/sys/fs/cgroup/wrix-nix-pool/seed/cgroup.events")?;
+    if !seed.lines().any(|line| line == "populated 0") {
+        return Ok(false);
+    }
     let pid = daemon_pid()?;
     let procs = fs::read_to_string("/sys/fs/cgroup/wrix-nix-pool/work/nix-daemon/cgroup.procs")?;
     let parsed = procs
@@ -330,10 +353,51 @@ fn command(program: &Path) -> tokio::process::Command {
     command
 }
 
+/// Fixed trusted import role; resource reservation is independent of control and peer native work.
+pub fn seed_import(image: &image::Id) -> Result<(), Error> {
+    use std::os::unix::process::CommandExt;
+    role_root()?;
+    let configuration = configuration()?;
+    let group = Path::new("/sys/fs/cgroup/wrix-nix-pool/seed");
+    for (name, expected) in [
+        ("memory.max", "805306368\n"),
+        ("pids.max", "16\n"),
+        ("memory.oom.group", "1\n"),
+    ] {
+        if fs::read_to_string(group.join(name))? != expected {
+            return Err(Error::Invalid);
+        }
+    }
+    fs::write(group.join("cgroup.procs"), std::process::id().to_string())?;
+    let temporary = Path::new("/nix/var/nix/seed-tmp");
+    match fs::DirBuilder::new().mode(0o700).create(temporary) {
+        Ok(()) => File::open("/nix/var/nix")?.sync_all()?,
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => (),
+        Err(error) => return Err(error.into()),
+    }
+    let metadata = fs::symlink_metadata(temporary)?;
+    if !metadata.is_dir()
+        || metadata.uid() != 0
+        || metadata.mode() & 0o777 != 0o700
+        || temporary.canonicalize()? != temporary
+        || metadata.dev() != fs::metadata("/nix/var/nix")?.dev()
+    {
+        return Err(Error::Invalid);
+    }
+    let expected = image::seed::Registry::native().importing(image)?;
+    let mut process = command(&configuration.seed_importer);
+    process
+        .env("NIX_REMOTE", "daemon")
+        .env("TMPDIR", temporary)
+        .args(expected.iter().map(image::StorePath::as_str));
+    Err(process.as_std_mut().exec().into())
+}
+
 async fn seed(
     state: &State,
     image: &image::Id,
     paths: &[image::StorePath],
+    imports: &[image::StorePath],
 ) -> Result<Reply, Error> {
     use std::collections::BTreeSet;
     if paths.is_empty() || paths.len() > 4096 {
@@ -343,12 +407,31 @@ async fn seed(
     if expected.len() != paths.len() {
         return Err(Error::Invalid);
     }
+    let import_set: BTreeSet<_> = imports.iter().cloned().collect();
+    if import_set.len() != imports.len() || !import_set.is_subset(&expected) {
+        return Err(Error::Invalid);
+    }
+    let registry = image::seed::Registry::native();
+    if registry.inspect(image, paths)? == ImageStatus::Pinned {
+        check_image_paths(state, paths).await?;
+        return Ok(Reply::Applied);
+    }
+    let missing = missing_image_paths(state, paths).await?;
+    if !missing.iter().all(|path| import_set.contains(path)) {
+        return Err(Error::Invalid);
+    }
+    if imports.is_empty() {
+        let pending = registry.begin_import(image, paths, imports)?;
+        check_image_paths(state, paths).await?;
+        pending.finish()?;
+        return Ok(Reply::Applied);
+    }
     let archive = Path::new(DATA)
         .join("incoming")
         .join(format!("{}.nar", image.as_str()));
     let input = OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(&archive)?;
     let metadata = input.metadata()?;
     if !metadata.is_file()
@@ -359,10 +442,10 @@ async fn seed(
     {
         return Err(Error::Invalid);
     }
+    let pending = registry.begin_import(image, paths, imports)?;
     let output = tempfile::NamedTempFile::new_in("/nix/var/nix")?;
-    let status = command(&state.configuration.nix_store)
-        .env("NIX_REMOTE", "daemon")
-        .arg("--import")
+    let status = command(&state.configuration.helper)
+        .args(["seed-import", image.as_str()])
         .stdin(input)
         .stdout(output.as_file().try_clone()?)
         .status()
@@ -378,24 +461,63 @@ async fn seed(
         .lines()
         .map(|line| image::StorePath::try_from(line.to_owned()))
         .collect::<Result<BTreeSet<_>, _>>()?;
-    if actual != expected {
+    if actual != import_set {
         return Err(Error::Invalid);
     }
-    let directory = Path::new("/nix/var/nix/gcroots/images").join(image.as_str());
-    fs::create_dir_all(&directory)?;
+    check_image_paths(state, paths).await?;
+    pending.finish()?;
+    Ok(Reply::Applied)
+}
+
+async fn missing_image_paths(
+    state: &State,
+    paths: &[image::StorePath],
+) -> Result<Vec<image::StorePath>, Error> {
+    let output = tempfile::NamedTempFile::new_in("/nix/var/nix")?;
+    let status = command(&state.configuration.nix_store)
+        .env("NIX_REMOTE", "daemon")
+        .args(["--check-validity", "--print-invalid"])
+        .args(paths.iter().map(image::StorePath::as_str))
+        .stdout(output.as_file().try_clone()?)
+        .status()
+        .await?;
+    if !status.success() || output.as_file().metadata()?.len() > 2_097_152 {
+        return Err(Error::Invalid);
+    }
+    let values = fs::read_to_string(output.path())?;
+    let mut missing = std::collections::BTreeSet::new();
+    for line in values.lines() {
+        let path = image::StorePath::try_from(line.to_owned())?;
+        if !paths.contains(&path) || !missing.insert(path) {
+            return Err(Error::Invalid);
+        }
+    }
     for path in paths {
-        let root = directory.join(path.basename());
-        match fs::read_link(&root) {
-            Ok(target) if target == Path::new(path.as_str()) => (),
-            Ok(_) => return Err(Error::Invalid),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                std::os::unix::fs::symlink(path.as_str(), root)?;
-            }
+        match fs::symlink_metadata(path.as_str()) {
+            Ok(_) if missing.contains(path) => return Err(Error::Busy),
+            Ok(_) => (),
+            Err(error) if error.kind() == io::ErrorKind::NotFound && missing.contains(path) => (),
             Err(error) => return Err(error.into()),
         }
     }
-    File::open(directory)?.sync_all()?;
-    Ok(Reply::Applied)
+    Ok(missing.into_iter().collect())
+}
+
+async fn check_image_paths(state: &State, paths: &[image::StorePath]) -> Result<(), Error> {
+    for path in paths {
+        fs::symlink_metadata(path.as_str())?;
+    }
+    let status = command(&state.configuration.nix_store)
+        .env("NIX_REMOTE", "daemon")
+        .arg("--check-validity")
+        .args(paths.iter().map(image::StorePath::as_str))
+        .stdout(std::process::Stdio::null())
+        .status()
+        .await?;
+    if !status.success() {
+        return Err(Error::Invalid);
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -424,7 +546,11 @@ async fn acquire<'a, T: Send>(
 ) -> Result<tokio::sync::MutexGuard<'a, T>, Error> {
     if matches!(
         operation,
-        Operation::Inspect {} | Operation::Collect {} | Operation::Shutdown {}
+        Operation::Inspect {}
+            | Operation::InspectImage { .. }
+            | Operation::InspectImageMissing { .. }
+            | Operation::Collect {}
+            | Operation::Shutdown {}
     ) {
         state.try_lock().map_err(|_| Error::Busy)
     } else {
@@ -503,7 +629,25 @@ async fn administer(stream: &mut UnixStream, state: &Mutex<State>) -> Result<(),
                 return response;
             }
         }
-        Operation::Seed { image, paths } => seed(&state, &image, &paths).await?,
+        Operation::InspectImage { image, paths } => {
+            let status = image::seed::Registry::native().inspect(&image, &paths)?;
+            if status == ImageStatus::Pinned {
+                check_image_paths(&state, &paths).await?;
+            }
+            Reply::Image { status }
+        }
+        Operation::InspectImageMissing { image, paths } => {
+            image::seed::Registry::native().inspect(&image, &paths)?;
+            Reply::MissingPaths {
+                paths: missing_image_paths(&state, &paths).await?,
+            }
+        }
+        Operation::SeedImage {
+            image,
+            paths,
+            imports,
+        } => seed(&state, &image, &paths, &imports).await?,
+        Operation::Seed { image, paths } => seed(&state, &image, &paths, &paths).await?,
         Operation::Collect {} => {
             if !state.leases.is_empty() || !quiescent()? {
                 Reply::Busy
@@ -675,7 +819,10 @@ pub async fn control() -> Result<(), Error> {
     let request: Operation = serde_json::from_slice(&bytes)?;
     let mut stream = UnixStream::connect(Path::new(RUN).join("control.sock")).await?;
     send(&mut stream, &request).await?;
-    let response: Reply = if matches!(request, Operation::Collect {}) {
+    let response: Reply = if matches!(
+        request,
+        Operation::Collect {} | Operation::Seed { .. } | Operation::SeedImage { .. }
+    ) {
         receive_frame(&mut stream).await?
     } else {
         receive(&mut stream).await?
