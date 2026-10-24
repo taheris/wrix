@@ -17,6 +17,8 @@ pkgs.writeShellApplication {
     test -f ${wrix.nixPoolImage.digest}
     export WRIX_NIX_POOL_PACKAGE_BINDING=${wrix.rustPackage.poolBinding}
     export WRIX_NIX_POOL_HOST_TOOLS=${wrix.rustPackage.poolHostTools}
+    export WRIX_TEST_POOL_NIX=${pkgs.nix}/bin/nix
+    export WRIX_TEST_POOL_BASH=${pkgs.bashInteractive}
     export WRIX_TEST_POOL_CONTROLLER=${wrix.rustPackage.controllerPackage}/bin/wrix-host-controller
     ${wrix.rustPackage.cacheBackendTests}/bin/workspace-admission-tests \
       --ignored --exact \

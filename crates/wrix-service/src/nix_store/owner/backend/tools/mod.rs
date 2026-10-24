@@ -54,6 +54,7 @@ pub(super) enum Program {
     Ssh,
     Keygen,
     NixStore,
+    Sshfs,
 }
 impl Program {
     const fn name(self) -> &'static str {
@@ -62,6 +63,7 @@ impl Program {
             Self::Ssh => "ssh",
             Self::Keygen => "ssh-keygen",
             Self::NixStore => "nix-store",
+            Self::Sshfs => "sshfs",
         }
     }
 }
@@ -101,16 +103,74 @@ impl Tools {
         Ok(())
     }
 
+    pub(crate) fn export_check(&self) -> Result<(), Error> {
+        use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
+        if !cfg!(target_os = "linux") {
+            return Err(Error::Unsupported);
+        }
+        let device = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open("/dev/fuse")?;
+        if !device.metadata()?.file_type().is_char_device() {
+            return Err(Error::Unsupported);
+        }
+        if !Path::new(self.command(Program::Sshfs).get_program()).is_file() {
+            return Err(Error::Unsupported);
+        }
+        Self::unmount_helper()?;
+        Ok(())
+    }
+
     pub(super) fn vm(&self) -> PathBuf {
         Path::new(self.root.as_str()).join("bin/krun")
     }
 
     pub(super) fn command(&self, program: Program) -> Command {
-        let mut command = Command::new(
+        self.configure(Command::new(
             Path::new(self.root.as_str())
                 .join("bin")
                 .join(program.name()),
-        );
+        ))
+    }
+
+    fn unmount_helper() -> Result<PathBuf, Error> {
+        use std::os::unix::fs::MetadataExt;
+        for path in [
+            "/run/wrappers/bin/fusermount3",
+            "/usr/bin/fusermount3",
+            "/bin/fusermount3",
+        ] {
+            let metadata = match std::fs::metadata(path) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error.into()),
+            };
+            if !metadata.is_file()
+                || metadata.uid() != 0
+                || metadata.mode() & 0o022 != 0
+                || metadata.mode() & 0o4000 == 0
+                || metadata.mode() & 0o111 == 0
+            {
+                return Err(Error::Unsupported);
+            }
+            return Ok(path.into());
+        }
+        Err(Error::Unsupported)
+    }
+
+    pub(super) fn unmount(&self, projection: &Path) -> Result<Output, Error> {
+        let mut command = self.configure(Command::new(Self::unmount_helper()?));
+        command.arg("-u").arg(projection);
+        Ok(transport::capture(
+            command,
+            None,
+            Some(Duration::from_secs(30)),
+        )?)
+    }
+
+    fn configure(&self, mut command: Command) -> Command {
         command
             .current_dir("/")
             .env_clear()

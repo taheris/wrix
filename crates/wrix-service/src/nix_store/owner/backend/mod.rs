@@ -1,5 +1,6 @@
 //! Recorded service-VM ownership and authenticated fixed-operation management.
 
+pub mod client;
 pub mod tools;
 mod transport;
 
@@ -17,7 +18,7 @@ use crate::{
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     ffi::OsString,
     fs::{self, File, OpenOptions},
     io::{self, Read, Write},
@@ -44,6 +45,10 @@ pub enum Error {
     Io(#[from] io::Error),
     /// pool host metadata is invalid: {0}
     Json(#[from] serde_json::Error),
+    /// pool execution evidence failed: {0}
+    Execution(#[from] wrix_state::store::Error),
+    /// pool checked issuance failed: {0}
+    Admission(#[from] wrix_state::nix_store::Error),
     /// pool preparation failed: {0}
     Preparation(#[from] super::Error),
     /// pool software target failed: {0}
@@ -140,6 +145,8 @@ struct Record {
     deployment: deployment::Id,
     pool: Key,
     state: State,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    executions: BTreeSet<wrix_state::execution::Ticket>,
 }
 
 pub(crate) enum Recorded {
@@ -256,8 +263,21 @@ fn public_key(path: &Path) -> Result<lease::Key, Error> {
     Ok(format!("{algorithm} {encoded}").try_into()?)
 }
 
+#[derive(Clone, Copy)]
+enum SshPath {
+    KnownHosts,
+    Identity,
+}
+
 fn known_hosts_option(path: &Path) -> Result<OsString, Error> {
-    let mut bytes = b"UserKnownHostsFile=\"".to_vec();
+    ssh_path_option(SshPath::KnownHosts, path)
+}
+
+fn ssh_path_option(option: SshPath, path: &Path) -> Result<OsString, Error> {
+    let mut bytes = match option {
+        SshPath::KnownHosts => b"UserKnownHostsFile=\"".to_vec(),
+        SshPath::Identity => b"IdentityFile=\"".to_vec(),
+    };
     for byte in path.as_os_str().as_bytes() {
         if byte.is_ascii_control() {
             return Err(Error::Invalid);
@@ -363,6 +383,7 @@ impl Record {
             || record.version != 1
             || &record.deployment != deployment
             || &record.pool != pool
+            || record.executions.len() > 64
         {
             return Err(Error::Invalid);
         }
@@ -585,6 +606,13 @@ impl Owner {
     }
 
     pub fn collect(&self) -> Result<(), Error> {
+        if client::protected(
+            &self.prepared.reservation.paths.control,
+            self.pool(),
+            &self.record.executions,
+        )? {
+            return Err(Error::Busy);
+        }
         if !matches!(self.record.state, State::Serving { .. }) {
             return Err(Error::Retained);
         }
@@ -597,6 +625,13 @@ impl Owner {
     }
 
     pub fn shutdown(&mut self) -> Result<(), Error> {
+        if client::protected(
+            &self.prepared.reservation.paths.control,
+            self.pool(),
+            &self.record.executions,
+        )? {
+            return Err(Error::Busy);
+        }
         if !matches!(self.record.state, State::Serving { .. }) {
             return Err(Error::Retained);
         }
@@ -750,6 +785,7 @@ impl Prepared {
             state: State::Starting {
                 attempt: attempt.clone(),
             },
+            executions: BTreeSet::new(),
         };
         let mut owner = Owner {
             prepared: self,

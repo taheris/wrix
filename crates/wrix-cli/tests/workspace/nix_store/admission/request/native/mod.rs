@@ -1,4 +1,6 @@
 //! Actual supervised controller, private IPC and caller-independent native provisioning.
+mod client;
+
 use super::*;
 use wrix_service::control::{
     Access, Client, Controller, Namespace, Operation, Policy, PoolPreparation, Reply,
@@ -208,6 +210,28 @@ fn supervised_controller_prepares_after_requester_exit_and_preserves_native_owne
         let original = record["state"]["connection"]["target"]["id"]
             .as_str()
             .unwrap();
+        let (ticket, delivery) = client::prepare(&runtime, &client, &selection, &host);
+        let (peer_ticket, peer_delivery) = client::prepare(&runtime, &client, &selection, &host);
+        wrix_state::execution::cancel(&host, selection.context().unwrap(), &peer_ticket).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let record: serde_json::Value = serde_json::from_slice(
+                &fs::read(peer_delivery.store().parent().unwrap().join("client.json")).unwrap(),
+            )
+            .unwrap();
+            if record["state"]["phase"] == "detached" {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "controller did not retire cancelled execution projection"
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        assert!(
+            fs::read_dir(delivery.store()).unwrap().next().is_some(),
+            "peer retirement disrupted the live projection"
+        );
         let pid =
             rustix::process::Pid::from_raw(i32::try_from(controller.0.id()).unwrap()).unwrap();
         rustix::process::kill_process(pid, rustix::process::Signal::TERM).unwrap();
@@ -216,8 +240,29 @@ fn supervised_controller_prepares_after_requester_exit_and_preserves_native_owne
             let _entered = runtime.enter();
             Controller::bind(&authority).unwrap()
         };
-        let mut owner = local.ensure_nix_pool(&selection, system()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut owner = loop {
+            match local.ensure_nix_pool(&selection, system()) {
+                Ok(owner) => break owner,
+                Err(wrix_service::control::Error::PoolOwner(
+                    wrix_service::nix_store::owner::backend::Error::Busy,
+                )) => {
+                    assert!(Instant::now() < deadline);
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+                Err(error) => panic!("recorded owner was not reusable: {error}"),
+            }
+        };
         assert_eq!(owner.runtime_identity().unwrap(), original);
+        client::exercise(&mut owner, &selection, &host, &delivery, &ticket);
+        let proof = wrix_state::execution::terminal(
+            &host,
+            selection.context().unwrap().key(),
+            &peer_ticket,
+        )
+        .unwrap()
+        .unwrap();
+        owner.release_execution(&proof).unwrap();
         owner.collect().unwrap();
         owner.shutdown().unwrap();
         local.close().unwrap();
@@ -255,6 +300,8 @@ fn supervised_controller_prepares_after_requester_exit_and_preserves_native_owne
         "WRIX_NIX_POOL_PACKAGE_BINDING",
         "WRIX_NIX_POOL_HOST_TOOLS",
         "WRIX_TEST_POOL_CONTROLLER",
+        "WRIX_TEST_POOL_NIX",
+        "WRIX_TEST_POOL_BASH",
     ] {
         command.env(
             name,

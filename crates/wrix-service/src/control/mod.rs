@@ -369,6 +369,13 @@ impl PoolAuthorization {
 pub enum Operation {
     Inspect {},
     InspectNixPool {},
+    InspectNixExecution {},
+    PrepareNixExecution {
+        id: wrix_state::nix_store::admission::request::Id,
+    },
+    InspectNixExecutionDelivery {
+        id: wrix_state::nix_store::admission::request::Id,
+    },
     PrepareNixPool {
         id: wrix_state::nix_store::admission::request::Id,
     },
@@ -440,6 +447,9 @@ pub enum Reply {
     PoolInterface {
         version: u16,
     },
+    PoolDelivery {
+        delivery: crate::nix_store::owner::backend::client::Delivery,
+    },
     PoolQueued {
         id: wrix_state::nix_store::admission::request::Id,
     },
@@ -465,7 +475,7 @@ pub struct Controller {
     deployment: crate::deployment::Id,
     assignments: assignment::Store,
     cache_issuer: Option<PathBuf>,
-    pool_jobs: pool::Jobs,
+    pool_jobs: pool::Queue,
 }
 
 impl Controller {
@@ -499,7 +509,7 @@ impl Controller {
         let credential = Credential::load(root)?;
         let listener = UnixListener::bind(root.join("control.sock"))?;
         fs::set_permissions(root.join("control.sock"), fs::Permissions::from_mode(0o600))?;
-        Ok(Self {
+        let controller = Self {
             listener,
             _ownership: ownership,
             credential,
@@ -509,8 +519,10 @@ impl Controller {
             deployment,
             assignments,
             cache_issuer: None,
-            pool_jobs: pool::Jobs::default(),
-        })
+            pool_jobs: pool::Queue::default(),
+        };
+        controller.pool_jobs.recover_startup(&controller);
+        Ok(controller)
     }
 
     /// Release the endpoint during a clean supervised stop, retaining private authority on disk.
@@ -684,8 +696,16 @@ impl Controller {
 
     fn apply(&self, operation: Operation) -> Result<Reply, Error> {
         match operation {
-            Operation::InspectNixPool {} => return Ok(Reply::PoolInterface { version: 1 }),
-            Operation::PrepareNixPool { id } => return self.pool_jobs.prepare(self, id),
+            Operation::InspectNixPool {} | Operation::InspectNixExecution {} => {
+                return Ok(Reply::PoolInterface { version: 1 });
+            }
+            Operation::PrepareNixPool { id } => {
+                return self.pool_jobs.prepare(self, id, pool::Action::Pool);
+            }
+            Operation::PrepareNixExecution { id } => {
+                return self.pool_jobs.prepare(self, id, pool::Action::Execution);
+            }
+            Operation::InspectNixExecutionDelivery { id } => return self.pool_jobs.delivery(&id),
             Operation::InspectNixPoolPreparation { id } => return self.pool_jobs.inspect(&id),
             _ => (),
         }
@@ -698,14 +718,20 @@ impl Controller {
             | Operation::IssueCache { .. }
             | Operation::InspectNixPool {}
             | Operation::PrepareNixPool { .. }
-            | Operation::InspectNixPoolPreparation { .. } => None,
+            | Operation::InspectNixPoolPreparation { .. }
+            | Operation::InspectNixExecution {}
+            | Operation::PrepareNixExecution { .. }
+            | Operation::InspectNixExecutionDelivery { .. } => None,
         };
         let mut namespaces = self.registrations.lock()?;
         Ok(match operation {
             Operation::IssueCache { .. }
             | Operation::InspectNixPool {}
             | Operation::PrepareNixPool { .. }
-            | Operation::InspectNixPoolPreparation { .. } => return Err(Error::PermissionDenied),
+            | Operation::InspectNixPoolPreparation { .. }
+            | Operation::InspectNixExecution {}
+            | Operation::PrepareNixExecution { .. }
+            | Operation::InspectNixExecutionDelivery { .. } => return Err(Error::PermissionDenied),
             Operation::Inspect {} => Reply::Snapshot {
                 version: VERSION,
                 namespaces: (*namespaces).clone(),
@@ -842,6 +868,41 @@ impl Client {
         .map_err(io::Error::other)??;
         match self
             .request(Operation::PrepareNixPool {
+                id: request.id().clone(),
+            })
+            .await?
+        {
+            Reply::PoolQueued { id } => Ok(id),
+            _ => Err(Error::PoolRequest),
+        }
+    }
+
+    /// Issue only against a checked never-started execution reservation; no raw pool/path is accepted.
+    pub async fn prepare_nix_execution(
+        &self,
+        selection: &wrix_state::context::Selection,
+        system: wrix_core::nix_store::pool::System,
+        ticket: &wrix_state::execution::Ticket,
+    ) -> Result<wrix_state::nix_store::admission::request::Id, Error> {
+        let host = wrix_state::host::Host::discover().map_err(io::Error::other)?;
+        if self.socket != host.roots().state().join("control/authority/control.sock") {
+            return Err(Error::PrivateRoot);
+        }
+        if self.request(Operation::InspectNixExecution {}).await?
+            != (Reply::PoolInterface { version: 1 })
+        {
+            return Err(Error::PoolInterface);
+        }
+        let selection = selection.clone();
+        let ticket = ticket.clone();
+        let request = tokio::task::spawn_blocking(move || {
+            wrix_state::nix_store::admission::Guard::acquire(&selection, system)?
+                .request_execution(ticket)
+        })
+        .await
+        .map_err(io::Error::other)??;
+        match self
+            .request(Operation::PrepareNixExecution {
                 id: request.id().clone(),
             })
             .await?

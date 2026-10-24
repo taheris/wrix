@@ -156,7 +156,7 @@ pub fn reconcile(workspace: &Path, ticket: &Ticket) -> Result<Observation, Error
     };
     let id = match phase {
         Phase::Retired(_) => return Ok(Observation::Retired),
-        Phase::Reserved | Phase::Launching => return Ok(Observation::Protected),
+        Phase::Reserved | Phase::Cancelled | Phase::Launching => return Ok(Observation::Protected),
         Phase::Bound(id) => id,
     };
     let output = Command::new("podman")

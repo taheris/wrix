@@ -15,7 +15,13 @@ use std::{
     time::{Duration, Instant},
 };
 use wrix_core::nix_store::pool::Key;
-use wrix_state::nix_store::admission::request::{self, Accepted, Id};
+use wrix_state::nix_store::admission::request::{self, Accepted, Id, Purpose};
+
+#[derive(Clone, Copy)]
+pub(super) enum Action {
+    Pool,
+    Execution,
+}
 
 const LIMIT: usize = 128;
 const ACQUISITION: Duration = Duration::from_secs(120);
@@ -30,12 +36,16 @@ pub enum Status {
     Unknown,
 }
 
+enum Prepared {
+    Pool,
+    Execution(backend::client::Delivery),
+}
 enum Outcome {
-    Ready,
+    Ready(Prepared),
     Failed,
 }
 enum Job {
-    Running(JoinHandle<Result<(), Error>>),
+    Running(JoinHandle<Result<Prepared, Error>>),
     Finished(Outcome),
 }
 #[derive(Default)]
@@ -57,13 +67,50 @@ impl Coordination {
     }
 }
 #[derive(Default)]
-pub(super) struct Jobs {
+pub(super) struct Queue {
     jobs: Mutex<BTreeMap<Id, Job>>,
     coordination: Arc<Coordination>,
+    supervisor: Arc<backend::client::supervisor::Supervisor>,
 }
 
-impl Jobs {
-    pub(super) fn prepare(&self, controller: &Controller, id: Id) -> Result<Reply, Error> {
+impl Queue {
+    pub(super) fn recover_startup(&self, controller: &Controller) {
+        let host = match wrix_state::host::Host::discover() {
+            Ok(host) => host,
+            Err(error) => {
+                tracing::debug!(operation = "nix_execution_recover", %error, "host pool supervision is unavailable; protection is not released");
+                return;
+            }
+        };
+        let address = match controller.listener.local_addr() {
+            Ok(address) => address,
+            Err(error) => {
+                tracing::warn!(operation = "nix_execution_recover", %error, "controller identity is unavailable; protection is retained");
+                return;
+            }
+        };
+        if address.as_pathname()
+            == Some(
+                host.roots()
+                    .state()
+                    .join("control/authority/control.sock")
+                    .as_path(),
+            )
+        {
+            let supervisor = self.supervisor.clone();
+            let deployment = controller.deployment.clone();
+            if let Err(error) = thread::Builder::new().name("wrix-pool-recover".to_owned()).spawn(move || {
+                if let Err(error) = supervisor.recover_all(&Arc::new(host), &deployment) { tracing::warn!(operation = "nix_execution_recover", %error, "recorded pool supervision is uncertain; protection is retained"); }
+            }) { tracing::warn!(operation = "nix_execution_recover", %error, "pool supervision could not start; protection is retained"); }
+        }
+    }
+
+    pub(super) fn prepare(
+        &self,
+        controller: &Controller,
+        id: Id,
+        action: Action,
+    ) -> Result<Reply, Error> {
         let host = wrix_state::host::Host::discover().map_err(io::Error::other)?;
         let root = host.roots().state().join("control/authority");
         if controller.listener.local_addr()?.as_pathname()
@@ -87,12 +134,23 @@ impl Jobs {
         let tools = Tools::from_env()?;
         let deployment = controller.deployment.clone();
         let coordination = self.coordination.clone();
+        let supervisor = self.supervisor.clone();
         let request = id.clone();
         let handle = thread::Builder::new()
             .name("wrix-pool-prepare".to_owned())
             .spawn(move || {
                 // Scope re-attestation can invoke the bounded host resolver; never run it in the control loop.
                 let accepted = request::claim(&request)?;
+                if !matches!(
+                    (action, accepted.purpose()),
+                    (Action::Pool, Purpose::Preparation)
+                        | (Action::Execution, Purpose::Execution { .. })
+                ) {
+                    return Err(Error::PermissionDenied);
+                }
+                if matches!(action, Action::Execution) {
+                    tools.export_check()?;
+                }
                 let namespace = Namespace::from(accepted.namespace());
                 let registrations = super::registration::Store::open(&root)?;
                 {
@@ -109,7 +167,23 @@ impl Jobs {
                         Err(backend::Error::Busy) if Instant::now() < deadline => {
                             thread::sleep(Duration::from_millis(25));
                         }
-                        result => return result.map_err(Error::from),
+                        Ok(mut owner) => {
+                            supervisor.recover(&accepted.host_handle(), &deployment, &owner)?;
+                            return match action {
+                                Action::Pool => Ok(Prepared::Pool),
+                                Action::Execution => {
+                                    let delivery = owner.admit_execution(&accepted)?;
+                                    supervisor.start(
+                                        accepted.host_handle(),
+                                        deployment.clone(),
+                                        accepted.namespace().clone(),
+                                        &delivery,
+                                    )?;
+                                    Ok(Prepared::Execution(delivery))
+                                }
+                            };
+                        }
+                        Err(error) => return Err(error.into()),
                     }
                 }
             })?;
@@ -117,12 +191,33 @@ impl Jobs {
         Ok(Reply::PoolQueued { id })
     }
 
+    pub(super) fn delivery(&self, id: &Id) -> Result<Reply, Error> {
+        let mut jobs = self.jobs.lock().map_err(|_| Error::LockPoisoned)?;
+        finish(&mut jobs);
+        Ok(match jobs.get(id) {
+            Some(Job::Finished(Outcome::Ready(Prepared::Execution(delivery)))) => {
+                Reply::PoolDelivery {
+                    delivery: delivery.clone(),
+                }
+            }
+            Some(Job::Running(_)) => Reply::PoolPreparation {
+                status: Status::Pending,
+            },
+            Some(Job::Finished(Outcome::Failed)) => Reply::PoolPreparation {
+                status: Status::Failed,
+            },
+            _ => Reply::PoolPreparation {
+                status: Status::Unknown,
+            },
+        })
+    }
+
     pub(super) fn inspect(&self, id: &Id) -> Result<Reply, Error> {
         let mut jobs = self.jobs.lock().map_err(|_| Error::LockPoisoned)?;
         finish(&mut jobs);
         let status = match jobs.get(id) {
             Some(Job::Running(_)) => Status::Pending,
-            Some(Job::Finished(Outcome::Ready)) => Status::Ready,
+            Some(Job::Finished(Outcome::Ready(_))) => Status::Ready,
             Some(Job::Finished(Outcome::Failed)) => Status::Failed,
             None => Status::Unknown,
         };
@@ -141,7 +236,7 @@ fn finish(jobs: &mut BTreeMap<Id, Job>) {
     for id in finished {
         if let Some(Job::Running(handle)) = jobs.remove(&id) {
             let status = match handle.join() {
-                Ok(Ok(())) => Outcome::Ready,
+                Ok(Ok(prepared)) => Outcome::Ready(prepared),
                 Ok(Err(error)) => {
                     tracing::warn!(operation = "nix_pool_prepare", %error, "pool preparation failed; retained ownership is not released");
                     Outcome::Failed
@@ -164,7 +259,7 @@ fn ensure(
     deployment: &crate::deployment::Id,
     candidate: &Candidate,
     tools: &Tools,
-) -> Result<(), backend::Error> {
+) -> Result<backend::Owner, backend::Error> {
     let host = accepted.host();
     accepted.recheck().map_err(io::Error::other)?;
     let pool = accepted.pool();
@@ -178,16 +273,16 @@ fn ensure(
         Ok(_) => {
             let mut owner = backend::Owner::open(host, deployment, pool)?;
             owner.ensure_ready()?;
+            Ok(owner)
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             tools.check(pool.system)?;
             Reservation::reserve(host, deployment, pool)?
                 .prepare(tools)?
-                .start(candidate.clone(), tools.clone())?;
+                .start(candidate.clone(), tools.clone())
         }
-        Err(error) => return Err(error.into()),
+        Err(error) => Err(error.into()),
     }
-    Ok(())
 }
 
 #[cfg(test)]

@@ -23,6 +23,11 @@ use crate::{host::Host, integration::Slot};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Generation([u8; 32]);
+impl Generation {
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
 
 const APPLICATION: i64 = 0x5752_5831;
 const SCHEMA: i64 = 1;

@@ -9,7 +9,7 @@ use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::io::Read;
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(transparent)]
 pub struct Ticket(String);
 
@@ -64,6 +64,7 @@ impl<'de> Deserialize<'de> for Container {
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub enum Phase {
     Reserved,
+    Cancelled,
     Launching,
     Bound(Container),
     Retired(Container),
@@ -139,12 +140,73 @@ pub fn retire(
     )
 }
 
+/// Revoke a never-handed-off reservation atomically; launching/unknown native work cannot be cancelled this way.
+pub fn cancel(host: &Host, context: &Context, ticket: &Ticket) -> Result<(), Error> {
+    transition(host, context, ticket, &Phase::Reserved, &Phase::Cancelled)
+}
+
+pub(crate) fn require_reserved(
+    store: &Store,
+    context: &Context,
+    ticket: &Ticket,
+) -> Result<(), Error> {
+    if read(store, context, ticket)? != Some(Phase::Reserved) {
+        return Err(Error::Conflict);
+    }
+    Ok(())
+}
+
+/// Host-native terminal evidence only; no caller-supplied exit status or containment ID can construct this.
+pub struct Terminal {
+    namespace: wrix_core::path::WorkspaceHash,
+    ticket: Ticket,
+    generation: crate::store::Generation,
+}
+impl Terminal {
+    pub const fn namespace(&self) -> &wrix_core::path::WorkspaceHash {
+        &self.namespace
+    }
+    pub const fn ticket(&self) -> &Ticket {
+        &self.ticket
+    }
+    pub const fn generation(&self) -> &crate::store::Generation {
+        &self.generation
+    }
+}
+
+pub fn terminal(
+    host: &Host,
+    namespace: &wrix_core::path::WorkspaceHash,
+    ticket: &Ticket,
+) -> Result<Option<Terminal>, Error> {
+    let store = Store::inspect(host)?.ok_or(Error::Uninitialized)?;
+    if !matches!(
+        read_namespace(&store, namespace, ticket)?,
+        Some(Phase::Retired(_) | Phase::Cancelled)
+    ) {
+        return Ok(None);
+    }
+    Ok(Some(Terminal {
+        namespace: namespace.clone(),
+        ticket: ticket.clone(),
+        generation: store.generation()?,
+    }))
+}
+
 fn read(store: &Store, context: &Context, ticket: &Ticket) -> Result<Option<Phase>, Error> {
+    read_namespace(store, context.key(), ticket)
+}
+
+fn read_namespace(
+    store: &Store,
+    namespace: &wrix_core::path::WorkspaceHash,
+    ticket: &Ticket,
+) -> Result<Option<Phase>, Error> {
     let bytes: Option<Vec<u8>> = store
         .connection
         .query_row(
             "SELECT value FROM namespace_metadata WHERE native_key = ?1 AND owner = ?2",
-            params![context.key().as_str(), ticket.owner()],
+            params![namespace.as_str(), ticket.owner()],
             |row| row.get(0),
         )
         .optional()?;

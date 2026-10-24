@@ -42,6 +42,28 @@ impl From<Id> for String {
     }
 }
 
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(tag = "purpose", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Purpose {
+    #[default]
+    Preparation,
+    Execution {
+        ticket: crate::execution::Ticket,
+    },
+}
+
+impl Purpose {
+    const fn is_preparation(&self) -> bool {
+        matches!(self, Self::Preparation)
+    }
+    fn recheck(&self, store: &Store, context: &crate::context::Context) -> Result<(), Error> {
+        if let Self::Execution { ticket } = self {
+            crate::execution::require_reserved(store, context, ticket)?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Record {
@@ -50,6 +72,8 @@ struct Record {
     pool: Key,
     common: Common,
     original: crate::context::snapshot::Snapshot,
+    #[serde(default, skip_serializing_if = "Purpose::is_preparation")]
+    purpose: Purpose,
 }
 
 /// Host-private, single-use preparation intent, not a native grant or execution lease.
@@ -64,22 +88,32 @@ impl Request {
 
 /// Consumed host authorization for one fixed pool, not a ready owner or client capability.
 pub struct Accepted {
-    host: Host,
+    host: std::sync::Arc<Host>,
     namespace: WorkspaceHash,
     pool: Key,
     generation: crate::store::Generation,
     common: Common,
     context: crate::context::Context,
+    purpose: Purpose,
 }
 impl Accepted {
-    pub const fn host(&self) -> &Host {
+    pub fn host(&self) -> &Host {
         &self.host
+    }
+    pub fn host_handle(&self) -> std::sync::Arc<Host> {
+        self.host.clone()
     }
     pub const fn namespace(&self) -> &WorkspaceHash {
         &self.namespace
     }
     pub const fn pool(&self) -> &Key {
         &self.pool
+    }
+    pub const fn purpose(&self) -> &Purpose {
+        &self.purpose
+    }
+    pub const fn generation(&self) -> &crate::store::Generation {
+        &self.generation
     }
     pub fn recheck(&self) -> Result<(), Error> {
         self.host.check()?;
@@ -88,6 +122,7 @@ impl Accepted {
         if store.generation()? != self.generation {
             return Err(Error::PreparationRequest);
         }
+        self.purpose.recheck(&store, &self.context)?;
         let catalog = Catalog::load(&store)?;
         let record = catalog
             .0
@@ -108,7 +143,16 @@ impl Accepted {
 impl Guard {
     /// Publish while original scope and approval are still checked; release database exclusion before I/O.
     pub fn request(self) -> Result<Request, Error> {
+        self.issue(Purpose::Preparation)
+    }
+
+    pub fn request_execution(self, ticket: crate::execution::Ticket) -> Result<Request, Error> {
+        self.issue(Purpose::Execution { ticket })
+    }
+
+    fn issue(self, purpose: Purpose) -> Result<Request, Error> {
         self.recheck()?;
+        purpose.recheck(&self.store, &self.context)?;
         let count: i64 = self.store.connection.query_row(
             "SELECT count(*) FROM namespace_metadata WHERE native_key = ?1 AND owner LIKE 'installed-store-preparation:%'",
             [self.namespace().as_str()], |row| row.get(0),
@@ -142,6 +186,7 @@ impl Guard {
             pool: self.pool.clone(),
             common: self.common.clone(),
             original: crate::context::snapshot::Snapshot::capture(&self.context),
+            purpose,
         };
         let bytes = serde_json::to_vec(&record)?;
         if bytes.len() > 65536 {
@@ -199,6 +244,7 @@ pub fn claim(id: &Id) -> Result<Accepted, Error> {
         return Err(Error::ApprovalRequired);
     }
     record.common.recheck()?;
+    record.purpose.recheck(&store, &context)?;
     if store.connection.execute(
         "DELETE FROM namespace_metadata WHERE native_key = ?1 AND owner = ?2",
         rusqlite::params![namespace.as_str(), owner],
@@ -210,12 +256,13 @@ pub fn claim(id: &Id) -> Result<Accepted, Error> {
     let generation = store.generation()?;
     drop(store);
     Ok(Accepted {
-        host,
+        host: std::sync::Arc::new(host),
         namespace,
         pool: record.pool,
         generation,
         common: record.common,
         context,
+        purpose: record.purpose,
     })
 }
 

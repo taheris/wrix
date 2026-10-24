@@ -83,9 +83,46 @@ controller restart can make a status unknown; neither releases native ownership
 nor proves that a worker or build exited. Interrupted native phases remain
 fenced.
 
+Execution preparation adds a separate private interface. Its one-use intent
+contains an original native execution reservation, not a caller-selected pool,
+public key, export path or runtime ID. Missing, foreign, cancelled and already
+handed-off reservations cannot issue clients. A durable per-pool index precedes
+client creation; losing an indexed directory is uncertainty, not an empty pool
+or permission to recreate a grant. Client state, keys and view leaves remain
+outside guest data and store contents. Each key authenticates only native
+forced-untrusted Nix and the jailed read-only SFTP export.
+
+The controller owns a read-only, nodev/nosuid FUSE projection with unique native
+mount identity. Exact mount source/type/readonly flags are checked, including on
+reuse. Native paths survive the private wire protocol as bytes. The package
+supplies SSHFS; an existing, owned setuid OS FUSE helper is a checked platform
+prerequisite. No permissions are repaired or privileges installed. Retirement
+uses only that fixed helper and selected leaf, never force/lazy unmount.
+
+Bounded retirement observers retain protection until host-native terminal
+evidence appears. Explicit revocation of a still-reserved ticket atomically
+prevents the native launch handoff; it cannot cancel launching or bound work.
+Public execution reconciliation remains conservative, and foreground completion
+is not terminal evidence. Worker retirement still needs the existing exact-ID
+inactive/removal protocol. The observer gracefully unmounts its own projection,
+then requires authenticated native work drain and release before dropping the
+host index. Busy/unknown readers and interrupted creation/unmount/release remain
+protected. Startup reattaches observers to recorded clients without starting,
+resuming or adopting any VM, grant or projection. Native GC and shutdown reject
+unreleased or inconsistent host client ownership in addition to guest
+protection.
+
+The live Rust test exercises private-protocol execution grants, real
+forced-untrusted Nix realization, read-only visibility, automatic cancelled-peer
+projection retirement without disrupting a live peer, controller-process loss
+with a surviving projection, same-owner reuse and proof-gated drain/revocation.
+No worker runtime is substituted. These are host/client/projection component
+checks, not production run/spawn or two-worker acceptance.
+
 Failed tests retain their private fixture rather than deleting possibly live
-backing data. This does not yet establish production worker grants, filesystem
-delivery, host-wide update/recovery integration or platform worker acceptance.
+backing data. Exact worker-image seeding, worker ingress/bootstrap and run/spawn
+delivery, full host-wide update/recovery integration, and independent
+platform-worker acceptance remain outstanding; shared launches stay disabled.
 
 ## Explicit same-image guest resume
 

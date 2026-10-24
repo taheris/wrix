@@ -5,6 +5,73 @@ use super::*;
 use wrix_state::nix_store::admission::request;
 
 #[test]
+fn execution_requests_require_an_original_unstarted_native_reservation() {
+    if let Some(caller) = child() {
+        let selection = Selection::inspect(&caller).unwrap();
+        let context = selection.context().unwrap();
+        let host = wrix_state::host::Host::discover().unwrap();
+        let forged = wrix_state::execution::Ticket::parse(&"a".repeat(64)).unwrap();
+        assert!(
+            Admission::acquire(&selection, System::X86_64Linux)
+                .unwrap()
+                .request_execution(forged)
+                .is_err()
+        );
+        let ticket = wrix_state::execution::reserve(&host, context).unwrap();
+        let request = Admission::acquire(&selection, System::X86_64Linux)
+            .unwrap()
+            .request_execution(ticket.clone())
+            .unwrap();
+        let accepted = request::claim(request.id()).unwrap();
+        assert!(
+            matches!(accepted.purpose(), request::Purpose::Execution { ticket: bound } if bound == &ticket)
+        );
+        wrix_state::execution::begin(&host, context, &ticket).unwrap();
+        assert!(wrix_state::execution::cancel(&host, context, &ticket).is_err());
+        assert!(
+            wrix_state::execution::terminal(&host, context.key(), &ticket)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            Admission::acquire(&selection, System::X86_64Linux)
+                .unwrap()
+                .request_execution(ticket)
+                .is_err()
+        );
+        let cancelled = wrix_state::execution::reserve(&host, context).unwrap();
+        wrix_state::execution::cancel(&host, context, &cancelled).unwrap();
+        assert!(wrix_state::execution::begin(&host, context, &cancelled).is_err());
+        assert!(
+            wrix_state::execution::terminal(&host, context.key(), &cancelled)
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            Admission::acquire(&selection, System::X86_64Linux)
+                .unwrap()
+                .request_execution(cancelled)
+                .is_err()
+        );
+        let peer = Selection::inspect(&caller.parent().unwrap().join("peer")).unwrap();
+        let foreign = wrix_state::execution::reserve(&host, peer.context().unwrap()).unwrap();
+        assert!(
+            Admission::acquire(&selection, System::X86_64Linux)
+                .unwrap()
+                .request_execution(foreign)
+                .is_err()
+        );
+        assert!(!host.roots().state().join("control/nix").exists());
+        return;
+    }
+    let (fixture, checkout) = setup();
+    fixture.repository("peer");
+    deployment(&fixture);
+    success(&fixture, &checkout, &["enable"]);
+    start(&fixture, &checkout, "nix_store::admission::request::execution_requests_require_an_original_unstarted_native_reservation").finish();
+}
+
+#[test]
 fn checked_preparation_requests_release_approval_exclusion_and_cannot_be_replayed() {
     if let Some(caller) = child() {
         let selection = Selection::inspect(&caller).unwrap();

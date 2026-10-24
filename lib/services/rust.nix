@@ -77,6 +77,7 @@ let
     ++ optionals pkgs.stdenv.hostPlatform.isLinux [
       pkgs.systemd
       pkgs.podman
+      pkgs.sshfs
       (import ../sandbox/linux/krun-runtime.nix { linuxPkgs = pkgs; })
     ];
   };
