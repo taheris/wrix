@@ -466,6 +466,66 @@ fn push_precedes_pull() -> TestResult {
 }
 
 #[test]
+fn push_fixture_preserves_foreign_rebase_under_inherited_git_context() -> TestResult {
+    let foreign = Fixture::new("beads-foreign-rebase")?;
+    setup_repo_with_beads_branch(&foreign)?;
+    let worktree = foreign.beads_worktree();
+    fs::write(worktree.join(".beads/.keep"), "local intent\n")?;
+    run_git(&worktree, &["add", ".beads/.keep"])?;
+    run_git(&worktree, &["commit", "-qm", "local intent"])?;
+    run_git(
+        foreign.repo(),
+        &["switch", "-c", "competing", "origin/beads", "--quiet"],
+    )?;
+    fs::write(foreign.repo().join(".beads/.keep"), "remote intent\n")?;
+    run_git(foreign.repo(), &["add", ".beads/.keep"])?;
+    run_git(foreign.repo(), &["commit", "-qm", "remote intent"])?;
+    run_git(foreign.repo(), &["push", "origin", "HEAD:beads", "--quiet"])?;
+    let conflict = git_command(&worktree, &["pull", "--rebase"]).output()?;
+    assert!(
+        !conflict.status.success(),
+        "expected a real rebase conflict"
+    );
+    let admin = PathBuf::from(git_stdout(&worktree, &["rev-parse", "--absolute-git-dir"])?);
+    assert!(admin.join("rebase-merge").is_dir());
+    let paths = [
+        admin.join("HEAD"),
+        admin.join("index"),
+        admin.join("rebase-merge/orig-head"),
+        admin.join("rebase-merge/onto"),
+        admin.join("rebase-merge/git-rebase-todo"),
+        worktree.join(".beads/.keep"),
+    ];
+    let before = paths.iter().map(fs::read).collect::<Result<Vec<_>, _>>()?;
+    let branch_before = git_stdout(foreign.repo(), &["rev-parse", "beads"])?;
+
+    let fixture = Fixture::new("beads-isolated-push")?;
+    setup_repo_with_beads_branch(&fixture)?;
+    let output = invoke_push(fixture.repo(), &[fixture.fake_bin()], |command| {
+        command
+            .env("IS_SANDBOX", "1")
+            .env("WRIX_BEADS_MANAGED", "1")
+            .env("WRIX_BEADS_GIT_DIR", &admin)
+            .env("WRIX_BEADS_GIT_COMMON", foreign.repo().join(".git"))
+            .env("GIT_DIR", &admin)
+            .env("GIT_COMMON_DIR", foreign.repo().join(".git"))
+            .env("GIT_WORK_TREE", &worktree)
+            .env("GIT_INDEX_FILE", admin.join("index"));
+        configure_bd(command, &fixture, "push-success");
+    })?;
+    assert_eq!(output.code, 0, "{}", output.stderr);
+    assert!(output.stdout.contains("synced to GitHub"));
+    let after = paths.iter().map(fs::read).collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(after, before, "foreign interrupted rebase was changed");
+    assert_eq!(
+        git_stdout(foreign.repo(), &["rev-parse", "beads"])?,
+        branch_before
+    );
+    assert!(admin.join("rebase-merge").is_dir());
+    Ok(())
+}
+
+#[test]
 fn authentication_and_permission_failures_never_pull() -> TestResult {
     for message in [
         "authentication failed",
@@ -1238,7 +1298,12 @@ fn invoke_push(
 fn configure_bd(command: &mut ProcessCommand, fixture: &Fixture, scenario: &str) {
     common::set_isolated_git_env(command);
     common::set_isolated_host_roots(command);
+    // These fixtures own local Git/Dolt state, not the enclosing worker's
+    // canonical namespace. Tests may opt back into guest behavior explicitly.
     command
+        .env_remove("WRIX_BEADS_MANAGED")
+        .env_remove("WRIX_BEADS_GIT_DIR")
+        .env_remove("WRIX_BEADS_GIT_COMMON")
         .env("WRIX_BEADS_BD_LOG", &fixture.bd_log)
         .env("WRIX_BEADS_STATE_DIR", &fixture.state_dir)
         .env("WRIX_BEADS_BD_SCENARIO", scenario)
