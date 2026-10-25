@@ -2,7 +2,7 @@ use std::{io, process::ExitCode};
 use tokio::io::AsyncWriteExt;
 use wrix_service::nix_store::native::{self, Role, lease};
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
     match run().await {
         Ok(status) => status,

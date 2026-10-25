@@ -78,6 +78,8 @@ let
       pkgs.systemd
       pkgs.podman
       pkgs.sshfs
+      pkgs.coreutils
+      pkgs.fuse3
       (import ../sandbox/linux/krun-runtime.nix { linuxPkgs = pkgs; })
     ];
   };

@@ -49,6 +49,16 @@ let
     ;
   privateNix = import ./private-nix.nix { inherit (pkgs) lib; };
   sharedNixContract = import ./shared-nix.nix;
+  sharedNixClient = pkgs.replaceVars ./shared-nix-client.sh {
+    STAT = "${pkgs.coreutils}/bin/stat";
+    MKDIR = "${pkgs.coreutils}/bin/mkdir";
+    SOCAT = "${pkgs.socat}/bin/socat";
+    SSH = "${pkgs.openssh}/bin/ssh";
+    TIMEOUT = "${pkgs.coreutils}/bin/timeout";
+    NIX = "${pkgs.nix}/bin/nix";
+    JQ = "${pkgs.jq}/bin/jq";
+    SLEEP = "${pkgs.coreutils}/bin/sleep";
+  };
   sshConfig = import ../util/ssh.nix;
   knownHosts = import ./known-hosts.nix { inherit pkgs; };
 
@@ -323,6 +333,7 @@ let
     "wrix.agent.kind" = agent;
     "wrix.nix.private" = toString privateNix.version;
     "wrix.nix.shared" = toString sharedNix.version;
+    "wrix.nix.client" = "1";
     "wrix.nix.seed" = builtins.hashString "sha256" (
       builtins.unsafeDiscardStringContext sharedNix.seed_closure
     );
@@ -354,6 +365,7 @@ let
       ${imageBuilderPkgs.bash}/bin/bash ${./install-known-hosts.sh} ${knownHosts}/known_hosts .
       echo "127.0.0.1 localhost" > etc/hosts
 
+      cp ${sharedNixClient} shared-nix-client.sh
       cp ${entrypointSh} entrypoint.sh
       cp ${./install-known-hosts.sh} install-known-hosts.sh
       chmod +x entrypoint.sh

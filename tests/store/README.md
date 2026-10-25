@@ -116,8 +116,9 @@ The live Rust test exercises private-protocol execution grants, real
 forced-untrusted Nix realization, read-only visibility, automatic cancelled-peer
 projection retirement without disrupting a live peer, controller-process loss
 with a surviving projection, same-owner reuse and proof-gated drain/revocation.
-No worker runtime is substituted. These are host/client/projection component
-checks, not production run/spawn or two-worker acceptance.
+No worker runtime is substituted. These initial checks remain host/client
+components, distinct from the actual Podman worker components below and from
+production run/spawn acceptance.
 
 Worker preparation adds a separately probed private interface and freezes the
 selected immutable image configuration digest and shared-Nix metadata alongside
@@ -144,9 +145,56 @@ preserves both complete registrations through native GC and sealed VM resume.
 These remain component checks: no normal launched-worker or runtime/platform
 acceptance is inferred.
 
+### Podman worker components
+
+The separately probed Podman preparation interface freezes the selected native
+filesystem plane in the original checked intent. Fixed package tools create,
+inspect and gracefully unmount its FUSE source inside Podman's own rootless
+mount namespace. The source must not propagate into the host namespace. This
+avoids leaving an untracked source copy in Podman's persistent namespace after
+host-side unmount. Native mount ID/device/source and readonly/nodev/nosuid flags
+are checked in the owning namespace; unknown namespaces or identities retain
+protection rather than being adopted. Host-only component views retain SSHFS
+symlink containment. Worker sources preserve canonical Unix links, interpreted
+inside the worker filesystem, and use immutable installed-file caching while
+negative lookups remain uncached.
+
+Each worker receives only five fixed readonly configuration/key files, its
+readonly store bind and an exact role-port firewall exception through the
+existing Podman host-loopback mapping. Trusted image startup establishes a
+bounded worker-local Unix socket, forwarding raw native daemon streams through
+pinned SSH with that execution's forced-untrusted key. No host daemon/socket,
+management key or general forwarding destination is supplied. Unix native-store
+semantics permit local execution of installed programs; an ssh-ng store alone
+cannot implement native `nix run` or `nix develop`. Startup authenticates native
+`trusted=false` before any workspace/agent code. Reserved mount destinations and
+the client bootstrap cannot be shadowed by profile or caller mounts.
+
+The live test now creates two independent actual Podman workers and a
+replacement through the SDK containment path. Before starting either object it
+checks the immutable native image digest and readonly runtime mounts. They run
+actual build/develop/run/profile operations, see paths added after an explicit
+negative lookup and reuse the same installed result. Mutation, repair, unsigned
+input-addressed import and administration are rejected through the actual worker
+endpoint; a known-readable physical-host file remains inaccessible even through
+a pool-output symlink. Killing the replacement's foreground launcher leaves
+native containment and GC protection live. Exact inactive inspection, removal
+reply and independent confirmed absence precede terminal proof, namespace-local
+graceful unmount and authenticated native work drain. Closing records remain
+protected while peer native work/readers prevent global drain. The
+private-controller path also proves checked Podman preparation and automatic
+retirement of a never-started reservation without a host-namespace mount.
+
+These are real worker/SDK components, not normal CLI run/spawn, full
+Rust-workflow/performance acceptance, service-unit restart, krun-worker or Apple
+acceptance. Elapsed worker milestones are recorded; complete upstream/import,
+build-invocation and filesystem-I/O measurements remain required. Native command
+helpers use one async thread and bound native GC marker threads rather than
+exhausting the fixed control PID budget with per-connection runtimes.
+
 Failed tests retain their private fixture rather than deleting possibly live
-backing data. Worker ingress/bootstrap and production run/spawn delivery, full
-host-wide update/recovery integration, and independent platform-worker
+backing data. Production run/spawn factory integration, full host-wide
+update/recovery, independent runtime/platform and complete lifetime/performance
 acceptance remain outstanding; shared launches stay disabled.
 
 ## Explicit same-image guest resume

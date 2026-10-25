@@ -89,6 +89,7 @@ impl Role {
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Operation {
     Inspect {},
+    InspectWork {},
     Register {
         id: lease::Id,
         key: lease::Key,
@@ -120,6 +121,7 @@ pub enum Operation {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "result", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Reply {
+    Work { activity: Activity },
     Ready { version: u16, leases: usize },
     Image { status: ImageStatus },
     MissingPaths { paths: Vec<image::StorePath> },
@@ -251,10 +253,27 @@ fn daemon_pid() -> Result<u32, Error> {
     Ok(pid)
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(tag = "activity", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Activity {
+    Idle,
+    Seed,
+    DaemonClient,
+    Build,
+    Client {
+        pid: std::num::NonZeroU32,
+        zombie: bool,
+    },
+}
+
 fn quiescent() -> Result<bool, Error> {
+    Ok(activity()? == Activity::Idle)
+}
+
+fn activity() -> Result<Activity, Error> {
     let seed = fs::read_to_string("/sys/fs/cgroup/wrix-nix-pool/seed/cgroup.events")?;
     if !seed.lines().any(|line| line == "populated 0") {
-        return Ok(false);
+        return Ok(Activity::Seed);
     }
     let pid = daemon_pid()?;
     let procs = fs::read_to_string("/sys/fs/cgroup/wrix-nix-pool/work/nix-daemon/cgroup.procs")?;
@@ -264,7 +283,7 @@ fn quiescent() -> Result<bool, Error> {
         .collect::<Result<Vec<_>, _>>()
         .map_err(|_| Error::Invalid)?;
     if parsed != [pid] {
-        return Ok(false);
+        return Ok(Activity::DaemonClient);
     }
     for entry in fs::read_dir("/sys/fs/cgroup/wrix-nix-pool/work")? {
         let entry = entry?;
@@ -275,7 +294,7 @@ fn quiescent() -> Result<bool, Error> {
         {
             let events = fs::read_to_string(entry.path().join("cgroup.events"))?;
             if !events.lines().any(|line| line == "populated 0") {
-                return Ok(false);
+                return Ok(Activity::Build);
             }
         }
     }
@@ -302,11 +321,23 @@ fn quiescent() -> Result<bool, Error> {
                 .parse()
                 .map_err(|_| Error::Invalid)?;
             if matches!(uid, 2000 | 2001) {
-                return Ok(false);
+                let pid = entry
+                    .file_name()
+                    .to_str()
+                    .ok_or(Error::Invalid)?
+                    .parse()
+                    .map_err(|_| Error::Invalid)?;
+                let zombie = status
+                    .lines()
+                    .find(|line| line.starts_with("State:"))
+                    .and_then(|line| line.split_whitespace().nth(1))
+                    .ok_or(Error::Invalid)?
+                    == "Z";
+                return Ok(Activity::Client { pid, zombie });
             }
         }
     }
-    Ok(true)
+    Ok(Activity::Idle)
 }
 
 async fn receive<T: serde::de::DeserializeOwned>(stream: &mut UnixStream) -> Result<T, Error> {
@@ -346,6 +377,7 @@ fn command(program: &Path) -> tokio::process::Command {
         .env("HOME", "/var/empty")
         .env("NIX_CONF_DIR", "/etc/nix")
         .env("NIX_USER_CONF_FILES", "/dev/null")
+        .env("GC_MARKERS", "1")
         .env(
             "NIX_DAEMON_SOCKET_PATH",
             "/nix/var/nix/daemon-socket/socket",
@@ -547,6 +579,7 @@ async fn acquire<'a, T: Send>(
     if matches!(
         operation,
         Operation::Inspect {}
+            | Operation::InspectWork {}
             | Operation::InspectImage { .. }
             | Operation::InspectImageMissing { .. }
             | Operation::Collect {}
@@ -636,6 +669,9 @@ async fn administer(stream: &mut UnixStream, state: &Mutex<State>) -> Result<(),
             }
             Reply::Image { status }
         }
+        Operation::InspectWork {} => Reply::Work {
+            activity: activity()?,
+        },
         Operation::InspectImageMissing { image, paths } => {
             image::seed::Registry::native().inspect(&image, &paths)?;
             Reply::MissingPaths {

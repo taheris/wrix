@@ -371,6 +371,7 @@ pub enum Operation {
     InspectNixPool {},
     InspectNixExecution {},
     InspectNixWorker {},
+    InspectNixPodmanWorker {},
     PrepareNixWorker {
         id: wrix_state::nix_store::admission::request::Id,
     },
@@ -702,7 +703,8 @@ impl Controller {
         match operation {
             Operation::InspectNixPool {}
             | Operation::InspectNixExecution {}
-            | Operation::InspectNixWorker {} => {
+            | Operation::InspectNixWorker {}
+            | Operation::InspectNixPodmanWorker {} => {
                 return Ok(Reply::PoolInterface { version: 1 });
             }
             Operation::PrepareNixPool { id } => {
@@ -732,7 +734,8 @@ impl Controller {
             | Operation::PrepareNixExecution { .. }
             | Operation::InspectNixExecutionDelivery { .. }
             | Operation::InspectNixWorker {}
-            | Operation::PrepareNixWorker { .. } => None,
+            | Operation::PrepareNixWorker { .. }
+            | Operation::InspectNixPodmanWorker {} => None,
         };
         let mut namespaces = self.registrations.lock()?;
         Ok(match operation {
@@ -744,7 +747,8 @@ impl Controller {
             | Operation::PrepareNixExecution { .. }
             | Operation::InspectNixExecutionDelivery { .. }
             | Operation::InspectNixWorker {}
-            | Operation::PrepareNixWorker { .. } => return Err(Error::PermissionDenied),
+            | Operation::PrepareNixWorker { .. }
+            | Operation::InspectNixPodmanWorker {} => return Err(Error::PermissionDenied),
             Operation::Inspect {} => Reply::Snapshot {
                 version: VERSION,
                 namespaces: (*namespaces).clone(),
@@ -933,21 +937,63 @@ impl Client {
         ticket: &wrix_state::execution::Ticket,
         image: &wrix_core::nix_store::binding::Binding,
     ) -> Result<wrix_state::nix_store::admission::request::Id, Error> {
+        self.prepare_worker_on(
+            selection,
+            system,
+            ticket,
+            image,
+            wrix_state::nix_store::admission::request::Plane::Host,
+        )
+        .await
+    }
+
+    /// Prepare the checked execution's source inside Podman's native rootless mount namespace, never the host namespace.
+    pub async fn prepare_nix_podman_worker(
+        &self,
+        selection: &wrix_state::context::Selection,
+        system: wrix_core::nix_store::pool::System,
+        ticket: &wrix_state::execution::Ticket,
+        image: &wrix_core::nix_store::binding::Binding,
+    ) -> Result<wrix_state::nix_store::admission::request::Id, Error> {
+        self.prepare_worker_on(
+            selection,
+            system,
+            ticket,
+            image,
+            wrix_state::nix_store::admission::request::Plane::Podman,
+        )
+        .await
+    }
+
+    async fn prepare_worker_on(
+        &self,
+        selection: &wrix_state::context::Selection,
+        system: wrix_core::nix_store::pool::System,
+        ticket: &wrix_state::execution::Ticket,
+        image: &wrix_core::nix_store::binding::Binding,
+        plane: wrix_state::nix_store::admission::request::Plane,
+    ) -> Result<wrix_state::nix_store::admission::request::Id, Error> {
+        use wrix_state::nix_store::admission::request::Plane;
         let host = wrix_state::host::Host::discover().map_err(io::Error::other)?;
         if self.socket != host.roots().state().join("control/authority/control.sock") {
             return Err(Error::PrivateRoot);
         }
-        if self.request(Operation::InspectNixWorker {}).await?
-            != (Reply::PoolInterface { version: 1 })
-        {
+        let probe = match plane {
+            Plane::Host => Operation::InspectNixWorker {},
+            Plane::Podman => Operation::InspectNixPodmanWorker {},
+        };
+        if self.request(probe).await? != (Reply::PoolInterface { version: 1 }) {
             return Err(Error::PoolInterface);
         }
         let selection = selection.clone();
         let ticket = ticket.clone();
         let image = image.clone();
         let request = tokio::task::spawn_blocking(move || {
-            wrix_state::nix_store::admission::Guard::acquire(&selection, system)?
-                .request_worker(ticket, image)
+            let guard = wrix_state::nix_store::admission::Guard::acquire(&selection, system)?;
+            match plane {
+                Plane::Host => guard.request_worker(ticket, image),
+                Plane::Podman => guard.request_podman_worker(ticket, image),
+            }
         })
         .await
         .map_err(io::Error::other)??;

@@ -10,11 +10,33 @@ pub(super) fn prepare(
     wrix_state::execution::Ticket,
     wrix_service::nix_store::owner::backend::client::Delivery,
 ) {
+    prepare_on(runtime, client, selection, host, request::Plane::Host)
+}
+
+fn prepare_on(
+    runtime: &tokio::runtime::Runtime,
+    client: &Client,
+    selection: &Selection,
+    host: &wrix_state::host::Host,
+    plane: request::Plane,
+) -> (
+    wrix_state::execution::Ticket,
+    wrix_service::nix_store::owner::backend::client::Delivery,
+) {
     let ticket = wrix_state::execution::reserve(host, selection.context().unwrap()).unwrap();
     let binding = super::seed::binding();
-    let id = runtime
-        .block_on(client.prepare_nix_worker(selection, system(), &ticket, &binding))
-        .unwrap();
+    let id = match plane {
+        request::Plane::Host => {
+            runtime.block_on(client.prepare_nix_worker(selection, system(), &ticket, &binding))
+        }
+        request::Plane::Podman => runtime.block_on(client.prepare_nix_podman_worker(
+            selection,
+            system(),
+            &ticket,
+            &binding,
+        )),
+    }
+    .unwrap();
     let deadline = Instant::now() + Duration::from_secs(180);
     loop {
         match runtime
@@ -34,6 +56,37 @@ pub(super) fn prepare(
             reply => panic!("execution preparation failed: {reply:?}"),
         }
     }
+}
+
+pub(super) fn podman_probe(
+    runtime: &tokio::runtime::Runtime,
+    client: &Client,
+    selection: &Selection,
+    host: &wrix_state::host::Host,
+) {
+    let (ticket, delivery) = prepare_on(runtime, client, selection, host, request::Plane::Podman);
+    assert!(delivery.podman_configuration().is_ok());
+    assert!(
+        fs::read_dir(delivery.store()).unwrap().next().is_none(),
+        "Podman source propagated into the host namespace"
+    );
+    wrix_state::execution::cancel(host, selection.context().unwrap(), &ticket).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let record: serde_json::Value = serde_json::from_slice(
+            &fs::read(delivery.key().parent().unwrap().join("client.json")).unwrap(),
+        )
+        .unwrap();
+        if record["state"]["phase"] == "released" {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "private controller did not retire its Podman-namespace source"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert!(delivery.podman_configuration().is_err());
 }
 
 pub(super) fn exercise(
@@ -139,7 +192,11 @@ pub(super) fn exercise(
         match owner.release_execution(&proof) {
             Ok(()) => break,
             Err(wrix_service::nix_store::owner::backend::Error::Busy) => {
-                assert!(Instant::now() < deadline);
+                assert!(
+                    Instant::now() < deadline,
+                    "native release activity: {:?}",
+                    owner.activity()
+                );
                 std::thread::sleep(Duration::from_millis(25));
             }
             Err(error) => panic!("native execution release failed: {error}"),

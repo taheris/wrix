@@ -36,6 +36,7 @@ fn worker_intent_freezes_exact_image_and_requires_supported_metadata_and_origina
             request::Purpose::Worker {
                 ticket: saved,
                 image: saved_image,
+                plane: request::Plane::Host,
             } => {
                 assert_eq!(saved, &ticket);
                 assert_eq!(saved_image, &image);
@@ -43,6 +44,18 @@ fn worker_intent_freezes_exact_image_and_requires_supported_metadata_and_origina
             _ => panic!("lost exact worker purpose"),
         }
         accepted.recheck().unwrap();
+        let podman = Admission::acquire(&selection, System::X86_64Linux)
+            .unwrap()
+            .request_podman_worker(ticket.clone(), image.clone())
+            .unwrap();
+        let podman = request::claim(podman.id()).unwrap();
+        assert!(matches!(
+            podman.purpose(),
+            request::Purpose::Worker {
+                plane: request::Plane::Podman,
+                ..
+            }
+        ));
         wrix_state::execution::cancel(&host, context, &ticket).unwrap();
         assert!(accepted.recheck().is_err());
         assert!(

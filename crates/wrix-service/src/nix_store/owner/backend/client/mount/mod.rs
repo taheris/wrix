@@ -79,15 +79,60 @@ fn parse(bytes: &[u8], path: &Path, lease: &lease::Id) -> Result<Option<Identity
     Ok(identity)
 }
 
-pub(super) fn observe(path: &Path, lease: &lease::Id) -> Result<Option<Identity>, Error> {
-    let mut bytes = Vec::new();
-    File::open("/proc/self/mountinfo")?
-        .take(4_194_305)
-        .read_to_end(&mut bytes)?;
+pub(super) fn observe(
+    plane: wrix_state::nix_store::admission::request::Plane,
+    tools: &super::super::Tools,
+    path: &Path,
+    lease: &lease::Id,
+) -> Result<Option<Identity>, Error> {
+    let bytes = match plane {
+        wrix_state::nix_store::admission::request::Plane::Host => {
+            let mut bytes = Vec::new();
+            File::open("/proc/self/mountinfo")?
+                .take(4_194_305)
+                .read_to_end(&mut bytes)?;
+            bytes
+        }
+        wrix_state::nix_store::admission::request::Plane::Podman => {
+            if observe(
+                wrix_state::nix_store::admission::request::Plane::Host,
+                tools,
+                path,
+                lease,
+            )?
+            .is_some()
+            {
+                return Err(Error::Retained);
+            }
+            let mut command = tools.view_command(plane, super::Program::Cat);
+            command.arg("/proc/self/mountinfo");
+            super::super::success(tools.run(command, None, Some(super::COMMAND_BUDGET))?)?
+        }
+    };
     if bytes.len() > 4_194_304 {
         return Err(Error::Invalid);
     }
     parse(&bytes, path, lease)
+}
+
+pub(super) fn readable(
+    plane: wrix_state::nix_store::admission::request::Plane,
+    tools: &super::super::Tools,
+    path: &Path,
+) -> Result<bool, Error> {
+    match plane {
+        wrix_state::nix_store::admission::request::Plane::Host => {
+            Ok(std::fs::read_dir(path)?.next().transpose()?.is_some())
+        }
+        wrix_state::nix_store::admission::request::Plane::Podman => {
+            let mut command = tools.view_command(plane, super::Program::Ls);
+            command.args(["-A", "--"]).arg(path);
+            Ok(
+                !super::super::success(tools.run(command, None, Some(super::COMMAND_BUDGET))?)?
+                    .is_empty(),
+            )
+        }
+    }
 }
 
 #[cfg(test)]

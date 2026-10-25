@@ -66,6 +66,7 @@ sources = {
     'entrypoint.sh': 'lib/sandbox/linux/entrypoint.sh',
     'network-bootstrap.sh': 'lib/sandbox/network-bootstrap.sh',
     'network-ready.sh': 'lib/sandbox/network-ready.sh',
+    'shared-nix-client.sh': 'lib/sandbox/shared-nix-client.sh',
     'tool-cache.sh': 'lib/sandbox/tool-cache.sh',
     'krun-init.sh': 'lib/sandbox/linux/krun-init.sh',
     'beads-sandbox.sh': 'lib/beads/sandbox.sh',
@@ -82,6 +83,8 @@ for name, source in sources.items():
         ('/etc/', str(root / 'etc') + '/'),
         ('/home/wrix', str(root / 'home')),
         ('/run/wrix-network-ready', str(root / 'run/wrix-network-ready')),
+        ('/run/wrix/nix-pool', str(root / 'run/nix-pool')),
+        ('/run/wrix/nix-client', str(root / 'run/nix-client')),
         ('/usr/local/libexec/wrix-network', str(root / 'tools')),
         ('/homeless-shelter', str(root / 'homeless-shelter')),
     ] + [('/' + script, str(root / script)) for script in sources]:

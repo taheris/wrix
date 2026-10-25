@@ -227,6 +227,50 @@ fn execution_unavailable_ambiguous_and_failed_removal_observations_retain_bindin
 }
 
 #[test]
+#[ignore = "requires host capability; run in the disposable native-system guest"]
+fn execution_absence_confirmation_failures_retain_the_original_binding() {
+    use std::os::unix::fs::PermissionsExt;
+    let id = "1".repeat(64);
+    for (status, reply) in [(0, ""), (125, ""), (1, "unexpected")] {
+        let root = tempfile::tempdir().unwrap();
+        run(root.path(), "reserve").unwrap();
+        run(root.path(), "bind").unwrap();
+        let bin = root.path().join("bin");
+        fs::create_dir(&bin).unwrap();
+        let runtime = bin.join("podman");
+        let inspection = format!(
+            "[{{\"Id\":\"{id}\",\"State\":{{\"Status\":\"exited\",\"Running\":false,\"Paused\":false,\"Restarting\":false}}}}]"
+        );
+        let script = format!(
+            "#!/usr/bin/env bash\nset -euo pipefail\nprintf '%s\\n' \"$*\" >> '{}'\ncase \"$1\" in\ninspect) printf '%s' '{inspection}' ;;\nrm) [[ \"$2\" == '{id}' ]]; printf '%s\\n' '{id}' ;;\ncontainer) [[ \"$2\" == exists && \"$3\" == '{id}' ]]; printf '%s' '{reply}'; exit {status} ;;\n*) exit 125 ;;\nesac\n",
+            root.path().join("runtime-calls").display()
+        );
+        fs::write(&runtime, script).unwrap();
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
+        let path = std::env::join_paths(
+            std::iter::once(bin).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+        )
+        .unwrap();
+        let output = child(root.path(), "unknown")
+            .unwrap()
+            .env("PATH", path)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            fs::read_to_string(root.path().join("runtime-calls"))
+                .unwrap()
+                .lines()
+                .any(|line| line == format!("container exists {id}"))
+        );
+    }
+}
+
+#[test]
 #[ignore = "requires actual Linux rootless Podman and locally installed alpine:3.22"]
 fn execution_actual_podman_survives_launcher_death_and_reconciles_exact_teardown() {
     let root = tempfile::tempdir_in(fs::canonicalize("/tmp").unwrap())

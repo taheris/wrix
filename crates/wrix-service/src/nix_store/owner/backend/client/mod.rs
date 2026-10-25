@@ -4,6 +4,7 @@ mod path;
 pub(crate) mod supervisor;
 #[cfg(test)]
 mod test;
+pub mod worker;
 use super::{
     COMMAND_BUDGET, Error, Owner, Program, SshPath, check_directory, known_hosts_option,
     private_file, public_key, random, ssh_path_option, success,
@@ -25,13 +26,15 @@ use std::{
 use wrix_core::nix_store::pool::Key;
 use wrix_state::{
     execution::{Terminal, Ticket},
-    nix_store::admission::request::{Accepted, Purpose},
+    nix_store::admission::request::{Accepted, Plane, Purpose},
 };
 
 /// A host-private delivery description; it is not workspace authority or native exit evidence.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Delivery {
+    #[serde(default, skip_serializing_if = "Plane::is_host")]
+    plane: Plane,
     pool: Key,
     ticket: Ticket,
     lease: lease::Id,
@@ -50,6 +53,7 @@ impl Delivery {
     pub const fn ticket(&self) -> &Ticket {
         &self.ticket
     }
+    /// Exact runtime bind source, not a host traversal root; links resolve inside the worker namespace.
     pub fn store(&self) -> &Path {
         &self.store
     }
@@ -78,6 +82,8 @@ enum State {
 #[serde(deny_unknown_fields)]
 struct Record {
     version: u16,
+    #[serde(default, skip_serializing_if = "Plane::is_host")]
+    plane: Plane,
     pool: Key,
     namespace: crate::control::Namespace,
     generation: Vec<u8>,
@@ -165,6 +171,10 @@ impl Owner {
         if issued.pool() != self.pool() {
             return Err(Error::Invalid);
         }
+        let plane = match issued.purpose() {
+            Purpose::Worker { plane, .. } => *plane,
+            _ => Plane::Host,
+        };
         let ticket = match issued.purpose() {
             Purpose::Execution { ticket } | Purpose::Worker { ticket, .. } => ticket,
             Purpose::Preparation => return Err(Error::Invalid),
@@ -172,6 +182,12 @@ impl Owner {
         if !matches!(self.record.state, super::State::Serving { .. }) {
             return Err(Error::Retained);
         }
+        self.connection()?
+            .target
+            .attempt
+            .software
+            .tools
+            .view_check(plane)?;
         if let Purpose::Worker { image: binding, .. } = issued.purpose() {
             let digest = wrix_sandbox::image::Digest::parse(binding.digest().as_str())
                 .map_err(|_| Error::Invalid)?;
@@ -226,7 +242,6 @@ impl Owner {
         self.inspect()?;
         let connection = self.connection()?.clone();
         let tools = &connection.target.attempt.software.tools;
-        tools.export_check()?;
         let parent = self.prepared.reservation.paths.control.join("executions");
         match fs::DirBuilder::new().mode(0o700).create(&parent) {
             Ok(()) => File::open(&self.prepared.reservation.paths.control)?.sync_all()?,
@@ -242,7 +257,8 @@ impl Owner {
                     return Err(Error::Retained);
                 }
                 let record = Record::read(&root)?;
-                if record.pool != *issued.pool()
+                if record.plane != plane
+                    || record.pool != *issued.pool()
                     || record.ticket != *ticket
                     || record.namespace.as_str() != issued.namespace().as_str()
                     || record.generation != issued.generation().as_bytes()
@@ -252,19 +268,18 @@ impl Owner {
                 let State::Attached { mount: expected } = &record.state else {
                     return Err(Error::Retained);
                 };
-                if mount::observe(&root.join("store"), &record.lease)?.as_ref() != Some(expected) {
+                if mount::observe(record.plane, tools, &root.join("store"), &record.lease)?.as_ref()
+                    != Some(expected)
+                {
                     return Err(Error::Retained);
                 }
-                if fs::read_dir(root.join("store"))?
-                    .next()
-                    .transpose()?
-                    .is_none()
-                {
+                if !mount::readable(record.plane, tools, &root.join("store"))? {
                     return Err(Error::Retained);
                 }
                 private_file(&root, "key", false)?;
                 private_file(&root, "known-hosts", false)?;
                 return Ok(Delivery {
+                    plane: record.plane,
                     pool: record.pool,
                     ticket: record.ticket,
                     lease: record.lease,
@@ -308,8 +323,12 @@ impl Owner {
                     return Err(Error::Invalid);
                 }
                 destination.sync_all()?;
+                if matches!(issued.purpose(), Purpose::Worker { .. }) {
+                    worker::create(&root, connection.port)?;
+                }
                 let record = Record {
                     version: 1,
+                    plane,
                     pool: issued.pool().clone(),
                     namespace: crate::control::Namespace::from(issued.namespace()),
                     generation: issued.generation().as_bytes().to_vec(),
@@ -339,7 +358,7 @@ impl Owner {
         }
         record.state = State::Attaching;
         record.publish(&root)?;
-        let mut command = tools.command(Program::Sshfs);
+        let mut command = tools.view_command(plane, Program::Sshfs);
         command.arg("-p").arg(connection.port.to_string());
         let ssh = tools.command(Program::Ssh).get_program().to_owned();
         let mut ssh_command = OsString::from("ssh_command=");
@@ -351,8 +370,8 @@ impl Owner {
             "nodev",
             "nosuid",
             "cache=no",
-            "attr_timeout=0",
-            "entry_timeout=0",
+            "attr_timeout=60",
+            "entry_timeout=60",
             "negative_timeout=0",
             "BatchMode=yes",
             "IdentitiesOnly=yes",
@@ -362,6 +381,14 @@ impl Owner {
             "ServerAliveCountMax=3",
         ] {
             command.arg("-o").arg(option);
+        }
+        if plane == Plane::Podman {
+            // Installed inodes cannot change while this execution excludes native GC.
+            command
+                .arg("-o")
+                .arg("no_contain_symlinks")
+                .arg("-o")
+                .arg("kernel_cache");
         }
         command.arg("-o").arg(fuse_option(&ssh_path_option(
             SshPath::Identity,
@@ -377,17 +404,15 @@ impl Owner {
             .arg("nix-export@127.0.0.1:/nix/store")
             .arg(root.join("store"));
         success(tools.run(command, None, Some(COMMAND_BUDGET))?)?;
-        let mounted = mount::observe(&root.join("store"), &record.lease)?.ok_or(Error::Retained)?;
-        if fs::read_dir(root.join("store"))?
-            .next()
-            .transpose()?
-            .is_none()
-        {
+        let mounted = mount::observe(record.plane, tools, &root.join("store"), &record.lease)?
+            .ok_or(Error::Retained)?;
+        if !mount::readable(record.plane, tools, &root.join("store"))? {
             return Err(Error::Retained);
         }
         record.state = State::Attached { mount: mounted };
         record.publish(&root)?;
         Ok(Delivery {
+            plane: record.plane,
             pool: record.pool,
             ticket: record.ticket,
             lease: record.lease,
@@ -424,15 +449,19 @@ impl Owner {
         let tools = &connection.target.attempt.software.tools;
         match &record.state {
             State::Attached { mount: expected } | State::Detaching { mount: expected } => {
-                if mount::observe(&root.join("store"), &record.lease)?.as_ref() != Some(expected) {
+                if mount::observe(record.plane, tools, &root.join("store"), &record.lease)?.as_ref()
+                    != Some(expected)
+                {
                     return Err(Error::Retained);
                 }
                 record.state = State::Detaching {
                     mount: expected.clone(),
                 };
                 record.publish(&root)?;
-                success(tools.unmount(&root.join("store"))?)?;
-                if mount::observe(&root.join("store"), &record.lease)?.is_some() {
+                success(tools.unmount(record.plane, &root.join("store"))?)?;
+                if mount::observe(record.plane, tools, &root.join("store"), &record.lease)?
+                    .is_some()
+                {
                     return Err(Error::Retained);
                 }
                 record.state = State::Detached;

@@ -151,6 +151,7 @@ impl Image {
             ("wrix.image.kind", "profile"),
             ("wrix.nix.private", "1"),
             ("wrix.nix.shared", "1"),
+            ("wrix.nix.client", "1"),
             ("wrix.nix.seed", hash.as_str()),
         ] {
             if observed.configuration.labels.get(label).map(String::as_str) != Some(value) {
@@ -245,6 +246,16 @@ impl super::Owner {
         }
         self.inspect()?;
         let connection = self.connection()?;
+        if let wrix_state::nix_store::admission::request::Purpose::Worker { plane, .. } =
+            issued.purpose()
+        {
+            connection
+                .target
+                .attempt
+                .software
+                .tools
+                .view_check(*plane)?;
+        }
         match self.rpc(
             connection,
             &native::Operation::InspectImage {

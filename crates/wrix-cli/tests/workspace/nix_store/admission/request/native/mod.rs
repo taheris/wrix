@@ -1,6 +1,7 @@
 //! Actual supervised controller, private IPC and caller-independent native provisioning.
 mod client;
 mod seed;
+mod worker;
 
 use super::*;
 use wrix_service::control::{
@@ -211,6 +212,7 @@ fn supervised_controller_prepares_after_requester_exit_and_preserves_native_owne
         let original = record["state"]["connection"]["target"]["id"]
             .as_str()
             .unwrap();
+        client::podman_probe(&runtime, &client, &selection, &host);
         let (ticket, delivery) = client::prepare(&runtime, &client, &selection, &host);
         let (peer_ticket, peer_delivery) = client::prepare(&runtime, &client, &selection, &host);
         wrix_state::execution::cancel(&host, selection.context().unwrap(), &peer_ticket).unwrap();
@@ -265,6 +267,7 @@ fn supervised_controller_prepares_after_requester_exit_and_preserves_native_owne
         .unwrap();
         owner.release_execution(&proof).unwrap();
         owner.collect().unwrap();
+        worker::exercise(&mut owner, &selection, &host, &caller);
         seed::retained(&owner, &selection, &host);
         owner.shutdown().unwrap();
         owner.resume().unwrap();
@@ -309,6 +312,7 @@ fn supervised_controller_prepares_after_requester_exit_and_preserves_native_owne
         "WRIX_TEST_POOL_NIX",
         "WRIX_TEST_POOL_BASH",
         "WRIX_TEST_POOL_WORKER_IMAGE",
+        "WRIX_TEST_POOL_UNSIGNED",
     ] {
         command.env(
             name,

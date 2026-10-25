@@ -42,6 +42,19 @@ impl From<Id> for String {
     }
 }
 
+#[derive(Clone, Copy, Default, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum Plane {
+    #[default]
+    Host,
+    Podman,
+}
+impl Plane {
+    pub const fn is_host(&self) -> bool {
+        matches!(self, Self::Host)
+    }
+}
+
 #[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(tag = "purpose", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Purpose {
@@ -53,6 +66,8 @@ pub enum Purpose {
     Worker {
         ticket: crate::execution::Ticket,
         image: wrix_core::nix_store::binding::Binding,
+        #[serde(default, skip_serializing_if = "Plane::is_host")]
+        plane: Plane,
     },
 }
 
@@ -166,7 +181,23 @@ impl Guard {
         ticket: crate::execution::Ticket,
         image: wrix_core::nix_store::binding::Binding,
     ) -> Result<Request, Error> {
-        self.issue(Purpose::Worker { ticket, image })
+        self.issue(Purpose::Worker {
+            ticket,
+            image,
+            plane: Plane::Host,
+        })
+    }
+
+    pub fn request_podman_worker(
+        self,
+        ticket: crate::execution::Ticket,
+        image: wrix_core::nix_store::binding::Binding,
+    ) -> Result<Request, Error> {
+        self.issue(Purpose::Worker {
+            ticket,
+            image,
+            plane: Plane::Podman,
+        })
     }
 
     fn issue(self, purpose: Purpose) -> Result<Request, Error> {

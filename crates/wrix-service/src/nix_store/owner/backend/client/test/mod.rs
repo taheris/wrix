@@ -19,6 +19,7 @@ fn interrupted_client_ownership_is_protected_and_substituted_records_are_never_e
     wrix_core::private_directory::prepare(&root).unwrap();
     let mut record = Record {
         version: 1,
+        plane: Plane::Host,
         pool: pool.clone(),
         namespace: crate::control::Namespace::from(
             &wrix_core::path::WorkspaceHash::parse(&"b".repeat(64)).unwrap(),

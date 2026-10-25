@@ -4,6 +4,9 @@ set -euo pipefail
 # shellcheck source=/dev/null
 . /network-ready.sh
 
+# shellcheck source=/dev/null
+. /shared-nix-client.sh
+
 # krun transports argv through the environment; decode it only after NET_ADMIN is gone.
 if [[ "${WRIX_KRUN_INIT:-}" == "1" ]]; then
   git config --global safe.directory /workspace

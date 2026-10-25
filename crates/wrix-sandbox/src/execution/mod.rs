@@ -106,8 +106,22 @@ pub fn command(
 pub struct Projection {
     #[serde(rename = "Id")]
     pub id: Container,
+    #[serde(rename = "Image", deserialize_with = "deserialize_image")]
+    pub image: crate::image::Digest,
     #[serde(rename = "Mounts")]
     pub mounts: Vec<ProjectionMount>,
+}
+
+fn deserialize_image<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<crate::image::Digest, D::Error> {
+    let value = String::deserialize(deserializer)?;
+    let value = if value.starts_with("sha256:") {
+        value
+    } else {
+        format!("sha256:{value}")
+    };
+    crate::image::Digest::parse(&value).map_err(serde::de::Error::custom)
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -132,7 +146,7 @@ pub fn projection(workspace: &Path, ticket: &Ticket) -> Result<Projection, Error
             "--type",
             "container",
             "--format",
-            r#"{"Id":"{{.Id}}","Mounts":{{json .Mounts}}}"#,
+            r#"{"Id":"{{.Id}}","Image":"{{.Image}}","Mounts":{{json .Mounts}}}"#,
             id.as_str(),
         ])
         .output()?;
@@ -174,6 +188,13 @@ pub fn reconcile(workspace: &Path, ticket: &Ticket) -> Result<Observation, Error
     if !removed.status.success() || String::from_utf8_lossy(&removed.stdout).trim() != id.as_str() {
         return Err(Error::Unknown);
     }
+    let absent = Command::new("podman")
+        .args(["container", "exists", id.as_str()])
+        .output()?;
+    if absent.status.code() != Some(1) || !absent.stdout.is_empty() {
+        return Err(Error::Unknown);
+    }
+    context.recheck(&host)?;
     execution::retire(&host, &context, ticket, &id)?;
     Ok(Observation::Retired)
 }
@@ -206,6 +227,28 @@ fn inactive(objects: &[Inspect], id: &Container) -> bool {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn projection_requires_complete_native_image_identity_and_canonicalizes_its_digest() {
+        for value in ["1".repeat(64), format!("sha256:{}", "1".repeat(64))] {
+            let projection: Projection = serde_json::from_value(
+                serde_json::json!({"Id":"2".repeat(64),"Image":value,"Mounts":[]}),
+            )
+            .unwrap();
+            assert_eq!(
+                projection.image.as_str(),
+                format!("sha256:{}", "1".repeat(64))
+            );
+        }
+        for value in ["latest", "1234", "sha256:short"] {
+            assert!(
+                serde_json::from_value::<Projection>(
+                    serde_json::json!({"Id":"2".repeat(64),"Image":value,"Mounts":[]})
+                )
+                .is_err()
+            );
+        }
+    }
 
     #[test]
     fn execution_reconciliation_requires_one_exact_inactive_container() {

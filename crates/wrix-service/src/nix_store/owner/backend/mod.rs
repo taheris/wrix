@@ -608,6 +608,20 @@ impl Owner {
         )
     }
 
+    /// Authenticated native activity observation; an idle observation alone is never a release capability.
+    pub fn activity(&self) -> Result<native::Activity, Error> {
+        self.inspect()?;
+        match self.rpc(
+            self.connection()?,
+            &native::Operation::InspectWork {},
+            Some(COMMAND_BUDGET),
+        )? {
+            native::Reply::Work { activity } => Ok(activity),
+            native::Reply::Busy => Err(Error::Busy),
+            _ => Err(Error::Retained),
+        }
+    }
+
     pub fn collect(&self) -> Result<(), Error> {
         if client::protected(
             &self.prepared.reservation.paths.control,

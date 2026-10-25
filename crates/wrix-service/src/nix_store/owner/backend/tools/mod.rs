@@ -55,6 +55,9 @@ pub(super) enum Program {
     Keygen,
     NixStore,
     Sshfs,
+    Cat,
+    Ls,
+    Fusermount,
 }
 impl Program {
     const fn name(self) -> &'static str {
@@ -64,6 +67,9 @@ impl Program {
             Self::Keygen => "ssh-keygen",
             Self::NixStore => "nix-store",
             Self::Sshfs => "sshfs",
+            Self::Cat => "cat",
+            Self::Ls => "ls",
+            Self::Fusermount => "fusermount3",
         }
     }
 }
@@ -123,6 +129,32 @@ impl Tools {
         Ok(())
     }
 
+    pub(crate) fn view_check(
+        &self,
+        plane: wrix_state::nix_store::admission::request::Plane,
+    ) -> Result<(), Error> {
+        use std::os::unix::fs::PermissionsExt;
+        self.export_check()?;
+        if plane == wrix_state::nix_store::admission::request::Plane::Podman {
+            for program in [Program::Cat, Program::Ls, Program::Fusermount] {
+                let metadata = match std::fs::metadata(self.command(program).get_program()) {
+                    Ok(metadata) => metadata,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        return Err(Error::Unsupported);
+                    }
+                    Err(error) => return Err(error.into()),
+                };
+                if !metadata.is_file()
+                    || metadata.permissions().mode() & 0o111 == 0
+                    || metadata.permissions().mode() & 0o022 != 0
+                {
+                    return Err(Error::Unsupported);
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn vm(&self) -> PathBuf {
         Path::new(self.root.as_str()).join("bin/krun")
     }
@@ -133,6 +165,23 @@ impl Tools {
                 .join("bin")
                 .join(program.name()),
         ))
+    }
+
+    pub(super) fn view_command(
+        &self,
+        plane: wrix_state::nix_store::admission::request::Plane,
+        program: Program,
+    ) -> Command {
+        match plane {
+            wrix_state::nix_store::admission::request::Plane::Host => self.command(program),
+            wrix_state::nix_store::admission::request::Plane::Podman => {
+                let mut command = self.command(Program::Podman);
+                command
+                    .arg("unshare")
+                    .arg(self.command(program).get_program());
+                command
+            }
+        }
     }
 
     fn unmount_helper() -> Result<PathBuf, Error> {
@@ -160,8 +209,19 @@ impl Tools {
         Err(Error::Unsupported)
     }
 
-    pub(super) fn unmount(&self, projection: &Path) -> Result<Output, Error> {
-        let mut command = self.configure(Command::new(Self::unmount_helper()?));
+    pub(super) fn unmount(
+        &self,
+        plane: wrix_state::nix_store::admission::request::Plane,
+        projection: &Path,
+    ) -> Result<Output, Error> {
+        let mut command = match plane {
+            wrix_state::nix_store::admission::request::Plane::Host => {
+                self.configure(Command::new(Self::unmount_helper()?))
+            }
+            wrix_state::nix_store::admission::request::Plane::Podman => {
+                self.view_command(plane, Program::Fusermount)
+            }
+        };
         command.arg("-u").arg(projection);
         Ok(transport::capture(
             command,

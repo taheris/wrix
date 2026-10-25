@@ -18,7 +18,7 @@ fn fixture() -> (Digest, Compatibility, Observation) {
                 .as_encoded_bytes()
         )
     );
-    let observation = serde_json::from_value(serde_json::json!({ "Id": digest.as_str(), "Architecture":"amd64", "Os":"linux", "Config":{"Labels":{"wrix.managed":"true", "wrix.image.kind":"profile", "wrix.nix.private":"1", "wrix.nix.shared":"1", "wrix.nix.seed":hash}}})).unwrap();
+    let observation = serde_json::from_value(serde_json::json!({ "Id": digest.as_str(), "Architecture":"amd64", "Os":"linux", "Config":{"Labels":{"wrix.managed":"true", "wrix.image.kind":"profile", "wrix.nix.private":"1", "wrix.nix.shared":"1", "wrix.nix.client":"1", "wrix.nix.seed":hash}}})).unwrap();
     (digest, compatibility, observation)
 }
 #[test]
@@ -40,6 +40,12 @@ fn seed_binding_requires_exact_native_image_architecture_and_factory_closure_lab
         .configuration
         .labels
         .insert("wrix.nix.seed".into(), "b".repeat(64));
+    assert!(Image::binding(System::X86_64Linux, &digest, &compatibility, &observation).is_err());
+}
+#[test]
+fn seed_binding_rejects_images_without_fixed_native_client_bootstrap() {
+    let (digest, compatibility, mut observation) = fixture();
+    observation.configuration.labels.remove("wrix.nix.client");
     assert!(Image::binding(System::X86_64Linux, &digest, &compatibility, &observation).is_err());
 }
 #[test]

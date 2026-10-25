@@ -156,7 +156,11 @@ impl Queue {
                     return Err(Error::PermissionDenied);
                 }
                 if matches!(action, Action::Execution | Action::Worker) {
-                    tools.export_check()?;
+                    let plane = match accepted.purpose() {
+                        Purpose::Worker { plane, .. } => *plane,
+                        _ => request::Plane::Host,
+                    };
+                    tools.view_check(plane)?;
                 }
                 let namespace = Namespace::from(accepted.namespace());
                 let registrations = super::registration::Store::open(&root)?;

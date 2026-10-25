@@ -906,6 +906,9 @@ fn is_bootstrap_sensitive_env(name: &str) -> bool {
 
 fn validate_mount_destination(destination: &str) -> Result<(), ConfigError> {
     const PROTECTED: &[&str] = &[
+        "/shared-nix-client.sh",
+        "/run/wrix/nix-pool",
+        "/run/wrix/nix-client",
         "/nix",
         "/etc/nix",
         "/run/wrix/cache-credentials",
@@ -1335,6 +1338,9 @@ mod test {
             "/run/wrix",
             "/run/wrix/cache-credentials",
             "/run/wrix/cache-credentials/netrc",
+            "/run/wrix/nix-pool",
+            "/run/wrix/nix-client/daemon.sock",
+            "/shared-nix-client.sh",
             "/homeless-shelter",
             "/network-bootstrap.sh",
             "/network-ready.sh",
