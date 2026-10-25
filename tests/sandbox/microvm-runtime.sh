@@ -47,6 +47,19 @@ test_microvm_probe_reports_launch_failure() {
     || fail "PTY probe discarded the launcher diagnostics: $output"
 }
 
+write_microvm_profile() {
+  # This verifier exercises private Nix, not shared-cache host admission.
+  jq '.services.nix_cache.enable = false' "$1" > "$2"
+}
+
+test_microvm_profile_excludes_shared_cache_admission() {
+  local original="$TEST_TMP/original.json" configured="$TEST_TMP/profile.json"
+  printf '%s\n' '{"services":{"nix_cache":{"enable":true},"beads":{"enable":"auto"}},"features":{"execution_tickets":true},"image":{"shared_nix":{"version":1}}}' > "$original"
+  write_microvm_profile "$original" "$configured"
+  jq -e '.services.nix_cache.enable == false' "$configured" >/dev/null
+  jq -e -s '.[0] == (.[1] | .services.nix_cache.enable = true)' "$original" "$configured" >/dev/null
+}
+
 test_linux_microvm_runtime() {
   local command_line output sandbox workspace profile_config spawn_config status
   local -a command
@@ -56,7 +69,8 @@ test_linux_microvm_runtime() {
   cd "$REPO_ROOT"
 
   sandbox=$(wrix_build_live_launcher)
-  profile_config=$(wrix_build_command_profile_config)
+  profile_config="$TEST_TMP/profile.json"
+  write_microvm_profile "$(wrix_build_command_profile_config)" "$profile_config"
   workspace="$TEST_TMP/workspace"
   mkdir -p "$workspace"
 
@@ -113,8 +127,10 @@ INNER
 case "${1:-}" in
   ""|test_linux_microvm_runtime)
     test_microvm_probe_reports_launch_failure
+    test_microvm_profile_excludes_shared_cache_admission
     test_linux_microvm_runtime
     ;;
   test_microvm_probe_reports_launch_failure) test_microvm_probe_reports_launch_failure ;;
+  test_microvm_profile_excludes_shared_cache_admission) test_microvm_profile_excludes_shared_cache_admission ;;
   *) fail "unknown microVM verifier: $1"; exit 64 ;;
 esac

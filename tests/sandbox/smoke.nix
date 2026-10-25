@@ -117,7 +117,11 @@ in
   microvm-verifier-diagnostics =
     runCommandLocal "smoke-microvm-verifier-diagnostics"
       {
-        nativeBuildInputs = [ bash ] ++ pkgs.lib.optional isLinux pkgs.util-linux;
+        nativeBuildInputs = [
+          bash
+          pkgs.jq
+        ]
+        ++ pkgs.lib.optional isLinux pkgs.util-linux;
       }
       ''
         set -euo pipefail
@@ -125,6 +129,7 @@ in
           if isLinux then
             ''
               REPO_ROOT=${../..} bash ${./microvm-runtime.sh} test_microvm_probe_reports_launch_failure
+              REPO_ROOT=${../..} bash ${./microvm-runtime.sh} test_microvm_profile_excludes_shared_cache_admission
             ''
           else
             ''
