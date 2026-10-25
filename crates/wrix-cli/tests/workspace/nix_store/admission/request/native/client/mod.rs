@@ -189,6 +189,7 @@ pub(super) fn podman_probe(
         std::thread::sleep(Duration::from_millis(25));
     }
     lost_launcher_restart(runtime, client, selection, host, &factory, controller);
+    interrupted_removal_restart(runtime, client, selection, host, &factory, controller);
 }
 
 fn lost_launcher_restart(
@@ -287,6 +288,130 @@ fn lost_launcher_restart(
             .is_some()
     );
     wrix_state::nix_store::set(host, selection.context().unwrap(), true).unwrap();
+}
+
+fn interrupted_removal_restart(
+    runtime: &tokio::runtime::Runtime,
+    client: &Client,
+    selection: &Selection,
+    host: &wrix_state::host::Host,
+    factory: &wrix_service::nix_store::worker::Connected,
+    controller: &mut Running,
+) {
+    let binding = super::seed::binding();
+    let attempt =
+        wrix_sandbox::nix_store::Attempt::reserve(selection, system(), binding.clone(), None)
+            .unwrap();
+    let ticket = attempt.ticket().clone();
+    let prepared = attempt.prepare(factory).unwrap();
+    let mounts = prepared.delivery().mounts();
+    let root = mounts[0].source.parent().unwrap();
+    let mut inspect = prepared.command().unwrap();
+    let mut remove = prepared.command().unwrap();
+    let mut exists = prepared.command().unwrap();
+    let mut command = prepared.command().unwrap();
+    command.args(["run", "--rm", "--cap-add=NET_ADMIN", "--memory=768m", "--pids-limit=256", "--network=pasta:--map-host-loopback,169.254.1.2,--map-guest-addr,none,-t,none,-u,none,-T,none,-U,none", "--mount", "type=tmpfs,destination=/home/wrix,U=true", "-e", "HOME=/home/wrix", "-e", "WRIX_AGENT=direct", "-e", "WRIX_NETWORK=open"]);
+    prepared.delivery().configure(&mut command);
+    command.arg(binding.digest().as_str()).arg("factory-probe");
+    let pid = rustix::process::Pid::from_raw(i32::try_from(controller.0.id()).unwrap()).unwrap();
+    rustix::process::kill_process(pid, rustix::process::Signal::TERM).unwrap();
+    assert!(controller.0.wait().unwrap().success());
+    let mut running = prepared.spawn(&command, false).unwrap();
+    assert!(running.child().wait().unwrap().success());
+    let generation = wrix_state::store::Store::inspect(host)
+        .unwrap()
+        .unwrap()
+        .generation()
+        .unwrap();
+    let record = wrix_state::execution::Recorded::load(
+        std::sync::Arc::new(wrix_state::host::Host::discover().unwrap()),
+        selection.context().unwrap().key(),
+        &ticket,
+        &generation,
+    )
+    .unwrap()
+    .unwrap();
+    inspect.args([
+        "inspect",
+        "--type",
+        "container",
+        record.container().as_str(),
+    ]);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let output = inspect.output().unwrap();
+        assert!(output.status.success());
+        let objects: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(objects.len(), 1);
+        assert_eq!(objects[0]["Id"], record.container().as_str());
+        let state = &objects[0]["State"];
+        if state["Status"] == "exited"
+            && state["Running"] == false
+            && state["Paused"] == false
+            && state["Restarting"] == false
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "native probe never became authoritatively inactive"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    record.removing().unwrap();
+    let output = remove
+        .args(["rm", record.container().as_str()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        record.container().as_str()
+    );
+    let output = exists
+        .args(["container", "exists", record.container().as_str()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.stdout, [] as [u8; 0]);
+    assert!(
+        wrix_state::execution::terminal(host, selection.context().unwrap().key(), &ticket)
+            .unwrap()
+            .is_none()
+    );
+    drop(record);
+    drop(running); // Actual removal is complete, but no caller publishes terminal state.
+    *controller = Running(
+        std::process::Command::new(std::env::var_os("WRIX_TEST_POOL_CONTROLLER").unwrap())
+            .arg(host.roots().state().join("control"))
+            .spawn()
+            .unwrap(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let state: serde_json::Value =
+            serde_json::from_slice(&fs::read(root.join("client.json")).unwrap()).unwrap();
+        if state["state"]["phase"] == "released" {
+            break;
+        }
+        assert!(controller.0.try_wait().unwrap().is_none());
+        assert!(
+            Instant::now() < deadline,
+            "restarted controller did not recover a native removal/terminal interruption"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert!(
+        wrix_state::execution::terminal(host, selection.context().unwrap().key(), &ticket)
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(
+        runtime
+            .block_on(client.request(Operation::InspectNixPool {}))
+            .unwrap(),
+        Reply::PoolInterface { version: 1 }
+    );
 }
 
 pub(super) fn exercise(
