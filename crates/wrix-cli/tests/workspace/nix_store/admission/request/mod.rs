@@ -2,6 +2,7 @@
 mod factory;
 mod handoff;
 mod native;
+mod retirement;
 mod worker;
 
 use super::*;

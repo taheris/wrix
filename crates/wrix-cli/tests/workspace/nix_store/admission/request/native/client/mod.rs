@@ -63,6 +63,7 @@ pub(super) fn podman_probe(
     client: &Client,
     selection: &Selection,
     host: &wrix_state::host::Host,
+    controller: &mut Running,
 ) {
     let namespace = wrix_service::control::Namespace::from(selection.context().unwrap().key());
     assert_eq!(
@@ -164,7 +165,9 @@ pub(super) fn podman_probe(
     assert!(!notification.join("nix-client").exists());
     assert!(!notification.join("nix-pool").exists());
     assert_eq!(
-        running.reconcile().unwrap(),
+        running
+            .wait_for_retirement(Duration::from_secs(30))
+            .unwrap(),
         wrix_sandbox::execution::Observation::Retired
     );
     assert!(
@@ -185,6 +188,105 @@ pub(super) fn podman_probe(
         );
         std::thread::sleep(Duration::from_millis(25));
     }
+    lost_launcher_restart(runtime, client, selection, host, &factory, controller);
+}
+
+fn lost_launcher_restart(
+    runtime: &tokio::runtime::Runtime,
+    client: &Client,
+    selection: &Selection,
+    host: &wrix_state::host::Host,
+    factory: &wrix_service::nix_store::worker::Connected,
+    controller: &mut Running,
+) {
+    let binding = super::seed::binding();
+    let attempt =
+        wrix_sandbox::nix_store::Attempt::reserve(selection, system(), binding.clone(), None)
+            .unwrap();
+    let ticket = attempt.ticket().clone();
+    let prepared = attempt.prepare(factory).unwrap();
+    let mounts = prepared.delivery().mounts();
+    let root = mounts[0].source.parent().unwrap();
+    let workspace = selection.context().unwrap().caller();
+    let mut command = prepared.command().unwrap();
+    command.args(["run", "--rm", "--cap-add=NET_ADMIN", "--memory=768m", "--pids-limit=256", "--network=pasta:--map-host-loopback,169.254.1.2,--map-guest-addr,none,-t,none,-u,none,-T,none,-U,none", "--mount", "type=tmpfs,destination=/home/wrix,U=true", "-e", "HOME=/home/wrix", "-e", "WRIX_AGENT=direct", "-e", "WRIX_NETWORK=open", "-v"]);
+    command.arg(format!("{}:/workspace:rw", workspace.display()));
+    prepared.delivery().configure(&mut command);
+    command
+        .arg(binding.digest().as_str())
+        .arg("factory-lifetime");
+    let mut running = prepared.spawn(&command, false).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !workspace.join("factory-lifetime-ready").exists() {
+        assert!(running.child().try_wait().unwrap().is_none());
+        assert!(
+            Instant::now() < deadline,
+            "native lifetime worker did not become ready"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    running.child().kill().unwrap();
+    assert!(!running.child().wait().unwrap().success());
+    drop(running); // No foreground reconciliation: only the service's native observer can finish this ticket.
+    wrix_state::nix_store::set(host, selection.context().unwrap(), false).unwrap();
+    let pid = rustix::process::Pid::from_raw(i32::try_from(controller.0.id()).unwrap()).unwrap();
+    rustix::process::kill_process(pid, rustix::process::Signal::TERM).unwrap();
+    assert!(controller.0.wait().unwrap().success());
+    *controller = Running(
+        std::process::Command::new(std::env::var_os("WRIX_TEST_POOL_CONTROLLER").unwrap())
+            .arg(host.roots().state().join("control"))
+            .spawn()
+            .unwrap(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let reply = runtime.block_on(client.request(Operation::InspectNixPool {}));
+        if matches!(reply, Ok(Reply::PoolInterface { version: 1 })) {
+            break;
+        }
+        assert!(controller.0.try_wait().unwrap().is_none());
+        assert!(
+            Instant::now() < deadline,
+            "restarted controller readiness: {reply:?}"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    fs::write(workspace.join("factory-lifetime-check"), b"check").unwrap();
+    while !workspace.join("factory-lifetime-resumed").exists() {
+        assert!(
+            Instant::now() < deadline,
+            "existing native client did not survive controller loss and approval withdrawal"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert!(
+        wrix_state::execution::terminal(host, selection.context().unwrap().key(), &ticket)
+            .unwrap()
+            .is_none()
+    );
+    let state: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join("client.json")).unwrap()).unwrap();
+    assert_eq!(state["state"]["phase"], "attached");
+    fs::write(workspace.join("factory-lifetime-exit"), b"exit").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let state: serde_json::Value =
+            serde_json::from_slice(&fs::read(root.join("client.json")).unwrap()).unwrap();
+        if state["state"]["phase"] == "released" {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "restarted controller did not retire lost-launcher native work"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert!(
+        wrix_state::execution::terminal(host, selection.context().unwrap().key(), &ticket)
+            .unwrap()
+            .is_some()
+    );
+    wrix_state::nix_store::set(host, selection.context().unwrap(), true).unwrap();
 }
 
 pub(super) fn exercise(

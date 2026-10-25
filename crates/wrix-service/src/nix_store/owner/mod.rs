@@ -104,15 +104,7 @@ pub(crate) fn inspect(
     for part in ["control", "nix", &repository.to_string()] {
         root.push(part);
         match fs::symlink_metadata(&root) {
-            Ok(metadata) => {
-                if !metadata.is_dir()
-                    || metadata.mode() & 0o022 != 0
-                    || metadata.uid() != rustix::process::geteuid().as_raw()
-                    || root.canonicalize()? != root
-                {
-                    return Err(Error::Invalid);
-                }
-            }
+            Ok(_) => check_parent(&root)?,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(error) => return Err(error.into()),
         }
@@ -124,6 +116,7 @@ pub(crate) fn inspect(
     for entry in fs::read_dir(&root)? {
         let name = entry?.file_name();
         if !systems.iter().any(|system| name == system.as_str()) {
+            tracing::warn!(entry = ?name, "pool repository contains an unknown system entry");
             return Err(Error::Invalid);
         }
     }
@@ -141,6 +134,7 @@ pub(crate) fn inspect(
             system,
         };
         if record.pool != expected || deployment != Some(&record.deployment) {
+            tracing::warn!(expected_repository = %expected.repository, system = expected.system.as_str(), recorded_repository = %record.pool.repository, expected_deployment = ?deployment, recorded_deployment = ?record.deployment, "pool reservation identity disagrees with inspection scope");
             return Err(Error::Invalid);
         }
         records.push((record.pool, record.phase));
@@ -166,6 +160,19 @@ impl Paths {
     }
 }
 
+/// Structural parents contain only scoped directories; secret-bearing pool/control directories remain 0700.
+pub(crate) fn check_parent(root: &Path) -> Result<(), Error> {
+    let metadata = fs::symlink_metadata(root)?;
+    if !metadata.is_dir()
+        || metadata.mode() & 0o022 != 0
+        || metadata.uid() != rustix::process::geteuid().as_raw()
+        || root.canonicalize()? != root
+    {
+        return Err(Error::Invalid);
+    }
+    Ok(())
+}
+
 fn check_directory(root: &Path) -> Result<(), Error> {
     let metadata = fs::symlink_metadata(root)?;
     if !metadata.is_dir()
@@ -173,6 +180,7 @@ fn check_directory(root: &Path) -> Result<(), Error> {
         || metadata.uid() != rustix::process::geteuid().as_raw()
         || root.canonicalize()? != root
     {
+        tracing::warn!(path = %root.display(), mode = metadata.mode() & 0o7777, uid = metadata.uid(), "pool directory does not satisfy private canonical ownership");
         return Err(Error::Invalid);
     }
     Ok(())

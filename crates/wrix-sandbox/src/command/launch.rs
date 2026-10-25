@@ -1252,7 +1252,7 @@ impl<'a> Plan<'a> {
                     *observed_status = Some(status);
                     status_to_exit(status)
                 });
-                let cleanup = match running.reconcile() {
+                let cleanup = match running.wait_for_retirement(std::time::Duration::from_secs(30)) {
                     Ok(crate::execution::Observation::Retired) => Ok(()),
                     Ok(crate::execution::Observation::Protected) => Err(io::Error::other("native shared worker remains protected; foreground completion is not teardown evidence").into()),
                     Err(error) => Err(crate::nix_store::Error::from(error).into()),

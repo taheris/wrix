@@ -24,6 +24,9 @@ use crate::{host::Host, integration::Slot};
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Generation([u8; 32]);
 impl Generation {
+    pub fn parse(bytes: &[u8]) -> Result<Self, Error> {
+        Ok(Self(bytes.try_into().map_err(|_| Error::Unsupported)?))
+    }
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }

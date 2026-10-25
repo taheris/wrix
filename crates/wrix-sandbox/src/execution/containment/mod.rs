@@ -15,6 +15,31 @@ impl Running {
     pub fn reconcile(&self) -> Result<Observation, Error> {
         self.prepared.reconcile()
     }
+    /// Wait for native transitions, not elapsed-time authority: exhaustion still returns Protected.
+    pub fn wait_for_retirement(&self, budget: std::time::Duration) -> Result<Observation, Error> {
+        let deadline = std::time::Instant::now()
+            .checked_add(budget)
+            .ok_or(Error::Unknown)?;
+        loop {
+            let result = self.reconcile();
+            let now = std::time::Instant::now();
+            match result {
+                Ok(Observation::Retired) => return Ok(Observation::Retired),
+                Ok(Observation::Protected) if now >= deadline => return Ok(Observation::Protected),
+                Ok(Observation::Protected) => (),
+                Err(error) => {
+                    if now >= deadline
+                        || self.prepared.bound.recorded()?.status()?
+                            != wrix_state::execution::Removal::Removing
+                    {
+                        return Err(error);
+                    }
+                    tracing::warn!(%error, "native removal outcome is uncertain; rechecking durable intent and independent absence");
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100).min(deadline - now));
+        }
+    }
 }
 
 /// Exact image and read-only delivery are checked after binding and again before one-use start.
@@ -110,22 +135,7 @@ impl Prepared {
         self.bound.ticket()
     }
     pub fn reconcile(&self) -> Result<Observation, Error> {
-        if matches!(self.bound.observe()?, Phase::Retired(_)) {
-            return Ok(Observation::Retired);
-        }
-        let observation = super::remove(
-            &self.runtime,
-            self.environment,
-            self.bound.container(),
-            || {
-                self.bound.recheck()?;
-                Ok(())
-            },
-        )?;
-        if observation == Observation::Retired {
-            self.bound.retire()?;
-        }
-        Ok(observation)
+        super::retirement::with_command(&self.bound.recorded()?, &self.runtime, self.environment)
     }
 }
 

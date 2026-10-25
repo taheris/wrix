@@ -212,7 +212,7 @@ fn supervised_controller_prepares_after_requester_exit_and_preserves_native_owne
         let original = record["state"]["connection"]["target"]["id"]
             .as_str()
             .unwrap();
-        client::podman_probe(&runtime, &client, &selection, &host);
+        client::podman_probe(&runtime, &client, &selection, &host, &mut controller);
         let (ticket, delivery) = client::prepare(&runtime, &client, &selection, &host);
         let (peer_ticket, peer_delivery) = client::prepare(&runtime, &client, &selection, &host);
         wrix_state::execution::cancel(&host, selection.context().unwrap(), &peer_ticket).unwrap();

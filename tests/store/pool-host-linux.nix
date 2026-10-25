@@ -41,6 +41,16 @@ let
         [[ "$("${pkgs.nix}/bin/nix" eval --expr '17')" == 17 ]]
         exit 0
         ;;
+      factory-lifetime)
+        [[ "$("${pkgs.nix}/bin/nix" eval --expr '17')" == 17 ]]
+        printf 'ready\n' > /workspace/factory-lifetime-ready
+        while [[ ! -f /workspace/factory-lifetime-check ]]; do ${pkgs.coreutils}/bin/sleep 0.1; done
+        [[ "$("${pkgs.nix}/bin/nix" eval --expr '18')" == 18 ]]
+        "${pkgs.nix}/bin/nix" store info --json | "${pkgs.jq}/bin/jq" -e '.trusted == false' > /dev/null
+        printf 'resumed\n' > /workspace/factory-lifetime-resumed
+        while [[ ! -f /workspace/factory-lifetime-exit ]]; do ${pkgs.coreutils}/bin/sleep 0.1; done
+        exit 0
+        ;;
       first|second|replacement) name="$1" ;;
       *) exit 64 ;;
     esac

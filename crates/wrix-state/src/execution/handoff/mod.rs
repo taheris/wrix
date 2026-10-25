@@ -1,16 +1,20 @@
 //! One-use approved native handoff, retaining the original checked context through binding and retirement.
 use super::{Container, Context, Error, Host, Phase, Store, Ticket};
+use crate::store::Generation;
 use rusqlite::params;
+use std::sync::Arc;
 
 /// Approval and reservation were consumed atomically; dropping this never asserts native teardown.
 pub struct Launching {
-    host: Host,
+    host: Arc<Host>,
+    generation: Generation,
     context: Context,
     ticket: Ticket,
 }
 /// One immutable native object bound under the original handoff, not a workspace rediscovery.
 pub struct Bound {
-    host: Host,
+    host: Arc<Host>,
+    generation: Generation,
     context: Context,
     ticket: Ticket,
     container: Container,
@@ -32,10 +36,12 @@ impl Launching {
                 serde_json::to_vec(&Phase::Launching).map_err(|_| Error::Unsupported)?
             ],
         )?;
+        let generation = store.generation()?;
         store.connection.execute_batch("COMMIT")?;
         drop(store);
         Ok(Self {
-            host,
+            host: Arc::new(host),
+            generation,
             context,
             ticket,
         })
@@ -44,6 +50,7 @@ impl Launching {
         super::bind(&self.host, &self.context, &self.ticket, &container)?;
         Ok(Bound {
             host: self.host,
+            generation: self.generation,
             context: self.context,
             ticket: self.ticket,
             container,
@@ -51,6 +58,20 @@ impl Launching {
     }
 }
 impl Bound {
+    /// Observe already-bound native work even after admission withdrawal; this can never authorize restart.
+    pub fn recorded(&self) -> Result<super::Recorded, Error> {
+        let record = super::Recorded::load(
+            self.host.clone(),
+            self.context.key(),
+            &self.ticket,
+            &self.generation,
+        )?
+        .ok_or(Error::Conflict)?;
+        if record.container() != &self.container {
+            return Err(Error::Conflict);
+        }
+        Ok(record)
+    }
     pub const fn ticket(&self) -> &Ticket {
         &self.ticket
     }

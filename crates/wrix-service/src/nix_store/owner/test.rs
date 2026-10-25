@@ -28,6 +28,24 @@ fn key() -> lease::Key {
 }
 
 #[test]
+fn structural_parents_do_not_relax_secret_directory_ownership_requirements() {
+    let directory = tempfile::tempdir().unwrap();
+    let parent = directory.path().join("nix");
+    fs::create_dir(&parent).unwrap();
+    fs::set_permissions(&parent, fs::Permissions::from_mode(0o755)).unwrap();
+    check_parent(&parent).unwrap();
+    assert!(check_directory(&parent).is_err());
+    fs::set_permissions(&parent, fs::Permissions::from_mode(0o777)).unwrap();
+    assert!(check_parent(&parent).is_err());
+    fs::set_permissions(&parent, fs::Permissions::from_mode(0o700)).unwrap();
+    check_parent(&parent).unwrap();
+    check_directory(&parent).unwrap();
+    let alias = directory.path().join("alias");
+    symlink(&parent, &alias).unwrap();
+    assert!(check_parent(&alias).is_err());
+}
+
+#[test]
 fn caller_loss_retains_reservation_and_never_implies_native_release() {
     let directory = tempfile::tempdir().unwrap();
     let layout = layout(directory.path());

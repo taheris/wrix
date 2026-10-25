@@ -1,4 +1,5 @@
 //! Native terminal evidence drives retirement; no elapsed lease, quiet socket or requester status does.
+mod runtime;
 use super::{Delivery, Error, Owner, Record, State, check_directory};
 use crate::deployment;
 use std::{
@@ -28,7 +29,7 @@ impl Supervisor {
     ) -> Result<(), Error> {
         let root = host.roots().state().join("control/nix");
         match fs::symlink_metadata(&root) {
-            Ok(_) => check_directory(&root)?,
+            Ok(_) => crate::nix_store::owner::check_parent(&root)?,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
             Err(error) => return Err(error.into()),
         }
@@ -172,7 +173,7 @@ impl Supervisor {
 }
 
 fn watch(
-    host: &Host,
+    host: &Arc<Host>,
     deployment: &deployment::Id,
     namespace: &WorkspaceHash,
     pool: &Key,
@@ -187,7 +188,11 @@ fn watch(
                 Err(Error::Busy) => (),
                 Err(error) => return Err(error),
             }
+            thread::sleep(Duration::from_secs(2));
+        } else {
+            thread::sleep(runtime::reconcile(
+                host, deployment, namespace, pool, ticket,
+            )?);
         }
-        thread::sleep(Duration::from_millis(250));
     }
 }

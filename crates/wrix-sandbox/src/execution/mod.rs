@@ -1,6 +1,7 @@
 //! Host-only Podman lifetime reconciliation for exact, durably bound container IDs.
 
 mod containment;
+pub mod retirement;
 pub use containment::{Prepared, Running};
 use serde::{Deserialize, Serialize};
 use std::{
