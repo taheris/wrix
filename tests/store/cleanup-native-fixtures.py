@@ -267,6 +267,9 @@ class Cleanup:
                     kind.startswith("fuse.")
                     or not (
                         target == self.storage
+                        # Overlay's driver directory can be a self-bind of the host filesystem;
+                        # merged container filesystems below it are never administrative mounts.
+                        or (target == self.storage / "overlay" and kind != "overlay")
                         or target.is_relative_to(self.root / "runtime")
                     )
                 )

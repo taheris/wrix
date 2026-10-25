@@ -100,7 +100,7 @@ class CleanupTest(unittest.TestCase):
         def run(args):
             calls.append(args)
             if args[-1] == "/proc/self/mountinfo":
-                return line(subject.storage, source="/dev/root", kind="ext4") + line(self.root / "runtime/containers", source="tmpfs", kind="tmpfs")
+                return line(subject.storage, source="/dev/root", kind="ext4") + line(subject.storage / "overlay", source="/dev/root", kind="ext4") + line(self.root / "runtime/containers", source="tmpfs", kind="tmpfs")
             return ""
 
         with patch.object(cleanup, "host_mounts", return_value=[]), patch.object(subject, "run", side_effect=run):
@@ -113,6 +113,15 @@ class CleanupTest(unittest.TestCase):
         with patch.object(cleanup, "host_mounts", return_value=[]), patch.object(subject, "run", return_value=line(self.root / "unknown", kind="ext4")):
             with self.assertRaisesRegex(RuntimeError, "non-administrative"):
                 subject.finish()
+        self.assertTrue(self.root.exists())
+
+    def test_driver_root_is_not_an_exception_for_exports_or_container_filesystems(self):
+        (self.root / "home/.local/share/containers/storage").mkdir(parents=True)
+        subject = cleanup.Cleanup(self.root)
+        for kind in ["overlay", "fuse.sshfs", "fuse.overlayfs"]:
+            with self.subTest(kind=kind), patch.object(cleanup, "host_mounts", return_value=[]), patch.object(subject, "run", return_value=line(subject.storage / "overlay", source="other", kind=kind)):
+                with self.assertRaisesRegex(RuntimeError, "non-administrative"):
+                    subject.finish()
         self.assertTrue(self.root.exists())
 
     def test_leftover_container_storage_mount_prevents_ownership_changes(self):
