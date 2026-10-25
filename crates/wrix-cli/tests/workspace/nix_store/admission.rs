@@ -1,7 +1,10 @@
 //! Checked host issuance, not production native endpoints or installed-store runtime proof.
 
+#[path = "admission/cleanup.rs"]
+mod cleanup;
 #[path = "admission/request/mod.rs"]
 mod request;
+use cleanup::NativeFixture;
 
 use super::{deployment, setup, success};
 use crate::fixture::{Fixture, isolation};
@@ -449,12 +452,8 @@ fn native_host_owner_survives_controller_loss_collects_and_resumes_recorded_soft
         fs::write(caller.parent().unwrap().join("finished"), b"released").unwrap();
         return;
     }
-    let (mut fixture, checkout) = setup();
-    assert!(
-        !fixture.isolated,
-        "native host VM acceptance cannot run inside a worker fixture"
-    );
-    fixture.root.disable_cleanup(true);
+    let (fixture, checkout) = setup();
+    let fixture = NativeFixture::new(fixture);
     deployment(&fixture);
     success(&fixture, &checkout, &["enable"]);
     let runtime_directory = fixture.root.path().join("runtime");
@@ -529,7 +528,7 @@ fn native_host_owner_survives_controller_loss_collects_and_resumes_recorded_soft
     fs::write(fixture.root.path().join("resume"), b"resume").unwrap();
     running.finish();
     assert!(fixture.root.path().join("finished").exists());
-    fixture.root.disable_cleanup(false);
+    fixture.finish();
 }
 
 #[test]

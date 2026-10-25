@@ -279,6 +279,22 @@ let
     // tmuxTests.checks
     // (import ./sandbox/pi-settings.nix { inherit pkgs wrix; })
     // piMcpTests.checks
+    // optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+      native-fixture-cleanup =
+        pkgs.runCommandLocal "native-fixture-cleanup"
+          {
+            nativeBuildInputs = [
+              pkgs.python3
+              pkgs.bash
+            ];
+          }
+          ''
+            set -euo pipefail
+            export PYTHONDONTWRITEBYTECODE=1
+            ${pkgs.python3}/bin/python3 ${./store}/test_cleanup_native_fixtures.py
+            touch "$out"
+          '';
+    }
     // {
       devshell-cli-selection = devshellCliSelection;
       builder-vmnet-route = builderRouteTest;

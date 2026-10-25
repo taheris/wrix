@@ -15,7 +15,7 @@ mkdir -m 0700 "$root/data" "$root/view"
 
 cleanup() {
   local status=$? unmounted=true
-  trap - EXIT
+  trap - EXIT INT TERM
   if mountpoint -q "$root/view"; then
     if ! fusermount3 -u "$root/view"; then
       printf 'Export is still busy; retaining its VM and fixture at %s\n' "$root" >&2
@@ -43,6 +43,8 @@ cleanup() {
   exit "$status"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 ssh-keygen -q -t ed25519 -N '' -f "$root/admin"
 ssh-keygen -q -t ed25519 -N '' -f "$root/client"

@@ -307,6 +307,39 @@ GiB/144 PIDs, trusted seeding to 768 MiB/16 PIDs and control to 384 MiB/96 PIDs.
 Seeding OOM is group-local, and seed activity participates in quiescence and
 clean-release checks.
 
+## Native test cleanup and retained fixtures
+
+The host-owner tests register their disposable roots before native allocation. A
+parent guard tears down each fixture on success and assertion unwind; the
+packaged runner also has an invocation-scoped registry and exit/signal traps
+around bounded test subprocesses. Cleanup stops containers in that fixture's
+isolated Podman storage, gracefully unmounts its exact Wrix SSHFS exports in the
+host and Podman namespaces, removes stopped containers and fixture images, and
+releases the fixture's Podman namespace. Only confirmed teardown permits
+directory removal. Cleanup failure fails the run and retains the fixture and
+registry for retry. It never changes production uncertainty guards or touches
+the user's normal host controller. An uncatchable kill or host crash can still
+require recovery.
+
+After stopping native test runs, remove legacy retained test resources from the
+host, as the same user who ran the tests:
+
+```bash
+python3 tests/store/cleanup-native-fixtures.py --discover --remove-files
+```
+
+Discovery is restricted to owned legacy `/tmp/.tmp*` fixtures identified by Wrix
+SSHFS mounts, pool-container monitor arguments, or retained native-pool control
+state. Explicit roots require a native-test marker or the checked legacy layout.
+Symlink escapes and roots writable by other users are refused. No force/lazy
+unmount is used. Without `--remove-files`, teardown retains diagnostic files; it
+does not reclaim the fixture's backing disks. A refusal reports the retained
+path and error instead of treating a missing cleanup capability as success.
+
+Portable conformance and parent-guard regressions run in the ordinary checks.
+Successful mocked runtime teardown is not native Podman/FUSE acceptance; run the
+host-owner verifier on a suitable Linux host for that boundary.
+
 ## Linux service-VM export
 
 ```bash

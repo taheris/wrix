@@ -278,12 +278,8 @@ fn supervised_controller_prepares_after_requester_exit_and_preserves_native_owne
         fs::write(directory.join("native-finished"), b"released").unwrap();
         return;
     }
-    let (mut fixture, checkout) = setup();
-    assert!(
-        !fixture.isolated,
-        "native controller acceptance requires a real host"
-    );
-    fixture.root.disable_cleanup(true);
+    let (fixture, checkout) = setup();
+    let fixture = NativeFixture::new(fixture);
     deployment(&fixture);
     success(&fixture, &checkout, &["enable"]);
     let runtime = fixture.root.path().join("runtime");
@@ -321,5 +317,5 @@ fn supervised_controller_prepares_after_requester_exit_and_preserves_native_owne
     }
     Running(command.spawn().unwrap()).finish();
     assert!(fixture.root.path().join("native-finished").exists());
-    fixture.root.disable_cleanup(false);
+    fixture.finish();
 }

@@ -29,6 +29,7 @@ let
       "crates/wrix-service/tests" = ../../crates/wrix-service/tests;
       ".config/nextest.toml" = ../../.config/nextest.toml;
       "tests/prepare-native-fixtures.sh" = ../../tests/prepare-native-fixtures.sh;
+      "tests/store/cleanup-native-fixtures.py" = ../../tests/store/cleanup-native-fixtures.py;
       "lib/util/git-ssh-setup.sh" = ../util/git-ssh-setup.sh;
       "lib/services/host-nix-config.sh" = ./host-nix-config.sh;
       "lib/sandbox/network-bootstrap.sh" = ../sandbox/network-bootstrap.sh;
