@@ -1,5 +1,5 @@
 //! Checked shared containment: original approved handoff, exact native object, then start authority.
-use super::{Error, Observation, Phase, Projection, ProjectionMount};
+use super::{Environment, Error, Observation, Phase, Projection, ProjectionMount};
 use std::process::{Child, Command, Stdio};
 use wrix_state::execution::{Bound, Handoff};
 
@@ -23,6 +23,7 @@ impl Running {
 pub struct Prepared {
     bound: Bound,
     runtime: Command,
+    environment: Environment,
     start: Command,
     image: crate::image::Digest,
     mounts: Vec<ProjectionMount>,
@@ -35,16 +36,51 @@ impl Prepared {
         image: &crate::image::Digest,
         mounts: &[ProjectionMount],
     ) -> Result<Self, Error> {
-        let id = super::create(command)?;
+        Self::prepare(
+            handoff,
+            command,
+            interactive,
+            image,
+            mounts,
+            Environment::Inherited,
+        )
+    }
+    /// Package-selected callers carry an explicit environment; never inherit ambient runtime selectors.
+    pub fn create_fixed(
+        handoff: Handoff,
+        command: &Command,
+        interactive: bool,
+        image: &crate::image::Digest,
+        mounts: &[ProjectionMount],
+    ) -> Result<Self, Error> {
+        Self::prepare(
+            handoff,
+            command,
+            interactive,
+            image,
+            mounts,
+            Environment::Fixed,
+        )
+    }
+    fn prepare(
+        handoff: Handoff,
+        command: &Command,
+        interactive: bool,
+        image: &crate::image::Digest,
+        mounts: &[ProjectionMount],
+        environment: Environment,
+    ) -> Result<Self, Error> {
+        let id = super::create(command, environment)?;
         let bound = handoff.bind(id)?;
-        let runtime = super::runtime_command(command);
-        let projection = super::projection_for(&runtime, bound.container())?;
+        let runtime = super::runtime_command(command, environment);
+        let projection = super::projection_for(&runtime, environment, bound.container())?;
         verify(&projection, image, mounts)?;
         bound.recheck()?;
-        let start = super::start(command, bound.container(), interactive);
+        let start = super::start(command, bound.container(), interactive, environment);
         Ok(Self {
             bound,
             runtime,
+            environment,
             start,
             image: image.clone(),
             mounts: mounts.to_vec(),
@@ -59,7 +95,7 @@ impl Prepared {
             return Err(Error::Unknown);
         }
         verify(
-            &super::projection_for(&self.runtime, self.bound.container())?,
+            &super::projection_for(&self.runtime, self.environment, self.bound.container())?,
             &self.image,
             &self.mounts,
         )?;
@@ -77,10 +113,15 @@ impl Prepared {
         if matches!(self.bound.observe()?, Phase::Retired(_)) {
             return Ok(Observation::Retired);
         }
-        let observation = super::remove(&self.runtime, self.bound.container(), || {
-            self.bound.recheck()?;
-            Ok(())
-        })?;
+        let observation = super::remove(
+            &self.runtime,
+            self.environment,
+            self.bound.container(),
+            || {
+                self.bound.recheck()?;
+                Ok(())
+            },
+        )?;
         if observation == Observation::Retired {
             self.bound.retire()?;
         }

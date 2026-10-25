@@ -192,13 +192,14 @@ fn run_sandbox(
         wrix_sandbox::command::write_spawn_help(stdout)?;
         return Ok(ExitCode::SUCCESS);
     }
-    wrix_sandbox::command::run_with_issuer(
+    wrix_sandbox::command::run_with_factories(
         command,
         profile_config,
         args,
         stdout,
         stderr,
         &wrix_service::lifecycle::credential::Host,
+        &wrix_service::nix_store::worker::Host,
     )
 }
 

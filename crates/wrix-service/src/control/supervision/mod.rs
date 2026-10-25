@@ -364,8 +364,9 @@ impl Native {
 }
 
 fn unit_contents(root: &Path, package: &Package) -> String {
+    // Controller loss is not worker exit: export helpers retain their native readers until checked retirement.
     format!(
-        "[Unit]\nDescription=Wrix host controller\n[Service]\nType=exec\nExecStart={} {}\nRestart=on-failure\nRestartSec=1\n",
+        "[Unit]\nDescription=Wrix host controller\n[Service]\nType=exec\nExecStart={} {}\nRestart=on-failure\nRestartSec=1\nKillMode=process\n",
         systemd_path(&package.executable()),
         systemd_path(root)
     )

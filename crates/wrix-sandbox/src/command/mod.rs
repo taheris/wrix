@@ -81,13 +81,33 @@ pub fn run_with_issuer(
     stderr: &mut impl Write,
     issuer: &dyn crate::cache_credentials::Factory,
 ) -> io::Result<ExitCode> {
+    run_with_factories(
+        command,
+        profile_config_path,
+        args,
+        stdout,
+        stderr,
+        issuer,
+        &crate::nix_store::Unavailable,
+    )
+}
+
+pub fn run_with_factories(
+    command: Command,
+    profile_config_path: Option<PathBuf>,
+    args: &[String],
+    stdout: &mut impl Write,
+    stderr: &mut impl Write,
+    issuer: &dyn crate::cache_credentials::Factory,
+    stores: &dyn crate::nix_store::Factory,
+) -> io::Result<ExitCode> {
     let preview = launch::preview::Options::from_args(command, args);
     match build_request(command, profile_config_path, args) {
         Ok(None) => {
             write_run_help(stdout)?;
             Ok(ExitCode::SUCCESS)
         }
-        Ok(Some(request)) => match launch::execute(&request, stdout, stderr, issuer) {
+        Ok(Some(request)) => match launch::execute(&request, stdout, stderr, issuer, stores) {
             Ok(code) => Ok(code),
             Err(_error) if preview.dry_run => {
                 launch::preview::Report::invalid().write(stdout, preview.json)

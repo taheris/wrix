@@ -75,8 +75,44 @@ fn inspect(root: &Path, port: NonZeroU16) -> Result<PathBuf, Error> {
     Ok(directory)
 }
 impl Delivery {
+    fn tools(&self) -> Result<super::super::Tools, Error> {
+        let host = wrix_state::host::Host::discover().map_err(std::io::Error::other)?;
+        let control = host
+            .roots()
+            .state()
+            .join("control/nix")
+            .join(self.pool.repository.to_string())
+            .join(self.pool.system.as_str());
+        if self.key
+            != control
+                .join("executions")
+                .join(self.ticket.as_str())
+                .join("key")
+        {
+            return Err(Error::Invalid);
+        }
+        let deployment = crate::control::existing_deployment(&host)
+            .map_err(std::io::Error::other)?
+            .ok_or(Error::Retained)?;
+        let record = super::super::Record::read(&control, &deployment, &self.pool)?;
+        if !record.executions.contains(&self.ticket) {
+            return Err(Error::Retained);
+        }
+        let super::super::State::Serving { connection } = record.state else {
+            return Err(Error::Retained);
+        };
+        Ok(connection.target.attempt.software.tools)
+    }
+    /// Use the protected owner's exact package and rootless namespace environment, never an ambient PATH executable.
+    pub fn podman(&self) -> Result<std::process::Command, Error> {
+        self.podman_configuration()?;
+        Ok(self.tools()?.command(super::super::Program::Podman))
+    }
     /// Validates existing fixed Podman configuration and the exact live readonly projection, without creation or repair.
     pub fn podman_configuration(&self) -> Result<PathBuf, Error> {
+        if self.plane != wrix_state::nix_store::admission::request::Plane::Podman {
+            return Err(Error::Invalid);
+        }
         let root = self.key.parent().ok_or(Error::Invalid)?;
         let record = Record::read(root)?;
         if record.plane != self.plane
@@ -91,7 +127,7 @@ impl Delivery {
         let State::Attached { mount: expected } = record.state else {
             return Err(Error::Retained);
         };
-        let tools = super::super::Tools::from_env()?;
+        let tools = self.tools()?;
         if mount::observe(record.plane, &tools, &self.store, &self.lease)?.as_ref()
             != Some(&expected)
         {

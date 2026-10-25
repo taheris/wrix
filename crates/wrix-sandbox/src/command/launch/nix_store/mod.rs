@@ -20,6 +20,7 @@ pub(super) enum Approval {
 pub(super) enum Blocker {
     RestrictedNetwork,
     IncompatibleImage,
+    UnsupportedRuntime,
     ApprovalUnavailable,
     ApprovalRequired,
     RepositoryRequired,
@@ -34,6 +35,9 @@ impl Blocker {
             }
             Self::IncompatibleImage => {
                 "Shared installed Nix stores require a compatible versioned image and seed closure."
+            }
+            Self::UnsupportedRuntime => {
+                "Shared installed Nix transport is not accepted for this worker runtime; select private mode."
             }
             Self::ApprovalUnavailable => {
                 "Shared installed Nix stores require checked host workspace authority; select private mode in a worker."
@@ -80,12 +84,32 @@ pub(super) fn resolve(
     if network != NetworkMode::Open {
         blockers.push(Blocker::RestrictedNetwork);
     }
-    if request
-        .profile_config
-        .image
-        .shared_nix
-        .as_ref()
-        .is_none_or(|image| image.version.require_supported().is_err())
+    if super::Platform::CURRENT != super::Platform::Linux || super::env_flag("WRIX_MICROVM") {
+        blockers.push(Blocker::UnsupportedRuntime);
+    }
+    let immutable_image = request.profile_config.image.digest.is_some()
+        && match &request.kind {
+            Kind::Run(_) => true,
+            Kind::Spawn(spawn) => {
+                spawn
+                    .config
+                    .image_ref
+                    .as_ref()
+                    .is_none_or(|image| image == &request.profile_config.image.reference)
+                    && spawn
+                        .config
+                        .image_source
+                        .as_ref()
+                        .is_none_or(|source| source == &request.profile_config.image.source)
+            }
+        };
+    if !immutable_image
+        || request
+            .profile_config
+            .image
+            .shared_nix
+            .as_ref()
+            .is_none_or(|image| image.version.require_supported().is_err())
     {
         blockers.push(Blocker::IncompatibleImage);
     }

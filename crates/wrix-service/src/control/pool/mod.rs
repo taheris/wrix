@@ -166,8 +166,27 @@ impl Queue {
                 let registrations = super::registration::Store::open(&root)?;
                 {
                     let _lease = registrations.lease(&namespace)?;
-                    if !registrations.lock()?.contains_key(&namespace) {
-                        return Err(Error::UnknownNamespace);
+                    let mut namespaces = registrations.lock()?;
+                    if !namespaces.contains_key(&namespace) {
+                        if !matches!(accepted.purpose(), Purpose::Worker { .. }) {
+                            return Err(Error::UnknownNamespace);
+                        }
+                        // Explicit checked shared launch admits only its pool, never Celler/SQL/proxy/compiler access.
+                        accepted.recheck()?;
+                        if namespaces.len() >= super::MAX_NAMESPACES {
+                            return Err(Error::PoolRequest);
+                        }
+                        namespaces.insert(
+                            namespace,
+                            super::Policy {
+                                dolt: super::Access::Denied,
+                                private_cache_read: super::Access::Denied,
+                                common_cache_read: super::Access::Denied,
+                                egress: super::Access::Denied,
+                                compiler: super::Access::Denied,
+                            },
+                        );
+                        namespaces.commit()?;
                     }
                 }
                 let preparation = match accepted.purpose() {

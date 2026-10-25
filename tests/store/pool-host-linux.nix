@@ -36,7 +36,14 @@ let
   '';
   workerAgent = pkgs.writeShellScriptBin "wrix-pool-worker" ''
     set -euo pipefail
-    case "$1" in first|second|replacement) name="$1" ;; *) exit 64 ;; esac
+    case "$1" in
+      factory-probe)
+        [[ "$("${pkgs.nix}/bin/nix" eval --expr '17')" == 17 ]]
+        exit 0
+        ;;
+      first|second|replacement) name="$1" ;;
+      *) exit 64 ;;
+    esac
     path=$("${pkgs.nix}/bin/nix" eval --impure --raw --file ${workflow} --apply 'drv: drv.outPath')
     if [[ "$name" == replacement ]]; then [[ -e "$path" ]]; else [[ ! -e "$path" ]]; fi
     printf 'ready\n' > "/workspace/$name-ready"

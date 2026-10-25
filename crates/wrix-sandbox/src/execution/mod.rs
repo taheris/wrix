@@ -66,14 +66,23 @@ pub fn command(
     let host = Host::discover()?;
     let context = Context::inspect(&host, workspace)?;
     execution::begin(&host, &context, ticket)?;
-    let id = create(command)?;
+    let id = create(command, Environment::Inherited)?;
     execution::bind(&host, &context, ticket, &id)?;
     context.recheck(&host)?;
-    Ok(start(command, &id, interactive))
+    Ok(start(command, &id, interactive, Environment::Inherited))
 }
 
-fn runtime_command(template: &Command) -> Command {
+#[derive(Clone, Copy)]
+enum Environment {
+    Inherited,
+    Fixed,
+}
+
+fn runtime_command(template: &Command, environment: Environment) -> Command {
     let mut command = Command::new(template.get_program());
+    if matches!(environment, Environment::Fixed) {
+        command.env_clear();
+    }
     for (name, value) in template.get_envs() {
         if let Some(value) = value {
             command.env(name, value);
@@ -87,7 +96,7 @@ fn runtime_command(template: &Command) -> Command {
     command
 }
 
-fn create(command: &Command) -> Result<Container, Error> {
+fn create(command: &Command, environment: Environment) -> Result<Container, Error> {
     if std::env::var_os("WRIX_UNSAFE_PODMAN_SOCKET").is_some() {
         return Err(Error::Unknown);
     }
@@ -97,7 +106,7 @@ fn create(command: &Command) -> Result<Container, Error> {
     {
         return Err(Error::Unknown);
     }
-    let mut create = runtime_command(command);
+    let mut create = runtime_command(command, environment);
     create.arg("create").args(args);
     let output = create.stdin(Stdio::null()).output()?;
     if !output.status.success() {
@@ -108,8 +117,13 @@ fn create(command: &Command) -> Result<Container, Error> {
     Ok(id)
 }
 
-fn start(command: &Command, id: &Container, interactive: bool) -> Command {
-    let mut start = runtime_command(command);
+fn start(
+    command: &Command,
+    id: &Container,
+    interactive: bool,
+    environment: Environment,
+) -> Command {
+    let mut start = runtime_command(command, environment);
     start.args(["start", "--attach"]);
     if interactive {
         start.arg("--interactive");
@@ -161,13 +175,17 @@ pub fn projection(workspace: &Path, ticket: &Ticket) -> Result<Projection, Error
     let Some(Phase::Bound(id)) = execution::observe(&host, &context, ticket)? else {
         return Err(Error::Unknown);
     };
-    let projection = projection_for(&Command::new("podman"), &id)?;
+    let projection = projection_for(&Command::new("podman"), Environment::Inherited, &id)?;
     context.recheck(&host)?;
     Ok(projection)
 }
 
-fn projection_for(runtime: &Command, id: &Container) -> Result<Projection, Error> {
-    let output = runtime_command(runtime)
+fn projection_for(
+    runtime: &Command,
+    environment: Environment,
+    id: &Container,
+) -> Result<Projection, Error> {
+    let output = runtime_command(runtime, environment)
         .args([
             "inspect",
             "--type",
@@ -199,7 +217,7 @@ pub fn reconcile(workspace: &Path, ticket: &Ticket) -> Result<Observation, Error
         Phase::Reserved | Phase::Cancelled | Phase::Launching => return Ok(Observation::Protected),
         Phase::Bound(id) => id,
     };
-    let observation = remove(&Command::new("podman"), &id, || {
+    let observation = remove(&Command::new("podman"), Environment::Inherited, &id, || {
         context.recheck(&host)?;
         Ok(())
     })?;
@@ -211,11 +229,12 @@ pub fn reconcile(workspace: &Path, ticket: &Ticket) -> Result<Observation, Error
 
 fn remove(
     runtime: &Command,
+    environment: Environment,
     id: &Container,
     mut recheck: impl FnMut() -> Result<(), Error>,
 ) -> Result<Observation, Error> {
     recheck()?;
-    let output = runtime_command(runtime)
+    let output = runtime_command(runtime, environment)
         .args(["inspect", "--type", "container", id.as_str()])
         .output()?;
     if !output.status.success() {
@@ -226,13 +245,13 @@ fn remove(
         return Ok(Observation::Protected);
     }
     recheck()?;
-    let removed = runtime_command(runtime)
+    let removed = runtime_command(runtime, environment)
         .args(["rm", id.as_str()])
         .output()?;
     if !removed.status.success() || String::from_utf8_lossy(&removed.stdout).trim() != id.as_str() {
         return Err(Error::Unknown);
     }
-    let absent = runtime_command(runtime)
+    let absent = runtime_command(runtime, environment)
         .args(["container", "exists", id.as_str()])
         .output()?;
     if absent.status.code() != Some(1) || !absent.stdout.is_empty() {
@@ -270,6 +289,54 @@ fn inactive(objects: &[Inspect], id: &Container) -> bool {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn fixed_runtime_reconstruction_excludes_ambient_namespace_selectors() {
+        const PROBE: &str = "WRIX_TEST_RUNTIME_PROBE";
+        const SELECTOR: &str = "WRIX_TEST_RUNTIME_SELECTOR";
+        let executable = std::env::current_exe().unwrap();
+        let args = [
+            "--exact",
+            "execution::test::fixed_runtime_reconstruction_excludes_ambient_namespace_selectors",
+            "--nocapture",
+        ];
+        match std::env::var(PROBE).as_deref() {
+            Ok("fixed") => {
+                assert!(std::env::var_os(SELECTOR).is_none());
+                assert_eq!(std::env::current_dir().unwrap(), Path::new("/"));
+            }
+            Ok("inherited") => assert_eq!(std::env::var(SELECTOR).unwrap(), "outer-runtime"),
+            Ok("outer") => {
+                let mut template = Command::new(&executable);
+                template.current_dir("/").env(PROBE, "fixed");
+                assert!(
+                    runtime_command(&template, Environment::Fixed)
+                        .args(args)
+                        .status()
+                        .unwrap()
+                        .success()
+                );
+                template.env(PROBE, "inherited");
+                assert!(
+                    runtime_command(&template, Environment::Inherited)
+                        .args(args)
+                        .status()
+                        .unwrap()
+                        .success()
+                );
+            }
+            Err(_) => assert!(
+                Command::new(&executable)
+                    .env(PROBE, "outer")
+                    .env(SELECTOR, "outer-runtime")
+                    .args(args)
+                    .status()
+                    .unwrap()
+                    .success()
+            ),
+            Ok(value) => panic!("unknown runtime probe {value}"),
+        }
+    }
 
     #[test]
     fn projection_requires_complete_native_image_identity_and_canonicalizes_its_digest() {

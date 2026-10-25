@@ -83,6 +83,8 @@ pub struct Spawn {
 #[derive(Debug, Display, Error)]
 pub enum LaunchError {
     /// {0}
+    SharedNix(#[from] crate::nix_store::Error),
+    /// {0}
     NixApproval(#[from] wrix_state::nix_store::Error),
     /// {reason}
     NixStoreAdmission { reason: &'static str },
@@ -233,6 +235,7 @@ pub fn execute(
     stdout: &mut impl Write,
     stderr: &mut impl Write,
     issuer: &dyn Factory,
+    stores: &dyn crate::nix_store::Factory,
 ) -> Result<ExitCode, LaunchError> {
     let network_mode = NetworkMode::from_env(request.profile_config.network.default_mode)?;
     let preview = request.preview();
@@ -284,6 +287,9 @@ pub fn execute(
     if request.profile_config.services.nix_cache.enabled {
         issuer.admit()?;
     }
+    if plan.nix_store.mode == wrix_core::nix_store::Mode::Shared {
+        stores.admit()?;
+    }
     let journal = execution_metadata::Journal::create(
         &plan.workspace,
         &request.kind,
@@ -293,7 +299,7 @@ pub fn execute(
     .map_err(|source| LaunchError::Metadata { source })?;
     let mut observed_status = None;
     let result = ServicesState::load(request, issuer, &plan.selection)
-        .and_then(|mut services| plan.launch(&mut services, &mut observed_status));
+        .and_then(|mut services| plan.launch(&mut services, &mut observed_status, stores));
     if let Err(error) = journal.complete(observed_status) {
         tracing::warn!(workspace = %plan.workspace.display(), %error, "execution metadata remains incomplete");
         if let Err(report_error) = writeln!(
@@ -1113,6 +1119,7 @@ impl<'a> Plan<'a> {
         &self,
         services: &mut ServicesState,
         observed_status: &mut Option<ExitStatus>,
+        stores: &dyn crate::nix_store::Factory,
     ) -> Result<ExitCode, LaunchError> {
         self.recheck()?;
         let registration = FocusRegistration::create(
@@ -1122,7 +1129,7 @@ impl<'a> Plan<'a> {
             self.darwin_origin.as_ref(),
         )?;
         let result = match Platform::CURRENT {
-            Platform::Linux => self.launch_linux(services, observed_status),
+            Platform::Linux => self.launch_linux(services, observed_status, stores),
             Platform::Darwin => self.launch_darwin(services, observed_status),
         };
         complete_with_cleanup(result, registration.remove())
@@ -1132,8 +1139,13 @@ impl<'a> Plan<'a> {
         &self,
         services: &mut ServicesState,
         observed_status: &mut Option<ExitStatus>,
+        stores: &dyn crate::nix_store::Factory,
     ) -> Result<ExitCode, LaunchError> {
+        if self.nix_store.mode == wrix_core::nix_store::Mode::Shared && env_flag("WRIX_MICROVM") {
+            return Err(crate::nix_store::Error::Unavailable.into());
+        }
         self.install_image(Runtime::Podman)?;
+        let shared = self.prepare_shared_store(stores)?;
         Staging::with(|staging| {
             self.recheck()?;
             let mut volumes = self.linux_volumes(staging, services)?;
@@ -1167,7 +1179,10 @@ impl<'a> Plan<'a> {
             } else {
                 None
             };
-            let mut command = ProcessCommand::new("podman");
+            let mut command = match &shared {
+                Some(shared) => shared.command()?,
+                None => ProcessCommand::new("podman"),
+            };
             command.arg("run").arg("--rm");
             if self.spawn() {
                 if self.stdio {
@@ -1215,10 +1230,14 @@ impl<'a> Plan<'a> {
             if let Some(krun) = &krun {
                 krun.configure(&mut command, !self.spawn());
             }
-            command
-                .arg("-w")
-                .arg("/workspace")
-                .arg(self.image_ref.as_str());
+            if let Some(shared) = &shared {
+                shared.delivery().configure(&mut command);
+            }
+            command.arg("-w").arg("/workspace").arg(
+                shared.as_ref().map_or(self.image_ref.as_str(), |shared| {
+                    shared.image().digest().as_str()
+                }),
+            );
             if krun.is_none() {
                 command.args(&self.agent_args);
             }
@@ -1227,6 +1246,19 @@ impl<'a> Plan<'a> {
                 .stdout(Stdio::inherit())
                 .stderr(Stdio::inherit());
             self.recheck()?;
+            if let Some(shared) = shared {
+                let mut running = shared.spawn(&command, !self.spawn() || self.stdio)?;
+                let result = services.wait_child(running.child()).and_then(|status| {
+                    *observed_status = Some(status);
+                    status_to_exit(status)
+                });
+                let cleanup = match running.reconcile() {
+                    Ok(crate::execution::Observation::Retired) => Ok(()),
+                    Ok(crate::execution::Observation::Protected) => Err(io::Error::other("native shared worker remains protected; foreground completion is not teardown evidence").into()),
+                    Err(error) => Err(crate::nix_store::Error::from(error).into()),
+                };
+                return complete_with_cleanup(result, cleanup);
+            }
             if let Kind::Spawn(spawn) = &self.request.kind
                 && let Some(ticket) = &spawn.execution_ticket
             {
@@ -1237,6 +1269,43 @@ impl<'a> Plan<'a> {
             *observed_status = Some(status);
             status_to_exit(status)
         })
+    }
+
+    fn prepare_shared_store(
+        &self,
+        stores: &dyn crate::nix_store::Factory,
+    ) -> Result<Option<crate::nix_store::Prepared>, LaunchError> {
+        if self.nix_store.mode == wrix_core::nix_store::Mode::Private {
+            return Ok(None);
+        }
+        let system = if cfg!(target_arch = "x86_64") {
+            wrix_core::nix_store::pool::System::X86_64Linux
+        } else if cfg!(target_arch = "aarch64") {
+            wrix_core::nix_store::pool::System::Aarch64Linux
+        } else {
+            return Err(crate::nix_store::Error::Unavailable.into());
+        };
+        let digest = self
+            .image_digest
+            .as_ref()
+            .ok_or(crate::nix_store::Error::Delivery)?;
+        let metadata = self
+            .request
+            .profile_config
+            .image
+            .shared_nix
+            .clone()
+            .ok_or(crate::nix_store::Error::Delivery)?;
+        let image = wrix_core::nix_store::binding::Binding::new(digest.as_str(), metadata)
+            .map_err(|_| crate::nix_store::Error::Delivery)?;
+        let ticket = match &self.request.kind {
+            Kind::Run(_) => None,
+            Kind::Spawn(spawn) => spawn.execution_ticket.as_ref(),
+        };
+        Ok(Some(
+            crate::nix_store::Attempt::reserve(&self.selection, system, image, ticket)?
+                .prepare(stores)?,
+        ))
     }
 
     fn launch_darwin(
@@ -1336,7 +1405,7 @@ impl<'a> Plan<'a> {
             mode: MountMode::Rw,
             optional: false,
         }];
-        if let Some(notification) = linux_notification_socket_mount()? {
+        if let Some(notification) = linux_notification_socket_mount(self.nix_store.mode)? {
             volumes.push(notification);
         }
         if let Some(socket) = services.beads_socket_mount() {
@@ -1954,9 +2023,13 @@ impl ServicesState {
     }
 
     fn wait(&mut self, command: &mut ProcessCommand) -> Result<ExitStatus, LaunchError> {
+        self.wait_child(&mut command.spawn()?)
+    }
+
+    fn wait_child(&mut self, child: &mut std::process::Child) -> Result<ExitStatus, LaunchError> {
         match self.project_cache.take() {
-            Some(cache) => Ok(cache.session.wait(&mut command.spawn()?)?),
-            None => Ok(command.status()?),
+            Some(cache) => Ok(cache.session.wait(child)?),
+            None => Ok(child.wait()?),
         }
     }
 
@@ -2685,8 +2758,10 @@ fn notification_env(platform: Platform) -> Option<(String, String)> {
     }
 }
 
-fn linux_notification_socket_mount() -> Result<Option<RenderedMount>, LaunchError> {
-    linux_notification_socket_mount_from_dir(&notification_socket_dir())
+fn linux_notification_socket_mount(
+    mode: wrix_core::nix_store::Mode,
+) -> Result<Option<RenderedMount>, LaunchError> {
+    linux_notification_socket_mount_from_dir(&notification_socket_dir(), mode)
 }
 
 fn notification_socket_dir() -> PathBuf {
@@ -2697,15 +2772,26 @@ fn notification_socket_dir() -> PathBuf {
 
 fn linux_notification_socket_mount_from_dir(
     socket_dir: &Path,
+    mode: wrix_core::nix_store::Mode,
 ) -> Result<Option<RenderedMount>, LaunchError> {
     let socket = socket_dir.join(NOTIFY_SOCKET_NAME);
     if !socket.try_exists()? || !file_type_is_socket(&socket)? {
         return Ok(None);
     }
+    let shared = mode == wrix_core::nix_store::Mode::Shared;
+    // Shared client runtime must stay worker-local, not underneath a writable host directory bind.
     Ok(Some(RenderedMount {
-        host: socket_dir.display().to_string(),
-        container: String::from(LINUX_NOTIFY_CONTAINER_DIR),
-        mode: MountMode::Rw,
+        host: if shared {
+            socket.display().to_string()
+        } else {
+            socket_dir.display().to_string()
+        },
+        container: if shared {
+            format!("{LINUX_NOTIFY_CONTAINER_DIR}/{NOTIFY_SOCKET_NAME}")
+        } else {
+            String::from(LINUX_NOTIFY_CONTAINER_DIR)
+        },
+        mode: if shared { MountMode::Ro } else { MountMode::Rw },
         optional: false,
     }))
 }
@@ -3404,12 +3490,31 @@ mod test {
         std::fs::create_dir_all(&socket_dir).unwrap();
         let _listener = UnixListener::bind(socket_dir.join("notify.sock")).unwrap();
 
-        let mount = super::linux_notification_socket_mount_from_dir(&socket_dir)
-            .unwrap()
-            .unwrap();
+        let mount = super::linux_notification_socket_mount_from_dir(
+            &socket_dir,
+            wrix_core::nix_store::Mode::Private,
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(mount.host, socket_dir.display().to_string());
         assert_eq!(mount.container, "/run/wrix");
         assert_eq!(mount.mode, MountMode::Rw);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shared_notifications_do_not_bind_the_parent_of_private_nix_runtime() {
+        let root = scratch_dir("shared-notify-mount");
+        let _listener = std::os::unix::net::UnixListener::bind(root.join("notify.sock")).unwrap();
+        let mount = super::linux_notification_socket_mount_from_dir(
+            &root,
+            wrix_core::nix_store::Mode::Shared,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(mount.host, root.join("notify.sock").display().to_string());
+        assert_eq!(mount.container, "/run/wrix/notify.sock");
+        assert_eq!(mount.mode, MountMode::Ro);
     }
 
     #[test]

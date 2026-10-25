@@ -4,6 +4,7 @@ pub mod gc;
 pub mod image;
 pub mod native;
 pub mod owner;
+pub mod worker;
 
 use std::{
     io::{self, Write},

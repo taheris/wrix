@@ -64,19 +64,64 @@ pub(super) fn podman_probe(
     selection: &Selection,
     host: &wrix_state::host::Host,
 ) {
-    let (ticket, delivery) = prepare_on(runtime, client, selection, host, request::Plane::Podman);
-    assert!(delivery.podman_configuration().is_ok());
+    let namespace = wrix_service::control::Namespace::from(selection.context().unwrap().key());
+    assert_eq!(
+        runtime
+            .block_on(client.request(Operation::Retire {
+                namespace: namespace.clone()
+            }))
+            .unwrap(),
+        Reply::Applied
+    );
+    let factory = wrix_service::nix_store::worker::Connected::new(
+        Client::open(&host.roots().state().join("control/authority")).unwrap(),
+    )
+    .unwrap();
+    let attempt = wrix_sandbox::nix_store::Attempt::reserve(
+        selection,
+        system(),
+        super::seed::binding(),
+        None,
+    )
+    .unwrap();
+    let ticket = attempt.ticket().clone();
+    let prepared = attempt.prepare(&factory).unwrap();
+    let mounts = prepared.delivery().mounts();
+    let store = &mounts[0].source;
+    let Reply::Snapshot { namespaces, .. } = runtime
+        .block_on(client.request(Operation::Inspect {}))
+        .unwrap()
+    else {
+        panic!("missing registry snapshot")
+    };
+    assert_eq!(
+        namespaces[&namespace],
+        wrix_service::control::Policy {
+            dolt: wrix_service::control::Access::Denied,
+            private_cache_read: wrix_service::control::Access::Denied,
+            common_cache_read: wrix_service::control::Access::Denied,
+            egress: wrix_service::control::Access::Denied,
+            compiler: wrix_service::control::Access::Denied
+        }
+    );
     assert!(
-        fs::read_dir(delivery.store()).unwrap().next().is_none(),
+        fs::read_dir(store).unwrap().next().is_none(),
         "Podman source propagated into the host namespace"
     );
-    wrix_state::execution::cancel(host, selection.context().unwrap(), &ticket).unwrap();
+    assert_eq!(
+        wrix_state::execution::observe(host, selection.context().unwrap(), &ticket).unwrap(),
+        Some(wrix_state::execution::Phase::Reserved)
+    );
+    drop(prepared);
+    assert_eq!(
+        wrix_state::execution::observe(host, selection.context().unwrap(), &ticket).unwrap(),
+        Some(wrix_state::execution::Phase::Cancelled)
+    );
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        let record: serde_json::Value = serde_json::from_slice(
-            &fs::read(delivery.key().parent().unwrap().join("client.json")).unwrap(),
-        )
-        .unwrap();
+        let record: serde_json::Value =
+            serde_json::from_slice(&fs::read(store.parent().unwrap().join("client.json")).unwrap())
+                .unwrap();
         if record["state"]["phase"] == "released" {
             break;
         }
@@ -86,7 +131,60 @@ pub(super) fn podman_probe(
         );
         std::thread::sleep(Duration::from_millis(25));
     }
-    assert!(delivery.podman_configuration().is_err());
+    assert!(fs::read_dir(store).unwrap().next().is_none());
+
+    // A second programmatic reservation follows the same factory, renderer, atomic handoff and native start path.
+    let ticket = wrix_state::execution::reserve(host, selection.context().unwrap()).unwrap();
+    let binding = super::seed::binding();
+    let prepared = wrix_sandbox::nix_store::Attempt::reserve(
+        selection,
+        system(),
+        binding.clone(),
+        Some(&ticket),
+    )
+    .unwrap()
+    .prepare(&factory)
+    .unwrap();
+    let mounts = prepared.delivery().mounts();
+    let root = mounts[0].source.parent().unwrap();
+    let mut command = prepared.command().unwrap();
+    command.args(["run", "--rm", "--cap-add=NET_ADMIN", "--memory=768m", "--pids-limit=256", "--network=pasta:--map-host-loopback,169.254.1.2,--map-guest-addr,none,-t,none,-u,none,-T,none,-U,none", "--mount", "type=tmpfs,destination=/home/wrix,U=true", "-e", "HOME=/home/wrix", "-e", "WRIX_AGENT=direct", "-e", "WRIX_NETWORK=open"]);
+    let notification = host.roots().state().join("probe-notify");
+    fs::create_dir(&notification).unwrap();
+    let _listener =
+        std::os::unix::net::UnixListener::bind(notification.join("notify.sock")).unwrap();
+    command.arg("-v").arg(format!(
+        "{}:/run/wrix/notify.sock:ro",
+        notification.join("notify.sock").display()
+    ));
+    prepared.delivery().configure(&mut command);
+    command.arg(binding.digest().as_str()).arg("factory-probe");
+    let mut running = prepared.spawn(&command, false).unwrap();
+    assert!(running.child().wait().unwrap().success());
+    assert!(!notification.join("nix-client").exists());
+    assert!(!notification.join("nix-pool").exists());
+    assert_eq!(
+        running.reconcile().unwrap(),
+        wrix_sandbox::execution::Observation::Retired
+    );
+    assert!(
+        wrix_state::execution::terminal(host, selection.context().unwrap().key(), &ticket)
+            .unwrap()
+            .is_some()
+    );
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let record: serde_json::Value =
+            serde_json::from_slice(&fs::read(root.join("client.json")).unwrap()).unwrap();
+        if record["state"]["phase"] == "released" {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "native factory worker roots were not authoritatively retired"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
 }
 
 pub(super) fn exercise(

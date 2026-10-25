@@ -156,6 +156,25 @@ fn linux_start_recovers_a_dangling_unit_link() {
 }
 
 #[test]
+fn linux_controller_unit_does_not_kill_export_helpers_with_the_control_process() {
+    // Verify the emitted unit contract, not actual service-manager restart acceptance.
+    let directory = tempfile::tempdir().unwrap();
+    let native = linux_manager(
+        directory.path(),
+        "LoadState=not-found\nActiveState=inactive\nFragmentPath=\n",
+    );
+    native.start(directory.path(), &package("blue")).unwrap();
+    let unit = fs::read_to_string(directory.path().join("wrix-host-controller.service")).unwrap();
+    assert_eq!(
+        unit.lines()
+            .filter(|line| line.starts_with("KillMode="))
+            .collect::<Vec<_>>(),
+        ["KillMode=process"]
+    );
+    assert!(unit.lines().any(|line| line == "Restart=on-failure"));
+}
+
+#[test]
 fn linux_start_preserves_existing_or_uncertain_controller_units() {
     for state in [
         "LoadState=loaded\nActiveState=active\nFragmentPath=/other/controller.service\n",
