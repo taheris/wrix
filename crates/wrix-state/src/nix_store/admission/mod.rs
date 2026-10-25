@@ -56,6 +56,20 @@ impl Guard {
         Ok(admission)
     }
 
+    /// Commits current approval and the original Reserved ticket together, releasing the writer before native I/O.
+    pub fn handoff(
+        self,
+        ticket: crate::execution::Ticket,
+    ) -> Result<crate::execution::Handoff, Error> {
+        self.recheck()?;
+        Ok(crate::execution::Handoff::commit(
+            self.host,
+            self.context,
+            ticket,
+            self.store,
+        )?)
+    }
+
     pub const fn pool(&self) -> &Key {
         &self.pool
     }

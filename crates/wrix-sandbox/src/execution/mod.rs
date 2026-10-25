@@ -1,5 +1,7 @@
 //! Host-only Podman lifetime reconciliation for exact, durably bound container IDs.
 
+mod containment;
+pub use containment::{Prepared, Running};
 use serde::{Deserialize, Serialize};
 use std::{
     io,
@@ -22,6 +24,8 @@ pub enum Error {
     Io(#[from] io::Error),
     /// runtime returned an ambiguous or unavailable lifetime observation
     Unknown,
+    /// native image or read-only delivery differs from the approved worker
+    Delivery,
     /// runtime returned malformed containment identity
     Json(#[from] serde_json::Error),
 }
@@ -62,33 +66,50 @@ pub fn command(
     let host = Host::discover()?;
     let context = Context::inspect(&host, workspace)?;
     execution::begin(&host, &context, ticket)?;
+    let id = create(command)?;
+    execution::bind(&host, &context, ticket, &id)?;
+    context.recheck(&host)?;
+    Ok(start(command, &id, interactive))
+}
+
+fn runtime_command(template: &Command) -> Command {
+    let mut command = Command::new(template.get_program());
+    for (name, value) in template.get_envs() {
+        if let Some(value) = value {
+            command.env(name, value);
+        } else {
+            command.env_remove(name);
+        }
+    }
+    if let Some(directory) = template.get_current_dir() {
+        command.current_dir(directory);
+    }
+    command
+}
+
+fn create(command: &Command) -> Result<Container, Error> {
+    if std::env::var_os("WRIX_UNSAFE_PODMAN_SOCKET").is_some() {
+        return Err(Error::Unknown);
+    }
     let mut args = command.get_args();
     if args.next() != Some(std::ffi::OsStr::new("run"))
         || args.next() != Some(std::ffi::OsStr::new("--rm"))
     {
         return Err(Error::Unknown);
     }
-    let mut create = Command::new(command.get_program());
+    let mut create = runtime_command(command);
     create.arg("create").args(args);
-    for (name, value) in command.get_envs() {
-        if let Some(value) = value {
-            create.env(name, value);
-        } else {
-            create.env_remove(name);
-        }
-    }
-    if let Some(directory) = command.get_current_dir() {
-        create.current_dir(directory);
-    }
     let output = create.stdin(Stdio::null()).output()?;
     if !output.status.success() {
         return Err(Error::Unknown);
     }
     let text = std::str::from_utf8(&output.stdout).map_err(|_| Error::Unknown)?;
     let id = Container::parse(text.trim())?;
-    execution::bind(&host, &context, ticket, &id)?;
-    context.recheck(&host)?;
-    let mut start = Command::new(command.get_program());
+    Ok(id)
+}
+
+fn start(command: &Command, id: &Container, interactive: bool) -> Command {
+    let mut start = runtime_command(command);
     start.args(["start", "--attach"]);
     if interactive {
         start.arg("--interactive");
@@ -98,7 +119,7 @@ pub fn command(
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
-    Ok(start)
+    start
 }
 
 /// Read-only projection of one exact ticket-bound object. Never retirement authority.
@@ -124,7 +145,7 @@ fn deserialize_image<'de, D: serde::Deserializer<'de>>(
     crate::image::Digest::parse(&value).map_err(serde::de::Error::custom)
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProjectionMount {
     #[serde(rename = "Source")]
     pub source: std::path::PathBuf,
@@ -140,7 +161,13 @@ pub fn projection(workspace: &Path, ticket: &Ticket) -> Result<Projection, Error
     let Some(Phase::Bound(id)) = execution::observe(&host, &context, ticket)? else {
         return Err(Error::Unknown);
     };
-    let output = Command::new("podman")
+    let projection = projection_for(&Command::new("podman"), &id)?;
+    context.recheck(&host)?;
+    Ok(projection)
+}
+
+fn projection_for(runtime: &Command, id: &Container) -> Result<Projection, Error> {
+    let output = runtime_command(runtime)
         .args([
             "inspect",
             "--type",
@@ -154,10 +181,9 @@ pub fn projection(workspace: &Path, ticket: &Ticket) -> Result<Projection, Error
         return Err(Error::Unknown);
     }
     let projection: Projection = serde_json::from_slice(&output.stdout)?;
-    if projection.id != id {
+    if &projection.id != id {
         return Err(Error::Unknown);
     }
-    context.recheck(&host)?;
     Ok(projection)
 }
 
@@ -173,29 +199,46 @@ pub fn reconcile(workspace: &Path, ticket: &Ticket) -> Result<Observation, Error
         Phase::Reserved | Phase::Cancelled | Phase::Launching => return Ok(Observation::Protected),
         Phase::Bound(id) => id,
     };
-    let output = Command::new("podman")
+    let observation = remove(&Command::new("podman"), &id, || {
+        context.recheck(&host)?;
+        Ok(())
+    })?;
+    if observation == Observation::Retired {
+        execution::retire(&host, &context, ticket, &id)?;
+    }
+    Ok(observation)
+}
+
+fn remove(
+    runtime: &Command,
+    id: &Container,
+    mut recheck: impl FnMut() -> Result<(), Error>,
+) -> Result<Observation, Error> {
+    recheck()?;
+    let output = runtime_command(runtime)
         .args(["inspect", "--type", "container", id.as_str()])
         .output()?;
     if !output.status.success() {
         return Err(Error::Unknown);
     }
     let objects: Vec<Inspect> = serde_json::from_slice(&output.stdout)?;
-    if !inactive(&objects, &id) {
+    if !inactive(&objects, id) {
         return Ok(Observation::Protected);
     }
-    context.recheck(&host)?;
-    let removed = Command::new("podman").args(["rm", id.as_str()]).output()?;
+    recheck()?;
+    let removed = runtime_command(runtime)
+        .args(["rm", id.as_str()])
+        .output()?;
     if !removed.status.success() || String::from_utf8_lossy(&removed.stdout).trim() != id.as_str() {
         return Err(Error::Unknown);
     }
-    let absent = Command::new("podman")
+    let absent = runtime_command(runtime)
         .args(["container", "exists", id.as_str()])
         .output()?;
     if absent.status.code() != Some(1) || !absent.stdout.is_empty() {
         return Err(Error::Unknown);
     }
-    context.recheck(&host)?;
-    execution::retire(&host, &context, ticket, &id)?;
+    recheck()?;
     Ok(Observation::Retired)
 }
 

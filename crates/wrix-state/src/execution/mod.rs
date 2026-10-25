@@ -1,5 +1,8 @@
 //! Host-private, one-shot runtime bindings; foreground exit is not teardown authority.
 
+mod handoff;
+pub use handoff::{Bound, Launching as Handoff};
+
 use crate::{
     context::Context,
     host::Host,

@@ -1,4 +1,5 @@
 //! Protected, one-use transport of the original checked context, not a namespace/path surrogate.
+mod handoff;
 mod native;
 mod worker;
 

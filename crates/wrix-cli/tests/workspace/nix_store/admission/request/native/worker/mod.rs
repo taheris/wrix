@@ -1,6 +1,7 @@
 //! Real independent Podman workers through their unchanged network/bootstrap and execution containment.
 use super::*;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
+use wrix_sandbox::execution::{Prepared, ProjectionMount, Running};
 use wrix_service::nix_store::owner::backend::{
     Owner,
     client::Delivery,
@@ -10,7 +11,7 @@ use wrix_service::nix_store::owner::backend::{
 struct Worker {
     ticket: wrix_state::execution::Ticket,
     delivery: Delivery,
-    child: Child,
+    execution: Running,
 }
 fn launch(
     owner: &mut Owner,
@@ -43,44 +44,42 @@ fn launch(
         .args(["-e", "HOME=/home/wrix", "-e", "WRIX_AGENT=direct", "-e", "WRIX_NETWORK=open"])
         .arg("-e").arg(format!("WRIX_NETWORK_LOCAL_ENDPOINTS=169.254.1.2:{}/tcp", delivery.port()))
         .arg(binding.digest().as_str()).arg(name);
-    let mut start = wrix_sandbox::execution::command(
-        selection.context().unwrap().caller(),
-        &ticket,
-        &run,
-        false,
-    )
-    .unwrap();
-    let projection =
-        wrix_sandbox::execution::projection(selection.context().unwrap().caller(), &ticket)
-            .unwrap();
-    assert_eq!(projection.image.as_str(), binding.digest().as_str());
-    assert!(
-        projection
-            .mounts
-            .iter()
-            .any(|mount| mount.source == delivery.store()
-                && mount.destination == Path::new("/nix/store")
-                && !mount.writable)
-    );
-    assert!(
-        projection
-            .mounts
-            .iter()
-            .any(|mount| mount.source == directory
-                && mount.destination == Path::new("/run/wrix/nix-pool")
-                && !mount.writable)
-    );
+    let handoff = Admission::acquire(selection, system())
+        .unwrap()
+        .handoff(ticket.clone())
+        .unwrap();
+    let mounts = [
+        ProjectionMount {
+            source: delivery.store().to_path_buf(),
+            destination: PathBuf::from("/nix/store"),
+            writable: false,
+        },
+        ProjectionMount {
+            source: directory.clone(),
+            destination: PathBuf::from("/run/wrix/nix-pool"),
+            writable: false,
+        },
+        ProjectionMount {
+            source: directory.join("nix.conf"),
+            destination: PathBuf::from("/etc/nix/nix.conf"),
+            writable: false,
+        },
+    ];
+    let prepared = Prepared::create(handoff, &run, false, &digest, &mounts).unwrap();
+    assert_eq!(prepared.ticket(), &ticket);
     let log = fs::File::create(workspace.join(format!("{name}-runtime.log"))).unwrap();
-    let child = start
-        .stdin(Stdio::null())
-        .stdout(log.try_clone().unwrap())
-        .stderr(log)
+    let execution = prepared
+        .stdio(
+            Stdio::null(),
+            Stdio::from(log.try_clone().unwrap()),
+            Stdio::from(log),
+        )
         .spawn()
         .unwrap();
     Worker {
         ticket,
         delivery,
-        child,
+        execution,
     }
 }
 fn await_file(workspace: &Path, file: &str, workers: &mut [&mut Worker]) {
@@ -89,7 +88,7 @@ fn await_file(workspace: &Path, file: &str, workers: &mut [&mut Worker]) {
     while !workspace.join(file).exists() {
         for worker in workers.iter_mut() {
             assert!(
-                worker.child.try_wait().unwrap().is_none(),
+                worker.execution.child().try_wait().unwrap().is_none(),
                 "worker exited before {file}; inspect retained runtime logs in {}",
                 workspace.display()
             );
@@ -112,7 +111,7 @@ fn retire(
     worker: &mut Worker,
 ) -> wrix_state::execution::Terminal {
     fs::write(workspace.join(format!("{name}-exit")), b"exit").unwrap();
-    assert!(worker.child.wait().unwrap().success());
+    assert!(worker.execution.child().wait().unwrap().success());
     retire_containment(owner, selection, host, worker)
 }
 fn retire_containment(
@@ -123,12 +122,7 @@ fn retire_containment(
 ) -> wrix_state::execution::Terminal {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        match wrix_sandbox::execution::reconcile(
-            selection.context().unwrap().caller(),
-            &worker.ticket,
-        )
-        .unwrap()
-        {
+        match worker.execution.reconcile().unwrap() {
             wrix_sandbox::execution::Observation::Retired => break,
             wrix_sandbox::execution::Observation::Protected => {
                 assert!(
@@ -145,7 +139,11 @@ fn retire_containment(
             .unwrap();
     match owner.release_execution(&terminal) {
         Ok(()) | Err(wrix_service::nix_store::owner::backend::Error::Busy) => (),
-        Err(error) => panic!("native worker release failed: {error}"),
+        Err(error) => panic!(
+            "native worker release failed: {error}; owner={:?}; activity={:?}",
+            owner.inspect(),
+            owner.activity()
+        ),
     }
     assert!(worker.delivery.podman_configuration().is_err());
     terminal
@@ -198,7 +196,7 @@ pub(super) fn exercise(
         Err(wrix_service::nix_store::owner::backend::Error::Busy)
     ));
     let first_proof = retire(owner, selection, host, workspace, "first", &mut first);
-    assert!(second.child.try_wait().unwrap().is_none());
+    assert!(second.execution.child().try_wait().unwrap().is_none());
     let mut replacement = launch(owner, selection, host, workspace, "replacement");
     await_file(
         workspace,
@@ -209,8 +207,8 @@ pub(super) fn exercise(
         fs::read_link(workspace.join("first-result")).unwrap(),
         fs::read_link(workspace.join("replacement-result")).unwrap()
     );
-    replacement.child.kill().unwrap();
-    assert!(!replacement.child.wait().unwrap().success());
+    replacement.execution.child().kill().unwrap();
+    assert!(!replacement.execution.child().wait().unwrap().success());
     assert!(matches!(
         wrix_sandbox::execution::reconcile(
             selection.context().unwrap().caller(),
@@ -250,7 +248,11 @@ pub(super) fn exercise(
                     );
                     std::thread::sleep(Duration::from_millis(25));
                 }
-                Err(error) => panic!("native worker release failed: {error}"),
+                Err(error) => panic!(
+                    "native worker drain failed: {error}; owner={:?}; activity={:?}",
+                    owner.inspect(),
+                    owner.activity()
+                ),
             }
         }
     }
