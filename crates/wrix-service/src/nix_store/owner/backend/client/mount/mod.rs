@@ -10,6 +10,12 @@ pub(super) struct Identity {
     device: (u32, u32),
 }
 
+impl Identity {
+    pub(super) fn same_filesystem(&self, expected: &Self) -> bool {
+        self.device == expected.device
+    }
+}
+
 fn decode(value: &[u8]) -> Result<Vec<u8>, Error> {
     let mut result = Vec::new();
     let mut cursor = 0;
@@ -50,6 +56,7 @@ fn parse(bytes: &[u8], path: &Path, lease: &lease::Id) -> Result<Option<Identity
             .position(|field| *field == b"-")
             .ok_or(Error::Invalid)?;
         if separator < 6
+            || fields[3] != b"/"
             || fields.len() != separator + 4
             || fields[separator + 1] != b"fuse.sshfs"
             || fields[separator + 2] != format!("wrix-nix-{}", lease.as_str()).as_bytes()
@@ -138,6 +145,43 @@ pub(super) fn readable(
 #[cfg(test)]
 mod test {
     use super::*;
+    #[test]
+    fn retirement_identifies_only_full_native_references_to_the_same_export() {
+        let lease = lease::Id::try_from("a".repeat(32)).unwrap();
+        let line = format!(
+            "90 2 0:99 / /view ro,nosuid,nodev - fuse.sshfs wrix-nix-{} ro\n",
+            lease.as_str()
+        );
+        let original = parse(line.as_bytes(), Path::new("/view"), &lease)
+            .unwrap()
+            .unwrap();
+        let replica = parse(
+            line.replacen("90 ", "91 ", 1).as_bytes(),
+            Path::new("/view"),
+            &lease,
+        )
+        .unwrap()
+        .unwrap();
+        assert_ne!(original, replica);
+        assert!(replica.same_filesystem(&original));
+        let foreign = parse(
+            line.replace("0:99", "0:100").as_bytes(),
+            Path::new("/view"),
+            &lease,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(!foreign.same_filesystem(&original));
+        assert!(
+            parse(
+                line.replace("0:99 / ", "0:99 /subdirectory ").as_bytes(),
+                Path::new("/view"),
+                &lease
+            )
+            .is_err()
+        );
+    }
+
     #[test]
     fn mount_identity_requires_the_exact_read_only_native_source_not_just_a_path() {
         let id = lease::Id::try_from("a".repeat(32)).unwrap();

@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
+
+readonly -a pool_vm_args=(--memory=6g --annotation=krun.ram_mib=4096 --annotation=krun.cpus=2 --cpus=2 --pids-limit=256)
 umask 077
 
 [[ $(uname -s) == Linux && -r /dev/kvm && -w /dev/kvm && -r /dev/fuse && -w /dev/fuse ]]
@@ -57,7 +59,7 @@ mkdir -m 0700 "$root/sparse"
 cp "$root/data/bootstrap.json" "$root/sparse/bootstrap.json"
 truncate --size=8589934592 "$root/sparse/store.ext4"
 if timeout --kill-after=1s 60s podman run --rm --runtime "$WRIX_TEST_POOL_RUNTIME" \
-  --memory=4g --cpus=2 --pids-limit=256 \
+  "${pool_vm_args[@]}" \
   -v "$root/sparse:/var/lib/wrix/nix-pool:rw" "$ref" > "$root/sparse-refusal.log" 2>&1; then
   printf 'A sparse file was accepted as reserved native storage.\n' >&2
   exit 1
@@ -72,7 +74,7 @@ pool_control() {
 start_pool() {
   local endpoint key_type key_blob _comment _attempt ready=false reply
   podman run -d --name "$name" --runtime "$WRIX_TEST_POOL_RUNTIME" \
-  --memory=4g --cpus=2 --pids-limit=256 --log-opt=max-size=16m \
+  "${pool_vm_args[@]}" --log-opt=max-size=16m \
   -p 127.0.0.1::2222 -v "$root/data:/var/lib/wrix/nix-pool:rw" "$ref" > "$root/container.id"
 started=true
 endpoint=$(podman port "$name" 2222/tcp)
@@ -204,7 +206,7 @@ cp "$root/bootstrap-resume.json" "$root/data/bootstrap.json"
 cp "$root/data/released" "$root/release-checkpoint"
 rm "$root/data/released"
 if timeout --kill-after=1s 60s podman run --rm --runtime "$WRIX_TEST_POOL_RUNTIME" \
-  --memory=4g --cpus=2 --pids-limit=256 \
+  "${pool_vm_args[@]}" \
   -v "$root/data:/var/lib/wrix/nix-pool:rw" "$ref" > "$root/missing-release-refusal.log" 2>&1; then
   printf 'Resume accepted missing native release evidence.\n' >&2
   exit 1
@@ -216,7 +218,7 @@ cp "$root/release-checkpoint" "$root/data/released"
 cp "$root/data/owner-active/software" "$root/original-software"
 printf '/nix/store/00000000000000000000000000000000-wrong-software' > "$root/data/owner-active/software"
 if timeout --kill-after=1s 60s podman run --rm --runtime "$WRIX_TEST_POOL_RUNTIME" \
-  --memory=4g --cpus=2 --pids-limit=256 \
+  "${pool_vm_args[@]}" \
   -v "$root/data:/var/lib/wrix/nix-pool:rw" "$ref" > "$root/changed-software-refusal.log" 2>&1; then
   printf 'Resume accepted different immutable software.\n' >&2
   exit 1
@@ -227,7 +229,7 @@ fi
 cp "$root/original-software" "$root/data/owner-active/software"
 printf 'uncertain reader\n' > "$root/data/leases/ffffffffffffffffffffffffffffffff"
 if timeout --kill-after=1s 60s podman run --rm --runtime "$WRIX_TEST_POOL_RUNTIME" \
-  --memory=4g --cpus=2 --pids-limit=256 \
+  "${pool_vm_args[@]}" \
   -v "$root/data:/var/lib/wrix/nix-pool:rw" "$ref" > "$root/retained-reader-refusal.log" 2>&1; then
   printf 'Resume discarded an uncertain reader.\n' >&2
   exit 1

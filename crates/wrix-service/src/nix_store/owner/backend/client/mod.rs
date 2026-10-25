@@ -449,8 +449,11 @@ impl Owner {
         let tools = &connection.target.attempt.software.tools;
         match &record.state {
             State::Attached { mount: expected } | State::Detaching { mount: expected } => {
-                if mount::observe(record.plane, tools, &root.join("store"), &record.lease)?.as_ref()
-                    != Some(expected)
+                let expected = expected.clone();
+                let observed =
+                    mount::observe(record.plane, tools, &root.join("store"), &record.lease)?;
+                if observed.as_ref().is_some_and(|actual| actual != &expected)
+                    || (observed.is_none() && !matches!(record.state, State::Detaching { .. }))
                 {
                     return Err(Error::Retained);
                 }
@@ -458,11 +461,27 @@ impl Owner {
                     mount: expected.clone(),
                 };
                 record.publish(&root)?;
-                success(tools.unmount(record.plane, &root.join("store"))?)?;
+                if observed.is_some() {
+                    success(tools.unmount(record.plane, &root.join("store"))?)?;
+                }
                 if mount::observe(record.plane, tools, &root.join("store"), &record.lease)?
                     .is_some()
                 {
                     return Err(Error::Retained);
+                }
+                if record.plane == Plane::Host
+                    && let Some(replica) =
+                        mount::observe(Plane::Podman, tools, &root.join("store"), &record.lease)?
+                {
+                    if !replica.same_filesystem(&expected) {
+                        return Err(Error::Retained);
+                    }
+                    success(tools.unmount(Plane::Podman, &root.join("store"))?)?;
+                    if mount::observe(Plane::Podman, tools, &root.join("store"), &record.lease)?
+                        .is_some()
+                    {
+                        return Err(Error::Retained);
+                    }
                 }
                 record.state = State::Detached;
                 record.publish(&root)?;

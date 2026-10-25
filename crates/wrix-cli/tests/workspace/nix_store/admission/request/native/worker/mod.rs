@@ -121,11 +121,24 @@ fn retire_containment(
     host: &wrix_state::host::Host,
     worker: &Worker,
 ) -> wrix_state::execution::Terminal {
-    assert!(matches!(
-        wrix_sandbox::execution::reconcile(selection.context().unwrap().caller(), &worker.ticket)
-            .unwrap(),
-        wrix_sandbox::execution::Observation::Retired
-    ));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match wrix_sandbox::execution::reconcile(
+            selection.context().unwrap().caller(),
+            &worker.ticket,
+        )
+        .unwrap()
+        {
+            wrix_sandbox::execution::Observation::Retired => break,
+            wrix_sandbox::execution::Observation::Protected => {
+                assert!(
+                    Instant::now() < deadline,
+                    "native worker containment did not become authoritatively inactive"
+                );
+                std::thread::sleep(Duration::from_millis(25));
+            }
+        }
+    }
     let terminal =
         wrix_state::execution::terminal(host, selection.context().unwrap().key(), &worker.ticket)
             .unwrap()

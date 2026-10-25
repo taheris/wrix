@@ -1,5 +1,6 @@
 //! Recorded service-VM ownership and authenticated fixed-operation management.
 
+mod budget;
 pub mod client;
 pub mod seed;
 pub mod tools;
@@ -111,6 +112,8 @@ struct Software {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Attempt {
+    #[serde(default, skip_serializing_if = "budget::Budget::is_legacy")]
+    budget: budget::Budget,
     nonce: lease::Id,
     software: Software,
 }
@@ -342,12 +345,22 @@ struct Observation {
     state: Status,
     #[serde(rename = "Mounts")]
     mounts: Vec<Mount>,
+    #[serde(rename = "HostConfig")]
+    resources: Resources,
 }
 #[derive(Deserialize)]
 struct Configuration {
     #[serde(rename = "Labels")]
     labels: BTreeMap<String, String>,
+    #[serde(rename = "Annotations")]
+    annotations: BTreeMap<String, String>,
 }
+#[derive(Deserialize)]
+struct Resources {
+    #[serde(rename = "Memory")]
+    memory: u64,
+}
+
 #[derive(Deserialize)]
 struct Status {
     #[serde(rename = "Running")]
@@ -472,6 +485,10 @@ impl Owner {
             || !same_image(&observation.image, &target.attempt.software.digest)
             || observation.name.trim_start_matches('/') != target.attempt.name()
             || Path::new(&observation.runtime) != target.attempt.software.tools.vm()
+            || !target.attempt.budget.matches(
+                observation.resources.memory,
+                &observation.config.annotations,
+            )
         {
             return Err(Error::Invalid);
         }
@@ -787,6 +804,7 @@ impl Prepared {
         }
         let nonce = random()?;
         let attempt = Attempt {
+            budget: budget::Budget::HostIo,
             nonce,
             software: Software {
                 candidate,
@@ -840,9 +858,9 @@ impl Owner {
             .map(OsString::from)
             .to_vec();
         arguments.push(tools.vm().into_os_string());
+        arguments.extend(attempt.budget.arguments().iter().map(OsString::from));
         arguments.extend(
             [
-                "--memory=4g",
                 "--cpus=2",
                 "--pids-limit=256",
                 "--log-opt=max-size=16m",
@@ -1025,6 +1043,7 @@ impl Owner {
         File::open(self.prepared.data_root())?.sync_all()?;
         let nonce = random()?;
         let attempt = Attempt {
+            budget: old.target.attempt.budget,
             nonce,
             software: old.target.attempt.software,
         };

@@ -152,12 +152,16 @@ filesystem plane in the original checked intent. Fixed package tools create,
 inspect and gracefully unmount its FUSE source inside Podman's own rootless
 mount namespace. The source must not propagate into the host namespace. This
 avoids leaving an untracked source copy in Podman's persistent namespace after
-host-side unmount. Native mount ID/device/source and readonly/nodev/nosuid flags
-are checked in the owning namespace; unknown namespaces or identities retain
-protection rather than being adopted. Host-only component views retain SSHFS
-symlink containment. Worker sources preserve canonical Unix links, interpreted
-inside the worker filesystem, and use immutable installed-file caching while
-negative lookups remain uncached.
+host-side unmount. Retiring a legacy host-only view also checks for a native
+reference to that exact export/device in Podman's namespace and gracefully
+unmounts only that verified full-filesystem reference. A durably retiring source
+can continue after confirmed unmount; unexpected identities or subdirectory
+references remain fenced. Native mount ID/device/source and
+readonly/nodev/nosuid flags are checked in the owning namespace; unknown
+namespaces or identities retain protection rather than being adopted. Host-only
+component views retain SSHFS symlink containment. Worker sources preserve
+canonical Unix links, interpreted inside the worker filesystem, and use
+immutable installed-file caching while negative lookups remain uncached.
 
 Each worker receives only five fixed readonly configuration/key files, its
 readonly store bind and an exact role-port firewall exception through the
@@ -295,7 +299,10 @@ control, live-lease GC refusal, release and native collection. Trusted startup
 can import an exact staged image archive and pin its declared paths; this is not
 a worker signature exception. Management and transport processes share the
 aggregate resource budget and have a bounded control subgroup. The VM has 4 GiB
-memory; the native aggregate limit is 3 GiB/256 PIDs, with work limited to 1.5
+guest RAM and two guest vCPUs, with an independently finite 6 GiB host-container
+budget for hypervisor and backing-file I/O cache. Its runtime profile is
+recorded and preserved on resume; older recorded limits are not silently
+enlarged. The native aggregate limit is 3 GiB/256 PIDs, with work limited to 1.5
 GiB/144 PIDs, trusted seeding to 768 MiB/16 PIDs and control to 384 MiB/96 PIDs.
 Seeding OOM is group-local, and seed activity participates in quiescence and
 clean-release checks.
