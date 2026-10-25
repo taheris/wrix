@@ -1,3 +1,7 @@
+#[cfg(test)]
+mod test;
+mod writer;
+
 use std::{fs, os::unix::fs::OpenOptionsExt, path::Path, time::Duration};
 
 use displaydoc::Display;
@@ -12,6 +16,10 @@ use crate::{
 
 #[derive(Debug, Display, Error)]
 pub enum Error {
+    /// attention writer is busy; retry after the active operation finishes
+    Busy,
+    /// attention writer lock must be an owned private file without symlink or hardlink substitutions
+    PrivateState,
     /// attention storage I/O failed: {0}
     Io(#[from] std::io::Error),
     /// attention database failed: {0}
@@ -40,6 +48,7 @@ pub fn open(directory: &Path) -> Result<Connection, Error> {
 }
 
 pub fn enqueue(directory: &Path, target: &Target, platform: Platform) -> Result<(), Error> {
+    let _writer = writer::acquire(directory)?;
     let mut db = open(directory)?;
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
     if let Some(record) = registration(directory, target, platform) {
@@ -58,6 +67,7 @@ pub fn focus<R: Runner>(
     platform: Platform,
     navigator: &Navigator<R>,
 ) -> Result<(), Error> {
+    let _writer = writer::acquire(directory)?;
     let mut db = open(directory)?;
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let entries = tx
@@ -125,6 +135,7 @@ pub fn return_to_origin<R: Runner>(
     platform: Platform,
     navigator: &Navigator<R>,
 ) -> Result<(), Error> {
+    let _writer = writer::acquire(directory)?;
     let mut db = open(directory)?;
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let text = tx

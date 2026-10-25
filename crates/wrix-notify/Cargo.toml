@@ -12,6 +12,7 @@ path = "src/main.rs"
 clap = { workspace = true }
 displaydoc = { workspace = true }
 rusqlite = { workspace = true }
+rustix = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }

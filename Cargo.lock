@@ -3284,6 +3284,7 @@ dependencies = [
  "clap",
  "displaydoc",
  "rusqlite",
+ "rustix",
  "serde",
  "serde_json",
  "tempfile",

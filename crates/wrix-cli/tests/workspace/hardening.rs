@@ -175,6 +175,62 @@ fn concurrent_identical_admissions_confirm_one_key_and_one_binding() {
 }
 
 #[test]
+fn identical_readmissions_do_not_wait_for_an_unrelated_sqlite_reader() {
+    let fixture = Fixture::new();
+    fixture.initialize();
+    let checkout = fixture.repository("checkout");
+    fixture.adapter(&checkout, &checkout, "workspace-one");
+    let admitted = fixture.admit(&checkout, "workspace-one", &["--allocate"]);
+    assert!(
+        admitted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&admitted.stderr)
+    );
+    let db = rusqlite::Connection::open(fixture.state().join("state.db")).unwrap();
+    db.execute_batch("BEGIN; SELECT * FROM binding;").unwrap();
+    let mut children = Vec::new();
+    for _ in 0..4 {
+        children.push(
+            fixture
+                .command(&[
+                    "admit",
+                    "--integration",
+                    "test-manager",
+                    "--expect-membership",
+                    "workspace-one",
+                    "--checkout",
+                    checkout.to_str().unwrap(),
+                    "--allocate",
+                ])
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap(),
+        );
+    }
+    let outputs: Vec<_> = children
+        .into_iter()
+        .map(|child| child.wait_with_output().unwrap())
+        .collect();
+    db.execute_batch("ROLLBACK").unwrap();
+    let failures: Vec<_> = outputs
+        .iter()
+        .filter(|output| !output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stderr).into_owned())
+        .collect();
+    assert!(failures.is_empty(), "{failures:?}");
+    for output in outputs {
+        assert_eq!(output.stdout, admitted.stdout);
+    }
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM binding", [], |row| row
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
 fn previously_admitted_participant_residue_blocks_primary_operations_and_readmission() {
     let fixture = Fixture::new();
     fixture.initialize();

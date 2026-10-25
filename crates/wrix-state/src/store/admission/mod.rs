@@ -53,18 +53,20 @@ impl Store {
         {
             return Err(Error::Conflict);
         }
+        // The host writer guard serializes mutations; unchanged admissions need only a read transaction.
         let tx = store
             .connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+            .transaction_with_behavior(TransactionBehavior::Deferred)?;
         resolution.recheck()?;
-        let existing: Option<String> = tx
+        let existing: Option<(String, Vec<u8>, Vec<u8>)> = tx
             .query_row(
-                "SELECT native_key FROM binding WHERE slot = ?1 AND membership = ?2",
+                "SELECT native_key, primary_root, primary_evidence FROM binding WHERE slot = ?1 AND membership = ?2",
                 params![slot.as_str(), expected.as_str()],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()?;
-        let key = if let Some(existing) = existing {
+        let already_registered = existing.is_some();
+        let (key, binding_changed) = if let Some((existing, primary, evidence)) = existing {
             let key = WorkspaceHash::parse(&existing)
                 .map_err(|error| Error::Invalid(error.to_string()))?;
             if !crate::namespace::registration(&tx, &key)? {
@@ -75,9 +77,13 @@ impl Store {
             {
                 return Err(Error::Conflict);
             }
-            key
+            (
+                key,
+                primary != resolution.primary().root().as_os_str().as_bytes()
+                    || evidence != resolution.primary().evidence(),
+            )
         } else {
-            match intent {
+            let key = match intent {
                 Intent::Allocate => {
                     let key = Workspace::from_path(resolution.primary().root())?
                         .hash()
@@ -103,7 +109,8 @@ impl Store {
                     validate_native(host, key)?;
                     key.clone()
                 }
-            }
+            };
+            (key, true)
         };
         let reverse: Option<(String, String)> = tx
             .query_row(
@@ -118,19 +125,26 @@ impl Store {
         {
             return Err(Error::Conflict);
         }
+        let mut updated_participants = Vec::new();
         for participant in [resolution.checkout(), resolution.primary()] {
-            let previous: Option<String> = tx
+            let previous: Option<(String, Vec<u8>)> = tx
                 .query_row(
-                    "SELECT native_key FROM participant WHERE checkout = ?1",
+                    "SELECT native_key, evidence FROM participant WHERE checkout = ?1",
                     [participant.root().as_os_str().as_bytes()],
-                    |row| row.get(0),
+                    |row| Ok((row.get(0)?, row.get(1)?)),
                 )
                 .optional()?;
             if previous
-                .as_deref()
-                .is_some_and(|previous| previous != key.as_str())
+                .as_ref()
+                .is_some_and(|(previous, _)| previous != key.as_str())
             {
                 return Err(Error::Conflict);
+            }
+            if previous
+                .as_ref()
+                .is_none_or(|(_, evidence)| evidence != participant.evidence())
+            {
+                updated_participants.push(participant);
             }
             let derived = Workspace::from_path(participant.root())?.hash().clone();
             if derived != key {
@@ -146,15 +160,19 @@ impl Store {
             }
         }
         verify_candidates(host, &tx, &key, &resolution)?;
-        tx.execute(
-            "INSERT OR IGNORE INTO namespace_metadata VALUES (?1, 'namespace/registered', X'01')",
-            [key.as_str()],
-        )?;
-        tx.execute(
-            "INSERT INTO binding VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(native_key) DO UPDATE SET primary_root = excluded.primary_root, primary_evidence = excluded.primary_evidence",
-            params![key.as_str(), slot.as_str(), expected.as_str(), resolution.primary().root().as_os_str().as_bytes(), resolution.primary().evidence()],
-        )?;
-        for participant in [resolution.checkout(), resolution.primary()] {
+        if !already_registered {
+            tx.execute(
+                "INSERT OR IGNORE INTO namespace_metadata VALUES (?1, 'namespace/registered', X'01')",
+                [key.as_str()],
+            )?;
+        }
+        if binding_changed {
+            tx.execute(
+                "INSERT INTO binding VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(native_key) DO UPDATE SET primary_root = excluded.primary_root, primary_evidence = excluded.primary_evidence",
+                params![key.as_str(), slot.as_str(), expected.as_str(), resolution.primary().root().as_os_str().as_bytes(), resolution.primary().evidence()],
+            )?;
+        }
+        for participant in updated_participants {
             tx.execute("INSERT INTO participant VALUES (?1, ?2, ?3) ON CONFLICT(checkout) DO UPDATE SET evidence = excluded.evidence",
                 params![participant.root().as_os_str().as_bytes(), key.as_str(), participant.evidence()])?;
         }
