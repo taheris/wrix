@@ -2,6 +2,8 @@
 """Tear down disposable native-test resources, never the user's Wrix deployment."""
 
 import argparse
+import json
+import tempfile
 import os
 from pathlib import Path
 import re
@@ -11,6 +13,7 @@ import subprocess
 import sys
 
 MARKER = ".wrix-native-test-fixture"
+STOPPED = ".wrix-native-test-resources-stopped"
 LEGACY = re.compile(r"^(/tmp/\.tmp[A-Za-z0-9]+)(?:/|$)")
 SOURCE = re.compile(r"wrix-nix-[0-9a-f]{32}")
 
@@ -75,7 +78,7 @@ def discover():
     return sorted(roots)
 
 
-def checked_root(root):
+def checked_root(root, registered=False):
     info = root.lstat()
     if (
         not stat.S_ISDIR(info.st_mode)
@@ -88,10 +91,11 @@ def checked_root(root):
             f"(owner={info.st_uid}, caller={os.getuid()}, "
             f"mode={stat.S_IMODE(info.st_mode):04o}, canonical={root.resolve()})"
         )
-    if not (root / MARKER).is_file() and not LEGACY.fullmatch(str(root)):
+    marked = (root / MARKER).is_file() or registered
+    if not marked and not LEGACY.fullmatch(str(root)):
         raise RuntimeError(f"not a marked native fixture or legacy /tmp/.tmp* fixture: {root}")
     state = root / "home/.local/state/wrix/control/nix"
-    if not (root / MARKER).is_file() and (not state.is_dir() or state.is_symlink()):
+    if not marked and (not state.is_dir() or state.is_symlink()):
         raise RuntimeError(f"legacy fixture has no native-pool control state: {root}")
     for relative in ["home", "runtime", "home/.local/share/containers/storage"]:
         if not (root / relative).resolve().is_relative_to(root):
@@ -100,8 +104,8 @@ def checked_root(root):
 
 
 class Cleanup:
-    def __init__(self, root, tools=None):
-        self.root = checked_root(Path(root))
+    def __init__(self, root, tools=None, registered=False):
+        self.root = checked_root(Path(root), registered)
         self.tools = Path(tools) if tools else None
         self.environment = dict(os.environ)
         for name in [
@@ -127,10 +131,10 @@ class Cleanup:
     def program(self, name):
         return str(self.tools / name) if self.tools else name
 
-    def run(self, args):
+    def run(self, args, timeout=45):
         result = subprocess.run(
             args, env=self.environment, stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=45, check=False,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout, check=False,
         )
         if result.returncode:
             raise RuntimeError(f"{args!r}: {os.fsdecode(result.stderr)}")
@@ -152,9 +156,93 @@ class Cleanup:
                     selected.append(target)
         return selected
 
-    def finish(self):
+    def capture_diagnostics(self):
+        try:
+            directory = self.root / "native-cleanup-diagnostics"
+            directory.mkdir(mode=0o700, exist_ok=True)
+            if directory.is_symlink() or directory.stat().st_uid != os.getuid() or stat.S_IMODE(directory.stat().st_mode) & 0o077:
+                raise RuntimeError("unsafe fixture diagnostic directory")
+            identifiers = self.run(self.podman + ["ps", "--all", "--no-trunc", "--format", "{{.ID}}"], timeout=3).splitlines()
+            for identifier in identifiers:
+                if not re.fullmatch(r"[0-9a-f]{64}", identifier):
+                    raise RuntimeError("invalid fixture container identity for diagnostics")
+                for label, arguments in [
+                    ("state", ["inspect", "--format", "{{json .State}}", identifier]),
+                    ("log", ["logs", "--tail=200", identifier]),
+                ]:
+                    output = self.run(self.podman + arguments, timeout=3)
+                    with tempfile.NamedTemporaryFile(mode="w", dir=directory, prefix=identifier + "-" + label + "-", delete=False) as stream:
+                        stream.write(output)
+        except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+            print(f"could not capture fixture diagnostics; continuing resource teardown: {error}", file=sys.stderr)
+
+    def stopped_identity(self):
+        info = self.root.stat()
+        return {"version": 1, "device": info.st_dev, "inode": info.st_ino}
+
+    def is_stopped(self):
+        try:
+            descriptor = os.open(self.root / STOPPED, os.O_RDONLY | os.O_NOFOLLOW)
+        except FileNotFoundError:
+            return False
+        with os.fdopen(descriptor) as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1:
+                raise RuntimeError("unsafe native test teardown receipt")
+            if json.load(stream) != self.stopped_identity():
+                raise RuntimeError("native test teardown receipt belongs to another root")
+        return True
+
+    def record_stopped(self):
+        with tempfile.NamedTemporaryFile(mode="w", dir=self.root, prefix=".cleanup-", delete=False) as stream:
+            json.dump(self.stopped_identity(), stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+            temporary = stream.name
+        os.replace(temporary, self.root / STOPPED)
+        descriptor = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+    def check_host_mounts(self):
+        if any(target.is_relative_to(self.root) for target, _, _ in host_mounts()):
+            raise RuntimeError(f"fixture still has host mounts: {self.root}")
+
+    def remove_files(self):
+        if not self.is_stopped():
+            raise RuntimeError("fixture teardown must complete before deleting files")
+        self.check_host_mounts()
+        if self.storage.exists():
+            shutil.rmtree(self.storage)
+        retained = {MARKER, STOPPED, "runtime"}
+        for entry in self.root.iterdir():
+            if entry.name not in retained:
+                if entry.is_dir() and not entry.is_symlink():
+                    shutil.rmtree(entry)
+                else:
+                    entry.unlink()
+        runtime = self.root / "runtime"
+        if runtime.exists():
+            shutil.rmtree(runtime)
+        (self.root / MARKER).unlink(missing_ok=True)
+        (self.root / STOPPED).unlink()
+        self.root.rmdir()
+
+    def finish(self, diagnostics=False):
+        if self.is_stopped():
+            self.check_host_mounts()
+            return
         has_storage = self.storage.exists()
         if has_storage:
+            runtime = self.root / "runtime"
+            runtime.mkdir(mode=0o700, exist_ok=True)
+            info = runtime.lstat()
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o077:
+                raise RuntimeError("fixture runtime must be an owned private directory")
+            if diagnostics:
+                self.capture_diagnostics()
             self.run(self.podman + ["stop", "--all", "--time=10"])
         for target in self.views(host_mounts()):
             helper = next(
@@ -178,16 +266,18 @@ class Cleanup:
                 and (
                     kind.startswith("fuse.")
                     or not (
-                        target.is_relative_to(self.storage)
+                        target == self.storage
                         or target.is_relative_to(self.root / "runtime")
                     )
                 )
             ]
             if unexpected:
                 raise RuntimeError(f"fixture still has non-administrative namespace mounts: {unexpected}")
+            self.run(self.podman + ["unshare", self.program("chown"), "--recursive", "--no-dereference", "0:0", str(self.storage)])
+            self.run(self.podman + ["unshare", self.program("chmod"), "--recursive", "u+rwX", str(self.storage)])
             self.run(self.podman + ["system", "migrate"])
-        if any(target.is_relative_to(self.root) for target, _, _ in host_mounts()):
-            raise RuntimeError(f"fixture still has host mounts: {self.root}")
+        self.check_host_mounts()
+        self.record_stopped()
 
 
 def main():
@@ -197,6 +287,7 @@ def main():
     parser.add_argument("--registry", type=Path, help="cleanup only the roots recorded by one native test invocation")
     parser.add_argument("--tools", type=Path, help="package-selected runtime bin directory")
     parser.add_argument("--remove-files", action="store_true", help="delete fixture files only after verified resource teardown")
+    parser.add_argument("--diagnostics", action="store_true", help="capture bounded fixture container state/logs before teardown")
     args = parser.parse_args()
     roots = set(args.roots)
     entries = {}
@@ -219,13 +310,14 @@ def main():
     for root in sorted(roots):
         try:
             print(f"cleaning native test fixture: {root}", flush=True)
-            Cleanup(root, args.tools).finish()
+            subject = Cleanup(root, args.tools, registered=root in entries)
+            subject.finish(diagnostics=args.diagnostics)
             if args.remove_files:
-                shutil.rmtree(root)
+                subject.remove_files()
                 print(f"native test resources and fixture files removed: {root}")
             else:
                 print(f"native test resources stopped and unmounted; files retained: {root}")
-            if root in entries:
+            if args.remove_files and root in entries:
                 entries[root].unlink()
         except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
             failed = True

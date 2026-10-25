@@ -35,6 +35,22 @@ impl Running {
 impl Drop for Running {
     fn drop(&mut self) {
         if self.0.try_wait().unwrap().is_none() {
+            #[cfg(target_os = "linux")]
+            {
+                let pid = rustix::process::Pid::from_raw(self.0.id().try_into().unwrap()).unwrap();
+                // Only an explicitly isolated child group belongs to this guard.
+                // Keep its unreaped leader until after signaling, preventing PID reuse.
+                if rustix::process::getpgid(Some(pid)).unwrap() == pid {
+                    match rustix::process::kill_process_group(pid, rustix::process::Signal::KILL) {
+                        Ok(()) | Err(rustix::io::Errno::SRCH) => {}
+                        Err(error) => {
+                            panic!("could not stop native assertion helper group: {error}")
+                        }
+                    }
+                    self.0.wait().unwrap();
+                    return;
+                }
+            }
             self.0.kill().unwrap();
             self.0.wait().unwrap();
         }
@@ -488,6 +504,7 @@ fn native_host_owner_survives_controller_loss_collects_and_resumes_recorded_soft
             std::env::var_os(name).expect("package-selected native pool inputs required"),
         );
     }
+    std::os::unix::process::CommandExt::process_group(&mut command, 0);
     let mut running = Running(command.spawn().unwrap());
     let deadline = Instant::now() + BUDGET;
     while !fixture.root.path().join("ready").exists() {

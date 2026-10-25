@@ -310,16 +310,33 @@ clean-release checks.
 ## Native test cleanup and retained fixtures
 
 The host-owner tests register their disposable roots before native allocation. A
-parent guard tears down each fixture on success and assertion unwind; the
+parent guard tears down native resources on success and assertion unwind; the
 packaged runner also has an invocation-scoped registry and exit/signal traps
 around bounded test subprocesses. Cleanup stops containers in that fixture's
 isolated Podman storage, gracefully unmounts its exact Wrix SSHFS exports in the
-host and Podman namespaces, removes stopped containers and fixture images, and
-releases the fixture's Podman namespace. Only confirmed teardown permits
-directory removal. Cleanup failure fails the run and retains the fixture and
-registry for retry. It never changes production uncertainty guards or touches
-the user's normal host controller. An uncatchable kill or host crash can still
-require recovery.
+host and Podman namespaces, and removes stopped containers and fixture images.
+Before releasing the fixture's Podman namespace, it makes remaining disposable
+storage owned and writable by the host caller from inside that user namespace;
+rootless image layers may otherwise contain subordinate-UID or read-only files.
+Unexpected nested storage mounts prevent this step. No host privilege is added.
+
+A private, root-inode-bound receipt records completed resource teardown before
+any directory deletion. File cleanup preserves that receipt, the marker and
+runtime directory until last, so a partial deletion can be retried without
+starting Podman against missing runtime state. The native assertion subprocess
+has a private process group: its guard terminates owned helpers before fixture
+teardown, not just the assertion process. External VM teardown remains scoped to
+the fixture's isolated Podman store; it does not force-unmount exports.
+
+Successful runs remove fixture files. Failed or interrupted runs still stop VMs
+and unmount exports, but retain the fixture and invocation registry for
+diagnosis. The helper attempts bounded container-state and last-200-line log
+captures under private `native-cleanup-diagnostics/` before removing containers;
+unavailable captures are reported and do not prevent resource teardown. Retained
+backing disks still consume host space. Cleanup failure also fails the run and
+retains its paths for retry. It never changes production uncertainty guards or
+touches the user's normal host controller. An uncatchable kill or host crash can
+still require recovery.
 
 After stopping native test runs, remove legacy retained test resources from the
 host, as the same user who ran the tests:
@@ -331,10 +348,12 @@ python3 tests/store/cleanup-native-fixtures.py --discover --remove-files
 Discovery is restricted to owned legacy `/tmp/.tmp*` fixtures identified by Wrix
 SSHFS mounts, pool-container monitor arguments, or retained native-pool control
 state. Explicit roots require a native-test marker or the checked legacy layout.
-Symlink escapes and roots writable by other users are refused. No force/lazy
-unmount is used. Without `--remove-files`, teardown retains diagnostic files; it
-does not reclaim the fixture's backing disks. A refusal reports the retained
-path and error instead of treating a missing cleanup capability as success.
+A private invocation registry can also identify a fixture whose marker was
+removed by older partial cleanup. Symlink escapes and roots writable by other
+users are refused. No force/lazy unmount is used. Without `--remove-files`,
+teardown retains diagnostic files; it does not reclaim the fixture's backing
+disks. A refusal reports the retained path and error instead of treating a
+missing cleanup capability as success.
 
 Portable conformance and parent-guard regressions run in the ordinary checks.
 Successful mocked runtime teardown is not native Podman/FUSE acceptance; run the
