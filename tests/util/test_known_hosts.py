@@ -38,7 +38,10 @@ class KnownHostsInstallation(unittest.TestCase):
                 before = external.stat()
                 try:
                     self.run_installer(source, root, mode)
-                    self.assertEqual(external.stat(), before)
+                    after = external.stat()
+                    # Copying may advance access time; identity, permissions and write timestamps must not change.
+                    for field in ("st_dev", "st_ino", "st_mode", "st_nlink", "st_uid", "st_gid", "st_size", "st_mtime_ns", "st_ctime_ns"):
+                        self.assertEqual(getattr(after, field), getattr(before, field), field)
                     self.assertFalse((root / "etc/ssh").is_symlink())
                     self.assertFalse((root / "etc/ssh/ssh_known_hosts").is_symlink())
                     self.assertEqual((root / "etc/ssh/ssh_known_hosts").read_bytes(), source.read_bytes())
