@@ -22,6 +22,25 @@ Wrix installation advice alone does not repair an incompatible producer.
 A subsequent safety-history error is independent: follow the host checks below
 without resetting retained evidence.
 
+## Runner input discovery
+
+The packaged Loom backports upstream
+[tier-separated batching](https://github.com/taheris/loom/commit/896e6df) and
+its [query-count regressions](https://github.com/taheris/loom/commit/db524e2)
+through `patches/loom-runner-input-batching.patch`. Discovery queries are shared
+per runner group within each tier, without changing System execution semantics
+or mixing Check and System declarations. Failed or malformed queries remain
+errors, not empty input declarations.
+
+`checks.loom-runner-inputs` runs the patched upstream input-resolution tests.
+`nix run .#verify -- cli.browser-gate-scope` checks the consumed CLI against
+Wrix's actual verifier inventory, cold browser/image boundaries, and both lanes.
+Keep these assertions intact when updating Loom. A full upstream update also
+requires an explicit integration of its new checked-definition admission:
+input-list JSON and opaque runner commands alone are not executable authority
+under that protocol. The bounded backport retains the currently supported
+protocol rather than disabling the newer admission check.
+
 ## Workspace safety failures
 
 `worker isolation or host safety-history association failed` is a Loom host

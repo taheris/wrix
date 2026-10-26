@@ -31,14 +31,18 @@ declarations, and the connection between resource operands, reads, and
 projections.
 
 Both check and system runners expose batched input queries. The consumed Loom
-package uses pinned upstream source without local patches. `wx-dhmlk` tracks a
-current upstream regression: check discovery repeats per annotation after group
-queries, and system discovery is per annotation. Existing query-sharing
-assertions remain intact and currently fail; they are not relaxed to land this
-change. Tier identities remain separate. Unknown declarations remain always-run;
+package backports the official tier-separated discovery fix and its regressions
+through `patches/loom-runner-input-batching.patch`, retaining the current
+upstream pin and supported runner protocol. `checks.loom-runner-inputs` executes
+the patched upstream input-resolution tests. The unchanged packaged CLI
+conformance requires one discovery query per runner group within each tier,
+shared with the integrity audit, without changing System execution semantics.
+Tier identities remain separate. Unknown declarations remain always-run;
 malformed declarations and failed discovery block execution. No persistent
 discovery cache, tier change, marker exception or skip-policy change is
-introduced.
+introduced. See
+[Loom troubleshooting](loom-troubleshooting.md#runner-input-discovery) for the
+integration boundary of a full upstream update.
 
 `verify:cli.browser-gate-scope` exercises the real consumed Loom planner and
 production Wrix runners in disposable Git repositories. It checks changed

@@ -8,9 +8,10 @@
       loomLib = upstreamLib // {
         mkProfileManifest = import ../../lib/loom-manifest.nix { upstream = upstreamLib; };
       };
-      launchPatches = [
+      loomPatches = [
         ../../patches/loom-data-only-manifests.patch
         ../../patches/loom-spawn-extensions.patch
+        ../../patches/loom-runner-input-batching.patch
       ];
       loomWorkspace =
         pkgs:
@@ -22,21 +23,22 @@
       mkLoom =
         pkgs:
         (loomWorkspace pkgs).bin.overrideAttrs (old: {
-          patches = (old.patches or [ ]) ++ launchPatches;
+          patches = (old.patches or [ ]) ++ loomPatches;
           postInstall = (old.postInstall or "") + ''
             find "$out/bin" -type f ! -name loom ! -name loom-walk -delete
           '';
         });
-      spawnContract =
+      loomContract =
+        cargoNextestExtraArgs:
         let
           workspace = loomWorkspace pkgs;
         in
         workspace.craneLib.cargoNextest {
           src = workspace.stagedSrc;
           inherit (workspace) cargoArtifacts;
-          patches = launchPatches;
+          patches = loomPatches;
           nativeBuildInputs = [ pkgs.git ];
-          cargoNextestExtraArgs = "-p loom-driver -E 'test(wrix_launch_) | test(wrix_runner_) | test(profile_manifest) | test(resolve_launcher)'";
+          inherit cargoNextestExtraArgs;
         };
       loomCli = mkLoom pkgs;
       linuxLoomCli = mkLoom linuxPkgs;
@@ -46,6 +48,9 @@
         inherit loomCli linuxLoomCli loomLib;
       };
       packages.loom = loomCli;
-      checks.loom-spawn-contract = spawnContract;
+      checks = {
+        loom-spawn-contract = loomContract "-p loom-driver -E 'test(wrix_launch_) | test(wrix_runner_) | test(profile_manifest) | test(resolve_launcher)'";
+        loom-runner-inputs = loomContract "-p loom-gate -E 'test(inputs::tests)'";
+      };
     };
 }
