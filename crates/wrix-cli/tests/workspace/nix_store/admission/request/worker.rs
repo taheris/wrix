@@ -56,7 +56,24 @@ fn worker_intent_freezes_exact_image_and_requires_supported_metadata_and_origina
                 ..
             }
         ));
+        let krun = Admission::acquire(&selection, System::X86_64Linux)
+            .unwrap()
+            .request_krun_worker(ticket.clone(), image.clone())
+            .unwrap();
+        let krun = request::claim(krun.id()).unwrap();
+        match krun.purpose() {
+            request::Purpose::Worker {
+                ticket: saved,
+                image: saved_image,
+                plane: request::Plane::Krun,
+            } => {
+                assert_eq!(saved, &ticket);
+                assert_eq!(saved_image, &image);
+            }
+            _ => panic!("lost separate-VM worker purpose"),
+        }
         wrix_state::execution::cancel(&host, context, &ticket).unwrap();
+        assert!(krun.recheck().is_err());
         assert!(accepted.recheck().is_err());
         assert!(
             Admission::acquire(&selection, System::X86_64Linux)

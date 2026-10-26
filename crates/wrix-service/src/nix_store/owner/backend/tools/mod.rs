@@ -84,7 +84,7 @@ impl Tools {
         Ok(serde_json::from_slice(&std::fs::read(path)?)?)
     }
 
-    pub(crate) fn check(&self, system: System) -> Result<(), Error> {
+    fn check_system(&self, system: System) -> Result<(), Error> {
         let native = if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
             System::X86_64Linux
         } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
@@ -95,6 +95,11 @@ impl Tools {
         if self.system != native || self.system != system {
             return Err(Error::Unsupported);
         }
+        Ok(())
+    }
+
+    pub(crate) fn check(&self, system: System) -> Result<(), Error> {
+        self.check_system(system)?;
         std::fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -134,8 +139,9 @@ impl Tools {
         plane: wrix_state::nix_store::admission::request::Plane,
     ) -> Result<(), Error> {
         use std::os::unix::fs::PermissionsExt;
+        self.check_system(self.system)?;
         self.export_check()?;
-        if plane == wrix_state::nix_store::admission::request::Plane::Podman {
+        if plane.is_podman_namespace() {
             for program in [Program::Cat, Program::Ls, Program::Fusermount] {
                 let metadata = match std::fs::metadata(self.command(program).get_program()) {
                     Ok(metadata) => metadata,
@@ -151,6 +157,19 @@ impl Tools {
                     return Err(Error::Unsupported);
                 }
             }
+        }
+        if plane == wrix_state::nix_store::admission::request::Plane::Krun {
+            let metadata = std::fs::metadata(self.vm())?;
+            if !metadata.is_file()
+                || metadata.permissions().mode() & 0o111 == 0
+                || metadata.permissions().mode() & 0o022 != 0
+            {
+                return Err(Error::Unsupported);
+            }
+            std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open("/dev/kvm")?;
         }
         Ok(())
     }
@@ -174,7 +193,8 @@ impl Tools {
     ) -> Command {
         match plane {
             wrix_state::nix_store::admission::request::Plane::Host => self.command(program),
-            wrix_state::nix_store::admission::request::Plane::Podman => {
+            wrix_state::nix_store::admission::request::Plane::Podman
+            | wrix_state::nix_store::admission::request::Plane::Krun => {
                 let mut command = self.command(Program::Podman);
                 command
                     .arg("unshare")
@@ -218,7 +238,8 @@ impl Tools {
             wrix_state::nix_store::admission::request::Plane::Host => {
                 self.configure(Command::new(Self::unmount_helper()?))
             }
-            wrix_state::nix_store::admission::request::Plane::Podman => {
+            wrix_state::nix_store::admission::request::Plane::Podman
+            | wrix_state::nix_store::admission::request::Plane::Krun => {
                 self.view_command(plane, Program::Fusermount)
             }
         };
@@ -299,6 +320,27 @@ impl Tools {
 #[cfg(test)]
 mod test {
     use super::*;
+    #[test]
+    fn architecture_admission_rejects_foreign_tools_without_executing_or_allocating() {
+        for system in [System::X86_64Linux, System::Aarch64Linux] {
+            let tools: Tools = serde_json::from_value(serde_json::json!({
+                "version":1,
+                "root":"/nix/store/00000000000000000000000000000000-not-installed",
+                "system":system,
+            }))
+            .unwrap();
+            let native = match system {
+                System::X86_64Linux => cfg!(all(target_os = "linux", target_arch = "x86_64")),
+                System::Aarch64Linux => cfg!(all(target_os = "linux", target_arch = "aarch64")),
+            };
+            assert_eq!(tools.check_system(system).is_ok(), native);
+            let peer = match system {
+                System::X86_64Linux => System::Aarch64Linux,
+                System::Aarch64Linux => System::X86_64Linux,
+            };
+            assert!(tools.check_system(peer).is_err());
+        }
+    }
     #[test]
     fn host_program_definition_is_closed_and_does_not_accept_executables_or_mounts() {
         let root = "/nix/store/00000000000000000000000000000000-runtime";

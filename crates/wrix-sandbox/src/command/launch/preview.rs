@@ -328,9 +328,7 @@ impl<'a> Report<'a> {
                 } else {
                     Runtime::AppleContainer
                 },
-                isolation: if Platform::CURRENT == Platform::Darwin
-                    || super::env_flag("WRIX_MICROVM")
-                {
+                isolation: if Platform::CURRENT == Platform::Darwin || plan.microvm {
                     Isolation::Microvm
                 } else {
                     Isolation::RootlessContainer

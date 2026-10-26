@@ -52,7 +52,7 @@ pub(super) fn reconcile(
     {
         return Err(Error::Invalid);
     }
-    if client.plane != wrix_state::nix_store::admission::request::Plane::Podman {
+    if !client.plane.is_podman_namespace() {
         return Ok(Duration::from_secs(2));
     }
     let generation = wrix_state::store::Generation::parse(&client.generation)?;

@@ -23,6 +23,13 @@ fn failed_factory_cancels_only_the_original_never_handed_off_reservation() {
                 .unwrap()
                 .is_some()
         );
+        let krun = Attempt::reserve(&selection, System::X86_64Linux, binding(), None).unwrap();
+        let krun_ticket = krun.ticket().clone();
+        assert!(krun.prepare_krun(&Unavailable).is_err());
+        assert_eq!(
+            execution::observe(&host, context, &krun_ticket).unwrap(),
+            Some(Phase::Cancelled)
+        );
         let ticket = execution::reserve(&host, context).unwrap();
         let attempt =
             Attempt::reserve(&selection, System::X86_64Linux, binding(), Some(&ticket)).unwrap();

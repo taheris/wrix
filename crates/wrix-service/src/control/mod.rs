@@ -374,6 +374,7 @@ pub enum Operation {
     InspectNixExecution {},
     InspectNixWorker {},
     InspectNixPodmanWorker {},
+    InspectNixKrunWorker {},
     PrepareNixWorker {
         id: wrix_state::nix_store::admission::request::Id,
     },
@@ -708,7 +709,8 @@ impl Controller {
             Operation::InspectNixPool {}
             | Operation::InspectNixExecution {}
             | Operation::InspectNixWorker {}
-            | Operation::InspectNixPodmanWorker {} => {
+            | Operation::InspectNixPodmanWorker {}
+            | Operation::InspectNixKrunWorker {} => {
                 return Ok(Reply::PoolInterface { version: 1 });
             }
             Operation::PrepareNixPool { id } => {
@@ -739,7 +741,8 @@ impl Controller {
             | Operation::InspectNixExecutionDelivery { .. }
             | Operation::InspectNixWorker {}
             | Operation::PrepareNixWorker { .. }
-            | Operation::InspectNixPodmanWorker {} => None,
+            | Operation::InspectNixPodmanWorker {}
+            | Operation::InspectNixKrunWorker {} => None,
         };
         let mut namespaces = self.registrations.lock()?;
         Ok(match operation {
@@ -752,7 +755,8 @@ impl Controller {
             | Operation::InspectNixExecutionDelivery { .. }
             | Operation::InspectNixWorker {}
             | Operation::PrepareNixWorker { .. }
-            | Operation::InspectNixPodmanWorker {} => return Err(Error::PermissionDenied),
+            | Operation::InspectNixPodmanWorker {}
+            | Operation::InspectNixKrunWorker {} => return Err(Error::PermissionDenied),
             Operation::Inspect {} => Reply::Snapshot {
                 version: VERSION,
                 namespaces: (*namespaces).clone(),
@@ -969,6 +973,24 @@ impl Client {
         .await
     }
 
+    /// Freeze separate-VM worker preparation while retaining Podman's private source namespace.
+    pub async fn prepare_nix_krun_worker(
+        &self,
+        selection: &wrix_state::context::Selection,
+        system: wrix_core::nix_store::pool::System,
+        ticket: &wrix_state::execution::Ticket,
+        image: &wrix_core::nix_store::binding::Binding,
+    ) -> Result<wrix_state::nix_store::admission::request::Id, Error> {
+        self.prepare_worker_on(
+            selection,
+            system,
+            ticket,
+            image,
+            wrix_state::nix_store::admission::request::Plane::Krun,
+        )
+        .await
+    }
+
     async fn prepare_worker_on(
         &self,
         selection: &wrix_state::context::Selection,
@@ -985,6 +1007,7 @@ impl Client {
         let probe = match plane {
             Plane::Host => Operation::InspectNixWorker {},
             Plane::Podman => Operation::InspectNixPodmanWorker {},
+            Plane::Krun => Operation::InspectNixKrunWorker {},
         };
         if self.request(probe).await? != (Reply::PoolInterface { version: 1 }) {
             return Err(Error::PoolInterface);
@@ -997,6 +1020,7 @@ impl Client {
             match plane {
                 Plane::Host => guard.request_worker(ticket, image),
                 Plane::Podman => guard.request_podman_worker(ticket, image),
+                Plane::Krun => guard.request_krun_worker(ticket, image),
             }
         })
         .await

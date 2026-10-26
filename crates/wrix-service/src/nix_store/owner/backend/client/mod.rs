@@ -390,7 +390,7 @@ impl Owner {
         ] {
             command.arg("-o").arg(option);
         }
-        if plane == Plane::Podman {
+        if plane.is_podman_namespace() {
             // Installed inodes cannot change while this execution excludes native GC.
             command
                 .arg("-o")

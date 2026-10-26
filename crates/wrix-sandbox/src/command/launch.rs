@@ -290,7 +290,11 @@ pub fn execute(
         issuer.admit()?;
     }
     if plan.nix_store.mode == wrix_core::nix_store::Mode::Shared {
-        stores.admit()?;
+        if plan.microvm {
+            stores.admit_krun()?;
+        } else {
+            stores.admit()?;
+        }
     }
     let journal = execution_metadata::Journal::create(
         &plan.workspace,
@@ -333,6 +337,7 @@ struct Plan<'a> {
     network_mode: NetworkMode,
     tool_cache_mode: wrix_core::tool_cache::Mode,
     nix_store: nix_store::Admission,
+    microvm: bool,
     git_identity: GitIdentity,
     focus_target: Option<FocusTarget>,
     host_tmux_target: Option<FocusTarget>,
@@ -943,9 +948,18 @@ impl KrunPlan {
     }
 
     fn configure(&self, command: &mut ProcessCommand, interactive: bool) {
+        self.configure_runtime(command, interactive, std::ffi::OsStr::new("krun"));
+    }
+
+    fn configure_runtime(
+        &self,
+        command: &mut ProcessCommand,
+        interactive: bool,
+        runtime: &std::ffi::OsStr,
+    ) {
         command
             .arg("--runtime")
-            .arg("krun")
+            .arg(runtime)
             .arg("--userns=keep-id:uid=0,gid=0")
             .arg("--user=0:0")
             .arg("--entrypoint")
@@ -1110,6 +1124,7 @@ impl<'a> Plan<'a> {
             network_mode,
             tool_cache_mode,
             nix_store,
+            microvm: env_flag("WRIX_MICROVM"),
             git_identity: GitIdentity::load(),
             focus_target,
             host_tmux_target,
@@ -1143,9 +1158,6 @@ impl<'a> Plan<'a> {
         observed_status: &mut Option<ExitStatus>,
         stores: &dyn crate::nix_store::Factory,
     ) -> Result<ExitCode, LaunchError> {
-        if self.nix_store.mode == wrix_core::nix_store::Mode::Shared && env_flag("WRIX_MICROVM") {
-            return Err(crate::nix_store::Error::Unavailable.into());
-        }
         self.install_image(Runtime::Podman)?;
         let shared = self.prepare_shared_store(stores)?;
         Staging::with(|staging| {
@@ -1175,8 +1187,10 @@ impl<'a> Plan<'a> {
                 volumes.push(socket.mount());
             }
 
-            let krun = if env_flag("WRIX_MICROVM") {
-                ensure_krun()?;
+            let krun = if self.microvm {
+                if shared.is_none() {
+                    ensure_krun()?;
+                }
                 Some(KrunPlan::new(&self.agent_args))
             } else {
                 None
@@ -1236,7 +1250,15 @@ impl<'a> Plan<'a> {
                 command.arg("-e").arg(format!("{key}={value}"));
             }
             if let Some(krun) = &krun {
-                krun.configure(&mut command, !self.spawn());
+                match &shared {
+                    Some(shared) => {
+                        let runtime = shared
+                            .krun_runtime()
+                            .ok_or(crate::nix_store::Error::Delivery)?;
+                        krun.configure_runtime(&mut command, !self.spawn(), runtime.as_os_str());
+                    }
+                    None => krun.configure(&mut command, !self.spawn()),
+                }
             }
             if let Some(shared) = &shared {
                 shared.delivery().configure(&mut command);
@@ -1310,10 +1332,12 @@ impl<'a> Plan<'a> {
             Kind::Run(_) => None,
             Kind::Spawn(spawn) => spawn.execution_ticket.as_ref(),
         };
-        Ok(Some(
-            crate::nix_store::Attempt::reserve(&self.selection, system, image, ticket)?
-                .prepare(stores)?,
-        ))
+        let attempt = crate::nix_store::Attempt::reserve(&self.selection, system, image, ticket)?;
+        Ok(Some(if self.microvm {
+            attempt.prepare_krun(stores)?
+        } else {
+            attempt.prepare(stores)?
+        }))
     }
 
     fn launch_darwin(
@@ -3347,6 +3371,32 @@ mod test {
                 assert_eq!(command.get_envs().count(), 0);
             }
         }
+    }
+
+    #[test]
+    fn shared_krun_command_uses_only_the_recorded_package_runtime() {
+        let plan = super::KrunPlan {
+            rows: 24,
+            columns: 80,
+            command: Some("'echo' 'ready'".into()),
+        };
+        let runtime =
+            std::ffi::OsStr::new("/nix/store/00000000000000000000000000000000-tools/bin/krun");
+        let mut command = std::process::Command::new("podman");
+        plan.configure_runtime(&mut command, false, runtime);
+        let arguments: Vec<_> = command.get_args().collect();
+        assert_eq!(arguments[0], "--runtime");
+        assert_eq!(arguments[1], runtime);
+        assert_eq!(
+            arguments
+                .iter()
+                .filter(|argument| **argument == "--runtime")
+                .count(),
+            1
+        );
+        assert!(arguments.contains(&std::ffi::OsStr::new("/krun-init.sh")));
+        assert!(arguments.contains(&std::ffi::OsStr::new("--userns=keep-id:uid=0,gid=0")));
+        assert_eq!(command.get_envs().count(), 0);
     }
 
     #[test]

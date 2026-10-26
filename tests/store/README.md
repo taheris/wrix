@@ -208,6 +208,37 @@ backing data. Production run/spawn factory integration, full host-wide
 update/recovery, independent runtime/platform and complete lifetime/performance
 acceptance remain outstanding; shared launches stay disabled.
 
+## Krun worker preparation
+
+The private controller has a distinct krun preparation probe and an immutable
+`krun` worker purpose. It freezes the original checked scope, execution ticket
+and image binding before seeding or client issuance. Older controllers fail that
+probe before an intent is published. A Podman grant cannot stand in for a krun
+grant or vice versa. Host-factory admission checks the package's controller,
+pool image and native tools bindings plus existing projection prerequisites
+before credential issuance or execution-journal creation. Krun admission also
+checks its fixed runtime and existing KVM access. Passive previews do not
+perform these native checks or start supervision.
+
+The krun source uses the same server-enforced read-only SFTP export and private
+Podman mount namespace, but the worker is still launched through the existing
+separate-VM krun entrypoint and identity mapping. Preparation checks the fixed
+runtime executable and existing KVM access; it adds no device, capability,
+privileged mode or worker-runtime migration. The executable comes from the
+recorded owner's protected package, not an ambient `krun` alias. The launcher
+rechecks that selection with the source and rejects changed, missing or
+duplicate runtime arguments before handing off the native reservation. Agent
+arguments remain after the immutable image boundary. Native containment
+retirement uses the recorded object and same independently checked
+namespace-local source.
+
+This is implementation wiring, not a cross-VM transport or platform pass. Public
+shared admission remains disabled, including krun's unsupported-runtime blocker.
+Actual separate-VM path visibility, networking, lifetime, workflow and
+performance acceptance remain required; no unavailable transport silently falls
+back to ordinary Podman or a private store. Native tests cover frozen intents,
+failure cancellation and exact runtime command binding without launching a VM.
+
 ## Explicit same-image guest resume
 
 Bootstrap version 3 adds a separate `resume` storage input. Normal allocation

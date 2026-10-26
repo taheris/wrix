@@ -108,9 +108,17 @@ impl Delivery {
         self.podman_configuration()?;
         Ok(self.tools()?.command(super::super::Program::Podman))
     }
+    /// The recorded worker runtime, never an ambient runtime alias or caller-chosen executable.
+    pub fn krun_runtime(&self) -> Result<Option<PathBuf>, Error> {
+        match self.plane {
+            wrix_state::nix_store::admission::request::Plane::Krun => Ok(Some(self.tools()?.vm())),
+            wrix_state::nix_store::admission::request::Plane::Podman => Ok(None),
+            wrix_state::nix_store::admission::request::Plane::Host => Err(Error::Invalid),
+        }
+    }
     /// Validates existing fixed Podman configuration and the exact live readonly projection, without creation or repair.
     pub fn podman_configuration(&self) -> Result<PathBuf, Error> {
-        if self.plane != wrix_state::nix_store::admission::request::Plane::Podman {
+        if !self.plane.is_podman_namespace() {
             return Err(Error::Invalid);
         }
         let root = self.key.parent().ok_or(Error::Invalid)?;

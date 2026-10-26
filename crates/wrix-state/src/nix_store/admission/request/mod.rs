@@ -48,10 +48,15 @@ pub enum Plane {
     #[default]
     Host,
     Podman,
+    Krun,
 }
 impl Plane {
     pub const fn is_host(&self) -> bool {
         matches!(self, Self::Host)
+    }
+
+    pub const fn is_podman_namespace(self) -> bool {
+        matches!(self, Self::Podman | Self::Krun)
     }
 }
 
@@ -197,6 +202,18 @@ impl Guard {
             ticket,
             image,
             plane: Plane::Podman,
+        })
+    }
+
+    pub fn request_krun_worker(
+        self,
+        ticket: crate::execution::Ticket,
+        image: wrix_core::nix_store::binding::Binding,
+    ) -> Result<Request, Error> {
+        self.issue(Purpose::Worker {
+            ticket,
+            image,
+            plane: Plane::Krun,
         })
     }
 

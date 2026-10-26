@@ -100,7 +100,8 @@ pub(super) fn observe(
                 .read_to_end(&mut bytes)?;
             bytes
         }
-        wrix_state::nix_store::admission::request::Plane::Podman => {
+        wrix_state::nix_store::admission::request::Plane::Podman
+        | wrix_state::nix_store::admission::request::Plane::Krun => {
             if observe(
                 wrix_state::nix_store::admission::request::Plane::Host,
                 tools,
@@ -131,7 +132,8 @@ pub(super) fn readable(
         wrix_state::nix_store::admission::request::Plane::Host => {
             Ok(std::fs::read_dir(path)?.next().transpose()?.is_some())
         }
-        wrix_state::nix_store::admission::request::Plane::Podman => {
+        wrix_state::nix_store::admission::request::Plane::Podman
+        | wrix_state::nix_store::admission::request::Plane::Krun => {
             let mut command = tools.view_command(plane, super::Program::Ls);
             command.args(["-A", "--"]).arg(path);
             Ok(
