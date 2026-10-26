@@ -317,6 +317,37 @@ class CleanupTest(unittest.TestCase):
             self.assertTrue((self.root / "ready").is_file())
             self.assertIn("diagnostics and registry retained", errors)
 
+    def test_signal_forwarding_targets_the_live_direct_child(self):
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        try:
+            output = subprocess.run([sys.executable, str(SCRIPT), "--signal-child", str(child.pid), "--parent", str(os.getpid())], capture_output=True, timeout=5)
+            self.assertEqual(output.returncode, 0, output.stderr)
+            self.assertEqual(child.wait(timeout=5), -signal.SIGTERM)
+        finally:
+            if child.poll() is None:
+                child.terminate()
+            child.wait(timeout=5)
+
+    def test_signal_forwarding_refuses_a_reused_pid_with_a_foreign_parent(self):
+        descriptor = os.open("/dev/null", os.O_RDONLY)
+        try:
+            with patch.object(os, "pidfd_open", return_value=descriptor), patch.object(os, "getppid", return_value=111), patch.object(Path, "read_text", return_value="222 (foreign) S 999 222 999"), patch.object(os, "close") as close, patch.object(signal, "pidfd_send_signal") as send:
+                self.assertFalse(cleanup.signal_child(222, 111))
+                send.assert_not_called()
+                close.assert_called_once_with(descriptor)
+        finally:
+            os.close(descriptor)
+
+    def test_signal_forwarding_refuses_after_the_owning_parent_exits(self):
+        descriptor = os.open("/dev/null", os.O_RDONLY)
+        try:
+            with patch.object(os, "pidfd_open", return_value=descriptor), patch.object(os, "getppid", side_effect=[111, 1]), patch.object(Path, "read_text", return_value="222 (owned) S 111 222 111"), patch.object(os, "close") as close, patch.object(signal, "pidfd_send_signal") as send:
+                self.assertFalse(cleanup.signal_child(222, 111))
+                send.assert_not_called()
+                close.assert_called_once_with(descriptor)
+        finally:
+            os.close(descriptor)
+
     def test_runner_cleans_on_success(self):
         self.assert_supervised_cleanup(self.run_supervised("sys.exit(0)"), 0)
 

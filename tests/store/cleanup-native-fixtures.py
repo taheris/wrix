@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -101,6 +102,29 @@ def checked_root(root, registered=False):
         if not (root / relative).resolve().is_relative_to(root):
             raise RuntimeError(f"fixture path escapes its private root: {root / relative}")
     return root
+
+
+def signal_child(pid, parent):
+    if pid <= 0 or pid == os.getpid() or parent <= 0 or os.getppid() != parent:
+        return False
+    try:
+        descriptor = os.pidfd_open(pid)
+    except ProcessLookupError:
+        return False  # The shell's timeout child already exited.
+    try:
+        try:
+            fields = Path(f"/proc/{pid}/stat").read_text(errors="surrogateescape").rsplit(")", 1)[1].split()
+        except (FileNotFoundError, ProcessLookupError):
+            return False  # The pinned child exited before its parent could be observed.
+        if int(fields[1]) != parent or os.getppid() != parent:
+            return False
+        try:
+            signal.pidfd_send_signal(descriptor, signal.SIGTERM)
+        except ProcessLookupError:
+            return False  # The pidfd cannot signal a process reusing this number.
+        return True
+    finally:
+        os.close(descriptor)
 
 
 def registry_entries(registry):
@@ -309,6 +333,8 @@ class Cleanup:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("roots", nargs="*", type=Path)
+    parser.add_argument("--signal-child", type=int, help=argparse.SUPPRESS)
+    parser.add_argument("--parent", type=int, help=argparse.SUPPRESS)
     parser.add_argument("--discover", action="store_true", help="include this user's legacy test mounts and pool VMs")
     parser.add_argument("--registry", type=Path, help="cleanup only the roots recorded by one native test invocation")
     parser.add_argument("--validate-registry", type=Path, help="validate a private invocation registry without teardown")
@@ -316,6 +342,11 @@ def main():
     parser.add_argument("--remove-files", action="store_true", help="delete fixture files only after verified resource teardown")
     parser.add_argument("--diagnostics", action="store_true", help="capture bounded fixture container state/logs before teardown")
     args = parser.parse_args()
+    if args.signal_child is not None:
+        if args.parent is None:
+            parser.error("--signal-child requires its owning --parent")
+        signal_child(args.signal_child, args.parent)
+        return 0
     if args.validate_registry:
         registry_entries(args.validate_registry)
         return 0

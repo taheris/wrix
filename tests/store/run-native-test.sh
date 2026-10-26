@@ -43,7 +43,7 @@ terminate_native_test() {
   trap - INT TERM
   if [[ -n "$pid" ]]; then
     # timeout forwards TERM to its separate process group and bounds the wait.
-    kill -TERM "$pid" 2>/dev/null || true # best-effort: the owned timeout child may already have exited.
+    "$WRIX_TEST_POOL_PYTHON" "$WRIX_TEST_POOL_CLEANUP_SCRIPT" --signal-child "$pid" --parent "$$"
     wait "$pid" 2>/dev/null || true # Its expected signal/failure exit must not replace the received signal status.
   fi
   exit "$status"
