@@ -118,6 +118,25 @@ The contract marker and label participate in archive and nix-descriptor image
 source/config-digest identities, and consequently generated ProfileConfigs.
 ProfileConfig remains one current data format; there is no old-layout mode.
 
+## Linux worker syscall policy
+
+The packaged host launcher supplies an immutable seccomp profile derived from
+its pinned Podman source. Only `sethostname` and `setdomainname` differ from
+that baseline: the kernel checks their namespace capabilities instead of seccomp
+rejecting them based on launch-time `CAP_SYS_ADMIN`. The launcher does not grant
+`SYS_ADMIN` or share host namespaces. After trusted startup both calls remain
+denied in the worker UTS namespace, but succeed after creating private user and
+UTS namespaces. Existing workers retain their original launch filter; updating
+the executable requires launching a fresh worker.
+
+The raw Cargo launcher requires `WRIX_WORKER_SECCOMP` pointing at the generated
+policy; the packaged CLI binds this itself and rejects a missing policy. The
+`verify:sandbox.worker-uts` live test exercises actual libc calls through the
+normal launcher and entrypoint, checks parent identity preservation, rootless
+mapping, seccomp, and capability bounds. This probe alone does not prove
+complete nested Nix readiness: procfs masking and other native build
+prerequisites still apply.
+
 ## Verification
 
 ```sh

@@ -105,6 +105,12 @@ impl Fixture {
             )
             .env("WRIX_TEST_DIGEST", format!("sha256:{}", "a".repeat(64)))
             .env("WRIX_TEST_ARGV", self.root.path().join("argv"));
+        let seccomp = self.root.path().join("worker-seccomp.json");
+        fs::write(
+            &seccomp,
+            include_str!("../../wrix-sandbox/tests/fixtures/seccomp.json"),
+        )?;
+        command.env("WRIX_WORKER_SECCOMP", seccomp);
         Ok(())
     }
 }

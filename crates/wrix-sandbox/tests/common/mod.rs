@@ -53,6 +53,12 @@ impl Default for ProfileFixture {
     }
 }
 
+pub fn seccomp_fixture(root: &Path) -> TestResult<std::path::PathBuf> {
+    let path = root.join("worker-seccomp.json");
+    fs::write(&path, include_str!("../fixtures/seccomp.json"))?;
+    Ok(path)
+}
+
 pub fn run_child(
     child_name: &str,
     root: &Path,
@@ -71,6 +77,7 @@ pub fn run_child(
         .arg(child_name)
         .arg("--exact")
         .arg("--ignored")
+        .env("WRIX_WORKER_SECCOMP", seccomp_fixture(root)?)
         .env("WRIX_SANDBOX_CHILD_COMMAND", command_name(spec.command))
         .env("WRIX_SANDBOX_STDOUT", &stdout)
         .env("WRIX_SANDBOX_STDERR", &stderr)

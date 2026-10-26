@@ -157,6 +157,8 @@ pub enum LaunchError {
     PathExpansionEnvMissing { name: &'static str },
     /// path expansion environment variable {name} is not valid Unicode
     PathExpansionEnvNotUnicode { name: &'static str },
+    /// worker seccomp policy is missing; use the packaged host Wrix CLI
+    WorkerSeccompMissing,
     /// /dev/kvm not found. A microVM boundary requires KVM support.
     KvmMissing,
     /// krun runtime not found. A microVM boundary requires crun with libkrun.
@@ -1191,7 +1193,13 @@ impl<'a> Plan<'a> {
             } else {
                 command.arg("-i").arg("-t");
             }
-            command.arg("--cap-add=NET_ADMIN");
+            let seccomp = env::var_os("WRIX_WORKER_SECCOMP")
+                .filter(|path| Path::new(path).is_file())
+                .ok_or(LaunchError::WorkerSeccompMissing)?;
+            command
+                .arg("--security-opt")
+                .arg(format!("seccomp={}", Path::new(&seccomp).display()))
+                .arg("--cap-add=NET_ADMIN");
             command
                 .arg(format!(
                     "--memory={}m",

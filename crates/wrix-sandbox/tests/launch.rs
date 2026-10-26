@@ -983,7 +983,33 @@ fn linux_default_boundary_preserves_real_identity() -> TestResult {
     assert!(!run.stdout.contains("LD_PRELOAD="));
     assert!(!run.stdout.contains("LD_PRELOAD"));
     assert!(!run.stdout.contains("libfakeuid"));
+    assert!(run.stdout.contains("--security-opt"));
+    assert!(run.stdout.contains("seccomp="));
+    assert!(!run.stdout.contains("unconfined"));
+    assert!(!run.stdout.contains("--privileged"));
+    assert!(!run.stdout.contains("SYS_ADMIN"));
+    assert!(!run.stdout.contains("--uts=host"));
+    assert!(!run.stdout.contains("--userns=host"));
 
+    Ok(())
+}
+
+#[test]
+fn linux_launch_rejects_missing_worker_seccomp_policy() -> TestResult {
+    if !cfg!(target_os = "linux") {
+        return Ok(());
+    }
+    let (root, profile, workspace) = podman_socket_fixture("missing-seccomp")?;
+    let run = run_launch(
+        root.path(),
+        "missing-seccomp",
+        &profile,
+        &workspace,
+        vec![(String::from("WRIX_WORKER_SECCOMP"), "".into())],
+    )?;
+    assert!(!run.success);
+    assert!(run.stderr.contains("worker seccomp policy is missing"));
+    assert!(!run.stdout.contains("--cap-add"));
     Ok(())
 }
 

@@ -154,6 +154,8 @@ in
 
   "sandbox.platform-dispatch".script = platform "test_platform_dispatch_current_system";
 
+  "sandbox.worker-uts" = linuxLive (sandboxScriptAllWithWrix "worker-uts");
+
   "sandbox.uid-mapping" = linuxLive (sandboxScriptAll "uid-mapping");
 
   "sandbox.unsupported-system-error".script = platform "test_unsupported_system_error";

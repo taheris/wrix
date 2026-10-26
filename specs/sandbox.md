@@ -846,6 +846,13 @@ success. Actual launch rechecks prerequisites against current state.
   `--userns=keep-id:uid=0,gid=0 --user=0:0` (mapping the invoking host
   user/group to guest root) and enters the same trusted bootstrap through
   `krun-init.sh`; argv decoding occurs only after the capability drop.
+- Worker seccomp retains the pinned Podman baseline except that `sethostname`
+  and `setdomainname` pass through to kernel capability checks, permitting
+  native Nix setup in private user/UTS namespaces. No `SYS_ADMIN` grant, shared
+  host namespaces, unmasked procfs, privileged mode or unconfined policy is
+  introduced. Both calls remain denied in the ordinary worker namespace after
+  startup; a nested private UTS change leaves its parent unchanged.
+  [system](verify:sandbox.worker-uts)
 - `--pids-limit 4096` fork-bomb guard
 - `WRIX_MICROVM=1` selects `podman --runtime krun`; requested KVM must be
   present and usable, not merely an existing device path

@@ -101,6 +101,11 @@ _:
           # Test sandbox image (claude/beads stubbed out with `hello`);
           if isLinux then
             {
+              test-image-worker-uts =
+                let
+                  sandbox = import ../../tests/sandbox/worker-uts.nix { inherit wrix linuxPkgs; };
+                in
+                sandbox.image.source // { profileConfig = sandbox.image.profileConfig; };
               test-image-base = test.testImages.base;
               test-image-base-direct = test.testImages.baseDirect;
               test-image-base-perturbed = test.testImages.basePerturbed;

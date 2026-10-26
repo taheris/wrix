@@ -138,6 +138,11 @@ let
         pkgs.openssl
       ]}"
     ]
+    ++ optionals pkgs.stdenv.hostPlatform.isLinux [
+      "--set"
+      "WRIX_WORKER_SECCOMP"
+      "${import ../sandbox/linux/seccomp.nix { inherit pkgs; }}"
+    ]
     ++ optionals (nixPoolImage != null) [
       "--set"
       "WRIX_NIX_POOL_PACKAGE_BINDING"
@@ -233,6 +238,11 @@ in
       ...
     }:
     {
+      WRIX_WORKER_SECCOMP =
+        if pkgs.stdenv.hostPlatform.isLinux then
+          import ../sandbox/linux/seccomp.nix { inherit pkgs; }
+        else
+          "";
       nativeBuildInputs =
         nativeBuildInputs
         ++ [

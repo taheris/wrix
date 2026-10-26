@@ -47,6 +47,10 @@ impl Fixture {
             fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
         }
         fs::write(root.path().join("deploy-key"), "fixture private key\n")?;
+        fs::write(
+            root.path().join("worker-seccomp.json"),
+            include_str!("../../fixtures/seccomp.json"),
+        )?;
         let source_kind = if cfg!(target_os = "macos") {
             "docker-archive"
         } else {
@@ -95,6 +99,10 @@ impl Fixture {
         ))?;
         command
             .env_clear()
+            .env(
+                "WRIX_WORKER_SECCOMP",
+                self.root().join("worker-seccomp.json"),
+            )
             .env("PATH", path)
             .env("HOME", self.root.path().join("home"))
             .env("XDG_RUNTIME_DIR", self.root.path().join("runtime"))
