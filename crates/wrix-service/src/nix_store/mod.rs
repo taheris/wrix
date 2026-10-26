@@ -121,15 +121,10 @@ pub fn run(args: &[String], stdout: &mut impl Write) -> io::Result<ExitCode> {
                     )?;
                     if let Some(deployment) = &deployment
                         && let Some(recorded) =
-                            owner::backend::recorded_phase(&host, deployment, &pool)
+                            owner::backend::observation::inspect(&host, deployment, &pool)
                                 .map_err(io::Error::other)?
                     {
-                        writeln!(
-                            stdout,
-                            "{}: recorded native owner {}; readiness not probed",
-                            pool.system.as_str(),
-                            recorded.as_str()
-                        )?;
+                        recorded.write(pool.system, stdout)?;
                     }
                 }
             }

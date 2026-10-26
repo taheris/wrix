@@ -2,6 +2,7 @@
 
 mod budget;
 pub mod client;
+pub(crate) mod observation;
 pub mod seed;
 pub mod tools;
 mod transport;
@@ -153,52 +154,6 @@ struct Record {
     state: State,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     executions: BTreeSet<wrix_state::execution::Ticket>,
-}
-
-pub(crate) enum Recorded {
-    Starting,
-    Created,
-    Serving,
-    Stopping,
-    Released,
-}
-impl Recorded {
-    pub(crate) const fn as_str(&self) -> &'static str {
-        match self {
-            Self::Starting => "starting",
-            Self::Created => "created",
-            Self::Serving => "serving",
-            Self::Stopping => "stopping",
-            Self::Released => "released",
-        }
-    }
-}
-
-pub(crate) fn recorded_phase(
-    host: &wrix_state::host::Host,
-    deployment: &deployment::Id,
-    pool: &Key,
-) -> Result<Option<Recorded>, Error> {
-    let root = host
-        .roots()
-        .state()
-        .join("control/nix")
-        .join(pool.repository.to_string())
-        .join(pool.system.as_str());
-    match fs::symlink_metadata(root.join(LEDGER)) {
-        Ok(_) => (),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.into()),
-    }
-    check_directory(&root)?;
-    let record = Record::read(&root, deployment, pool)?;
-    Ok(Some(match record.state {
-        State::Starting { .. } => Recorded::Starting,
-        State::Created { .. } => Recorded::Created,
-        State::Serving { .. } => Recorded::Serving,
-        State::Stopping { .. } => Recorded::Stopping,
-        State::Released { .. } => Recorded::Released,
-    }))
 }
 
 fn success(output: Output) -> Result<Vec<u8>, Error> {

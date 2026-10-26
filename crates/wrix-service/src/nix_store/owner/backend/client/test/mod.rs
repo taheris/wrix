@@ -1,3 +1,4 @@
+mod inventory;
 use super::*;
 use std::os::unix::fs::PermissionsExt;
 
@@ -32,6 +33,7 @@ fn interrupted_client_ownership_is_protected_and_substituted_records_are_never_e
     let check = || protected(&control, &pool, &indexed);
     record.publish(&root).unwrap();
     assert!(check().unwrap());
+    assert_eq!(retained(&control, &pool, &indexed).unwrap(), 1);
     record.state = State::Attaching;
     record.publish(&root).unwrap();
     assert!(check().unwrap());
@@ -41,6 +43,7 @@ fn interrupted_client_ownership_is_protected_and_substituted_records_are_never_e
     record.state = State::Released;
     record.publish(&root).unwrap();
     assert!(!check().unwrap());
+    assert_eq!(retained(&control, &pool, &indexed).unwrap(), 0);
     fs::hard_link(root.join("client.json"), root.join("substituted")).unwrap();
     assert!(check().is_err());
     fs::rename(control.join("executions"), control.join("retained")).unwrap();

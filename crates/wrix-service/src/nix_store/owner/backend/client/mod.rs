@@ -133,15 +133,23 @@ pub(super) fn protected(
     pool: &Key,
     indexed: &BTreeSet<Ticket>,
 ) -> Result<bool, Error> {
+    Ok(retained(control, pool, indexed)? != 0)
+}
+
+pub(super) fn retained(
+    control: &Path,
+    pool: &Key,
+    indexed: &BTreeSet<Ticket>,
+) -> Result<usize, Error> {
     let root = control.join("executions");
     match fs::symlink_metadata(&root) {
         Ok(_) => check_directory(&root)?,
         Err(error) if error.kind() == io::ErrorKind::NotFound && indexed.is_empty() => {
-            return Ok(false);
+            return Ok(0);
         }
         Err(error) => return Err(error.into()),
     }
-    let mut protected = false;
+    let mut retained = 0;
     let mut seen = BTreeSet::new();
     for entry in fs::read_dir(&root)? {
         let entry = entry?;
@@ -154,14 +162,14 @@ pub(super) fn protected(
             if !indexed.contains(&ticket) {
                 return Err(Error::Invalid);
             }
-            protected = true;
+            retained += 1;
         }
         seen.insert(ticket);
     }
     if !indexed.is_subset(&seen) {
         return Err(Error::Retained);
     }
-    Ok(protected)
+    Ok(retained)
 }
 
 impl Owner {

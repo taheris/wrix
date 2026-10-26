@@ -3,13 +3,13 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::json;
 use std::os::unix::fs::{PermissionsExt, symlink};
 
-fn key() -> String {
+pub(super) fn key() -> String {
     let mut wire = b"\0\0\0\x0bssh-ed25519\0\0\0\x20".to_vec();
     wire.extend([7_u8; 32]);
     format!("ssh-ed25519 {}", STANDARD.encode(wire))
 }
 
-fn target() -> serde_json::Value {
+pub(super) fn target() -> serde_json::Value {
     json!({
         "id": "a".repeat(64),
         "attempt": {

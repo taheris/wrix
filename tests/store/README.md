@@ -50,8 +50,15 @@ server key. Unexpected exits do not authorize resume. Scoped CLI collection uses
 only recorded running owners through the same authenticated channel, retains
 host exclusion through native completion, retries busy acquisition within its
 per-pool budget and never realizes images or starts a VM. Native GC execution
-has no acquisition-derived running deadline. Information reports recorded phases
-without probing a runtime or claiming observed readiness.
+has no acquisition-derived running deadline. Information reports the recorded
+owner phase, immutable image configuration digest and retained
+execution-protection count without probing a runtime or claiming observed
+readiness or compatibility. The protection inventory checks the durable
+execution index against every retained client record: interrupted registration,
+attachment and retirement remain counted; released history is not live
+protection. Missing indexed records, foreign pools and substituted metadata fail
+rather than reporting zero readers. A recorded zero is not native work-drain or
+maintenance authority.
 
 The local-API Rust live test provisions real storage and a VM, drops the
 controller, collects through a separate actual CLI even after approval is
