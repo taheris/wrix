@@ -1,4 +1,9 @@
-{ pkgs, wrix }:
+{
+  pkgs,
+  wrix,
+  interrupt ? false,
+  sourceRevision ? "dirty",
+}:
 
 let
   unsigned = pkgs.writeText "wrix-worker-unsigned-input" "unsigned worker import control\n";
@@ -107,7 +112,8 @@ let
 in
 assert pkgs.stdenv.hostPlatform.isLinux;
 pkgs.writeShellApplication {
-  name = "test-shared-nix-host-owner-linux";
+  name =
+    if interrupt then "test-shared-nix-interruption-linux" else "test-shared-nix-host-owner-linux";
   runtimeInputs = [
     pkgs.coreutils
     pkgs.git
@@ -118,7 +124,16 @@ pkgs.writeShellApplication {
     pkgs.util-linux
   ];
   text = ''
-    [[ -r /dev/kvm && -w /dev/kvm ]]
+    if [[ ! -r /dev/kvm || ! -w /dev/kvm ]]; then
+      echo "native acceptance requires readable/writable /dev/kvm" >&2
+      exit 1
+    fi
+    ${pkgs.lib.optionalString interrupt ''
+      if [[ ! -r /dev/fuse || ! -w /dev/fuse ]]; then
+        echo "native interruption acceptance requires readable/writable /dev/fuse" >&2
+        exit 1
+      fi
+    ''}
     test -f ${wrix.nixPoolImage.source}
     test -f ${wrix.nixPoolImage.digest}
     export WRIX_TEST_POOL_CLEANUP_TOOLS
@@ -133,15 +148,32 @@ pkgs.writeShellApplication {
     export WRIX_TEST_POOL_WORKER_IMAGE=${seedImage}
     export WRIX_TEST_POOL_CONTROLLER=${wrix.rustPackage.controllerPackage}/bin/wrix-host-controller
     export WRIX_TEST_POOL_CONTROLLER_BINDING=${wrix.rustPackage.controllerBinding}
-    ${pkgs.bash}/bin/bash ${./run-native-test.sh} \
-      ${wrix.rustPackage.cacheBackendTests}/bin/workspace-admission-tests \
-      --ignored --exact \
-      nix_store::admission::native_host_owner_survives_controller_loss_collects_and_resumes_recorded_software \
+    ${pkgs.lib.optionalString (!interrupt) ''
+      ${pkgs.bash}/bin/bash ${./run-native-test.sh} \
+        ${wrix.rustPackage.cacheBackendTests}/bin/workspace-admission-tests \
+        --ignored --exact \
+        nix_store::admission::native_host_owner_survives_controller_loss_collects_and_resumes_recorded_software \
+        --nocapture
+    ''}
+    native_test=(
+      ${pkgs.bash}/bin/bash ${./run-native-test.sh}
+      ${wrix.rustPackage.cacheBackendTests}/bin/workspace-admission-tests
+      --ignored --exact
+      nix_store::admission::request::native::supervised_controller_prepares_after_requester_exit_and_preserves_native_owner
       --nocapture
-    ${pkgs.bash}/bin/bash ${./run-native-test.sh} \
-      ${wrix.rustPackage.cacheBackendTests}/bin/workspace-admission-tests \
-      --ignored --exact \
-      nix_store::admission::request::native::supervised_controller_prepares_after_requester_exit_and_preserves_native_owner \
-      --nocapture
+    )
+    ${
+      if interrupt then
+        ''
+          exec ${pkgs.python3}/bin/python3 ${./interrupt-native-test.py} "$@" \
+            --source-revision ${pkgs.lib.escapeShellArg sourceRevision} \
+            --cleanup "$WRIX_TEST_POOL_CLEANUP_SCRIPT" \
+            --tools "$WRIX_TEST_POOL_CLEANUP_TOOLS" -- "''${native_test[@]}"
+        ''
+      else
+        ''
+          "''${native_test[@]}"
+        ''
+    }
   '';
 }

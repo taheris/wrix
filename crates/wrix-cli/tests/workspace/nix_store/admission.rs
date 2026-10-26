@@ -2,6 +2,8 @@
 
 #[path = "admission/cleanup.rs"]
 mod cleanup;
+#[path = "admission/interrupt.rs"]
+mod interrupt;
 #[path = "admission/request/mod.rs"]
 mod request;
 use cleanup::NativeFixture;

@@ -3,13 +3,21 @@
 set -euo pipefail
 : "${WRIX_TEST_POOL_PYTHON:?}"
 : "${WRIX_TEST_POOL_CLEANUP_SCRIPT:?}"
-registry=$(mktemp -d)
+keep_files=false
+if [[ "${1:-}" == --registry ]]; then
+  keep_files=true
+  registry="$2"
+  shift 2
+  "$WRIX_TEST_POOL_PYTHON" "$WRIX_TEST_POOL_CLEANUP_SCRIPT" --validate-registry "$registry"
+else
+  registry=$(mktemp -d)
+fi
 export WRIX_TEST_POOL_FIXTURE_REGISTRY="$registry"
 cleanup_native_test() {
   local status=$?
   trap - EXIT INT TERM
   local -a args=(--registry "$registry")
-  if [[ "$status" == 0 ]]; then
+  if [[ "$status" == 0 && "$keep_files" == false ]]; then
     args+=(--remove-files)
   else
     args+=(--diagnostics)
@@ -18,7 +26,7 @@ cleanup_native_test() {
     args+=(--tools "$WRIX_TEST_POOL_CLEANUP_TOOLS")
   fi
   if "$WRIX_TEST_POOL_PYTHON" "$WRIX_TEST_POOL_CLEANUP_SCRIPT" "${args[@]}"; then
-    if [[ "$status" == 0 ]]; then
+    if [[ "$status" == 0 && "$keep_files" == false ]]; then
       rmdir "$registry" || status=1
     else
       printf 'native failure diagnostics and registry retained: %s\n' "$registry" >&2

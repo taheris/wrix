@@ -103,6 +103,26 @@ def checked_root(root, registered=False):
     return root
 
 
+def registry_entries(registry):
+    registry = Path(registry)
+    info = registry.lstat()
+    if (
+        not stat.S_ISDIR(info.st_mode)
+        or info.st_uid != os.getuid()
+        or stat.S_IMODE(info.st_mode) & 0o077
+        or registry.resolve() != registry
+    ):
+        raise RuntimeError("fixture registry must be an owned private directory")
+    entries = {}
+    for entry in registry.iterdir():
+        info = entry.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_size > 4096:
+            raise RuntimeError(f"invalid fixture registry entry: {entry}")
+        root = Path(os.fsdecode(entry.read_bytes()))
+        entries[root] = entry
+    return entries
+
+
 class Cleanup:
     def __init__(self, root, tools=None, registered=False):
         self.root = checked_root(Path(root), registered)
@@ -138,6 +158,8 @@ class Cleanup:
         )
         if result.returncode:
             raise RuntimeError(f"{args!r}: {os.fsdecode(result.stderr)}")
+        if result.stderr:
+            print(os.fsdecode(result.stderr), end="", file=sys.stderr, flush=True)
         return os.fsdecode(result.stdout)
 
     def views(self, table):
@@ -230,6 +252,22 @@ class Cleanup:
         (self.root / STOPPED).unlink()
         self.root.rmdir()
 
+    def check_namespace_mounts(self, table):
+        unexpected = [
+            str(target) for target, kind, _ in table
+            if target.is_relative_to(self.root)
+            and (
+                kind.startswith("fuse.")
+                or not (
+                    target == self.storage
+                    or (target == self.storage / "overlay" and kind != "overlay")
+                    or target.is_relative_to(self.root / "runtime")
+                )
+            )
+        ]
+        if unexpected:
+            raise RuntimeError(f"fixture still has non-administrative namespace mounts: {unexpected}")
+
     def finish(self, diagnostics=False):
         if self.is_stopped():
             self.check_host_mounts()
@@ -260,22 +298,7 @@ class Cleanup:
             # Rootless Podman bind-mounts its storage/runtime directories in
             # the pause namespace. Those administrative mounts remain until
             # migrate terminates the pause process; they are not live exports.
-            unexpected = [
-                str(target) for target, kind, _ in table
-                if target.is_relative_to(self.root)
-                and (
-                    kind.startswith("fuse.")
-                    or not (
-                        target == self.storage
-                        # Overlay's driver directory can be a self-bind of the host filesystem;
-                        # merged container filesystems below it are never administrative mounts.
-                        or (target == self.storage / "overlay" and kind != "overlay")
-                        or target.is_relative_to(self.root / "runtime")
-                    )
-                )
-            ]
-            if unexpected:
-                raise RuntimeError(f"fixture still has non-administrative namespace mounts: {unexpected}")
+            self.check_namespace_mounts(table)
             self.run(self.podman + ["unshare", self.program("chown"), "--recursive", "--no-dereference", "0:0", str(self.storage)])
             self.run(self.podman + ["unshare", self.program("chmod"), "--recursive", "u+rwX", str(self.storage)])
             self.run(self.podman + ["system", "migrate"])
@@ -288,23 +311,17 @@ def main():
     parser.add_argument("roots", nargs="*", type=Path)
     parser.add_argument("--discover", action="store_true", help="include this user's legacy test mounts and pool VMs")
     parser.add_argument("--registry", type=Path, help="cleanup only the roots recorded by one native test invocation")
+    parser.add_argument("--validate-registry", type=Path, help="validate a private invocation registry without teardown")
     parser.add_argument("--tools", type=Path, help="package-selected runtime bin directory")
     parser.add_argument("--remove-files", action="store_true", help="delete fixture files only after verified resource teardown")
     parser.add_argument("--diagnostics", action="store_true", help="capture bounded fixture container state/logs before teardown")
     args = parser.parse_args()
+    if args.validate_registry:
+        registry_entries(args.validate_registry)
+        return 0
     roots = set(args.roots)
-    entries = {}
-    if args.registry:
-        info = args.registry.lstat()
-        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o077:
-            parser.error("fixture registry must be an owned private directory")
-        for entry in args.registry.iterdir():
-            info = entry.lstat()
-            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_size > 4096:
-                parser.error(f"invalid fixture registry entry: {entry}")
-            root = Path(os.fsdecode(entry.read_bytes()))
-            roots.add(root)
-            entries[root] = entry
+    entries = registry_entries(args.registry) if args.registry else {}
+    roots.update(entries)
     if args.discover:
         roots.update(discover())
     if not roots and not args.discover and not args.registry:

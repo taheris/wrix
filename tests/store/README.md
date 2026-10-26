@@ -307,6 +307,45 @@ GiB/144 PIDs, trusted seeding to 768 MiB/16 PIDs and control to 384 MiB/96 PIDs.
 Seeding OOM is group-local, and seed activity participates in quiescence and
 clean-release checks.
 
+## Automated native interruption acceptance
+
+On a clean, published Linux checkout with the existing rootless Podman, KVM and
+FUSE prerequisites, run one command; no milestone watching or manual signal is
+needed:
+
+```bash
+nix run .#legacyPackages.x86_64-linux.ciApps.test-shared-nix-interruption-linux
+```
+
+The app runs only the supervised-controller/worker test. It waits at most ten
+minutes for an atomic, invocation-nonce and fixture-inode-bound checkpoint after
+both real workers finish their initial Nix evaluation. Before signalling its
+owned supervisor with SIGTERM, it independently requires the pool and both
+workers to be running and their SSHFS exports to exist. Progress is printed at
+least every fifteen seconds during readiness, teardown and namespace inspection.
+The checkpoint itself expires after two minutes if the harness disappears.
+
+A read-only witness joins and retains the **original** fixture Podman namespace
+before interruption. After bounded supervisor cleanup (three minutes), private
+session helpers are terminated through checked pidfds while the session leader
+remains unreaped, preventing PID/session reuse from targeting unrelated work.
+The witness inventories containers, images and mounts again in the same retained
+namespace, even after Podman retires its pause process. A replacement empty
+namespace or a teardown receipt alone cannot prove absence. Host mount absence
+is checked separately. Cleanup failures, early exits, readiness timeouts,
+hanging helpers and namespace changes fail the harness; they are not
+interruption passes. No force/lazy unmount or broad host-container deletion is
+performed.
+
+The app always retains its fixture and private registry. Full native output,
+namespace snapshots, packaged and checkout Git revisions, exact test command,
+observed native exit (expected 143), harness exit and result are saved under the
+printed `.loom/scratch/linux-acceptance/interruption-*/` directory. Optional
+`--output /absolute/new-directory` selects a new evidence directory; timeout
+options are intended for diagnosis, not relaxed acceptance. Native prerequisite
+failure or a dirty/unbound app build cannot pass. Portable stub contracts and
+Rust checkpoint tests exercise the mechanism but are not native acceptance.
+
 ## Native test cleanup and retained fixtures
 
 The host-owner tests register their disposable roots before native allocation. A

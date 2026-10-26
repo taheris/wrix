@@ -318,6 +318,9 @@ fn supervised_controller_prepares_after_requester_exit_and_preserves_native_owne
             std::env::var_os(name).expect("native package test inputs"),
         );
     }
+    if let Some(nonce) = std::env::var_os(super::super::interrupt::NONCE) {
+        command.env(super::super::interrupt::NONCE, nonce);
+    }
     Running(command.spawn().unwrap()).finish();
     assert!(fixture.root.path().join("native-finished").exists());
     fixture.finish();

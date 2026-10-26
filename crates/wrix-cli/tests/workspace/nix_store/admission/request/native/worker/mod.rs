@@ -175,6 +175,11 @@ pub(super) fn exercise(
     let mut second = launch(owner, selection, host, workspace, "second");
     await_file(workspace, "first-ready", &mut [&mut first, &mut second]);
     await_file(workspace, "second-ready", &mut [&mut first, &mut second]);
+    assert!(matches!(
+        owner.inspect().unwrap(),
+        wrix_service::nix_store::native::Reply::Ready { .. }
+    ));
+    super::super::super::interrupt::pause(workspace);
     fs::write(workspace.join("workers-go"), b"go").unwrap();
     await_file(workspace, "first-done", &mut [&mut first, &mut second]);
     await_file(workspace, "second-done", &mut [&mut first, &mut second]);

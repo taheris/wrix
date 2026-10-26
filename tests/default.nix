@@ -292,6 +292,7 @@ let
             set -euo pipefail
             export PYTHONDONTWRITEBYTECODE=1
             ${pkgs.python3}/bin/python3 ${./store}/test_cleanup_native_fixtures.py
+            ${pkgs.python3}/bin/python3 ${./store}/test_interrupt_native_test.py
             touch "$out"
           '';
     }
@@ -548,6 +549,20 @@ let
         // {
           platforms = linux;
           capabilities = [ "container-runtime" ];
+        }
+      )
+      (
+        (mkCiApp (import ./store/pool-host-linux.nix {
+          inherit pkgs wrix;
+          interrupt = true;
+          sourceRevision = src.rev or "dirty";
+        }) "test-shared-nix-interruption-linux")
+        // {
+          platforms = linux;
+          capabilities = [
+            "container-runtime"
+            "kvm"
+          ];
         }
       )
       (
