@@ -226,6 +226,7 @@ fn lost_launcher_restart(
         );
         std::thread::sleep(Duration::from_millis(25));
     }
+    super::maintenance::busy(host);
     running.child().kill().unwrap();
     assert!(!running.child().wait().unwrap().success());
     drop(running); // No foreground reconciliation: only the service's native observer can finish this ticket.

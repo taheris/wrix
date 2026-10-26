@@ -213,6 +213,7 @@ fn hostile_package_paths_are_rejected_before_supervision() {
     ] {
         fs::write(&manifest, serde_json::to_vec(&serde_json::json!({"controller":controller, "runtime":"/nix/store/runtime", "image":"/nix/store/image.drv"})).unwrap()).unwrap();
         assert!(matches!(Package::load(&manifest), Err(Error::Package)));
+        assert!(serde_json::from_slice::<Package>(&fs::read(&manifest).unwrap()).is_err());
     }
 }
 

@@ -1,5 +1,6 @@
 //! Actual supervised controller, private IPC and caller-independent native provisioning.
 mod client;
+mod maintenance;
 mod seed;
 mod worker;
 
@@ -193,6 +194,7 @@ fn supervised_controller_prepares_after_requester_exit_and_preserves_native_owne
             request::claim(&id).is_err(),
             "accepted request was not consumed"
         );
+        maintenance::exercise(&runtime, &client, &selection, &host);
         let pool = Admission::acquire(&selection, system())
             .unwrap()
             .pool()
@@ -305,6 +307,7 @@ fn supervised_controller_prepares_after_requester_exit_and_preserves_native_owne
         "WRIX_NIX_POOL_PACKAGE_BINDING",
         "WRIX_NIX_POOL_HOST_TOOLS",
         "WRIX_TEST_POOL_CONTROLLER",
+        "WRIX_TEST_POOL_CONTROLLER_BINDING",
         "WRIX_TEST_POOL_NIX",
         "WRIX_TEST_POOL_BASH",
         "WRIX_TEST_POOL_WORKER_IMAGE",

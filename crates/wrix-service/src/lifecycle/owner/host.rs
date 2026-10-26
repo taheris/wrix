@@ -21,6 +21,7 @@ use wrix_core::path::ContainerName;
 
 pub(in crate::lifecycle) fn recover() -> Result<String> {
     let host = wrix_state::host::Host::discover().map_err(std::io::Error::other)?;
+    let _pools = crate::nix_store::lifecycle::gate::shared(&host).map_err(std::io::Error::other)?;
     let guard = coordination::acquire(&host.roots().state().join("host-lifecycle"))?;
     let previous = Selected::read(guard.root())?;
     let pending = Selected::read(&guard.root().join("celler-candidate"))?;

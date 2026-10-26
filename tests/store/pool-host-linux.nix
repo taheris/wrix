@@ -132,6 +132,7 @@ pkgs.writeShellApplication {
     export WRIX_TEST_POOL_BASH=${pkgs.bashInteractive}
     export WRIX_TEST_POOL_WORKER_IMAGE=${seedImage}
     export WRIX_TEST_POOL_CONTROLLER=${wrix.rustPackage.controllerPackage}/bin/wrix-host-controller
+    export WRIX_TEST_POOL_CONTROLLER_BINDING=${wrix.rustPackage.controllerBinding}
     ${pkgs.bash}/bin/bash ${./run-native-test.sh} \
       ${wrix.rustPackage.cacheBackendTests}/bin/workspace-admission-tests \
       --ignored --exact \

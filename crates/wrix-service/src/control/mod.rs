@@ -83,6 +83,8 @@ pub enum Error {
     PoolStorage(#[from] crate::nix_store::owner::Error),
     /// installed-store native owner failed: {0}
     PoolOwner(#[from] crate::nix_store::owner::backend::Error),
+    /// installed-store lifecycle admission failed: {0}
+    PoolLifecycle(#[from] crate::nix_store::lifecycle::Error),
 }
 
 /// Inspect a retained deployment without creating authority, locks or listeners.
@@ -642,6 +644,7 @@ impl Controller {
         if self.listener.local_addr()?.as_pathname() != Some(expected.as_path()) {
             return Err(Error::PrivateRoot);
         }
+        let _admission = crate::nix_store::lifecycle::gate::shared(&host)?;
         authorization.recheck()?;
         let reservation = crate::nix_store::owner::Reservation::reserve(
             &host,
@@ -672,6 +675,7 @@ impl Controller {
         if self.listener.local_addr()?.as_pathname() != Some(expected.as_path()) {
             return Err(Error::PrivateRoot);
         }
+        let _admission = crate::nix_store::lifecycle::gate::shared(&host)?;
         let root = host
             .roots()
             .state()

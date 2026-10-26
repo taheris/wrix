@@ -417,6 +417,13 @@ impl Record {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MaintenanceState {
+    Serving,
+    Released,
+    Stopping,
+}
+
 /// A short host management window, not a worker grant; drop never stops or deletes a VM.
 pub struct Owner {
     prepared: Prepared,
@@ -658,6 +665,66 @@ impl Owner {
         }
     }
 
+    /// Complete census preflight only; it neither stops nor starts native work.
+    pub(crate) fn maintenance_state(&self, recovering: bool) -> Result<MaintenanceState, Error> {
+        if client::protected(
+            &self.prepared.reservation.paths.control,
+            self.pool(),
+            &self.record.executions,
+        )? {
+            return Err(Error::Busy);
+        }
+        match &self.record.state {
+            State::Serving { .. } => {
+                if !matches!(
+                    self.inspect()?,
+                    native::Reply::Ready {
+                        version: 1,
+                        leases: 0
+                    }
+                ) || self.activity()? != native::Activity::Idle
+                {
+                    return Err(Error::Busy);
+                }
+                Ok(MaintenanceState::Serving)
+            }
+            State::Released { connection } => {
+                released(self.prepared.data_root())?;
+                if !Self::absent(connection)? {
+                    return Err(Error::Retained);
+                }
+                Ok(MaintenanceState::Released)
+            }
+            State::Stopping { connection } if recovering => {
+                if Self::absent(connection)? {
+                    released(self.prepared.data_root())?;
+                } else {
+                    let observation = self.observe(&connection.target)?;
+                    if !observation.state.running {
+                        if observation.state.exit_code != 0 {
+                            return Err(Error::Retained);
+                        }
+                        released(self.prepared.data_root())?;
+                    }
+                }
+                Ok(MaintenanceState::Stopping)
+            }
+            _ => Err(Error::Retained),
+        }
+    }
+
+    fn absent(connection: &Connection) -> Result<bool, Error> {
+        let tools = &connection.target.attempt.software.tools;
+        let mut command = tools.command(Program::Podman);
+        command.args(["container", "exists", &connection.target.id.0]);
+        let output = tools.run(command, None, Some(COMMAND_BUDGET))?;
+        match (output.status.code(), output.stdout.is_empty()) {
+            (Some(1), true) => Ok(true),
+            (Some(0), true) => Ok(false),
+            _ => Err(Error::Retained),
+        }
+    }
+
     pub fn shutdown(&mut self) -> Result<(), Error> {
         if client::protected(
             &self.prepared.reservation.paths.control,
@@ -666,64 +733,67 @@ impl Owner {
         )? {
             return Err(Error::Busy);
         }
-        if !matches!(self.record.state, State::Serving { .. }) {
+        if !matches!(
+            self.record.state,
+            State::Serving { .. } | State::Stopping { .. } | State::Released { .. }
+        ) {
             return Err(Error::Retained);
         }
         let connection = self.connection()?.clone();
+        if matches!(self.record.state, State::Released { .. }) {
+            released(self.prepared.data_root())?;
+            return if Self::absent(&connection)? {
+                Ok(())
+            } else {
+                Err(Error::Retained)
+            };
+        }
         self.record.state = State::Stopping {
             connection: connection.clone(),
         };
         self.record
             .publish(&self.prepared.reservation.paths.control)?;
-        match self.rpc(
-            &connection,
-            &native::Operation::Shutdown {},
-            Some(COMMAND_BUDGET),
-        ) {
-            Ok(native::Reply::Busy) => {
-                self.record.state = State::Serving { connection };
-                self.record
-                    .publish(&self.prepared.reservation.paths.control)?;
-                return Err(Error::Busy);
+        if Self::absent(&connection)? {
+            // An interrupted stop needs both the independent guest release certificate and exact runtime absence.
+            released(self.prepared.data_root())?;
+        } else {
+            let observation = self.observe(&connection.target)?;
+            if observation.state.running {
+                match self.rpc(
+                    &connection,
+                    &native::Operation::Shutdown {},
+                    Some(COMMAND_BUDGET),
+                ) {
+                    Ok(native::Reply::Busy) => {
+                        self.record.state = State::Serving { connection };
+                        self.record
+                            .publish(&self.prepared.reservation.paths.control)?;
+                        return Err(Error::Busy);
+                    }
+                    Ok(native::Reply::Stopping) | Err(Error::Helper(_) | Error::Json(_)) => (),
+                    Ok(_) => return Err(Error::Retained),
+                    Err(error) => return Err(error),
+                }
+                let exit = text(podman(
+                    &connection.target.attempt.software.tools,
+                    &["wait", &connection.target.id.0],
+                )?)?;
+                if exit != "0" {
+                    return Err(Error::Retained);
+                }
             }
-            Ok(native::Reply::Stopping) | Err(Error::Helper(_) | Error::Json(_)) => (),
-            Ok(_) => return Err(Error::Retained),
-            Err(error) => return Err(error),
-        }
-        let exit = text(podman(
-            &connection.target.attempt.software.tools,
-            &["wait", &connection.target.id.0],
-        )?)?;
-        let observation = self.observe(&connection.target)?;
-        if exit != "0" || observation.state.running || observation.state.exit_code != 0 {
-            return Err(Error::Retained);
-        }
-        released(self.prepared.data_root())?;
-        let removed = text(podman(
-            &connection.target.attempt.software.tools,
-            &["rm", &connection.target.id.0],
-        )?)?;
-        if removed != connection.target.id.0 {
-            return Err(Error::Retained);
-        }
-        let mut exists = connection
-            .target
-            .attempt
-            .software
-            .tools
-            .command(Program::Podman);
-        exists.args(["container", "exists", &connection.target.id.0]);
-        if connection
-            .target
-            .attempt
-            .software
-            .tools
-            .run(exists, None, Some(COMMAND_BUDGET))?
-            .status
-            .code()
-            != Some(1)
-        {
-            return Err(Error::Retained);
+            let observation = self.observe(&connection.target)?;
+            if observation.state.running || observation.state.exit_code != 0 {
+                return Err(Error::Retained);
+            }
+            released(self.prepared.data_root())?;
+            let removed = text(podman(
+                &connection.target.attempt.software.tools,
+                &["rm", &connection.target.id.0],
+            )?)?;
+            if removed != connection.target.id.0 || !Self::absent(&connection)? {
+                return Err(Error::Retained);
+            }
         }
         self.record.state = State::Released { connection };
         self.record
@@ -986,15 +1056,7 @@ impl Owner {
             .software
             .tools
             .check(self.pool().system)?;
-        let mut exists = old.target.attempt.software.tools.command(Program::Podman);
-        exists.args(["container", "exists", &old.target.id.0]);
-        let output = old
-            .target
-            .attempt
-            .software
-            .tools
-            .run(exists, None, Some(COMMAND_BUDGET))?;
-        if output.status.code() != Some(1) {
+        if !Self::absent(&old)? {
             return Err(Error::Retained);
         }
         let software = &old.target.attempt.software;

@@ -71,6 +71,8 @@ impl Factory for Host {
     fn admit(&self) -> Result<(), Error> {
         podman_host()?;
         Package::from_env().map_err(io::Error::other)?;
+        let host = Capability::discover()?;
+        super::lifecycle::gate::check_clear(&host).map_err(io::Error::other)?;
         Ok(())
     }
     fn prepare_podman(
@@ -86,6 +88,7 @@ impl Factory for Host {
             .pool()
             .clone();
         let host = Capability::discover()?;
+        let _admission = super::lifecycle::gate::shared(&host).map_err(io::Error::other)?;
         let root = host.roots().state().join("control");
         let package = Package::from_env().map_err(io::Error::other)?;
         selection.authorize_effects()?;

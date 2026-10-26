@@ -48,6 +48,12 @@ struct Wire {
     image: PathBuf,
 }
 
+impl<'de> Deserialize<'de> for Package {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::from_wire(Wire::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
+
 impl Package {
     /// Read the immutable binding set by the host package wrapper, not project configuration.
     pub fn from_env() -> Result<Self, Error> {
@@ -56,7 +62,10 @@ impl Package {
     }
 
     pub fn load(path: &Path) -> Result<Self, Error> {
-        let wire: Wire = serde_json::from_slice(&fs::read(path)?)?;
+        Self::from_wire(serde_json::from_slice(&fs::read(path)?)?)
+    }
+
+    fn from_wire(wire: Wire) -> Result<Self, Error> {
         let package = Self {
             controller: wire.controller,
             runtime: wire.runtime,

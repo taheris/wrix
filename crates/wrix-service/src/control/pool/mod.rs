@@ -155,6 +155,8 @@ impl Queue {
                 ) {
                     return Err(Error::PermissionDenied);
                 }
+                // Verified intent precedes the gate; exclusion precedes every namespace/pool/client effect.
+                let _admission = crate::nix_store::lifecycle::gate::shared(accepted.host())?;
                 if matches!(action, Action::Execution | Action::Worker) {
                     let plane = match accepted.purpose() {
                         Purpose::Worker { plane, .. } => *plane,

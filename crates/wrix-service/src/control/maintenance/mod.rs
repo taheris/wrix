@@ -7,9 +7,11 @@ use super::{Client, Error, Operation, Reply, VERSION, recover_registry, supervis
 pub fn repair(host: &wrix_state::host::Host) -> Result<(), Error> {
     let root = host.roots().state().join("control");
     if !root.join("package.json").try_exists()? {
+        let _pools = crate::nix_store::lifecycle::unmanaged_repair(host)?;
         return recover_registry(host);
     }
     let package = supervision::Package::from_env().map_err(io::Error::other)?;
+    let pools = crate::nix_store::lifecycle::Repair::begin(host, &package)?;
     let native = supervision::Native::for_package(
         supervision::Platform::current().map_err(io::Error::other)?,
         fs::metadata(&root)?.uid(),
@@ -56,5 +58,7 @@ pub fn repair(host: &wrix_state::host::Host) -> Result<(), Error> {
         })
         .await
         .map_err(|_| Error::ControllerReadiness)?
-    })
+    })?;
+    pools.complete()?;
+    Ok(())
 }

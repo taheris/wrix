@@ -1,6 +1,7 @@
 //! Protected, one-use transport of the original checked context, not a namespace/path surrogate.
 mod factory;
 mod handoff;
+mod maintenance;
 mod native;
 mod retirement;
 mod worker;

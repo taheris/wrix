@@ -2,6 +2,7 @@
 
 pub mod gc;
 pub mod image;
+pub mod lifecycle;
 pub mod native;
 pub mod owner;
 pub mod worker;
