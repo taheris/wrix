@@ -24,6 +24,113 @@ pub(super) fn target() -> serde_json::Value {
     })
 }
 
+fn recorded_owner(state: State) -> (tempfile::TempDir, Owner) {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let layout = deployment::Layout::new(&root, &root.join("cache")).unwrap();
+    let pool = Key {
+        repository: "a".repeat(32).try_into().unwrap(),
+        system: wrix_core::nix_store::pool::System::X86_64Linux,
+    };
+    let deployment = "b".repeat(32).try_into().unwrap();
+    let reservation = Reservation::create(&layout, &deployment, &pool).unwrap();
+    let owner = Owner {
+        prepared: Prepared { reservation },
+        record: Record {
+            version: 1,
+            deployment,
+            pool,
+            state,
+            executions: BTreeSet::new(),
+        },
+    };
+    owner
+        .record
+        .publish(&owner.prepared.reservation.paths.control)
+        .unwrap();
+    (directory, owner)
+}
+
+#[test]
+fn update_requires_recorded_release_before_any_candidate_effect() {
+    let target: Target = serde_json::from_value(target()).unwrap();
+    let connection = Connection {
+        target: target.clone(),
+        port: NonZeroU16::new(2222).unwrap(),
+        host_key: key().try_into().unwrap(),
+    };
+    for state in [
+        State::Starting {
+            attempt: target.attempt.clone(),
+        },
+        State::Created {
+            target: target.clone(),
+        },
+        State::Serving {
+            connection: connection.clone(),
+        },
+        State::Stopping { connection },
+    ] {
+        let (_directory, mut owner) = recorded_owner(state);
+        let root = owner.prepared.reservation.paths.control.clone();
+        let before = fs::read(root.join(LEDGER)).unwrap();
+        assert!(matches!(
+            owner.update(
+                &target.attempt.software.candidate,
+                &target.attempt.software.tools
+            ),
+            Err(Error::Retained)
+        ));
+        assert_eq!(fs::read(root.join(LEDGER)).unwrap(), before);
+        assert!(!root.join("software-roots").exists());
+    }
+}
+
+#[test]
+fn released_metadata_without_native_checkpoint_cannot_acquire_a_candidate() {
+    let target: Target = serde_json::from_value(target()).unwrap();
+    let connection = Connection {
+        target: target.clone(),
+        port: NonZeroU16::new(2222).unwrap(),
+        host_key: key().try_into().unwrap(),
+    };
+    let (_directory, mut owner) = recorded_owner(State::Released { connection });
+    let root = owner.prepared.reservation.paths.control.clone();
+    let before = fs::read(root.join(LEDGER)).unwrap();
+    assert!(
+        matches!(owner.update(&target.attempt.software.candidate, &target.attempt.software.tools), Err(Error::Preparation(super::super::Error::Io(error))) if error.kind() == io::ErrorKind::NotFound)
+    );
+    assert_eq!(fs::read(root.join(LEDGER)).unwrap(), before);
+    assert!(!root.join("software-roots").exists());
+}
+
+#[test]
+fn resume_configuration_preserves_management_identity_without_allocating_or_migrating() {
+    let target: Target = serde_json::from_value(target()).unwrap();
+    let (_directory, owner) = recorded_owner(State::Starting {
+        attempt: target.attempt,
+    });
+    let original = bootstrap::Configuration::preallocated(key().try_into().unwrap());
+    let data = owner.prepared.data_root();
+    let mut file = private_file(data, "bootstrap.json", true).unwrap();
+    file.write_all(&serde_json::to_vec(&original).unwrap())
+        .unwrap();
+    fs::write(data.join("database-control"), b"retained native database").unwrap();
+    let resume = owner.resume_configuration().unwrap();
+    assert_eq!(resume.admin_key(), original.admin_key());
+    assert_eq!(resume.storage(), bootstrap::Storage::Resume);
+    owner.publish_resume_configuration(&resume).unwrap();
+    let published: bootstrap::Configuration =
+        serde_json::from_reader(private_file(data, "bootstrap.json", false).unwrap()).unwrap();
+    assert_eq!(published.storage(), bootstrap::Storage::Resume);
+    assert_eq!(published.admin_key(), original.admin_key());
+    assert_eq!(
+        fs::read(data.join("database-control")).unwrap(),
+        b"retained native database"
+    );
+    assert!(!data.join("store.ext4").exists());
+}
+
 #[test]
 fn release_checkpoint_requires_private_owned_regular_evidence_and_no_resume_marker() {
     let directory = tempfile::Builder::new()

@@ -143,7 +143,7 @@ let
       refuse_retained
     fi
     storage_mode=$(${owner}/bin/wrix-nix-pool-owner storage)
-    if [[ "$storage_mode" == resume ]]; then
+    if [[ "$storage_mode" == resume || "$storage_mode" == upgrade ]]; then
       [[ -f "$root/owner-active/version" && ! -L "$root/owner-active/version" ]]
       [[ $(< "$root/owner-active/version") == '2:${pkgs.nix.version}:8589934592' ]]
       ${owner}/bin/wrix-nix-pool-owner resume
@@ -175,18 +175,31 @@ let
     device=$(losetup --find --show "$root/store.ext4")
     mount -t ext4 -o nodev,nosuid "$device" "$root/filesystem"
     storage="$root/filesystem"
-    if [[ "$storage_mode" == resume ]]; then
+    if [[ "$storage_mode" == resume || "$storage_mode" == upgrade ]]; then
       [[ -d "$storage/nix/store" && ! -L "$storage/nix" && ! -L "$storage/nix/store" ]]
       [[ $(stat -c '%u:%g:%a' "$storage/nix/store") == 0:30000:1775 ]]
       [[ -f "$storage/nix/var/nix/db/db.sqlite" && ! -L "$storage/nix/var/nix/db/db.sqlite" ]]
+    fi
+    if [[ "$storage_mode" == resume ]]; then
       mapfile -t roots < ${seedClosure}/store-paths
       roots+=("$(< "$root/owner-active/software")")
       for path in "''${roots[@]}"; do
         [[ -e "$storage$path" && $(readlink "$storage/nix/var/nix/gcroots/bootstrap/''${path##*/}") == "$path" ]]
       done
     else
-      install -d -m 0755 "$storage/nix" "$storage/nix/var" "$storage/nix/var/nix"
-      install -d -m 1775 -o 0 -g 30000 "$storage/nix/store"
+      if [[ "$storage_mode" == upgrade ]]; then
+        for directory in nix nix/var nix/var/nix nix/var/nix/gcroots nix/var/nix/gcroots/bootstrap nix/var/nix/daemon-socket nix/var/nix/builds; do
+          path="$storage/$directory"
+          [[ -d "$path" && ! -L "$path" ]]
+          case $(stat -c '%u:%g:%a' "$path") in
+            0:0:755|0:0:700) ;;
+            *) refuse_retained ;;
+          esac
+        done
+      else
+        install -d -m 0755 "$storage/nix" "$storage/nix/var" "$storage/nix/var/nix"
+        install -d -m 1775 -o 0 -g 30000 "$storage/nix/store"
+      fi
       mapfile -t roots < ${seedClosure}/store-paths
       entrypoint=$(readlink -e /bin/wrix-nix-pool)
       [[ "$entrypoint" == /nix/store/*/bin/wrix-nix-pool ]]
@@ -194,9 +207,16 @@ let
       bootstrap_root=/nix/store/''${tail%%/*}
       roots+=("$bootstrap_root")
       nix copy --no-check-sigs --from local --to "local?root=$storage" "''${roots[@]}"
-      install -d -m 0755 "$storage/nix/var/nix/gcroots/bootstrap" "$storage/nix/var/nix/daemon-socket" "$storage/nix/var/nix/builds"
+      if [[ "$storage_mode" != upgrade ]]; then
+        install -d -m 0755 "$storage/nix/var/nix/gcroots/bootstrap" "$storage/nix/var/nix/daemon-socket" "$storage/nix/var/nix/builds"
+      fi
       for path in "''${roots[@]}"; do
-        ln -s "$path" "$storage/nix/var/nix/gcroots/bootstrap/''${path##*/}"
+        pin="$storage/nix/var/nix/gcroots/bootstrap/''${path##*/}"
+        if [[ -e "$pin" || -L "$pin" ]]; then
+          [[ -L "$pin" && $(readlink "$pin") == "$path" ]]
+        else
+          ln -s "$path" "$pin"
+        fi
       done
       sync "$storage/nix/var/nix/gcroots/bootstrap" "$storage/nix/var/nix"
       ${owner}/bin/wrix-nix-pool-owner seal
@@ -205,17 +225,27 @@ let
     [[ -f /etc/resolv.conf && ! -L /etc/resolv.conf ]]
     mount --bind ${filesystem}/etc/resolv.conf /etc/resolv.conf
     mount -o remount,bind,ro /etc/resolv.conf
-    if [[ "$storage_mode" == resume ]]; then
+    if [[ "$storage_mode" == resume || "$storage_mode" == upgrade ]]; then
       for directory in nix nix/store bin etc etc/wrix run run/wrix-nix-pool var var/empty dev; do
         path="$root/export-root/$directory"
         [[ -d "$path" && ! -L "$path" && $(stat -c '%u:%g:%a' "$path") == 0:0:755 ]]
       done
       [[ -f "$root/export-root/dev/null" && ! -L "$root/export-root/dev/null" ]]
-      [[ $(readlink "$root/export-root/bin/sh") == '${pkgs.bash}/bin/sh' ]]
+      [[ -L "$root/export-root/bin/sh" ]]
+      if [[ "$storage_mode" == resume ]]; then
+        [[ $(readlink "$root/export-root/bin/sh") == '${pkgs.bash}/bin/sh' ]]
+      else
+        ln -sfn ${pkgs.bash}/bin/sh "$root/export-root/bin/sh"
+      fi
       for file in passwd group nsswitch.conf wrix/nix-pool-native.json; do
         path="$root/export-root/etc/$file"
         [[ -f "$path" && ! -L "$path" && $(stat -c '%u:%g:%a:%h' "$path") == 0:0:444:1 ]]
-        cmp -- "${filesystem}/etc/$file" "$path"
+        if [[ "$storage_mode" == resume ]]; then
+          cmp -- "${filesystem}/etc/$file" "$path"
+        else
+          # Explicit upgrade has consumed clean release; no worker or export may still use these inputs.
+          install -m 0444 "${filesystem}/etc/$file" "$path"
+        fi
       done
     else
       install -d -m 0755 "$root/export-root/nix/store" "$root/export-root/bin" "$root/export-root/etc/wrix" "$root/export-root/run/wrix-nix-pool" "$root/export-root/var/empty"

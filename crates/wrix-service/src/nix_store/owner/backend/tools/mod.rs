@@ -174,6 +174,10 @@ impl Tools {
         Ok(())
     }
 
+    pub(crate) fn belongs_to(&self, package: &crate::control::supervision::Package) -> bool {
+        Path::new(self.root.as_str()) == package.runtime()
+    }
+
     pub(super) fn vm(&self) -> PathBuf {
         Path::new(self.root.as_str()).join("bin/krun")
     }

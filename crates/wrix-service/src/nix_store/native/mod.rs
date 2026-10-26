@@ -818,6 +818,14 @@ pub fn seal() -> Result<(), Error> {
     role_root()?;
     let configuration: bootstrap::Configuration =
         serde_json::from_slice(&private_file(&Path::new(DATA).join("bootstrap.json"))?)?;
+    if let Some(previous) = configuration.upgrade_from() {
+        return restart::upgrade(
+            Path::new(DATA),
+            previous,
+            &startup_software()?,
+            &configuration.admin_key,
+        );
+    }
     if configuration.storage() == bootstrap::Storage::Resume {
         return Err(Error::Invalid);
     }
@@ -830,14 +838,18 @@ pub fn seal() -> Result<(), Error> {
 
 /// Consume a clean guest checkpoint before opening retained native state; never proves host release.
 pub fn resume() -> Result<(), Error> {
-    if storage()? != bootstrap::Storage::Resume {
+    if !matches!(
+        storage()?,
+        bootstrap::Storage::Resume | bootstrap::Storage::Upgrade
+    ) {
         return Err(Error::Invalid);
     }
     let configuration: bootstrap::Configuration =
         serde_json::from_slice(&private_file(&Path::new(DATA).join("bootstrap.json"))?)?;
+    let startup = startup_software()?;
     restart::begin(
         Path::new(DATA),
-        &startup_software()?,
+        configuration.upgrade_from().unwrap_or(&startup),
         &configuration.admin_key,
     )
 }

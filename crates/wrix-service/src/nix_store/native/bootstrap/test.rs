@@ -50,6 +50,61 @@ fn retained_storage_requires_explicit_resume_version() {
 }
 
 #[test]
+fn explicit_upgrade_binds_the_previous_immutable_software_and_administration() {
+    let previous: StorePath = "/nix/store/00000000000000000000000000000000-bootstrap"
+        .to_owned()
+        .try_into()
+        .unwrap();
+    let configuration = Configuration::upgrade(key(), previous.clone());
+    let wire = serde_json::to_value(configuration).unwrap();
+    assert_eq!(wire["version"], 4);
+    assert_eq!(wire["storage"], "upgrade");
+    let recovered: Configuration = serde_json::from_value(wire).unwrap();
+    assert_eq!(recovered.upgrade_from(), Some(&previous));
+    assert_eq!(recovered.admin_key(), &key());
+    assert_eq!(recovered.storage(), Storage::Upgrade);
+}
+
+#[test]
+fn upgrade_authority_is_not_accepted_by_ordinary_resume_or_allocation() {
+    for (version, storage) in [
+        (1, "allocate"),
+        (2, "preallocated"),
+        (3, "resume"),
+        (4, "resume"),
+    ] {
+        assert!(
+            serde_json::from_value::<Configuration>(json!({
+                "version":version,"admin_key":key(),"storage":storage,
+                "upgrade_from":"/nix/store/00000000000000000000000000000000-bootstrap"
+            }))
+            .is_err()
+        );
+    }
+    assert!(
+        serde_json::from_value::<Configuration>(
+            json!({"version":4,"admin_key":key(),"storage":"upgrade"})
+        )
+        .is_err()
+    );
+    assert!(serde_json::from_value::<Configuration>(json!({"version":4,"admin_key":key(),"storage":"upgrade","upgrade_from":"/host/database"})).is_err());
+}
+
+#[test]
+fn ordinary_resume_does_not_replay_prior_upgrade_authority() {
+    let prior: StorePath = "/nix/store/00000000000000000000000000000000-bootstrap"
+        .to_owned()
+        .try_into()
+        .unwrap();
+    let upgraded = Configuration::upgrade(key(), prior);
+    let resumed = Configuration::resume(upgraded.admin_key().clone());
+    let wire = serde_json::to_value(resumed).unwrap();
+    assert_eq!(wire["version"], 3);
+    assert_eq!(wire["storage"], "resume");
+    assert!(wire.get("upgrade_from").is_none());
+}
+
+#[test]
 fn storage_versions_unknown_fields_and_paths_cannot_change_disk_policy() {
     for (version, storage) in [
         (0, None),

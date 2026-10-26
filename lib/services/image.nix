@@ -31,7 +31,10 @@ let
     if pool == null then
       { "wrix.service.supervision" = "2"; }
     else
-      { "wrix.nix-pool.bootstrap-version" = "3"; }
+      {
+        "wrix.nix-pool.bootstrap-version" = "3";
+        "wrix.nix-pool.upgrade-version" = "1";
+      }
   );
   contents = [
     dockerTools.binSh

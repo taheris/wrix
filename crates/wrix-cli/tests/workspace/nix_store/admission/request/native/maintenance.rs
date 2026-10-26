@@ -3,7 +3,7 @@ use super::*;
 use wrix_service::{
     control::supervision::Package,
     nix_store::{
-        lifecycle::{Error, Repair},
+        lifecycle::{Error, Repair, Update},
         owner::backend,
     },
 };
@@ -139,6 +139,44 @@ pub(super) fn exercise(
     assert_eq!(
         resumed["state"]["connection"]["target"]["attempt"]["software"],
         original["state"]["connection"]["target"]["attempt"]["software"]
+    );
+    let roots: Vec<_> = fs::read_dir(root.join("software-roots"))
+        .unwrap()
+        .map(|entry| {
+            let path = entry.unwrap().path();
+            let target = fs::read_link(&path).unwrap();
+            (path, target)
+        })
+        .collect();
+    assert_ne!(roots.len(), 0);
+    let candidate = wrix_service::nix_store::image::Candidate::from_env().unwrap();
+    let tools = backend::tools::Tools::from_env().unwrap();
+    let update = Update::begin(host, &package, &candidate, &tools).unwrap();
+    assert_eq!(read()["state"]["phase"], "released");
+    drop(update);
+    assert!(matches!(
+        Repair::begin(host, &package),
+        Err(Error::Conflict)
+    ));
+    fenced(runtime, client, selection);
+    Update::begin(host, &package, &candidate, &tools)
+        .unwrap()
+        .complete()
+        .unwrap();
+    let updated = read();
+    assert_eq!(updated["state"]["phase"], "serving");
+    assert_ne!(
+        updated["state"]["connection"]["target"]["id"],
+        resumed["state"]["connection"]["target"]["id"]
+    );
+    for (path, target) in roots {
+        assert_eq!(fs::read_link(path).unwrap(), target);
+    }
+    assert_eq!(
+        fs::read_dir(root.join("software-roots/updates"))
+            .unwrap()
+            .count(),
+        1
     );
     let id = runtime
         .block_on(client.prepare_nix_pool(selection, system()))

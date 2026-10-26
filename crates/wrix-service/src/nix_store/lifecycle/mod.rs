@@ -1,11 +1,13 @@
-//! Host controller repair accounts for every provisioned pool and never changes recorded pool software implicitly.
+//! Whole-host pool maintenance accounts for every provisioned pool; only explicit update selects new software.
 pub(crate) mod gate;
+#[cfg(test)]
+mod test;
 use crate::{
     control::supervision::Package,
     deployment,
     nix_store::owner::{
         self,
-        backend::{self, MaintenanceState, Owner},
+        backend::{self, MaintenanceState, Owner, tools::Tools},
     },
 };
 use serde::{Deserialize, Serialize};
@@ -18,6 +20,23 @@ use wrix_state::{host::Host, store::Store};
 
 const LIMIT: usize = 256;
 const DOCUMENT: u64 = 65_536;
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
+enum Intent {
+    #[default]
+    Repair,
+    Update {
+        candidate: crate::nix_store::image::Candidate,
+        tools: Tools,
+    },
+}
+impl Intent {
+    const fn is_repair(&self) -> bool {
+        matches!(self, Self::Repair)
+    }
+}
+
 #[derive(Debug, displaydoc::Display, thiserror::Error)]
 pub enum Error {
     /// installed-store maintenance I/O failed; interrupted ownership is retained: {0}
@@ -53,6 +72,16 @@ enum Entry {
     Released(Key),
 }
 impl Entry {
+    fn capture(pool: &Key, state: MaintenanceState, intent: &Intent) -> Result<Self, Error> {
+        match state {
+            MaintenanceState::Released if intent.is_repair() => Ok(Self::Released(pool.clone())),
+            MaintenanceState::Serving | MaintenanceState::Released => {
+                Ok(Self::Serving(pool.clone()))
+            }
+            MaintenanceState::Stopping => Err(Error::Invalid),
+        }
+    }
+
     const fn pool(&self) -> &Key {
         match self {
             Self::Serving(pool) | Self::Released(pool) => pool,
@@ -66,6 +95,8 @@ struct Marker {
     generation: Vec<u8>,
     deployment: deployment::Id,
     target: Package,
+    #[serde(default, skip_serializing_if = "Intent::is_repair")]
+    intent: Intent,
     entries: Vec<Entry>,
 }
 impl Marker {
@@ -120,12 +151,13 @@ impl Marker {
         &self,
         host: &Host,
         target: &Package,
+        intent: &Intent,
         deployment: Option<&deployment::Id>,
         pools: &[Key],
     ) -> Result<(), Error> {
+        self.check_intent(target, intent)?;
         let generation = Store::inspect(host)?.ok_or(Error::Invalid)?.generation()?;
-        if self.target != *target
-            || self.generation != generation.as_bytes().as_slice()
+        if self.generation != generation.as_bytes().as_slice()
             || deployment != Some(&self.deployment)
         {
             return Err(Error::Conflict);
@@ -137,6 +169,13 @@ impl Marker {
                 .zip(pools)
                 .any(|(entry, pool)| entry.pool() != pool)
         {
+            return Err(Error::Conflict);
+        }
+        Ok(())
+    }
+
+    fn check_intent(&self, target: &Package, intent: &Intent) -> Result<(), Error> {
+        if self.target != *target || self.intent != *intent {
             return Err(Error::Conflict);
         }
         Ok(())
@@ -195,6 +234,37 @@ pub(crate) fn unmanaged_repair(host: &Host) -> Result<gate::Guard, Error> {
     Ok(guard)
 }
 
+/// Pool portion of an explicit whole-deployment update, not a separate pool selector.
+///
+/// Begin before changing core roles; complete only after compatible owned core-role readiness.
+/// Drop preserves intent and fences admission. Candidate failure never silently resumes the old software.
+pub struct Update<'a>(Repair<'a>);
+impl<'a> Update<'a> {
+    pub fn begin(
+        host: &'a Host,
+        target: &Package,
+        candidate: &crate::nix_store::image::Candidate,
+        tools: &Tools,
+    ) -> Result<Self, Error> {
+        if !tools.belongs_to(target) {
+            return Err(Error::Conflict);
+        }
+        Repair::begin_intent(
+            host,
+            target,
+            Intent::Update {
+                candidate: candidate.clone(),
+                tools: tools.clone(),
+            },
+        )
+        .map(Self)
+    }
+
+    pub fn complete(self) -> Result<(), Error> {
+        self.0.complete()
+    }
+}
+
 /// Explicit host operation only. Drop preserves an interruption marker and never rolls back or resumes native work.
 pub struct Repair<'a> {
     host: &'a Host,
@@ -203,6 +273,10 @@ pub struct Repair<'a> {
 }
 impl<'a> Repair<'a> {
     pub fn begin(host: &'a Host, target: &Package) -> Result<Self, Error> {
+        Self::begin_intent(host, target, Intent::Repair)
+    }
+
+    fn begin_intent(host: &'a Host, target: &Package, intent: Intent) -> Result<Self, Error> {
         let guard = gate::exclusive(host)?;
         let deployment = crate::control::existing_deployment(host).map_err(io::Error::other)?;
         let pools = census(host, deployment.as_ref())?;
@@ -216,9 +290,15 @@ impl<'a> Repair<'a> {
         }
         let deployment = deployment.ok_or(Error::Invalid)?;
         if let Some(marker) = &pending {
-            marker.check(host, target, Some(&deployment), &pools)?;
+            marker.check(host, target, &intent, Some(&deployment), &pools)?;
         }
         let mut owners = owners(host, &deployment, &pools, pending.is_some())?;
+        if let Intent::Update { tools, .. } = &intent {
+            // Check every target runtime before releasing any peer; this does not realize a candidate.
+            for pool in &pools {
+                tools.check(pool.system)?;
+            }
+        }
         let marker = if let Some(marker) = pending {
             marker
         } else {
@@ -229,17 +309,14 @@ impl<'a> Repair<'a> {
                 .to_vec();
             let entries = owners
                 .iter()
-                .map(|(owner, state)| match state {
-                    MaintenanceState::Serving => Ok(Entry::Serving(owner.pool().clone())),
-                    MaintenanceState::Released => Ok(Entry::Released(owner.pool().clone())),
-                    MaintenanceState::Stopping => Err(Error::Invalid),
-                })
+                .map(|(owner, state)| Entry::capture(owner.pool(), *state, &intent))
                 .collect::<Result<_, _>>()?;
             let marker = Marker {
                 version: 1,
                 generation,
                 deployment,
                 target: target.clone(),
+                intent,
                 entries,
             };
             marker.publish(host)?;
@@ -263,7 +340,8 @@ impl<'a> Repair<'a> {
             _gate: guard,
         })
     }
-    /// Call only after compatible owned controller readiness. Resume recorded software, never the candidate pool image.
+    /// Call only after compatible owned controller readiness. Repair resumes recorded software;
+    /// the explicit update wrapper alone carries authority to select the recorded candidate.
     pub fn complete(self) -> Result<(), Error> {
         let Some(marker) = &self.marker else {
             return Ok(());
@@ -271,7 +349,13 @@ impl<'a> Repair<'a> {
         let deployment =
             crate::control::existing_deployment(self.host).map_err(io::Error::other)?;
         let pools = census(self.host, deployment.as_ref())?;
-        marker.check(self.host, &marker.target, deployment.as_ref(), &pools)?;
+        marker.check(
+            self.host,
+            &marker.target,
+            &marker.intent,
+            deployment.as_ref(),
+            &pools,
+        )?;
         if Marker::read(self.host)?.as_ref() != Some(marker) {
             return Err(Error::Conflict);
         }
@@ -285,8 +369,15 @@ impl<'a> Repair<'a> {
         }
         for (entry, (owner, state)) in marker.entries.iter().zip(&mut owners) {
             if matches!(entry, Entry::Serving(_)) && *state == MaintenanceState::Released {
-                owner.resume()?;
+                match &marker.intent {
+                    Intent::Repair => owner.resume()?,
+                    Intent::Update { candidate, tools } => owner.update(candidate, tools)?,
+                }
                 owner.maintenance_state(false)?;
+            } else if let Intent::Update { candidate, tools } = &marker.intent
+                && !owner.selected(candidate, tools)?
+            {
+                return Err(Error::Conflict);
             }
         }
         fs::remove_file(self.host.roots().state().join(gate::MARKER))?;

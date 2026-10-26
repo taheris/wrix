@@ -66,6 +66,27 @@ disabled, reuses the same native owner, confirms unavailable collection after
 stop, then resumes recorded software with a new runtime identity and drains it
 again.
 
+The pool-side explicit update coordinator additionally records the exact target
+pool image and package-bound runtime in the durable maintenance receipt. Repair
+cannot reinterpret an interrupted update or silently resume old software. The
+complete owner census and target-runtime preflight precede any stop; candidate
+acquisition starts only after clean native release. Candidate roots use a new
+private leaf without replacing the old software roots. Provisioned stopped pools
+are included in update activation, while controller repair preserves their
+stopped state.
+
+Guest upgrade uses a separate version-four bootstrap input bound to the previous
+sealed software and unchanged administrator key. It consumes the clean release,
+requires the same Nix version before database access, imports and pins the new
+startup closure incrementally, preserves existing pins, and reseals the new
+bootstrap before daemon readiness. It does not format retained storage, replace
+the database, repair ownership or permit ordinary resume to change software.
+Interrupted upgrade retains its consumed checkpoint and host admission fence.
+These are pool coordinator and guest implementation boundaries, not a claim that
+the whole-deployment update/shutdown CLI or Apple transport is implemented. The
+Rust live maintenance exercise now includes update/retry and old-root retention;
+that extended live exercise has not been run in this environment.
+
 A second Rust live test starts the actual packaged host-controller process and
 uses its authenticated private protocol. A one-use request is published only
 under the original checked scope and approval; its private frozen observation

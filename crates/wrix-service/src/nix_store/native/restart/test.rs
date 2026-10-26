@@ -57,6 +57,60 @@ fn fixture() -> tempfile::TempDir {
 }
 
 #[test]
+fn explicit_upgrade_reseals_only_after_consuming_the_exact_previous_release() {
+    let root = fixture();
+    begin(root.path(), &software('0'), &key(7)).unwrap();
+    upgrade(root.path(), &software('0'), &software('1'), &key(7)).unwrap();
+    assert_eq!(
+        read(&root.path().join("owner-active/software")).unwrap(),
+        software('1').as_str().as_bytes()
+    );
+    assert_eq!(
+        read(&root.path().join("owner-active/admin-key")).unwrap(),
+        key(7).as_str().as_bytes()
+    );
+    assert_eq!(read(&root.path().join("resuming")).unwrap(), b"1\n");
+    assert!(!root.path().join("released").exists());
+}
+
+#[test]
+fn upgrade_cannot_skip_checkpoint_consumption() {
+    let root = fixture();
+    assert!(upgrade(root.path(), &software('0'), &software('1'), &key(7)).is_err());
+    assert_eq!(
+        read(&root.path().join("owner-active/software")).unwrap(),
+        software('0').as_str().as_bytes()
+    );
+    assert_eq!(read(&root.path().join("released")).unwrap(), b"1\n");
+}
+
+#[test]
+fn upgrade_rejects_changed_previous_software_or_administration() {
+    for (previous, admin) in [(software('2'), key(7)), (software('0'), key(8))] {
+        let root = fixture();
+        begin(root.path(), &software('0'), &key(7)).unwrap();
+        assert!(upgrade(root.path(), &previous, &software('1'), &admin).is_err());
+        assert_eq!(
+            read(&root.path().join("owner-active/software")).unwrap(),
+            software('0').as_str().as_bytes()
+        );
+    }
+}
+
+#[test]
+fn interrupted_upgrade_cannot_reuse_the_consumed_release() {
+    let root = fixture();
+    begin(root.path(), &software('0'), &key(7)).unwrap();
+    upgrade(root.path(), &software('0'), &software('1'), &key(7)).unwrap();
+    assert!(begin(root.path(), &software('1'), &key(7)).is_err());
+    assert!(upgrade(root.path(), &software('0'), &software('2'), &key(7)).is_err());
+    assert_eq!(
+        read(&root.path().join("owner-active/software")).unwrap(),
+        software('1').as_str().as_bytes()
+    );
+}
+
+#[test]
 fn resume_consumes_the_checkpoint_before_native_database_access() {
     let root = fixture();
     begin(root.path(), &software('0'), &key(7)).unwrap();

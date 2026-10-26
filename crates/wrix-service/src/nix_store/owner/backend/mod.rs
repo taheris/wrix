@@ -110,6 +110,57 @@ struct Software {
     image: ImageId,
     tools: Tools,
 }
+impl Software {
+    fn install(
+        candidate: Candidate,
+        tools: Tools,
+        system: wrix_core::nix_store::pool::System,
+        roots: &Path,
+    ) -> Result<Self, Error> {
+        tools.check(system)?;
+        wrix_core::private_directory::prepare_with_parents(roots).map_err(io::Error::other)?;
+        tools.pin(roots)?;
+        let digest = candidate.realize(roots)?;
+        let mut store = image::CommandStore;
+        image::install(
+            &mut store,
+            &image::InstallRequest::new(
+                image::Runtime::Podman,
+                candidate.image(),
+                candidate.source(),
+                Some(&digest),
+            )?,
+        )?;
+        let selected = image::Target::Reference(candidate.image().clone());
+        let image = store
+            .image_id(image::Runtime::Podman, &selected)?
+            .ok_or(Error::Invalid)?;
+        if !same_image(&image, &digest) {
+            return Err(Error::Invalid);
+        }
+        let bytes = podman(&tools, &["image", "inspect", image.as_str()])?;
+        let metadata: serde_json::Value = serde_json::from_slice(&bytes)?;
+        let architecture = match system {
+            wrix_core::nix_store::pool::System::X86_64Linux => "amd64",
+            wrix_core::nix_store::pool::System::Aarch64Linux => "arm64",
+        };
+        if metadata.as_array().map(Vec::len) != Some(1)
+            || metadata[0]["Config"]["Labels"]["wrix.nix-pool.bootstrap-version"] != "3"
+            || metadata[0]["Config"]["Labels"]["wrix.image.kind"] != "service"
+            || metadata[0]["Config"]["Labels"]["wrix.managed"] != "true"
+            || metadata[0]["Architecture"] != architecture
+        {
+            return Err(Error::Invalid);
+        }
+        Ok(Self {
+            candidate,
+            digest,
+            image,
+            tools,
+        })
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Attempt {
@@ -793,50 +844,17 @@ impl Prepared {
             return Err(Error::Invalid);
         }
         private_file(self.data_root(), "store.ext4", false)?;
-        let roots = self.reservation.paths.control.join("software-roots");
-        wrix_core::private_directory::prepare_with_parents(&roots).map_err(io::Error::other)?;
-        tools.pin(&roots)?;
-        let digest = candidate.realize(&roots)?;
-        let mut store = image::CommandStore;
-        image::install(
-            &mut store,
-            &image::InstallRequest::new(
-                image::Runtime::Podman,
-                candidate.image(),
-                candidate.source(),
-                Some(&digest),
-            )?,
+        let software = Software::install(
+            candidate,
+            tools,
+            self.pool().system,
+            &self.reservation.paths.control.join("software-roots"),
         )?;
-        let selected = image::Target::Reference(candidate.image().clone());
-        let image = store
-            .image_id(image::Runtime::Podman, &selected)?
-            .ok_or(Error::Invalid)?;
-        if !same_image(&image, &digest) {
-            return Err(Error::Invalid);
-        }
-        let bytes = podman(&tools, &["image", "inspect", image.as_str()])?;
-        let metadata: serde_json::Value = serde_json::from_slice(&bytes)?;
-        let architecture = match self.pool().system {
-            wrix_core::nix_store::pool::System::X86_64Linux => "amd64",
-            wrix_core::nix_store::pool::System::Aarch64Linux => "arm64",
-        };
-        if metadata[0]["Config"]["Labels"]["wrix.nix-pool.bootstrap-version"] != "3"
-            || metadata[0]["Config"]["Labels"]["wrix.image.kind"] != "service"
-            || metadata[0]["Config"]["Labels"]["wrix.managed"] != "true"
-            || metadata[0]["Architecture"] != architecture
-        {
-            return Err(Error::Invalid);
-        }
         let nonce = random()?;
         let attempt = Attempt {
             budget: budget::Budget::HostIo,
             nonce,
-            software: Software {
-                candidate,
-                digest,
-                image,
-                tools,
-            },
+            software,
         };
         let record = Record {
             version: 1,
@@ -999,6 +1017,98 @@ impl Owner {
         Ok(())
     }
 
+    pub(crate) fn selected(&self, candidate: &Candidate, tools: &Tools) -> Result<bool, Error> {
+        let software = &self.connection()?.target.attempt.software;
+        Ok(software.candidate == *candidate && software.tools == *tools)
+    }
+
+    /// Explicit host update only, after the complete pool census has drained.
+    /// Failed candidate acquisition retains the old software roots and released owner.
+    pub(crate) fn update(&mut self, candidate: &Candidate, tools: &Tools) -> Result<(), Error> {
+        let State::Released { connection } = &self.record.state else {
+            return Err(Error::Retained);
+        };
+        let old = connection.clone();
+        released(self.prepared.data_root())?;
+        if !Self::absent(&old)? {
+            return Err(Error::Retained);
+        }
+        // Never overwrite the old owner's roots: a failed candidate is not rollback evidence.
+        let nonce = random()?;
+        let roots = self
+            .prepared
+            .reservation
+            .paths
+            .control
+            .join("software-roots/updates")
+            .join(nonce.as_str());
+        let software =
+            Software::install(candidate.clone(), tools.clone(), self.pool().system, &roots)?;
+        let bytes = podman(
+            &software.tools,
+            &["image", "inspect", software.image.as_str()],
+        )?;
+        let metadata: serde_json::Value = serde_json::from_slice(&bytes)?;
+        if metadata[0]["Config"]["Labels"]["wrix.nix-pool.upgrade-version"] != "1" {
+            return Err(Error::Invalid);
+        }
+        let mut previous = Vec::new();
+        private_file(
+            &self.prepared.data_root().join("owner-active"),
+            "software",
+            false,
+        )?
+        .take(4097)
+        .read_to_end(&mut previous)?;
+        if previous.len() > 4096 {
+            return Err(Error::Invalid);
+        }
+        let previous = String::from_utf8(previous)
+            .map_err(|_| Error::Invalid)?
+            .try_into()?;
+        let configuration = bootstrap::Configuration::upgrade(
+            self.resume_configuration()?.admin_key().clone(),
+            previous,
+        );
+        let attempt = Attempt {
+            budget: old.target.attempt.budget,
+            nonce,
+            software,
+        };
+        // Persist new ownership intent before changing bootstrap inputs or touching native state.
+        self.record.state = State::Starting {
+            attempt: attempt.clone(),
+        };
+        self.record
+            .publish(&self.prepared.reservation.paths.control)?;
+        self.publish_resume_configuration(&configuration)?;
+        self.boot(&attempt, Some(&old.host_key))
+    }
+
+    fn resume_configuration(&self) -> Result<bootstrap::Configuration, Error> {
+        let configuration: bootstrap::Configuration = serde_json::from_reader(private_file(
+            &self.prepared.reservation.paths.data,
+            "bootstrap.json",
+            false,
+        )?)?;
+        Ok(bootstrap::Configuration::resume(
+            configuration.admin_key().clone(),
+        ))
+    }
+
+    fn publish_resume_configuration(
+        &self,
+        configuration: &bootstrap::Configuration,
+    ) -> Result<(), Error> {
+        let mut file = tempfile::NamedTempFile::new_in(self.prepared.data_root())?;
+        file.write_all(&serde_json::to_vec(configuration)?)?;
+        file.as_file().sync_all()?;
+        file.persist(self.prepared.data_root().join("bootstrap.json"))
+            .map_err(|error| error.error)?;
+        File::open(self.prepared.data_root())?.sync_all()?;
+        Ok(())
+    }
+
     /// Resume only the recorded software after prior native release and runtime removal.
     pub fn resume(&mut self) -> Result<(), Error> {
         let State::Released { connection } = &self.record.state else {
@@ -1043,21 +1153,7 @@ impl Owner {
         {
             return Err(Error::Invalid);
         }
-        let configuration: bootstrap::Configuration = serde_json::from_reader(private_file(
-            &self.prepared.reservation.paths.data,
-            "bootstrap.json",
-            false,
-        )?)?;
-        let mut wire = serde_json::to_value(configuration)?;
-        wire["version"] = serde_json::json!(3);
-        wire["storage"] = serde_json::json!("resume");
-        let checked: bootstrap::Configuration = serde_json::from_value(wire)?;
-        let mut file = tempfile::NamedTempFile::new_in(self.prepared.data_root())?;
-        file.write_all(&serde_json::to_vec(&checked)?)?;
-        file.as_file().sync_all()?;
-        file.persist(self.prepared.data_root().join("bootstrap.json"))
-            .map_err(|error| error.error)?;
-        File::open(self.prepared.data_root())?.sync_all()?;
+        let configuration = self.resume_configuration()?;
         let nonce = random()?;
         let attempt = Attempt {
             budget: old.target.attempt.budget,
@@ -1069,6 +1165,7 @@ impl Owner {
         };
         self.record
             .publish(&self.prepared.reservation.paths.control)?;
+        self.publish_resume_configuration(&configuration)?;
         self.boot(&attempt, Some(&old.host_key))
     }
 }

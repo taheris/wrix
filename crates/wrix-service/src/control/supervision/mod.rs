@@ -97,6 +97,10 @@ impl Package {
     pub fn executable(&self) -> PathBuf {
         self.controller.join("bin/wrix-host-controller")
     }
+
+    pub(crate) fn runtime(&self) -> &Path {
+        &self.runtime
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

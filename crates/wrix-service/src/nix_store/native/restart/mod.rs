@@ -64,6 +64,37 @@ pub(super) fn seal(root: &Path, software: &StorePath, admin: &Key) -> Result<(),
     Ok(())
 }
 
+/// Replace only the software seal of an explicitly consumed clean checkpoint.
+/// The caller has already seeded and rooted the candidate using startup authority.
+pub(super) fn upgrade(
+    root: &Path,
+    previous: &StorePath,
+    candidate: &StorePath,
+    admin: &Key,
+) -> Result<(), Error> {
+    directory(root, 0o700)?;
+    let owner = root.join("owner-active");
+    directory(&owner, 0o700)?;
+    if read(&root.join("resuming"))? != b"1\n"
+        || read(&owner.join("software"))? != previous.as_str().as_bytes()
+        || read(&owner.join("admin-key"))? != admin.as_str().as_bytes()
+    {
+        return Err(Error::Invalid);
+    }
+    match fs::symlink_metadata(root.join("released")) {
+        Ok(_) => return Err(Error::Invalid),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+        Err(error) => return Err(error.into()),
+    }
+    let mut file = tempfile::NamedTempFile::new_in(&owner)?;
+    file.write_all(candidate.as_str().as_bytes())?;
+    file.as_file().sync_all()?;
+    file.persist(owner.join("software"))
+        .map_err(|error| error.error)?;
+    File::open(owner)?.sync_all()?;
+    Ok(())
+}
+
 pub(super) fn begin(root: &Path, software: &StorePath, admin: &Key) -> Result<(), Error> {
     directory(root, 0o700)?;
     for entry in fs::read_dir(root)? {
