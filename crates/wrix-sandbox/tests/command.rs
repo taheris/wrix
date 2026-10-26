@@ -2,7 +2,7 @@ mod common;
 
 use std::{fs, path::PathBuf};
 
-use wrix_sandbox::command::{self, Command};
+use wrix_sandbox::command::Command;
 
 use common::{ChildSpec, ProfileFixture, TestResult};
 
@@ -76,24 +76,26 @@ fn command_child() -> TestResult {
     common::run_command_child()
 }
 
-struct Invocation {
-    stderr: String,
-    success: bool,
-}
-
 fn invoke(
     command: Command,
     profile_config: Option<PathBuf>,
     args: &[String],
-) -> TestResult<Invocation> {
-    let mut stdout = Vec::new();
-    let mut stderr = Vec::new();
-    let code = command::run(command, profile_config, args, &mut stdout, &mut stderr)?;
-    assert!(stdout.is_empty(), "{}", String::from_utf8_lossy(&stdout));
-    Ok(Invocation {
-        stderr: String::from_utf8(stderr)?,
-        success: code == std::process::ExitCode::SUCCESS,
-    })
+) -> TestResult<common::ChildRun> {
+    let root = tempfile::tempdir()?;
+    let result = common::run_child(
+        "command_child",
+        root.path(),
+        "invoke",
+        ChildSpec {
+            command,
+            profile_config,
+            args: args.to_vec(),
+            env: Vec::new(),
+            capture_runtime: false,
+        },
+    )?;
+    assert!(result.stdout.is_empty(), "{}", result.stdout);
+    Ok(result)
 }
 
 fn workspace_arg(path: &std::path::Path) -> String {

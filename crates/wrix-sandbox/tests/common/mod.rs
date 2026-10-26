@@ -95,6 +95,7 @@ pub fn run_child(
         .env("GIT_AUTHOR_EMAIL", "wrix@example.test")
         .env("GIT_COMMITTER_NAME", "Wrix Test")
         .env("GIT_COMMITTER_EMAIL", "wrix@example.test")
+        .env_remove("WRIX_PROJECT_PROFILE_CONFIG")
         .env_remove("WRIX_AGENT")
         .env_remove("WRIX_NETWORK")
         .env_remove("WRIX_MICROVM")

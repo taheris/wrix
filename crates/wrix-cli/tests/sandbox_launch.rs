@@ -41,6 +41,10 @@ impl Fixture {
             value["network"] = network;
         }
         fs::write(&profile, serde_json::to_vec(&value)?)?;
+        fs::write(
+            root.path().join("worker-seccomp.json"),
+            include_str!("../../wrix-sandbox/tests/fixtures/seccomp.json"),
+        )?;
         Ok(Self {
             root,
             workspace,
@@ -61,6 +65,10 @@ impl Fixture {
             .arg(&self.profile)
             .arg("run")
             .env("HOME", self.root.path().join("home"))
+            .env(
+                "WRIX_WORKER_SECCOMP",
+                self.root.path().join("worker-seccomp.json"),
+            )
             .env_remove("WRIX_NETWORK")
             .env_remove("WRIX_DRY_RUN")
             .env_remove("WRIX_DRY_RUN_SERVICES");
@@ -915,6 +923,10 @@ esac
             .args(["spawn", "--spawn-config"])
             .arg(spawn_config)
             .arg("--stdio")
+            .env(
+                "WRIX_WORKER_SECCOMP",
+                self.root.path().join("worker-seccomp.json"),
+            )
             .env("PATH", path)
             .env("HOME", self.root.path().join("home"))
             .env("XDG_RUNTIME_DIR", self.root.path().join("runtime"))

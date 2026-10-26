@@ -238,11 +238,6 @@ in
       ...
     }:
     {
-      WRIX_WORKER_SECCOMP =
-        if pkgs.stdenv.hostPlatform.isLinux then
-          import ../sandbox/linux/seccomp.nix { inherit pkgs; }
-        else
-          "";
       nativeBuildInputs =
         nativeBuildInputs
         ++ [
