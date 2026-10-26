@@ -92,6 +92,10 @@ write_fake_devshell_tools() {
   cat > "$bin_dir/wrix" <<'SCRIPT'
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ "$*" == 'run --help' ]]; then
+  printf '%s\n' 'Use generated project launch data.'
+  exit 0
+fi
 if [[ "${1:-}" == "service" && "${2:-}" == "capabilities" ]]; then
   printf '%s\n' shared-services-v1
   exit 0
