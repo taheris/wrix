@@ -1,3 +1,5 @@
+mod apple;
+
 use std::{
     env, fs, io,
     path::{Path, PathBuf},
@@ -1028,6 +1030,9 @@ fn darwin_image_for_digest(digest: &Digest) -> Result<Option<Target>, Error> {
 }
 
 fn container_content_digest(value: &Value) -> Result<Option<Digest>, Error> {
+    if value.pointer("/0/configuration/descriptor").is_some() {
+        return apple::cached(value);
+    }
     if let Some(actual) = value.pointer("/0/digest").and_then(Value::as_str) {
         let normalized = format!(
             "sha256:{}",
@@ -1092,7 +1097,20 @@ fn load_container_archive(archive: &Path, temp_dir: &Path) -> Result<Option<Imag
             &oci_archive.display().to_string(),
         ],
     )?;
-    loaded_container_ref(&output.stdout, &output.stderr)
+    let loaded = loaded_container_ref(&output.stdout, &output.stderr)?;
+    if let Some(reference) = &loaded {
+        apple::attest(reference, temp_dir)?;
+    } else {
+        let output = std::str::from_utf8(&output.stdout).map_err(|_| Error::InvalidMetadata)?;
+        for reference in output
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+        {
+            apple::attest(&ImageRef::parse(reference)?, temp_dir)?;
+        }
+    }
+    Ok(loaded)
 }
 
 fn loaded_container_ref(stdout: &[u8], stderr: &[u8]) -> Result<Option<ImageRef>, Error> {

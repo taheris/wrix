@@ -300,6 +300,23 @@ selectors. The packaging verifier runs that binary from two different project
 directories/configurations and verifies the same target and absent host-state
 effects.
 
+## Apple image identity prerequisite
+
+Apple's native image descriptor ID is not the OCI configuration digest declared
+by the package. For its current inspection format, runtime image lookup reads a
+private, versioned configuration receipt bound to the exact native descriptor
+and guest architecture; absent evidence is not a digest match. Installation
+obtains that evidence by exporting the selected Linux variant, reading its OCI
+configuration digest and rechecking the native identity before atomic receipt
+publication. Warm lookup only reads the receipt: it neither exports the image
+nor creates cache paths. Foreign, substituted or malformed receipts fail closed.
+
+The Rust image tests cover descriptor identity parsing, receipt binding and
+permissions, symlink refusal and passive missing evidence. Native Apple export
+and installed-image acceptance have not been run here. This prerequisite does
+not implement Apple pool ownership, authenticated read-only projection, worker
+handoff or whole-deployment lifecycle dispatch.
+
 ## Guest bootstrap
 
 Run the dedicated image inside a disposable Linux VM:
