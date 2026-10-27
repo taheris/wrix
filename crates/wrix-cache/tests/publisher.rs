@@ -418,7 +418,10 @@ async fn warm_reads_repository_policy_and_checks_flag_overrides_environment() {
         fixture.policy(policy);
         fixture.run("warm", &args);
         assert!(fixture.present(&fixture.foreign).await);
-        assert!(fixture.log().contains("build --no-link .#checks.unit"));
+        let log = fixture.log();
+        assert!(log.contains("build --json --out-link "));
+        assert!(log.contains(".#checks.unit"));
+        assert!(!log.contains("--no-link"));
     }
 }
 
@@ -775,31 +778,86 @@ fn upstream_fixture_models_partial_null_and_failed_queries() {
     );
 }
 
-const NIX_FIXTURE: &str = r#"#!/usr/bin/env bash
-set -euo pipefail
-printf '%s\n' "$*" >>"$WRIX_TEST_NIX_LOG"
-if [[ "$1" == build ]]; then
-  exit "${WRIX_TEST_BUILD_FAIL:-0}"
-fi
-if [[ "$1" == path-info && "$2" == --store && "$4" == --json ]]; then
-  case "$WRIX_TEST_UPSTREAM" in
-    unavailable) exit 1 ;;
-    malformed) printf 'invalid JSON\n'; exit 0 ;;
-    normal|partial) ;;
-    *) exit 2 ;;
-  esac
-  shift 4
-  printf '{'
-  separator=''
-  for path in "$@"; do
-    printf '%s"%s":' "$separator" "$path"
-    if [[ "$path" == "$WRIX_TEST_UPSTREAM_HIT" ]]; then printf '{}'; else printf 'null'; fi
-    separator=','
-  done
-  printf '}\n'
-  [[ "$WRIX_TEST_UPSTREAM" == normal ]]
-  exit "$?"
-fi
-printf 'unexpected Nix invocation\n' >&2
-exit 2
-"#;
+#[test]
+fn build_fixture_models_native_selected_graph_and_rooted_json_inventory() {
+    let root = tempfile::tempdir().unwrap();
+    let nix = root.path().join("nix");
+    fs::write(&nix, NIX_FIXTURE).unwrap();
+    fs::set_permissions(&nix, fs::Permissions::from_mode(0o755)).unwrap();
+    let roots = root.path().join("roots.json");
+    fs::write(&roots, json!({"roots":[Fixture::root("packages.selected", Path::new("/nix/store/selected")), Fixture::root("packages.unselected", Path::new("/nix/store/unselected"))]}).to_string()).unwrap();
+    let mut command = Command::new(&nix);
+    command
+        .env("WRIX_TEST_NIX_LOG", root.path().join("log"))
+        .env("WRIX_CACHE_ROOTS_FILE", &roots);
+    let graph = command
+        .args([
+            "derivation",
+            "show",
+            "--recursive",
+            "/nix/store/packages.selected.drv",
+        ])
+        .output()
+        .unwrap();
+    assert!(graph.status.success());
+    let graph: Value = serde_json::from_slice(&graph.stdout).unwrap();
+    assert_eq!(graph.as_object().unwrap().len(), 1);
+    assert_eq!(
+        graph["/nix/store/packages.selected.drv"]["outputs"]["out"]["path"],
+        "/nix/store/selected"
+    );
+    let link = root.path().join("result");
+    let built = Command::new(&nix)
+        .args(["build", "--json", "--out-link"])
+        .arg(&link)
+        .arg(".#packages.selected")
+        .env("WRIX_TEST_NIX_LOG", root.path().join("log"))
+        .env("WRIX_CACHE_ROOTS_FILE", &roots)
+        .output()
+        .unwrap();
+    assert!(built.status.success());
+    let built: Value = serde_json::from_slice(&built.stdout).unwrap();
+    assert_eq!(built.as_array().unwrap().len(), 1);
+    assert_eq!(built[0]["outputs"]["out"], "/nix/store/selected");
+    assert_eq!(
+        fs::read_link(link).unwrap(),
+        Path::new("/nix/store/selected")
+    );
+}
+
+const NIX_FIXTURE: &str = r"#!/usr/bin/env python3
+import json, os, pathlib, sys
+args = sys.argv[1:]
+with open(os.environ['WRIX_TEST_NIX_LOG'], 'a') as log:
+    log.write(' '.join(args) + '\n')
+if args == ['config', 'show', 'post-build-hook']:
+    print('/nix/store/fixture/bin/wrix-cache-post-build-hook')
+    sys.exit(0)
+if args[:3] == ['derivation', 'show', '--recursive']:
+    roots = json.load(open(os.environ['WRIX_CACHE_ROOTS_FILE']))['roots']
+    print(json.dumps({root['drv_path']: {'outputs': {'out': {'path': root['out_paths'][0]}}} for root in roots if root['drv_path'] in args[3:]}, separators=(',', ':')))
+    sys.exit(0)
+if args[:3] == ['build', '--json', '--out-link']:
+    if os.environ.get('WRIX_TEST_BUILD_FAIL') == '1':
+        sys.exit(1)
+    assert len(args) > 4
+    roots = json.load(open(os.environ['WRIX_CACHE_ROOTS_FILE']))['roots']
+    built = [root for root in roots if root['installable'] in args[4:]]
+    for index, root in enumerate(built):
+        link = args[3] if index == 0 else args[3] + '-' + str(index)
+        pathlib.Path(link).symlink_to(root['out_paths'][0])
+    print(json.dumps([{'drvPath': root['drv_path'], 'outputs': {'out': root['out_paths'][0]}} for root in built], separators=(',', ':')))
+    sys.exit(0)
+if args[:2] == ['path-info', '--store'] and args[3] == '--json':
+    mode = os.environ['WRIX_TEST_UPSTREAM']
+    if mode == 'unavailable':
+        sys.exit(1)
+    if mode == 'malformed':
+        print('invalid JSON')
+        sys.exit(0)
+    assert mode in ['normal', 'partial']
+    print(json.dumps({path: {} if path == os.environ['WRIX_TEST_UPSTREAM_HIT'] else None for path in args[4:]}, separators=(',', ':')))
+    sys.exit(0 if mode == 'normal' else 1)
+sys.stderr.write('unexpected Nix invocation\n')
+sys.exit(2)
+";

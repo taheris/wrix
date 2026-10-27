@@ -32,6 +32,12 @@ fn prepare_on(
         request::Plane::Krun => {
             runtime.block_on(client.prepare_nix_krun_worker(selection, system(), &ticket, &binding))
         }
+        request::Plane::Apple => runtime.block_on(client.prepare_nix_apple_worker(
+            selection,
+            system(),
+            &ticket,
+            &binding,
+        )),
         request::Plane::Podman => runtime.block_on(client.prepare_nix_podman_worker(
             selection,
             system(),

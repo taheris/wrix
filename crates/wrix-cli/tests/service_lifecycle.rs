@@ -292,6 +292,37 @@ struct Fixture {
     snapshot: Value,
 }
 
+#[test]
+#[cfg(target_os = "linux")]
+fn supervised_controller_fixture_obeys_native_ownership_and_rejects_unknown_manager_commands()
+-> TestResult {
+    use wrix_service::control::supervision::{Lifecycle, Native, Package, Platform};
+    let fixture = Fixture::new()?;
+    let package = Package::load(std::path::Path::new(
+        &std::env::var_os("WRIX_TEST_CONTROLLER_BINDING")
+            .ok_or("missing controller fixture binding")?,
+    ))?;
+    let control = fixture.root.path().join("state/wrix/control");
+    let manager = fixture.root.path().join("controller-supervisor");
+    let native = Native::new(
+        Platform::Linux,
+        rustix::process::geteuid().as_raw(),
+        manager.clone(),
+        fixture.root.path().join("controller-pin"),
+    );
+    assert_eq!(
+        Lifecycle::lock(&control)?.preflight(&native, &package)?,
+        Some(package)
+    );
+    assert!(
+        !Command::new(manager)
+            .args(["--user", "unknown-operation"])
+            .status()?
+            .success()
+    );
+    Ok(())
+}
+
 impl Fixture {
     /// A cache-only namespace on a fresh, verified singleton deployment. SQL
     /// namespaces instead use the native public-CLI conformance fixture above.
@@ -421,6 +452,11 @@ impl Fixture {
                 .as_str()
                 .ok_or("missing workspace hash")?,
         )?;
+        #[cfg(target_os = "linux")]
+        {
+            *fixture.controller.borrow_mut() =
+                Some(controller::Server::start_supervised(fixture.root.path())?);
+        }
         Ok(fixture)
     }
 
@@ -469,6 +505,9 @@ impl Fixture {
             .env_remove("WRIX_SERVICE_IMAGE_SOURCE")
             .env_remove("WRIX_SERVICE_IMAGE_SOURCE_KIND")
             .env_remove("WRIX_SERVICE_IMAGE_DIGEST");
+        if let Some(controller) = self.controller.borrow().as_ref() {
+            controller.configure(&mut command)?;
+        }
         Ok(command)
     }
 

@@ -589,6 +589,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aedcfb3409746eddb02b9e19ebda1c3394f759a152e48ee875a0844d1b955484"
 
 [[package]]
+name = "fnv"
+version = "1.0.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
+
+[[package]]
 name = "foldhash"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -844,10 +850,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "http-range-header"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9171a2ea8a68358193d15dd5d70c1c10a2afc3e7e4c5bc92bc9f025cebd7359c"
+
+[[package]]
 name = "httparse"
 version = "1.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87"
+
+[[package]]
+name = "httpdate"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
 name = "humantime"
@@ -1090,6 +1108,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "iri-string"
+version = "0.7.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1663ee7d8cf2900cc1414b1e1eec9f348d6eaa3bcab07579f4726a4b8499f447"
+dependencies = [
+ "memchr",
+ "serde",
+]
+
+[[package]]
 name = "itertools"
 version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1315,6 +1343,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "md5"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ebb8d8732c6a6df3d8f032a82911cfc747e00efb95cc46e8d0acd5b5b88570c"
+
+[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1325,6 +1359,16 @@ name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
+
+[[package]]
+name = "mime_guess"
+version = "2.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f7c44f8e672c00fe5308fa235f821cb4198414e1c77935c1ab6948d3fd78550e"
+dependencies = [
+ "mime",
+ "unicase",
+]
 
 [[package]]
 name = "mio"
@@ -1393,6 +1437,15 @@ dependencies = [
  "tokio-stream",
  "tokio-test",
  "tracing",
+]
+
+[[package]]
+name = "nom"
+version = "8.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df9761775871bdef83bee530e60050f7e54b1105350d6884eb0fb4f46c2f9405"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]
@@ -1694,6 +1747,129 @@ name = "rama-error"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29d4648eb9886eb028f1a31e3eeaa4fff3b05e217a59a6080e648a3f8fa40238"
+
+[[package]]
+name = "rama-http"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b2b32e574f2bc7e9d2d35153efb0759928661d5ccfd7565005787a1c4179fb2"
+dependencies = [
+ "ahash",
+ "base64 0.23.1",
+ "bitflags 2.13.2",
+ "const_format",
+ "csv",
+ "http-range-header",
+ "httpdate",
+ "iri-string",
+ "jiff",
+ "parking_lot",
+ "percent-encoding",
+ "pin-project-lite",
+ "rama-core",
+ "rama-http-headers",
+ "rama-http-types",
+ "rama-json",
+ "rama-net",
+ "rama-utils",
+ "rand",
+ "serde",
+ "serde_html_form",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "rama-http-core"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd832563002979754e619537a0d5861b1f1c8dfb505b71c314ccd781b2697324"
+dependencies = [
+ "ahash",
+ "atomic-waker",
+ "futures-channel",
+ "httparse",
+ "httpdate",
+ "indexmap 2.14.2",
+ "itoa",
+ "parking_lot",
+ "pin-project-lite",
+ "rama-core",
+ "rama-http",
+ "rama-http-types",
+ "rama-net",
+ "rama-utils",
+ "slab",
+ "tokio",
+ "tokio-test",
+ "want",
+]
+
+[[package]]
+name = "rama-http-headers"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d1f342069baf92925a7d8ed74b42f8dcfb0a08e831da8537fa24e7b516384f10"
+dependencies = [
+ "ahash",
+ "base64 0.23.1",
+ "const_format",
+ "httpdate",
+ "jiff",
+ "rama-core",
+ "rama-http-types",
+ "rama-macros",
+ "rama-net",
+ "rama-utils",
+ "rand",
+ "serde",
+ "sha1",
+]
+
+[[package]]
+name = "rama-http-types"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5b09c027c4580a73643571953aa662429d8dab848aac6c45425f3f82b4a8eaa5"
+dependencies = [
+ "bytes",
+ "const_format",
+ "fnv",
+ "futures-core",
+ "hex",
+ "itoa",
+ "md5",
+ "memchr",
+ "mime",
+ "mime_guess",
+ "nom",
+ "parking_lot",
+ "pin-project-lite",
+ "rama-core",
+ "rama-json",
+ "rama-net",
+ "rama-utils",
+ "rand",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "sync_wrapper",
+ "tokio",
+]
+
+[[package]]
+name = "rama-json"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4aa8ad4c1fcd8195a08ed8d965227d92a73ac724fd0eb671d56344143bff9599"
+dependencies = [
+ "itoa",
+ "rama-utils",
+ "ryu",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "rama-macros"
@@ -2191,6 +2367,17 @@ dependencies = [
  "ryu",
  "serde",
  "unsafe-libyaml",
+]
+
+[[package]]
+name = "sha1"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aacc4cc499359472b4abe1bf11d0b12e688af9a805fa5e3016f9a386dc2d0214"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.3.1",
+ "digest 0.11.3",
 ]
 
 [[package]]
@@ -2771,6 +2958,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
+name = "unicase"
+version = "2.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "357cc3acc6a036009fd6c973ed009037c732d60d0b4f6c673e9041497482a28f"
+
+[[package]]
 name = "unicode-ident"
 version = "1.0.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3298,6 +3491,7 @@ dependencies = [
 name = "wrix-sandbox"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "displaydoc",
  "fs2",
  "libc",
@@ -3320,10 +3514,14 @@ version = "0.1.0"
 dependencies = [
  "attic",
  "base64 0.22.1",
+ "bytes",
  "displaydoc",
  "fs2",
+ "getrandom 0.4.3",
  "libc",
  "rama-core",
+ "rama-http",
+ "rama-http-core",
  "rama-net",
  "rama-tcp",
  "reqwest",

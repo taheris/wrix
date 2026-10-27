@@ -6,11 +6,15 @@ version.workspace = true
 
 [dependencies]
 base64 = { workspace = true }
+bytes = { workspace = true }
+getrandom = { workspace = true }
 displaydoc = { workspace = true }
 fs2 = { workspace = true }
 libc = { workspace = true }
 rustix = { workspace = true }
 rama-core = { workspace = true }
+rama-http = { workspace = true }
+rama-http-core = { workspace = true }
 rama-net = { workspace = true }
 rama-tcp = { workspace = true }
 tokio = { workspace = true }

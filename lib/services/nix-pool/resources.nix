@@ -11,7 +11,18 @@ pkgs.writeShellScriptBin "wrix-nix-pool-daemon" ''
   [[ "$#" == 0 && $(id -u) == 0 ]]
   [[ -f /etc/wrix/nix-pool-service && ! -e /etc/wrix/image-agent ]]
   [[ $(</etc/wrix/nix-pool-service) == 1 ]]
-  printf '0\n' > /proc/sys/vm/panic_on_oom
+  if [[ $(</proc/sys/vm/panic_on_oom) != 0 ]]; then
+    printf '0\n' > /proc/sys/vm/panic_on_oom
+  fi
+  supervisor=/sys/fs/cgroup/wrix-nix-pool-supervisor
+  [[ ! -e "$supervisor" ]]
+  mkdir "$supervisor"
+  mapfile -t bootstrap_pids < /sys/fs/cgroup/cgroup.procs
+  for pid in "''${bootstrap_pids[@]}"; do
+    [[ "$pid" == "$BASHPID" || "$pid" == "$PPID" ]]
+    printf '%s\n' "$pid" > "$supervisor/cgroup.procs"
+  done
+  [[ -z $(</sys/fs/cgroup/cgroup.procs) ]]
   base=/sys/fs/cgroup/wrix-nix-pool
   [[ ! -e "$base" && ! -e /run/wrix-nix-pool ]]
   printf '+cpu +memory +pids\n' > /sys/fs/cgroup/cgroup.subtree_control
@@ -45,6 +56,15 @@ pkgs.writeShellScriptBin "wrix-nix-pool-daemon" ''
   printf '536870912\n' > "$base/memory.min"
   printf '536870912\n' > "$base/work/memory.min"
   mkdir -m 0755 /run/wrix-nix-pool
+  data_owner=$(</run/wrix-nix-pool-data-owner)
+  host_key=/var/lib/wrix/nix-pool/host-key
+  [[ -f "$host_key" && ! -L "$host_key" ]]
+  [[ $(stat -c '%u:%g:%a:%h' "$host_key") == "$data_owner:600:1" ]]
+  install -m 0600 "$host_key" /run/wrix-nix-pool/host-key
+  [[ $(stat -c '%u:%g:%a:%h' /run/wrix-nix-pool/host-key) == 0:0:600:1 ]]
+  mkdir -m 0755 /run/wrix-nix-pool/export-root
+  mount --rbind /var/lib/wrix/nix-pool/export-root /run/wrix-nix-pool/export-root
+  [[ $(stat -c '%u:%g:%a' /run/wrix-nix-pool/export-root) == 0:0:755 ]]
   printf '%s\n' "$BASHPID" > /run/wrix-nix-pool/supervisor.pid
   exec 3<> /nix/var/nix/gc.lock
   flock --shared 3
@@ -91,7 +111,7 @@ pkgs.writeShellScriptBin "wrix-nix-pool-daemon" ''
     sleep 0.01
   done
   [[ "$protected" == true ]]
-  export_root=/var/lib/wrix/nix-pool/export-root
+  export_root=/run/wrix-nix-pool/export-root
   touch "$export_root/run/wrix-nix-pool/admission.sock"
   mount --bind /run/wrix-nix-pool/admission.sock "$export_root/run/wrix-nix-pool/admission.sock"
   install -m 0555 ${owner}/bin/wrix-nix-pool-owner /run/wrix-nix-pool/keys
@@ -102,14 +122,15 @@ pkgs.writeShellScriptBin "wrix-nix-pool-daemon" ''
   sshd_pid=$!
   printf '%s\n' "$sshd_pid" > /run/wrix-nix-pool/transport.pid
   printf '1\n' > /run/wrix-nix-pool/ready
-  if wait -n "$daemon_pid" "$owner_pid" "$sshd_pid"; then
+  completed=
+  if wait -n -p completed "$daemon_pid" "$owner_pid" "$sshd_pid"; then
     status=0
   else
     status=$?
   fi
   work_events=$(<"$base/work/cgroup.events")
   seed_events=$(<"$base/seed/cgroup.events")
-  if [[ -f /run/wrix-nix-pool/stopping && "$work_events" == *'populated 0'* && "$seed_events" == *'populated 0'* ]]; then
+  if [[ "$status" == 0 && "$completed" == "$daemon_pid" && -f /run/wrix-nix-pool/stopping && "$work_events" == *'populated 0'* && "$seed_events" == *'populated 0'* ]]; then
     kill -TERM "$sshd_pid" "$owner_pid"
     for child in "$sshd_pid" "$owner_pid"; do
       if wait "$child"; then
@@ -121,7 +142,7 @@ pkgs.writeShellScriptBin "wrix-nix-pool-daemon" ''
     sync -f /nix
     if [[ -e /var/lib/wrix/nix-pool/resuming || -L /var/lib/wrix/nix-pool/resuming ]]; then
       [[ -f /var/lib/wrix/nix-pool/resuming && ! -L /var/lib/wrix/nix-pool/resuming ]]
-      [[ $(stat -c '%u:%g:%a:%h' /var/lib/wrix/nix-pool/resuming) == 0:0:600:1 ]]
+      [[ $(stat -c '%u:%g:%a:%h' /var/lib/wrix/nix-pool/resuming) == "$data_owner:600:1" ]]
       [[ $(</var/lib/wrix/nix-pool/resuming) == 1 ]]
       rm -- /var/lib/wrix/nix-pool/resuming
     fi

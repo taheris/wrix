@@ -29,6 +29,9 @@ fn interrupted_client_ownership_is_protected_and_substituted_records_are_never_e
         ticket,
         lease: "c".repeat(32).try_into().unwrap(),
         state: State::Registering,
+        native_process: None,
+        broker_epoch: None,
+        port: None,
     };
     let check = || protected(&control, &pool, &indexed);
     record.publish(&root).unwrap();

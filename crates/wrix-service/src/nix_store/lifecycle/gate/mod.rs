@@ -58,6 +58,13 @@ pub fn check_clear(host: &Host) -> Result<(), Error> {
 pub fn shared(host: &Host) -> Result<Guard, Error> {
     let guard = lock(host, false)?;
     check_clear(host)?;
+    for marker in ["shutdown.json", "update.json"] {
+        match fs::symlink_metadata(host.roots().state().join("host-lifecycle").join(marker)) {
+            Ok(_) => return Err(Error::Stopped),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+            Err(error) => return Err(error.into()),
+        }
+    }
     Ok(guard)
 }
 pub fn exclusive(host: &Host) -> Result<Guard, Error> {

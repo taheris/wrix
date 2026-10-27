@@ -71,6 +71,23 @@ impl Store {
         Ok(snapshot.ports.map(Some))
     }
 
+    pub(super) fn bound_ports(&self) -> Result<Option<[NonZeroU16; 4]>, Error> {
+        let issued = self
+            .issued
+            .try_lock()
+            .map_err(|_| Error::ControllerReadiness)?;
+        if !*issued {
+            return Ok(None);
+        }
+        let [sql, cache, egress, compiler] = self.load()?;
+        Ok(Some([
+            sql.ok_or(Error::InvalidEndpoints)?,
+            cache.ok_or(Error::InvalidEndpoints)?,
+            egress.ok_or(Error::InvalidEndpoints)?,
+            compiler.ok_or(Error::InvalidEndpoints)?,
+        ]))
+    }
+
     pub(super) async fn bind(&self) -> Result<Listeners, Error> {
         let mut issued = self.issued.lock().await;
         if *issued {

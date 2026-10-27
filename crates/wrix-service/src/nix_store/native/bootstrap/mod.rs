@@ -1,5 +1,7 @@
 //! Closed startup inputs; public bootstrap data is not host admission authority.
 
+pub(crate) mod ownership;
+
 use super::{Error, image::StorePath, lease::Key};
 use serde::{Deserialize, Serialize};
 

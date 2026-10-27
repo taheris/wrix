@@ -1,15 +1,20 @@
 //! Actual supervised controller, private IPC and caller-independent native provisioning.
+#[cfg(target_os = "linux")]
 mod client;
 mod interruption;
 mod maintenance;
+mod platform;
 mod seed;
+#[cfg(target_os = "linux")]
 mod worker;
 
 use super::*;
 use wrix_service::control::{
     Access, Client, Controller, Namespace, Operation, Policy, PoolPreparation, Reply,
 };
+#[cfg(target_os = "linux")]
 const REQUESTER: &str = "WRIX_TEST_POOL_REQUESTER";
+#[cfg(target_os = "linux")]
 const NAME: &str = "nix_store::admission::request::native::supervised_controller_prepares_after_requester_exit_and_preserves_native_owner";
 
 fn system() -> System {
@@ -21,6 +26,7 @@ fn system() -> System {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 #[ignore = "requires package-bound native Linux KVM/krun/Podman and eight GiB; run the host-owner CI app"]
 fn supervised_controller_prepares_after_requester_exit_and_preserves_native_owner() {
     if let Some(caller) = child() {

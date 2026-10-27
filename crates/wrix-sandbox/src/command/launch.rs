@@ -290,7 +290,9 @@ pub fn execute(
         issuer.admit()?;
     }
     if plan.nix_store.mode == wrix_core::nix_store::Mode::Shared {
-        if plan.microvm {
+        if Platform::CURRENT == Platform::Darwin {
+            stores.admit_apple()?;
+        } else if plan.microvm {
             stores.admit_krun()?;
         } else {
             stores.admit()?;
@@ -1147,7 +1149,7 @@ impl<'a> Plan<'a> {
         )?;
         let result = match Platform::CURRENT {
             Platform::Linux => self.launch_linux(services, observed_status, stores),
-            Platform::Darwin => self.launch_darwin(services, observed_status),
+            Platform::Darwin => self.launch_darwin(services, observed_status, stores),
         };
         complete_with_cleanup(result, registration.remove())
     }
@@ -1333,7 +1335,9 @@ impl<'a> Plan<'a> {
             Kind::Spawn(spawn) => spawn.execution_ticket.as_ref(),
         };
         let attempt = crate::nix_store::Attempt::reserve(&self.selection, system, image, ticket)?;
-        Ok(Some(if self.microvm {
+        Ok(Some(if Platform::CURRENT == Platform::Darwin {
+            attempt.prepare_apple(stores)?
+        } else if self.microvm {
             attempt.prepare_krun(stores)?
         } else {
             attempt.prepare(stores)?
@@ -1344,14 +1348,29 @@ impl<'a> Plan<'a> {
         &self,
         services: &mut ServicesState,
         observed_status: &mut Option<ExitStatus>,
+        stores: &dyn crate::nix_store::Factory,
     ) -> Result<ExitCode, LaunchError> {
-        if let Kind::Spawn(spawn) = &self.request.kind
+        if self.nix_store.mode == wrix_core::nix_store::Mode::Private
+            && let Kind::Spawn(spawn) = &self.request.kind
             && spawn.execution_ticket.is_some()
         {
             return Err(io::Error::other("trusted execution tickets require Linux Podman containment; Darwin observations remain unavailable").into());
         }
-        let vpn_conflict = fix_darwin_vmnet_route()?;
-        self.install_image(Runtime::Container)?;
+        let shared_mode = self.nix_store.mode == wrix_core::nix_store::Mode::Shared;
+        let vpn_conflict = if shared_mode {
+            false
+        } else {
+            fix_darwin_vmnet_route()?
+        };
+        if shared_mode {
+            let (container, skopeo) = stores.apple_image_commands()?;
+            image::with_runtime_commands(&container, &skopeo, || {
+                self.install_image_checked(Runtime::Container)
+            })?;
+        } else {
+            self.install_image(Runtime::Container)?;
+        }
+        let shared = self.prepare_shared_store(stores)?;
         Staging::with(|staging| {
             let credentials = self.credentials(staging)?;
             let pi_auth = self.pi_auth()?;
@@ -1360,7 +1379,10 @@ impl<'a> Plan<'a> {
             if let Some(cache) = &services.project_cache {
                 darwin_mounts.mounts.push(cache.mount());
             }
-            let mut command = ProcessCommand::new("container");
+            let mut command = match &shared {
+                Some(shared) => shared.command()?,
+                None => ProcessCommand::new("container"),
+            };
             command
                 .arg("run")
                 .arg("--rm")
@@ -1411,6 +1433,9 @@ impl<'a> Plan<'a> {
             if vpn_conflict {
                 command.arg("-e").arg("WRIX_WAIT_FOR_ROUTE=1");
             }
+            if let Some(shared) = &shared {
+                shared.delivery().configure(&mut command);
+            }
             command
                 .arg("--")
                 .arg(self.image_ref.as_str())
@@ -1419,7 +1444,21 @@ impl<'a> Plan<'a> {
                 .stdout(Stdio::inherit())
                 .stderr(Stdio::inherit());
             self.recheck()?;
-            let status = services.wait(&mut command)?;
+            let status = if let Some(shared) = shared {
+                let mut running = shared.spawn(&command, !self.spawn() || self.stdio)?;
+                let status = services.wait_child(running.child())?;
+                *observed_status = Some(status);
+                if running
+                    .wait_for_retirement(std::time::Duration::from_secs(30))
+                    .map_err(crate::nix_store::Error::from)?
+                    != crate::execution::Observation::Retired
+                {
+                    return Err(crate::nix_store::Error::Delivery.into());
+                }
+                status
+            } else {
+                services.wait(&mut command)?
+            };
             *observed_status = Some(status);
             darwin_mounts.sync_files()?;
             status_to_exit(status)
@@ -1523,6 +1562,10 @@ impl<'a> Plan<'a> {
     }
 
     fn install_image(&self, runtime: Runtime) -> Result<(), LaunchError> {
+        self.install_image_checked(runtime)?;
+        Ok(())
+    }
+    fn install_image_checked(&self, runtime: Runtime) -> Result<(), image::Error> {
         let mut store = CommandStore;
         image::install(
             &mut store,

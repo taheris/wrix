@@ -160,6 +160,29 @@ struct Target {
 pub struct Generation([Arc<Target>; 4]);
 
 impl Generation {
+    pub(crate) fn from_native(addresses: [SocketAddr; 4]) -> Result<Self, Error> {
+        if addresses
+            .iter()
+            .any(|address| !address.ip().is_loopback() || address.port() == 0)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "native roles require fixed host-loopback addresses",
+            )
+            .into());
+        }
+        Ok(Self(addresses.map(|address| {
+            Arc::new(Target {
+                address,
+                connections: AtomicUsize::new(0),
+            })
+        })))
+    }
+
+    pub(crate) fn reuse_role(&mut self, previous: &Self, role: Role) {
+        self.0[role.index()] = previous.0[role.index()].clone();
+    }
+
     /// Call only after the controller establishes this role's native authenticated readiness.
     /// A successful TCP connection alone is not readiness or backend ownership evidence.
     pub fn confirm_ready(&self, role: Role) -> ReadyRoute {

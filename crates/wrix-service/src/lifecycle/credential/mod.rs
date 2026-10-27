@@ -64,9 +64,10 @@ enum OpenError {
 }
 
 fn open(selection: &Selection) -> Result<Source, OpenError> {
-    Capability::discover()?;
+    let host = Capability::discover()?;
     let package = Package::from_env()?;
     selection.authorize_effects()?;
+    let _lifecycle = crate::nix_store::lifecycle::gate::shared(&host).map_err(io::Error::other)?;
     let workspace = selection.workspace();
     let namespace = Namespace::from(workspace.hash());
     let paths = Paths::for_workspace(workspace.hash())?;

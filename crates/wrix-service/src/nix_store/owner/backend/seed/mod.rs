@@ -1,4 +1,6 @@
 //! Exact installed worker-image inputs, not an arbitrary host Nix command or path-list grant.
+mod apple;
+
 use super::{COMMAND_BUDGET, Error, Program, Tools, success, text};
 use crate::nix_store::native::image::{Id, StorePath};
 use serde::Deserialize;
@@ -77,14 +79,7 @@ impl Image {
             .require_supported()
             .map_err(|_| Error::Invalid)?;
         let tools = Tools::from_env()?;
-        let mut command = tools.command(Program::Podman);
-        command.args(["image", "inspect", digest.as_str()]);
-        let mut observations: Vec<Observation> =
-            serde_json::from_slice(&success(tools.run(command, None, Some(COMMAND_BUDGET))?)?)?;
-        if observations.len() != 1 {
-            return Err(Error::Invalid);
-        }
-        let observation = observations.pop().ok_or(Error::Invalid)?;
+        let observation = Self::observation(&tools, system, digest)?;
         let id = Self::binding(system, digest, compatibility, &observation)?;
         let path = compatibility.seed_closure.as_path();
         let metadata = fs::symlink_metadata(path)?;
@@ -115,6 +110,20 @@ impl Image {
             paths,
         })
     }
+    fn observation(tools: &Tools, system: System, digest: &Digest) -> Result<Observation, Error> {
+        if tools.platform() == super::tools::Platform::Apple {
+            return apple::inspect(tools, system, digest);
+        }
+        let mut command = tools.command(Program::Podman);
+        command.args(["image", "inspect", digest.as_str()]);
+        let mut observations: Vec<Observation> =
+            serde_json::from_slice(&success(tools.run(command, None, Some(COMMAND_BUDGET))?)?)?;
+        if observations.len() != 1 {
+            return Err(Error::Invalid);
+        }
+        observations.pop().ok_or(Error::Invalid)
+    }
+
     fn binding(
         system: System,
         expected: &Digest,

@@ -4,6 +4,37 @@ use wrix_core::git::Branch;
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
 #[test]
+fn fresh_native_tcp_state_uses_the_already_bound_controller_sql_port() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let guard = coordination::acquire(&root.path().join("host-lifecycle"))?;
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
+    let port = NonZeroU16::new(listener.local_addr()?.port()).ok_or("zero port")?;
+    let record = Record::prepare_native_for(&guard, port, DoltTransport::Tcp)?;
+    assert_eq!(record.public_sql_port(), Some(port));
+    assert_ne!(record.sync_port, Some(port));
+    assert_eq!(
+        Record::at(guard.root())?
+            .ok_or("missing shared state")?
+            .public_sql_port(),
+        Some(port)
+    );
+    Ok(())
+}
+
+#[test]
+fn retained_native_tcp_endpoint_conflict_refuses_without_rewriting_state() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let guard = coordination::acquire(&root.path().join("host-lifecycle"))?;
+    let first = NonZeroU16::new(23001).ok_or("zero port")?;
+    let second = NonZeroU16::new(23002).ok_or("zero port")?;
+    Record::prepare_native_for(&guard, first, DoltTransport::Tcp)?;
+    let before = fs::read(guard.root().join("shared.json"))?;
+    assert!(Record::prepare_native_for(&guard, second, DoltTransport::Tcp).is_err());
+    assert_eq!(fs::read(guard.root().join("shared.json"))?, before);
+    Ok(())
+}
+
+#[test]
 fn interrupted_linked_worktree_cutover_repairs_to_private_git_without_losing_staged_state()
 -> TestResult {
     exercise_linked_worktree_cutover(WorktreeView::HostAbsolute)

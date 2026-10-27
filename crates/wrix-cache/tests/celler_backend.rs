@@ -24,6 +24,8 @@ const RETENTION: Duration = Duration::from_hours(720);
 
 #[path = "common/registration/rotation.rs"]
 mod rotation;
+#[path = "../../../lib/services/celler-work-drain-state.rs"]
+pub mod workflow_native;
 
 #[tokio::test]
 async fn native_common_readiness_preserves_retention_key_and_separate_publication_admission() {
@@ -113,7 +115,10 @@ impl Server {
         listener.set_nonblocking(true).unwrap();
         let endpoint = format!("http://{}/", listener.local_addr().unwrap());
         let worker = thread::spawn(move || {
-            for exchange in exchanges {
+            let tracker = workflow_native::Tracker::new();
+            let mut exchanges = exchanges.into_iter().peekable();
+            let mut next_workflow = 0_u64;
+            while exchanges.peek().is_some() || tracker.status().workflows != 0 {
                 let deadline = std::time::Instant::now() + Duration::from_secs(10);
                 let mut socket = loop {
                     match listener.accept() {
@@ -136,14 +141,57 @@ impl Server {
                     assert!(header.len() <= 8192);
                 }
                 let header = String::from_utf8(header).unwrap();
-                assert_eq!(
-                    header.lines().next().unwrap(),
-                    format!(
-                        "{} /_api/v1/cache-config/{namespace} HTTP/1.1",
-                        exchange.method
-                    )
-                );
                 check(&header);
+                let authority = header
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("authorization")
+                            .then(|| value.trim().to_owned())
+                    })
+                    .unwrap();
+                let workflow = header.lines().find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("x-wrix-workflow")
+                        .then(|| value.trim().to_owned())
+                });
+                let _work = tracker
+                    .request(workflow.as_deref(), &authority)
+                    .expect("request must conform to native admitted workflow state");
+                let request = header.lines().next().unwrap();
+                let exchange = if request == format!("POST /_api/v1/workflow/{namespace} HTTP/1.1")
+                {
+                    assert!(workflow.is_none());
+                    next_workflow += 1;
+                    let id = format!("00000000-0000-4000-8000-{next_workflow:012x}");
+                    assert!(tracker.open_workflow(id.clone(), authority));
+                    Exchange {
+                        method: "POST",
+                        status: 200,
+                        response: json!({"workflow": id}),
+                        body: None,
+                    }
+                } else if request == format!("DELETE /_api/v1/workflow/{namespace} HTTP/1.1") {
+                    assert!(tracker.close_workflow(workflow.as_deref().unwrap(), &authority));
+                    Exchange {
+                        method: "DELETE",
+                        status: 204,
+                        response: Value::Null,
+                        body: None,
+                    }
+                } else {
+                    let exchange = exchanges
+                        .next()
+                        .expect("unexpected native configuration request");
+                    assert_eq!(
+                        request,
+                        format!(
+                            "{} /_api/v1/cache-config/{namespace} HTTP/1.1",
+                            exchange.method
+                        )
+                    );
+                    exchange
+                };
                 let lower = header.to_ascii_lowercase();
                 let length = lower
                     .lines()
@@ -156,12 +204,18 @@ impl Server {
                 } else {
                     assert_eq!(body, [] as [u8; 0]);
                 }
-                let response = serde_json::to_vec(&exchange.response).unwrap();
+                let response = if exchange.status == 204 {
+                    Vec::new()
+                } else {
+                    serde_json::to_vec(&exchange.response).unwrap()
+                };
                 write!(socket,
                     "HTTP/1.1 {} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                     exchange.status, response.len()).unwrap();
                 socket.write_all(&response).unwrap();
             }
+            assert_eq!(tracker.status().workflows, 0);
+            assert_eq!(tracker.status().requests, 0);
         });
         Self { endpoint, worker }
     }
@@ -297,6 +351,39 @@ async fn failed_creation_reports_failure_without_a_key_patch() {
         "Celler returned HTTP 500 Internal Server Error"
     );
     server.finish();
+}
+
+#[tokio::test]
+async fn http_fixture_preserves_the_native_workflow_open_request_and_close_contract() {
+    let server = Server::start(vec![get(config(PUBLIC_KEY))]);
+    let session = wrix_cache::backend::publication::workflow::Session::open(&server.client())
+        .await
+        .unwrap();
+    assert_eq!(
+        session.client().public_key().await.unwrap().as_str(),
+        PUBLIC_KEY
+    );
+    session.finish().await.unwrap();
+    server.finish();
+}
+
+#[tokio::test]
+async fn native_http_fixture_proves_workflow_support_before_cache_creation() {
+    let server = native::Server::start();
+    let client = server.client("private");
+    let session = wrix_cache::backend::publication::workflow::Session::open(&client)
+        .await
+        .expect("WRIX_TEST_CELLERD must include the native work-drain patch");
+    assert!(matches!(
+        session.client().public_key().await,
+        Err(Error::Protocol)
+    ));
+    session.finish().await.unwrap();
+    assert_eq!(
+        server.get("_api/v1/cache-config/private").await.status(),
+        404
+    );
+    assert!(matches!(client.public_key().await, Err(Error::Protocol)));
 }
 
 #[test]
@@ -834,7 +921,7 @@ async fn issuer_backed_publisher_issues_current_exact_view_credentials_per_opera
     .unwrap();
     let publisher = Publisher::load(&control, workspace.hash()).unwrap();
     publisher.register().await.unwrap();
-    let first: Vec<_> = (0..3).map(|_| received.recv().unwrap()).collect();
+    let first: Vec<_> = (0..5).map(|_| received.recv().unwrap()).collect();
     assert!(first.iter().all(|issued| *issued == first[0]));
     tokio::time::sleep(Duration::from_secs(1)).await;
     let now = std::time::SystemTime::now()
@@ -842,7 +929,7 @@ async fn issuer_backed_publisher_issues_current_exact_view_credentials_per_opera
         .unwrap()
         .as_secs();
     publisher.register().await.unwrap();
-    for _ in 0..3 {
+    for _ in 0..5 {
         let timestamp = received.recv().unwrap();
         assert!(timestamp >= now);
         assert!(

@@ -1,4 +1,14 @@
 mod apple;
+mod command;
+
+/// Scope native image operations to exact package commands with only their explicit environment.
+pub fn with_runtime_commands<T, E: From<Error>>(
+    container: &ProcessCommand,
+    skopeo: &ProcessCommand,
+    callback: impl FnOnce() -> Result<T, E>,
+) -> Result<T, E> {
+    command::scope(container, skopeo, callback)
+}
 
 use std::{
     env, fs, io,
@@ -637,6 +647,7 @@ impl Store for CommandStore {
     }
 
     fn tag(&mut self, runtime: Runtime, source: &Target, target: &ImageRef) -> Result<(), Error> {
+        let source = runtime_selector(runtime, source)?;
         let source = source.as_str();
         let target = target.as_str();
         let (program, output) = match runtime {
@@ -795,7 +806,8 @@ impl Store for CommandStore {
     }
 
     fn delete_image(&mut self, runtime: Runtime, target: &Target) -> Result<(), Error> {
-        let target = target.as_str();
+        let selector = runtime_selector(runtime, target)?;
+        let target = selector.as_str();
         let (program, output) = match runtime {
             Runtime::Podman => ("podman", run_output("podman", &["rmi", target])?),
             Runtime::Container => (
@@ -859,12 +871,25 @@ enum InspectField {
     PrivateNix,
 }
 
+fn runtime_selector(runtime: Runtime, target: &Target) -> Result<String, Error> {
+    match (runtime, target) {
+        (Runtime::Container, Target::Id(id)) => apple::reference(id),
+        (Runtime::Container, Target::Digest(digest)) => Ok(darwin_image_for_digest(digest)?
+            .ok_or_else(|| Error::MissingImageId {
+                target: digest.as_str().to_owned(),
+            })?
+            .as_str()
+            .to_owned()),
+        _ => Ok(target.as_str().to_owned()),
+    }
+}
+
 fn inspect_value(
     runtime: Runtime,
     target: &Target,
     field: InspectField,
 ) -> Result<Option<String>, Error> {
-    let target = target.as_str();
+    let selector = runtime_selector(runtime, target)?;
     let output = match runtime {
         Runtime::Podman => {
             let format = match field {
@@ -874,9 +899,12 @@ fn inspect_value(
                 InspectField::Kind => "{{ index .Config.Labels \"wrix.image.kind\" }}",
                 InspectField::PrivateNix => "{{ index .Config.Labels \"wrix.nix.private\" }}",
             };
-            run_output("podman", &["image", "inspect", "--format", format, target])?
+            run_output(
+                "podman",
+                &["image", "inspect", "--format", format, &selector],
+            )?
         }
-        Runtime::Container => run_output("container", &["image", "inspect", target])?,
+        Runtime::Container => run_output("container", &["image", "inspect", &selector])?,
     };
     if !output.status.success() {
         return Err(Error::ProcessFailed {
@@ -890,7 +918,12 @@ fn inspect_value(
     }
     match runtime {
         Runtime::Podman => Ok(normalized_value(&trim_stdout(&output.stdout))),
-        Runtime::Container => inspect_container_value(&output.stdout, field),
+        Runtime::Container => {
+            if let Target::Id(expected) = target {
+                apple::require_id(&output.stdout, expected)?;
+            }
+            inspect_container_value(&output.stdout, field)
+        }
     }
 }
 
@@ -1011,15 +1044,9 @@ fn container_image_in_use(
 }
 
 fn darwin_image_for_digest(digest: &Digest) -> Result<Option<Target>, Error> {
-    let output = run_output("container", &["image", "list", "--format", "json"])?;
-    if !output.status.success() {
-        return Ok(None);
-    }
+    let output = run_required_output("container", &["image", "list", "--format", "json"])?;
     for row in container_image_rows(&output.stdout)? {
-        let inspect = run_output("container", &["image", "inspect", row.target.as_str()])?;
-        if !inspect.status.success() {
-            continue;
-        }
+        let inspect = run_required_output("container", &["image", "inspect", row.target.as_str()])?;
         let value = serde_json::from_slice::<Value>(&inspect.stdout)
             .map_err(|source| Error::DescriptorJson { source })?;
         if container_content_digest(&value)?.as_ref() == Some(digest) {
@@ -1153,7 +1180,8 @@ fn run_required_output(program: &str, args: &[&str]) -> Result<Output, Error> {
 }
 
 fn run_output(program: &str, args: &[&str]) -> Result<Output, Error> {
-    ProcessCommand::new(program)
+    command::selected(program)
+        .unwrap_or_else(|| ProcessCommand::new(program))
         .args(args)
         .stdin(Stdio::null())
         .output()

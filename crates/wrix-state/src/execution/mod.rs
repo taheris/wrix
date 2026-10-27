@@ -1,7 +1,9 @@
 //! Host-private, one-shot runtime bindings; foreground exit is not teardown authority.
 
+pub mod apple;
 mod handoff;
 mod recorded;
+pub use apple::Bound as AppleBound;
 pub use handoff::{Bound, Launching as Handoff};
 pub use recorded::{Binding as Recorded, Removal};
 
@@ -73,6 +75,8 @@ pub enum Phase {
     Launching,
     Bound(Container),
     Retired(Container),
+    AppleBound(apple::Identity),
+    AppleRetired(apple::Identity),
 }
 
 pub fn reserve(host: &Host, context: &Context) -> Result<Ticket, Error> {
@@ -187,7 +191,7 @@ pub fn terminal(
     let store = Store::inspect(host)?.ok_or(Error::Uninitialized)?;
     if !matches!(
         read_namespace(&store, namespace, ticket)?,
-        Some(Phase::Retired(_) | Phase::Cancelled)
+        Some(Phase::Retired(_) | Phase::AppleRetired(_) | Phase::Cancelled)
     ) {
         return Ok(None);
     }

@@ -1,9 +1,11 @@
 //! Actual pool exclusion, clean drain, interrupted host intent and same-software native resume.
 use super::*;
+#[cfg(target_os = "linux")]
+use wrix_service::nix_store::lifecycle::Update;
 use wrix_service::{
     control::supervision::Package,
     nix_store::{
-        lifecycle::{Error, Repair, Update},
+        lifecycle::{Error, Repair},
         owner::backend,
     },
 };
@@ -31,6 +33,7 @@ pub(super) fn busy(host: &wrix_state::host::Host) {
             .exists()
     );
 }
+#[cfg(target_os = "linux")]
 fn fenced(runtime: &tokio::runtime::Runtime, client: &Client, selection: &Selection) {
     let id = runtime
         .block_on(client.prepare_nix_pool(selection, system()))
@@ -54,6 +57,7 @@ fn fenced(runtime: &tokio::runtime::Runtime, client: &Client, selection: &Select
         }
     }
 }
+#[cfg(target_os = "linux")]
 pub(super) fn exercise(
     runtime: &tokio::runtime::Runtime,
     client: &Client,

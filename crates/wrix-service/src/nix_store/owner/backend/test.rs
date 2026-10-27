@@ -24,7 +24,7 @@ pub(super) fn target() -> serde_json::Value {
     })
 }
 
-fn recorded_owner(state: State) -> (tempfile::TempDir, Owner) {
+pub(super) fn recorded_owner(state: State) -> (tempfile::TempDir, Owner) {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     let layout = deployment::Layout::new(&root, &root.join("cache")).unwrap();
@@ -183,6 +183,20 @@ fn configuration_digest_is_not_confused_with_a_manifest_digest() {
 }
 
 #[test]
+fn installed_native_descriptor_and_expected_oci_config_have_distinct_identities() {
+    let native = ImageId::parse(&"a".repeat(64)).unwrap();
+    let config = Digest::parse(&format!("sha256:{}", "b".repeat(64))).unwrap();
+    assert_eq!(
+        Software::installed_image(Some(native.clone()), Some(&config), &config).unwrap(),
+        native
+    );
+    let wrong_config = Digest::parse(&format!("sha256:{}", "a".repeat(64))).unwrap();
+    assert!(Software::installed_image(Some(native.clone()), Some(&wrong_config), &config).is_err());
+    assert!(Software::installed_image(Some(native), None, &config).is_err());
+    assert!(Software::installed_image(None, Some(&config), &config).is_err());
+}
+
+#[test]
 fn native_runtime_identity_cannot_select_an_option_name_or_path() {
     assert!(NativeId::try_from("a".repeat(64)).is_ok());
     for value in [
@@ -193,6 +207,29 @@ fn native_runtime_identity_cannot_select_an_option_name_or_path() {
     ] {
         assert!(NativeId::try_from(value).is_err());
     }
+}
+
+#[test]
+fn native_identifiers_cannot_cross_runtime_ownership_ledgers() {
+    let original = target();
+    let parsed: Target = serde_json::from_value(original.clone()).unwrap();
+    parsed.check_runtime().unwrap();
+    let mut corrupted = original.clone();
+    corrupted["id"] = json!(format!("wrix-nix-{}", "b".repeat(32)));
+    assert!(
+        serde_json::from_value::<Target>(corrupted)
+            .unwrap()
+            .check_runtime()
+            .is_err()
+    );
+    let mut corrupted = original;
+    corrupted["attempt"]["software"]["tools"]["system"] = json!("aarch64-darwin");
+    assert!(
+        serde_json::from_value::<Target>(corrupted)
+            .unwrap()
+            .check_runtime()
+            .is_err()
+    );
 }
 
 #[test]

@@ -26,6 +26,13 @@ pub fn repair(host: &wrix_state::host::Host) -> Result<(), Error> {
             recover_registry(host).map_err(io::Error::other)
         })
         .map_err(io::Error::other)?;
+    ready(host)?;
+    pools.complete()?;
+    Ok(())
+}
+
+pub fn ready(host: &wrix_state::host::Host) -> Result<(), Error> {
+    let root = host.roots().state().join("control");
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
@@ -59,6 +66,5 @@ pub fn repair(host: &wrix_state::host::Host) -> Result<(), Error> {
         .await
         .map_err(|_| Error::ControllerReadiness)?
     })?;
-    pools.complete()?;
     Ok(())
 }

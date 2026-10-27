@@ -39,7 +39,13 @@ impl Binding {
         }
         let container = match super::read_namespace(&store, namespace, ticket)? {
             Some(Phase::Bound(id) | Phase::Retired(id)) => id,
-            Some(Phase::Reserved | Phase::Launching | Phase::Cancelled) => return Ok(None),
+            Some(
+                Phase::Reserved
+                | Phase::Launching
+                | Phase::Cancelled
+                | Phase::AppleBound(_)
+                | Phase::AppleRetired(_),
+            ) => return Ok(None),
             None => return Err(Error::Conflict),
         };
         let binding = Self {

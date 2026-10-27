@@ -14,7 +14,7 @@ use wrix_core::nix_store::pool::System;
 #[serde(try_from = "Wire", into = "Wire")]
 pub struct Tools {
     root: StorePath,
-    system: System,
+    system: Host,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -22,7 +22,25 @@ pub struct Tools {
 struct Wire {
     version: u16,
     root: StorePath,
-    system: System,
+    system: Host,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+enum Host {
+    #[serde(rename = "x86_64-linux")]
+    X86Linux,
+    #[serde(rename = "aarch64-linux")]
+    ArmLinux,
+    #[serde(rename = "aarch64-darwin")]
+    ArmDarwin,
+}
+impl Host {
+    const fn guest(self) -> System {
+        match self {
+            Self::X86Linux => System::X86_64Linux,
+            Self::ArmLinux | Self::ArmDarwin => System::Aarch64Linux,
+        }
+    }
 }
 
 impl TryFrom<Wire> for Tools {
@@ -48,12 +66,24 @@ impl From<Tools> for Wire {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Platform {
+    Podman,
+    Apple,
+}
+
 #[derive(Clone, Copy)]
 pub(super) enum Program {
     Podman,
+    Container,
+    Launchctl,
+    Ifconfig,
+    Uname,
+    Unmount,
     Ssh,
     Keygen,
     NixStore,
+    Skopeo,
     Sshfs,
     Cat,
     Ls,
@@ -63,9 +93,15 @@ impl Program {
     const fn name(self) -> &'static str {
         match self {
             Self::Podman => "podman",
+            Self::Container => "container",
+            Self::Launchctl => "wrix-nix-pool-launchctl",
+            Self::Ifconfig => "wrix-nix-pool-ifconfig",
+            Self::Uname => "wrix-nix-pool-uname",
+            Self::Unmount => "wrix-nix-pool-unmount",
             Self::Ssh => "ssh",
             Self::Keygen => "ssh-keygen",
             Self::NixStore => "nix-store",
+            Self::Skopeo => "skopeo",
             Self::Sshfs => "sshfs",
             Self::Cat => "cat",
             Self::Ls => "ls",
@@ -74,7 +110,49 @@ impl Program {
     }
 }
 
+pub(crate) struct AppleNetworkObservation {
+    pub(crate) network: Vec<u8>,
+    pub(crate) interfaces: Vec<u8>,
+    pub(crate) release: Vec<u8>,
+}
+
 impl Tools {
+    pub(crate) fn apple_network(&self) -> Result<AppleNetworkObservation, Error> {
+        if !cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            return Err(Error::Unsupported);
+        }
+        self.check(System::Aarch64Linux)?;
+        let mut command = self.command(Program::Container);
+        command.args(["network", "inspect", "default"]);
+        let budget = Some(Duration::from_secs(5));
+        Ok(AppleNetworkObservation {
+            network: super::success(self.run(command, None, budget)?)?,
+            interfaces: super::success(self.run(self.command(Program::Ifconfig), None, budget)?)?,
+            release: super::success(self.run(self.command(Program::Uname), None, budget)?)?,
+        })
+    }
+
+    pub(crate) fn for_package(
+        package: &crate::control::supervision::Package,
+    ) -> Result<Self, Error> {
+        let system = if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            Host::X86Linux
+        } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+            Host::ArmLinux
+        } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            Host::ArmDarwin
+        } else {
+            return Err(Error::Unsupported);
+        };
+        let root = package
+            .runtime()
+            .to_str()
+            .ok_or(Error::Invalid)?
+            .to_owned()
+            .try_into()?;
+        Ok(Self { root, system })
+    }
+
     pub fn from_env() -> Result<Self, Error> {
         let path = std::env::var_os("WRIX_NIX_POOL_HOST_TOOLS").ok_or(Error::Unsupported)?;
         Self::load(Path::new(&path))
@@ -86,13 +164,15 @@ impl Tools {
 
     fn check_system(&self, system: System) -> Result<(), Error> {
         let native = if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
-            System::X86_64Linux
+            Host::X86Linux
         } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
-            System::Aarch64Linux
+            Host::ArmLinux
+        } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            Host::ArmDarwin
         } else {
             return Err(Error::Unsupported);
         };
-        if self.system != native || self.system != system {
+        if self.system != native || self.system.guest() != system {
             return Err(Error::Unsupported);
         }
         Ok(())
@@ -100,6 +180,10 @@ impl Tools {
 
     pub(crate) fn check(&self, system: System) -> Result<(), Error> {
         self.check_system(system)?;
+        if self.runtime() == wrix_sandbox::image::Runtime::Container {
+            super::apple::available(self)?;
+            return Ok(());
+        }
         std::fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -115,7 +199,24 @@ impl Tools {
     }
 
     pub(crate) fn export_check(&self) -> Result<(), Error> {
-        use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
+        use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
+        if self.platform() == Platform::Apple {
+            if !cfg!(target_os = "macos") {
+                return Err(Error::Unsupported);
+            }
+            let helper = std::fs::metadata(
+                "/Library/Filesystems/macfuse.fs/Contents/Resources/mount_macfuse",
+            )?;
+            if !helper.is_file()
+                || helper.uid() != 0
+                || helper.mode() & 0o022 != 0
+                || helper.mode() & 0o111 == 0
+                || !Path::new(self.command(Program::Sshfs).get_program()).is_file()
+            {
+                return Err(Error::Unsupported);
+            }
+            return Ok(());
+        }
         if !cfg!(target_os = "linux") {
             return Err(Error::Unsupported);
         }
@@ -139,7 +240,12 @@ impl Tools {
         plane: wrix_state::nix_store::admission::request::Plane,
     ) -> Result<(), Error> {
         use std::os::unix::fs::PermissionsExt;
-        self.check_system(self.system)?;
+        self.check_system(self.system.guest())?;
+        if (plane == wrix_state::nix_store::admission::request::Plane::Apple)
+            != (self.platform() == Platform::Apple)
+        {
+            return Err(Error::Unsupported);
+        }
         self.export_check()?;
         if plane.is_podman_namespace() {
             for program in [Program::Cat, Program::Ls, Program::Fusermount] {
@@ -174,8 +280,41 @@ impl Tools {
         Ok(())
     }
 
+    pub(crate) fn apple_image_commands(&self) -> Result<(Command, Command), Error> {
+        self.check_system(self.system.guest())?;
+        if self.platform() != Platform::Apple {
+            return Err(Error::Unsupported);
+        }
+        Ok((
+            self.command(Program::Container),
+            self.command(Program::Skopeo),
+        ))
+    }
+
     pub(crate) fn belongs_to(&self, package: &crate::control::supervision::Package) -> bool {
         Path::new(self.root.as_str()) == package.runtime()
+    }
+
+    pub(super) const fn platform(&self) -> Platform {
+        match self.system {
+            Host::ArmDarwin => Platform::Apple,
+            Host::X86Linux | Host::ArmLinux => Platform::Podman,
+        }
+    }
+
+    pub(super) const fn image_runtime(&self) -> wrix_sandbox::image::Runtime {
+        self.runtime()
+    }
+
+    pub(super) const fn runtime(&self) -> wrix_sandbox::image::Runtime {
+        match self.system {
+            Host::X86Linux | Host::ArmLinux => wrix_sandbox::image::Runtime::Podman,
+            Host::ArmDarwin => wrix_sandbox::image::Runtime::Container,
+        }
+    }
+
+    pub(super) fn attach(&self) -> PathBuf {
+        Path::new(self.root.as_str()).join("bin/wrix-nix-pool-attach")
     }
 
     pub(super) fn vm(&self) -> PathBuf {
@@ -196,7 +335,8 @@ impl Tools {
         program: Program,
     ) -> Command {
         match plane {
-            wrix_state::nix_store::admission::request::Plane::Host => self.command(program),
+            wrix_state::nix_store::admission::request::Plane::Host
+            | wrix_state::nix_store::admission::request::Plane::Apple => self.command(program),
             wrix_state::nix_store::admission::request::Plane::Podman
             | wrix_state::nix_store::admission::request::Plane::Krun => {
                 let mut command = self.command(Program::Podman);
@@ -239,6 +379,14 @@ impl Tools {
         projection: &Path,
     ) -> Result<Output, Error> {
         let mut command = match plane {
+            wrix_state::nix_store::admission::request::Plane::Apple => {
+                if self.platform() != Platform::Apple {
+                    return Err(Error::Unsupported);
+                }
+                let mut command = self.command(Program::Unmount);
+                command.arg(projection);
+                return self.run(command, None, Some(Duration::from_secs(30)));
+            }
             wrix_state::nix_store::admission::request::Plane::Host => {
                 self.configure(Command::new(Self::unmount_helper()?))
             }
@@ -345,6 +493,26 @@ mod test {
             assert!(tools.check_system(peer).is_err());
         }
     }
+    #[test]
+    fn darwin_tools_select_native_apple_programs_and_a_linux_guest_without_podman() {
+        let tools: Tools = serde_json::from_value(serde_json::json!({"version":1,"root":"/nix/store/00000000000000000000000000000000-runtime","system":"aarch64-darwin"})).unwrap();
+        assert_eq!(tools.platform(), Platform::Apple);
+        assert_eq!(
+            tools.image_runtime(),
+            wrix_sandbox::image::Runtime::Container
+        );
+        assert_eq!(tools.system.guest(), System::Aarch64Linux);
+        assert_eq!(
+            tools.command(Program::Container).get_program(),
+            Path::new("/nix/store/00000000000000000000000000000000-runtime/bin/container")
+        );
+        assert_eq!(
+            tools.check_system(System::Aarch64Linux).is_ok(),
+            cfg!(all(target_os = "macos", target_arch = "aarch64"))
+        );
+        assert!(tools.check_system(System::X86_64Linux).is_err());
+    }
+
     #[test]
     fn host_program_definition_is_closed_and_does_not_accept_executables_or_mounts() {
         let root = "/nix/store/00000000000000000000000000000000-runtime";

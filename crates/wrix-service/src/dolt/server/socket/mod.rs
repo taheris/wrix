@@ -43,10 +43,13 @@ pub fn retire(data: &Path) -> Result<(), Error> {
 
 /// The caller holds the original service owner.lock, not a replacement inode.
 pub(super) fn clear(data: &Path) -> Result<(), Error> {
-    let run = data.join("run");
-    super::super::check_directory(&run)?;
-    let path = run.join("dolt.sock");
-    let before = match fs::symlink_metadata(&path) {
+    clear_path(data, &data.join("run/dolt.sock"))
+}
+
+/// Only the native supervisor holding the original owner inode may retire this endpoint.
+pub(super) fn clear_path(data: &Path, path: &Path) -> Result<(), Error> {
+    super::super::check_directory(path.parent().ok_or(Error::UnsafePath)?)?;
+    let before = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error.into()),
@@ -57,12 +60,16 @@ pub(super) fn clear(data: &Path) -> Result<(), Error> {
     {
         return Err(Error::UnsafePath);
     }
-    match connect(&path) {
-        Ok(()) => return Err(Error::SocketBusy { path }),
+    match connect(path) {
+        Ok(()) => {
+            return Err(Error::SocketBusy {
+                path: path.to_owned(),
+            });
+        }
         Err(error) if error.kind() == io::ErrorKind::ConnectionRefused => {}
         Err(error) => return Err(error.into()),
     }
-    let after = fs::symlink_metadata(&path)?;
+    let after = fs::symlink_metadata(path)?;
     if after.dev() != before.dev()
         || after.ino() != before.ino()
         || !after.file_type().is_socket()

@@ -108,6 +108,26 @@ fn host_hook_uses_database_only_metadata_and_queues_under_contention() {
         isolation::install_executable(root.path(), &setup, Path::new("/bin/setup"));
         isolation::install_executable(root.path(), publisher, Path::new("/bin/publisher"));
     }
+    let bin = root.path().join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let nix_store = bin.join("nix-store");
+    let bash = if isolated {
+        isolation::install_executable(root.path(), &executable("bash"), Path::new("/bin/bash"));
+        PathBuf::from("/bin/bash")
+    } else {
+        executable("bash")
+    };
+    fs::write(&nix_store, r#"#!/bin/bash
+set -euo pipefail
+[[ $# == 8 && "$1" == --option && "$2" == substitute && "$3" == false && "$4" == --add-root && "$6" == --indirect && "$7" == --realise ]]
+[[ "$8" == /nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-output ]]
+ln -s "$8" "$5"
+printf '%s\n' "$8"
+"#.replacen("#!/bin/bash", &format!("#!{}", bash.display()), 1)).unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&nix_store, fs::Permissions::from_mode(0o755)).unwrap();
+    }
     let owner = if rustix::process::geteuid().is_root() {
         (
             rustix::process::Uid::from_raw(12345),
@@ -231,6 +251,16 @@ fn host_hook_uses_database_only_metadata_and_queues_under_contention() {
             "--config",
             config.to_str().unwrap(),
         ],
+    )
+    .env(
+        "PATH",
+        if isolated {
+            std::ffi::OsString::from("/bin:/usr/bin")
+        } else {
+            let mut paths = vec![bin];
+            paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
+            std::env::join_paths(paths).unwrap()
+        },
     )
     .env("DRV_PATH", DRV)
     .env(

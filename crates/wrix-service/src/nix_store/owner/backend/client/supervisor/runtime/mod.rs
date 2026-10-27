@@ -52,10 +52,45 @@ pub(super) fn reconcile(
     {
         return Err(Error::Invalid);
     }
+    let generation = wrix_state::store::Generation::parse(&client.generation)?;
+    let ledger = backend::Record::read(&control, deployment, pool)?;
+    if !ledger.executions.contains(ticket) {
+        return Err(Error::Retained);
+    }
+    let backend::State::Serving { connection } = ledger.state else {
+        return Err(Error::Retained);
+    };
+    let tools = connection.target.attempt.software.tools;
+    if client.plane == wrix_state::nix_store::admission::request::Plane::Apple {
+        if let Err(error) = super::super::bridge::broker::reconcile(
+            host,
+            &control.join("executions").join(ticket.as_str()),
+            &client,
+        ) {
+            tracing::warn!(operation = "nix_apple_broker_observe", ticket = ticket.as_str(), %error, "broker state is uncertain; no restart or replay is authorized");
+        }
+        if let Some(record) = wrix_state::execution::apple::Recorded::load(
+            host.clone(),
+            namespace,
+            ticket,
+            &generation,
+        )? {
+            let Some(process) = &client.native_process else {
+                return Ok(Duration::from_secs(2));
+            };
+            let runtime = tools.command(Program::Container);
+            if let Err(error) =
+                wrix_sandbox::execution::apple::reconcile(&record, &runtime, process)
+            {
+                tracing::warn!(operation = "nix_apple_execution_observe", ticket = ticket.as_str(), %error, "native Apple observation is uncertain; protection is retained");
+                return Ok(Duration::from_secs(15));
+            }
+        }
+        return Ok(Duration::from_secs(2));
+    }
     if !client.plane.is_podman_namespace() {
         return Ok(Duration::from_secs(2));
     }
-    let generation = wrix_state::store::Generation::parse(&client.generation)?;
     let Some(record) =
         wrix_state::execution::Recorded::load(host.clone(), namespace, ticket, &generation)?
     else {
@@ -64,16 +99,7 @@ pub(super) fn reconcile(
     if record.status()? == wrix_state::execution::Removal::Retired {
         return Ok(Duration::from_secs(2));
     }
-    let ledger = backend::Record::read(&control, deployment, pool)?;
-    if !ledger.executions.contains(ticket) {
-        return Err(Error::Retained);
-    }
-    let backend::State::Serving { connection } = ledger.state else {
-        return Err(Error::Retained);
-    };
-    let mut runtime = Native {
-        tools: connection.target.attempt.software.tools,
-    };
+    let mut runtime = Native { tools };
     match retirement::reconcile(&record, &mut runtime) {
         Ok(Observation::Protected | Observation::Retired) => Ok(Duration::from_secs(2)),
         Err(error) => {

@@ -1,18 +1,27 @@
 //! Native mount identity, not a launcher exit or a mount-path description.
+mod darwin;
 use super::{Error, lease};
 use serde::{Deserialize, Serialize};
 use std::{fs::File, io::Read, os::unix::ffi::OsStrExt, path::Path};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Identity {
-    id: std::num::NonZeroU64,
-    device: (u32, u32),
+#[serde(untagged)]
+pub(super) enum Identity {
+    Linux {
+        id: std::num::NonZeroU64,
+        device: (u32, u32),
+    },
+    Darwin(darwin::Identity),
 }
 
 impl Identity {
     pub(super) fn same_filesystem(&self, expected: &Self) -> bool {
-        self.device == expected.device
+        match (self, expected) {
+            (Self::Linux { device, .. }, Self::Linux { device: other, .. }) => device == other,
+            (Self::Darwin(value), Self::Darwin(other)) => value == other,
+            _ => false,
+        }
     }
 }
 
@@ -81,7 +90,7 @@ fn parse(bytes: &[u8], path: &Path, lease: &lease::Id) -> Result<Option<Identity
             major.parse().map_err(|_| Error::Invalid)?,
             minor.parse().map_err(|_| Error::Invalid)?,
         );
-        identity = Some(Identity { id, device });
+        identity = Some(Identity::Linux { id, device });
     }
     Ok(identity)
 }
@@ -93,6 +102,9 @@ pub(super) fn observe(
     lease: &lease::Id,
 ) -> Result<Option<Identity>, Error> {
     let bytes = match plane {
+        wrix_state::nix_store::admission::request::Plane::Apple => {
+            return darwin::observe(path, lease).map(|value| value.map(Identity::Darwin));
+        }
         wrix_state::nix_store::admission::request::Plane::Host => {
             let mut bytes = Vec::new();
             File::open("/proc/self/mountinfo")?
@@ -129,7 +141,8 @@ pub(super) fn readable(
     path: &Path,
 ) -> Result<bool, Error> {
     match plane {
-        wrix_state::nix_store::admission::request::Plane::Host => {
+        wrix_state::nix_store::admission::request::Plane::Host
+        | wrix_state::nix_store::admission::request::Plane::Apple => {
             Ok(std::fs::read_dir(path)?.next().transpose()?.is_some())
         }
         wrix_state::nix_store::admission::request::Plane::Podman
@@ -147,6 +160,26 @@ pub(super) fn readable(
 #[cfg(test)]
 mod test {
     use super::*;
+    #[test]
+    fn darwin_witness_never_reuses_a_device_number_as_mount_identity() {
+        let value = serde_json::json!({"fsid":"fsid_t { __fsid_val: [11, 22] }","device":99,"inode":1,"born":[900,5],"owner":501,"mountpoint":[47,118],"source":[108,101,97,115,101]});
+        let original: Identity = serde_json::from_value(value.clone()).unwrap();
+        for (field, replacement) in [
+            ("fsid", serde_json::json!("fsid_t { __fsid_val: [33, 44] }")),
+            ("born", serde_json::json!([901, 5])),
+            ("source", serde_json::json!([112, 101, 101, 114])),
+            ("mountpoint", serde_json::json!([47, 112])),
+            ("owner", serde_json::json!(502)),
+        ] {
+            let mut changed = value.clone();
+            changed[field] = replacement;
+            let changed: Identity = serde_json::from_value(changed).unwrap();
+            assert!(!changed.same_filesystem(&original));
+        }
+        let roundtrip: Identity =
+            serde_json::from_slice(&serde_json::to_vec(&original).unwrap()).unwrap();
+        assert_eq!(original, roundtrip);
+    }
     #[test]
     fn retirement_identifies_only_full_native_references_to_the_same_export() {
         let lease = lease::Id::try_from("a".repeat(32)).unwrap();

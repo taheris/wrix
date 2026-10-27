@@ -137,7 +137,9 @@ fn unproved_shared_launch_fails_before_service_runtime_staging_or_journal() -> T
         )?;
         assert!(!result.success);
         assert!(
-            result.stderr.contains("Shared installed Nix stores"),
+            result
+                .stderr
+                .contains("Shared installed Nix execution is unavailable"),
             "{}",
             result.stderr
         );

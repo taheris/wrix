@@ -106,7 +106,13 @@ async fn recording_failure_reports_partial_rotation_and_retry_preserves_the_repl
                     .to_ascii_lowercase()
                     .contains("authorization: bearer ")
             );
-            if counter.fetch_add(1, Ordering::SeqCst) == 6 {
+            if header
+                .lines()
+                .next()
+                .unwrap()
+                .contains("/_api/v1/cache-config/")
+                && counter.fetch_add(1, Ordering::SeqCst) == 6
+            {
                 fs::create_dir(&blocked).unwrap();
             }
         },

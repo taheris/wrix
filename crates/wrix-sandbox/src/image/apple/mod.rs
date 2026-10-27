@@ -179,5 +179,49 @@ pub(super) fn attest(reference: &ImageRef, temporary: &Path) -> Result<(), Error
     Ok(())
 }
 
+fn reported_id(bytes: &[u8]) -> Result<ImageId, Error> {
+    let value: Value =
+        serde_json::from_slice(bytes).map_err(|source| Error::DescriptorJson { source })?;
+    if value.as_array().map(Vec::len) != Some(1) {
+        return Err(Error::InvalidMetadata);
+    }
+    if value.pointer("/0/configuration/descriptor").is_some() {
+        index(&value)?;
+    }
+    Ok(ImageId::parse(
+        value
+            .pointer("/0/id")
+            .and_then(Value::as_str)
+            .ok_or(Error::InvalidMetadata)?,
+    )?)
+}
+fn same_id(actual: &ImageId, expected: &ImageId) -> Result<bool, Error> {
+    match (content_digest_id(actual)?, content_digest_id(expected)?) {
+        (Some(actual), Some(expected)) => Ok(actual == expected),
+        _ => Ok(actual == expected),
+    }
+}
+pub(super) fn require_id(bytes: &[u8], expected: &ImageId) -> Result<(), Error> {
+    if !same_id(&reported_id(bytes)?, expected)? {
+        return Err(Error::InvalidMetadata);
+    }
+    Ok(())
+}
+
+/// Apple selectors are references, not the hexadecimal IDs reported by inspection.
+pub(super) fn reference(expected: &ImageId) -> Result<String, Error> {
+    let images = run_required_output("container", &["image", "list", "--format", "json"])?;
+    for row in super::container_image_rows(&images.stdout)? {
+        let inspection =
+            run_required_output("container", &["image", "inspect", row.target.as_str()])?;
+        if same_id(&reported_id(&inspection.stdout)?, expected)? {
+            return Ok(row.target.as_str().to_owned());
+        }
+    }
+    Err(Error::MissingImageId {
+        target: expected.as_str().to_owned(),
+    })
+}
+
 #[cfg(test)]
 mod test;

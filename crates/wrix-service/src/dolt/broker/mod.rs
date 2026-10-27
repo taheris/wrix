@@ -103,7 +103,11 @@ pub enum Endpoint {
     },
 }
 
-pub(crate) async fn serve(data: &Path, tcp: bool) -> Result<(), Error> {
+pub(crate) async fn serve(
+    data: &Path,
+    tcp: bool,
+    gate: crate::lifecycle::sql::Gate,
+) -> Result<(), Error> {
     let socket = data.join("run/sync.sock");
     if socket.exists() {
         fs::remove_file(&socket)?;
@@ -128,15 +132,17 @@ pub(crate) async fn serve(data: &Path, tcp: bool) -> Result<(), Error> {
             connection = unix.accept() => {
                 let (stream, _) = connection?;
                 if let Ok(permit) = capacity.clone().try_acquire_owned() {
+                    let Ok(work) = gate.admit_broker() else { continue; };
                     let data = data.to_owned();
-                    tasks.spawn(async move { let _permit = permit; exchange(stream, &data).await });
+                    tasks.spawn(async move { let _permit = permit; exchange(stream, &data, work).await });
                 }
             }
             connection = async { match &listener { Some(listener) => listener.accept().await, None => std::future::pending().await } } => {
                 let (stream, _) = connection?;
                 if let Ok(permit) = capacity.clone().try_acquire_owned() {
+                    let Ok(work) = gate.admit_broker() else { continue; };
                     let data = data.to_owned();
-                    tasks.spawn(async move { let _permit = permit; exchange(stream, &data).await });
+                    tasks.spawn(async move { let _permit = permit; exchange(stream, &data, work).await });
                 }
             }
         }
@@ -146,6 +152,7 @@ pub(crate) async fn serve(data: &Path, tcp: bool) -> Result<(), Error> {
 async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(
     mut stream: S,
     data: &Path,
+    work: crate::lifecycle::sql::Lease,
 ) -> Result<(), Error> {
     let request: Request = tokio::time::timeout(Duration::from_secs(5), async {
         let size = stream.read_u32().await?;
@@ -159,9 +166,13 @@ async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(
     .await
     .map_err(|_| Error::Unauthorized)??;
     let data = data.to_owned();
-    let reply = tokio::task::spawn_blocking(move || apply(&data, &request))
-        .await
-        .map_err(|_| Error::Task)??;
+    let (_work, reply) = tokio::task::spawn_blocking(move || {
+        let reply = apply(&data, &request);
+        (work, reply)
+    })
+    .await
+    .map_err(|_| Error::Task)?;
+    let reply = reply?;
     let bytes = serde_json::to_vec(&reply)?;
     tokio::time::timeout(Duration::from_secs(5), async {
         stream
@@ -289,7 +300,7 @@ pub(crate) fn admin(
             "--host",
             "127.0.0.1",
             "--port",
-            "3306",
+            "13306",
             "--no-tls",
             "--password",
             &password,
@@ -324,3 +335,6 @@ fn equal(first: &[u8], second: &[u8]) -> bool {
             .fold(0, |diff, (a, b)| diff | (a ^ b))
             == 0
 }
+
+#[cfg(test)]
+mod test;

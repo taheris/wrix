@@ -49,6 +49,7 @@ pub enum Plane {
     Host,
     Podman,
     Krun,
+    Apple,
 }
 impl Plane {
     pub const fn is_host(&self) -> bool {
@@ -217,6 +218,18 @@ impl Guard {
         })
     }
 
+    pub fn request_apple_worker(
+        self,
+        ticket: crate::execution::Ticket,
+        image: wrix_core::nix_store::binding::Binding,
+    ) -> Result<Request, Error> {
+        self.issue(Purpose::Worker {
+            ticket,
+            image,
+            plane: Plane::Apple,
+        })
+    }
+
     fn issue(self, purpose: Purpose) -> Result<Request, Error> {
         self.recheck()?;
         purpose.recheck(&self.store, &self.context)?;
@@ -352,6 +365,15 @@ fn pending(store: &Store, owner: &str) -> Result<(String, Vec<u8>), Error> {
 #[cfg(test)]
 mod test {
     use super::*;
+    #[test]
+    fn apple_authority_is_distinct_from_host_and_rootless_podman_namespace() {
+        let plane: Plane = serde_json::from_str("\"apple\"").unwrap();
+        assert_eq!(plane, Plane::Apple);
+        assert!(!plane.is_host());
+        assert!(!plane.is_podman_namespace());
+        assert_eq!(serde_json::to_string(&plane).unwrap(), "\"apple\"");
+        assert!(serde_json::from_str::<Plane>("\"apple_gateway\"").is_err());
+    }
     #[test]
     fn preparation_identifiers_cannot_choose_a_namespace_path_or_command() {
         assert!(Id::try_from("a".repeat(32)).is_ok());

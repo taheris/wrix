@@ -54,8 +54,9 @@ pub fn is_retired(root: &Path, workspace: &WorkspaceHash) -> Result<bool> {
 
 /// Serializes host publication and closes future admission without claiming backend release.
 pub async fn retire(root: &Path, workspace: &WorkspaceHash, timeout: Duration) -> Result<()> {
-    let _lock = super::registration::acquire(root, timeout).await?;
+    let lock = super::registration::acquire(root, timeout).await?;
     if is_retired(root, workspace)? {
+        fs2::FileExt::unlock(&lock).map_err(Error::UnlockCommitted)?;
         return Ok(());
     }
     let mut temporary = tempfile::NamedTempFile::new_in(root)?;
@@ -67,6 +68,8 @@ pub async fn retire(root: &Path, workspace: &WorkspaceHash, timeout: Duration) -
     File::open(root)?
         .sync_all()
         .map_err(Error::RetirementCommitted)?;
+    // Forked exec children can transiently retain the same open file description.
+    fs2::FileExt::unlock(&lock).map_err(Error::UnlockCommitted)?;
     Ok(())
 }
 
@@ -131,6 +134,28 @@ mod test {
         ));
         activate(root.path(), &identity).unwrap();
         assert!(!is_retired(root.path(), &identity).unwrap());
+    }
+
+    #[test]
+    fn explicit_unlock_releases_fork_shared_descriptions_before_the_last_close() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("lock");
+        let held = File::options()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        fs2::FileExt::lock_exclusive(&held).unwrap();
+        let inherited = held.try_clone().unwrap();
+        drop(held);
+        let next = File::options().read(true).write(true).open(path).unwrap();
+        assert!(
+            matches!(fs2::FileExt::try_lock_exclusive(&next), Err(error) if error.kind() == io::ErrorKind::WouldBlock)
+        );
+        fs2::FileExt::unlock(&inherited).unwrap();
+        fs2::FileExt::try_lock_exclusive(&next).unwrap();
+        fs2::FileExt::unlock(&next).unwrap();
     }
 
     #[tokio::test]

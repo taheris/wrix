@@ -5,7 +5,7 @@ use fs2::FileExt;
 use std::{
     fs::File,
     io::{Read, Write},
-    os::unix::fs::OpenOptionsExt,
+    os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::Path,
     process::Stdio,
     time::Duration,
@@ -24,7 +24,18 @@ pub async fn run(data: &Path, tcp: bool) -> Result<(), Error> {
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
         .open(data.join("owner.lock"))?;
+    let metadata = ownership.metadata()?;
+    if !metadata.is_file()
+        || metadata.nlink() != 1
+        || metadata.mode() & 0o077 != 0
+        || metadata.uid() != std::fs::metadata(data)?.uid()
+    {
+        return Err(Error::UnsafePath);
+    }
     ownership.try_lock_exclusive()?;
+    crate::lifecycle::compiler::clear_backend_release(data)?;
+    super::private_directory(Path::new("/run/wrix/dolt"))?;
+    socket::clear_path(data, Path::new("/run/wrix/dolt/native.sock"))?;
     super::private_directory(&data.join("databases"))?;
     super::private_directory(&data.join("run"))?;
     socket::clear(data)?;
@@ -43,51 +54,118 @@ pub async fn run(data: &Path, tcp: bool) -> Result<(), Error> {
         .spawn()?;
     let mut celler = tokio::process::Command::new("sh")
         .args(["-c", wrix_cache::backend::layout::runtime::COMMAND])
+        .env("WRIX_CELLER_DRAIN_SOCKET", "/run/wrix/celler/drain.sock")
         .stdin(Stdio::null())
         .kill_on_drop(true)
         .spawn()?;
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
-    let result = tokio::select! {
-        result = dolt.wait() => { result?; Err(Error::Incomplete) },
-        result = celler.wait() => { result?; Err(Error::Incomplete) },
-        result = super::broker::serve(data, tcp) => result,
-        _ = terminate.recv() => Ok(()),
-        _ = interrupt.recv() => Ok(()),
-    };
-    // Explicit container stop is intentionally disruptive; children get native TERM before the deadline.
-    for child in [&mut dolt, &mut celler] {
-        if let Some(id) = child.id() {
-            let output = tokio::process::Command::new("kill")
-                .args(["-TERM", &id.to_string()])
-                .output()
-                .await?;
-            if !output.status.success() && child.try_wait()?.is_none() {
-                return Err(Error::Incomplete);
-            }
-            tokio::time::timeout(Duration::from_secs(20), child.wait())
-                .await
-                .map_err(|_| Error::Incomplete)??;
+    let gate = crate::lifecycle::sql::Gate::default();
+    let result = {
+        let broker = super::broker::serve(data, tcp, gate.clone());
+        let sql = crate::lifecycle::sql::serve(data, gate.clone());
+        tokio::pin!(broker, sql);
+        tokio::select! {
+            result = dolt.wait() => { result?; Err(Error::Incomplete) },
+            result = celler.wait() => {
+                let status = result?;
+                if crate::lifecycle::compiler::planned()? && status.success() {
+                    let release = planned_release(&mut dolt);
+                    tokio::pin!(release);
+                    tokio::select! {
+                        result = &mut release => {
+                            result?;
+                            drop(ownership);
+                            return Ok(());
+                        }
+                        result = &mut broker => result.and(Err(Error::Incomplete)),
+                        result = &mut sql => result.map_err(Error::from).and(Err(Error::Incomplete)),
+                    }
+                } else {
+                    Err(Error::Native { stderr: format!("supervised Celler exited unexpectedly: {status}") })
+                }
+            },
+            result = &mut broker => result.and(Err(Error::Incomplete)),
+            result = &mut sql => result.map_err(Error::from).and(Err(Error::Incomplete)),
+            _ = terminate.recv() => stopped(),
+            _ = interrupt.recv() => stopped(),
         }
+    };
+    // Explicit host stop and unexpected failure retain the disruptive shutdown contract.
+    for child in [&mut dolt, &mut celler] {
+        tokio::time::timeout(Duration::from_secs(20), stop(child))
+            .await
+            .map_err(|_| Error::Incomplete)??;
     }
     result
 }
 
-pub(crate) fn configuration_value(data: &Path, tcp: bool) -> serde_json::Value {
+async fn planned_release(dolt: &mut tokio::process::Child) -> Result<(), Error> {
+    while !crate::lifecycle::compiler::released()? {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    loop {
+        let response = tokio::task::spawn_blocking(|| {
+            crate::lifecycle::sql::dispatch(crate::lifecycle::drain::Command::Quiesce)
+        })
+        .await
+        .map_err(|_| Error::Task)?;
+        match response {
+            Ok(response) if response.accepted && response.status.drained() => break,
+            Ok(response) => {
+                tracing::warn!(status = ?response.status, "retaining Dolt owner until native SQL work finishes");
+            }
+            Err(error) => {
+                tracing::warn!(%error, "retaining Dolt owner while SQL completion is uncertain");
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    stop(dolt).await
+}
+
+fn stopped() -> Result<(), Error> {
+    if crate::lifecycle::compiler::planned()? {
+        return Err(Error::Incomplete);
+    }
+    Ok(())
+}
+
+/// Planned backend release has no deadline or forced-kill escalation.
+async fn stop(child: &mut tokio::process::Child) -> Result<(), Error> {
+    if let Some(id) = child.id() {
+        let output = tokio::process::Command::new("kill")
+            .args(["-TERM", &id.to_string()])
+            .output()
+            .await?;
+        if !output.status.success() && child.try_wait()?.is_none() {
+            return Err(Error::Incomplete);
+        }
+    }
+    let status = child.wait().await?;
+    if !status.success() {
+        return Err(Error::Native {
+            stderr: format!("native backend did not close cleanly: {status}"),
+        });
+    }
+    Ok(())
+}
+
+pub(crate) fn configuration_value(data: &Path, _tcp: bool) -> serde_json::Value {
     serde_json::json!({
         "data_dir": data.join("databases").display().to_string().replace('$', "$$"),
         "cfg_dir": data.join("databases/.doltcfg").display().to_string().replace('$', "$$"),
         "privilege_file": data.join("databases/.doltcfg/privileges.db").display().to_string().replace('$', "$$"),
         "listener": {
-            "host": if tcp { "0.0.0.0" } else { "127.0.0.1" },
-            "port": 3306,
-            "socket": data.join("run/dolt.sock").display().to_string().replace('$', "$$"),
+            "host": "127.0.0.1",
+            "port": 13306,
+            "socket": "/run/wrix/dolt/native.sock",
         },
         "system_variables": { "secure_file_priv": "/dev/null" },
     })
 }
 
-fn initialize(data: &Path) -> Result<(), Error> {
+pub(crate) fn initialize(data: &Path) -> Result<(), Error> {
     let path = data.join("admin.password");
     let password = match File::options()
         .write(true)
@@ -149,3 +227,8 @@ fn initialize(data: &Path) -> Result<(), Error> {
     File::open(data)?.sync_all()?;
     Ok(())
 }
+
+#[cfg(test)]
+mod native_test;
+#[cfg(test)]
+mod test;

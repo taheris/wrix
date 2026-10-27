@@ -459,6 +459,30 @@ impl Lifecycle {
         })
     }
 
+    /// Admit native unit ownership before any backend creation or data effects.
+    pub fn preflight(
+        &self,
+        native: &Native,
+        candidate: &Package,
+    ) -> Result<Option<Package>, Error> {
+        native.check()?;
+        match Package::load(&self.root.join("package.json")) {
+            Ok(recorded) => {
+                native.verify_owned(&self.root, &recorded)?;
+                Ok(Some(recorded))
+            }
+            Err(Error::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
+                if native.verify_owned(&self.root, candidate)? {
+                    return Err(Error::UnitConflict(
+                        "an existing unit has no retained package identity".into(),
+                    ));
+                }
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     /// Request supervision of the recorded identity, never the caller's newer package.
     /// Callers must separately authenticate controller readiness before admitting effects.
     pub fn start(&self, native: &Native, candidate: &Package) -> Result<Package, Error> {
@@ -516,9 +540,31 @@ impl Lifecycle {
         Ok(())
     }
 
+    /// Stop only the verified recorded native unit. An absent unit still retains shutdown intent.
+    pub fn stop_owned(&self, native: &Native) -> Result<(), Error> {
+        let package = Package::load(&self.root.join("package.json"))?;
+        let owned = native.verify_owned(&self.root, &package)?;
+        self.record_stop()?;
+        if owned {
+            native.stop()?;
+        }
+        Ok(())
+    }
+
+    fn record_stop(&self) -> Result<(), Error> {
+        let mut marker = tempfile::NamedTempFile::new_in(&self.root)?;
+        marker.write_all(b"explicit host shutdown\n")?;
+        marker.as_file().sync_all()?;
+        marker
+            .persist(self.root.join("stopped"))
+            .map_err(|error| error.error)?;
+        File::open(&self.root)?.sync_all()?;
+        Ok(())
+    }
+
     /// Persist intent before contacting supervision, including when its control plane fails.
     pub fn stop(&self, native: &Native) -> Result<(), Error> {
-        File::create(self.root.join("stopped"))?.sync_all()?;
+        self.record_stop()?;
         native.stop()
     }
 }

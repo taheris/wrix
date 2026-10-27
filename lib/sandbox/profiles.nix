@@ -7,6 +7,12 @@
 }:
 
 let
+  workerCompiler = import ../../crates/wrix-service/src/lifecycle/drain/native/compiler.nix {
+    inherit pkgs;
+  };
+  hostCompiler = import ../../crates/wrix-service/src/lifecycle/drain/native/compiler.nix {
+    pkgs = hostPkgs;
+  };
   inherit (pkgs.lib)
     cleanSourceWith
     concatStringsSep
@@ -334,7 +340,7 @@ let
         pkgs.openssl.dev
         pkgs.pkg-config
         pkgs.postgresql.lib
-        pkgs.sccache
+        workerCompiler
       ];
 
       packages = [
@@ -349,7 +355,7 @@ let
         hostPkgs.openssl.dev
         hostPkgs.pkg-config
         hostPkgs.postgresql.lib
-        hostPkgs.sccache
+        hostCompiler
       ];
 
       enabledPlugins = {
@@ -357,24 +363,24 @@ let
       };
 
       env = {
-        CARGO_BUILD_RUSTC_WRAPPER = "${pkgs.sccache}/bin/sccache";
+        CARGO_BUILD_RUSTC_WRAPPER = "${workerCompiler}/bin/sccache";
         LIBRARY_PATH = "${pkgs.postgresql.lib}/lib";
         OPENSSL_INCLUDE_DIR = "${pkgs.openssl.dev}/include";
         OPENSSL_LIB_DIR = "${pkgs.openssl.out}/lib";
         RUSTC = "${imageToolchain}/bin/rustc";
-        RUSTC_WRAPPER = "${pkgs.sccache}/bin/sccache";
+        RUSTC_WRAPPER = "${workerCompiler}/bin/sccache";
         RUST_SRC_PATH = "${imageToolchain}/lib/rustlib/src/rust/library";
         SCCACHE_CACHE_SIZE = "50G";
         SCCACHE_DIR = "/home/wrix/.cache/sccache";
       };
 
       hostEnv = {
-        CARGO_BUILD_RUSTC_WRAPPER = "${hostPkgs.sccache}/bin/sccache";
+        CARGO_BUILD_RUSTC_WRAPPER = "${hostCompiler}/bin/sccache";
         LIBRARY_PATH = "${hostPkgs.postgresql.lib}/lib";
         OPENSSL_INCLUDE_DIR = "${hostPkgs.openssl.dev}/include";
         OPENSSL_LIB_DIR = "${hostPkgs.openssl.out}/lib";
         RUSTC = "${hostToolchain}/bin/rustc";
-        RUSTC_WRAPPER = "${hostPkgs.sccache}/bin/sccache";
+        RUSTC_WRAPPER = "${hostCompiler}/bin/sccache";
         RUST_SRC_PATH = "${hostToolchain}/lib/rustlib/src/rust/library";
         SCCACHE_CACHE_SIZE = "50G";
       };
@@ -409,8 +415,8 @@ let
       shellHook = ''
         export PATH="${hostToolchain}/bin:$PATH"
         export RUSTC="''${RUSTC:-${hostToolchain}/bin/rustc}"
-        export RUSTC_WRAPPER="''${RUSTC_WRAPPER:-${hostPkgs.sccache}/bin/sccache}"
-        export CARGO_BUILD_RUSTC_WRAPPER="''${CARGO_BUILD_RUSTC_WRAPPER:-${hostPkgs.sccache}/bin/sccache}"
+        export RUSTC_WRAPPER="''${RUSTC_WRAPPER:-${hostCompiler}/bin/sccache}"
+        export CARGO_BUILD_RUSTC_WRAPPER="''${CARGO_BUILD_RUSTC_WRAPPER:-${hostCompiler}/bin/sccache}"
         export SCCACHE_DIR="''${SCCACHE_DIR:-$HOME/.cache/sccache}"
         export SCCACHE_CACHE_SIZE="''${SCCACHE_CACHE_SIZE:-50G}"
       '';

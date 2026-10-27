@@ -7,7 +7,7 @@ use std::{
     path::Path,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread::{self, JoinHandle},
     time::Duration,
@@ -160,7 +160,8 @@ fn serve(root: &Path, mut stream: TcpStream) -> io::Result<()> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => None,
         Err(error) => return Err(error),
     };
-    let valid = route.starts_with("/_api/v1/cache-config/wrix-") && authenticated;
+    let workflow = route.starts_with("/_api/v1/workflow/wrix-");
+    let valid = (route.starts_with("/_api/v1/cache-config/wrix-") || workflow) && authenticated;
     let status = forced
         .as_deref()
         .unwrap_or(if valid { "200" } else { "403" });
@@ -170,6 +171,10 @@ fn serve(root: &Path, mut stream: TcpStream) -> io::Result<()> {
         "celler-policy.json"
     });
     let body = match method {
+        "POST" if workflow => {
+            static NEXT: AtomicU64 = AtomicU64::new(1);
+            json!({"workflow": format!("00000000-0000-4000-8000-{:012x}", NEXT.fetch_add(1, Ordering::Relaxed))})
+        }
         "GET" => {
             let period =
                 match fs::read(&policy) {

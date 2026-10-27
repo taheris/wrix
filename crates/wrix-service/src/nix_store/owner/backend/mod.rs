@@ -1,5 +1,6 @@
 //! Recorded service-VM ownership and authenticated fixed-operation management.
 
+mod apple;
 mod budget;
 pub mod client;
 pub(crate) mod observation;
@@ -62,7 +63,7 @@ pub enum Error {
     ImageInput(#[from] native::image::Error),
     /// pool native identity failed: {0}
     Identity(#[from] native::lease::Error),
-    /// pool host operation requires its package-selected Linux service VM runtime
+    /// pool host operation requires its package-selected native service VM runtime
     Unsupported,
     /// pool deployment paths are invalid: {0}
     Layout(#[from] deployment::Error),
@@ -86,8 +87,14 @@ struct NativeId(String);
 impl TryFrom<String> for NativeId {
     type Error = Error;
     fn try_from(value: String) -> Result<Self, Error> {
-        if value.len() != 64
-            || !value
+        let hex = value.strip_prefix("wrix-nix-").unwrap_or(&value);
+        let length = if value.starts_with("wrix-nix-") {
+            32
+        } else {
+            64
+        };
+        if hex.len() != length
+            || !hex
                 .bytes()
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
         {
@@ -109,9 +116,60 @@ struct Software {
     digest: Digest,
     image: ImageId,
     tools: Tools,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    environment: Option<BTreeMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reference: Option<image::ImageRef>,
 }
 impl Software {
+    fn installed_image(
+        image: Option<ImageId>,
+        actual: Option<&Digest>,
+        expected: &Digest,
+    ) -> Result<ImageId, Error> {
+        if actual != Some(expected) {
+            return Err(Error::Invalid);
+        }
+        image.ok_or(Error::Invalid)
+    }
+
+    fn metadata(
+        tools: &Tools,
+        image: &ImageId,
+        reference: &image::ImageRef,
+        system: wrix_core::nix_store::pool::System,
+    ) -> Result<(serde_json::Value, Option<image::ImageRef>), Error> {
+        if tools.runtime() == image::Runtime::Container {
+            let (config, reference) = apple::image_config(tools, image, reference, system)?;
+            return Ok((config, Some(reference)));
+        }
+        let bytes = podman(tools, &["image", "inspect", image.as_str()])?;
+        let metadata: serde_json::Value = serde_json::from_slice(&bytes)?;
+        if metadata.as_array().map(Vec::len) != Some(1) {
+            return Err(Error::Invalid);
+        }
+        Ok((
+            serde_json::json!({"config":metadata[0]["Config"], "architecture":metadata[0]["Architecture"]}),
+            None,
+        ))
+    }
+
     fn install(
+        candidate: Candidate,
+        tools: Tools,
+        system: wrix_core::nix_store::pool::System,
+        roots: &Path,
+    ) -> Result<Self, Error> {
+        if tools.platform() == tools::Platform::Apple {
+            let (container, skopeo) = tools.apple_image_commands()?;
+            return image::with_runtime_commands(&container, &skopeo, || {
+                Self::install_native(candidate, tools, system, roots)
+            });
+        }
+        Self::install_native(candidate, tools, system, roots)
+    }
+
+    fn install_native(
         candidate: Candidate,
         tools: Tools,
         system: wrix_core::nix_store::pool::System,
@@ -122,41 +180,56 @@ impl Software {
         tools.pin(roots)?;
         let digest = candidate.realize(roots)?;
         let mut store = image::CommandStore;
+        let runtime = tools.image_runtime();
         image::install(
             &mut store,
             &image::InstallRequest::new(
-                image::Runtime::Podman,
+                runtime,
                 candidate.image(),
                 candidate.source(),
                 Some(&digest),
             )?,
         )?;
         let selected = image::Target::Reference(candidate.image().clone());
-        let image = store
-            .image_id(image::Runtime::Podman, &selected)?
-            .ok_or(Error::Invalid)?;
-        if !same_image(&image, &digest) {
-            return Err(Error::Invalid);
-        }
-        let bytes = podman(&tools, &["image", "inspect", image.as_str()])?;
-        let metadata: serde_json::Value = serde_json::from_slice(&bytes)?;
+        let native = store.image_id(runtime, &selected)?;
+        let image = match runtime {
+            image::Runtime::Container => Self::installed_image(
+                native,
+                store.image_digest(runtime, &selected)?.as_ref(),
+                &digest,
+            )?,
+            image::Runtime::Podman => {
+                let image = native.ok_or(Error::Invalid)?;
+                if !same_image(&image, &digest) {
+                    return Err(Error::Invalid);
+                }
+                image
+            }
+        };
+        let (metadata, reference) = Self::metadata(&tools, &image, candidate.image(), system)?;
         let architecture = match system {
             wrix_core::nix_store::pool::System::X86_64Linux => "amd64",
             wrix_core::nix_store::pool::System::Aarch64Linux => "arm64",
         };
-        if metadata.as_array().map(Vec::len) != Some(1)
-            || metadata[0]["Config"]["Labels"]["wrix.nix-pool.bootstrap-version"] != "3"
-            || metadata[0]["Config"]["Labels"]["wrix.image.kind"] != "service"
-            || metadata[0]["Config"]["Labels"]["wrix.managed"] != "true"
-            || metadata[0]["Architecture"] != architecture
+        if metadata["config"]["Labels"]["wrix.nix-pool.bootstrap-version"] != "3"
+            || metadata["config"]["Labels"]["wrix.image.kind"] != "service"
+            || metadata["config"]["Labels"]["wrix.managed"] != "true"
+            || metadata["architecture"] != architecture
         {
             return Err(Error::Invalid);
         }
+        let environment = if tools.platform() == tools::Platform::Apple {
+            Some(apple::environment(&metadata["config"]["Env"])?)
+        } else {
+            None
+        };
         Ok(Self {
             candidate,
             digest,
             image,
             tools,
+            environment,
+            reference,
         })
     }
 }
@@ -179,7 +252,33 @@ impl Attempt {
 struct Target {
     attempt: Attempt,
     id: NativeId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    apple: Option<apple::Binding>,
 }
+impl Target {
+    fn check_runtime(&self) -> Result<(), Error> {
+        match self.attempt.software.tools.platform() {
+            tools::Platform::Podman
+                if self.apple.is_none()
+                    && self.id.0.len() == 64
+                    && self.attempt.software.reference.is_none()
+                    && self.attempt.software.environment.is_none() =>
+            {
+                Ok(())
+            }
+            tools::Platform::Apple
+                if self.apple.is_some()
+                    && self.id.0 == self.attempt.name()
+                    && self.attempt.software.reference.is_some()
+                    && self.attempt.software.environment.is_some() =>
+            {
+                Ok(())
+            }
+            _ => Err(Error::Invalid),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Connection {
@@ -372,7 +471,7 @@ struct Status {
     #[serde(rename = "Running")]
     running: bool,
     #[serde(rename = "ExitCode")]
-    exit_code: i32,
+    exit_code: Option<i32>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -408,6 +507,13 @@ impl Record {
             || record.executions.len() > 64
         {
             return Err(Error::Invalid);
+        }
+        match &record.state {
+            State::Starting { .. } => (),
+            State::Created { target } => target.check_runtime()?,
+            State::Serving { connection }
+            | State::Stopping { connection }
+            | State::Released { connection } => connection.target.check_runtime()?,
         }
         Ok(record)
     }
@@ -487,7 +593,14 @@ impl Owner {
         }
     }
 
-    fn observe(&self, target: &Target) -> Result<Observation, Error> {
+    fn observe(&self, target: &Target) -> Result<Status, Error> {
+        target.check_runtime()?;
+        if target.attempt.software.tools.runtime() == image::Runtime::Container {
+            return apple::observe(self, target);
+        }
+        if target.apple.is_some() {
+            return Err(Error::Invalid);
+        }
         let bytes = podman(&target.attempt.software.tools, &["inspect", &target.id.0])?;
         let mut observations: Vec<Observation> = serde_json::from_slice(&bytes)?;
         if observations.len() != 1 {
@@ -543,7 +656,7 @@ impl Owner {
         if data != 1 {
             return Err(Error::Invalid);
         }
-        Ok(observation)
+        Ok(observation.state)
     }
 
     fn rpc(
@@ -552,8 +665,11 @@ impl Owner {
         operation: &native::Operation,
         budget: Option<Duration>,
     ) -> Result<native::Reply, Error> {
+        if connection.target.apple.is_some() {
+            apple::validate_binding(self, &connection.target, connection.port)?;
+        }
         self.observe(&connection.target).and_then(|observation| {
-            if observation.state.running {
+            if observation.running {
                 Ok(())
             } else {
                 Err(Error::Retained)
@@ -696,18 +812,18 @@ impl Owner {
             }
             State::Released { connection } => {
                 released(self.prepared.data_root())?;
-                if !Self::absent(connection)? {
+                if !self.absent(connection)? {
                     return Err(Error::Retained);
                 }
                 Ok(MaintenanceState::Released)
             }
             State::Stopping { connection } if recovering => {
-                if Self::absent(connection)? {
+                if self.absent(connection)? {
                     released(self.prepared.data_root())?;
                 } else {
                     let observation = self.observe(&connection.target)?;
-                    if !observation.state.running {
-                        if observation.state.exit_code != 0 {
+                    if !observation.running {
+                        if observation.exit_code != Some(0) {
                             return Err(Error::Retained);
                         }
                         released(self.prepared.data_root())?;
@@ -719,7 +835,16 @@ impl Owner {
         }
     }
 
-    fn absent(connection: &Connection) -> Result<bool, Error> {
+    fn absent(&self, connection: &Connection) -> Result<bool, Error> {
+        connection.target.check_runtime()?;
+        if connection.target.attempt.software.tools.runtime() == image::Runtime::Container {
+            apple::validate_binding(self, &connection.target, connection.port)?;
+            let absent = apple::absent(&connection.target)?;
+            if absent {
+                apple::clean_exit(self, &connection.target)?;
+            }
+            return Ok(absent);
+        }
         let tools = &connection.target.attempt.software.tools;
         let mut command = tools.command(Program::Podman);
         command.args(["container", "exists", &connection.target.id.0]);
@@ -748,7 +873,7 @@ impl Owner {
         let connection = self.connection()?.clone();
         if matches!(self.record.state, State::Released { .. }) {
             released(self.prepared.data_root())?;
-            return if Self::absent(&connection)? {
+            return if self.absent(&connection)? {
                 Ok(())
             } else {
                 Err(Error::Retained)
@@ -759,12 +884,12 @@ impl Owner {
         };
         self.record
             .publish(&self.prepared.reservation.paths.control)?;
-        if Self::absent(&connection)? {
+        if self.absent(&connection)? {
             // An interrupted stop needs both the independent guest release certificate and exact runtime absence.
             released(self.prepared.data_root())?;
         } else {
             let observation = self.observe(&connection.target)?;
-            if observation.state.running {
+            if observation.running {
                 match self.rpc(
                     &connection,
                     &native::Operation::Shutdown {},
@@ -780,24 +905,35 @@ impl Owner {
                     Ok(_) => return Err(Error::Retained),
                     Err(error) => return Err(error),
                 }
-                let exit = text(podman(
-                    &connection.target.attempt.software.tools,
-                    &["wait", &connection.target.id.0],
-                )?)?;
-                if exit != "0" {
-                    return Err(Error::Retained);
+                if connection.target.apple.is_some() {
+                    apple::wait(self, &connection.target)?;
+                } else {
+                    let exit = text(podman(
+                        &connection.target.attempt.software.tools,
+                        &["wait", &connection.target.id.0],
+                    )?)?;
+                    if exit != "0" {
+                        return Err(Error::Retained);
+                    }
                 }
             }
             let observation = self.observe(&connection.target)?;
-            if observation.state.running || observation.state.exit_code != 0 {
+            if observation.running || observation.exit_code != Some(0) {
                 return Err(Error::Retained);
             }
             released(self.prepared.data_root())?;
-            let removed = text(podman(
-                &connection.target.attempt.software.tools,
-                &["rm", &connection.target.id.0],
-            )?)?;
-            if removed != connection.target.id.0 || !Self::absent(&connection)? {
+            if connection.target.apple.is_some() {
+                apple::remove(self, &connection.target)?;
+            } else {
+                let removed = text(podman(
+                    &connection.target.attempt.software.tools,
+                    &["rm", &connection.target.id.0],
+                )?)?;
+                if removed != connection.target.id.0 {
+                    return Err(Error::Retained);
+                }
+            }
+            if !self.absent(&connection)? {
                 return Err(Error::Retained);
             }
         }
@@ -895,6 +1031,10 @@ impl Reservation {
 
 impl Owner {
     fn boot(&mut self, attempt: &Attempt, expected_key: Option<&lease::Key>) -> Result<(), Error> {
+        if attempt.software.tools.runtime() == image::Runtime::Container {
+            let (target, port) = apple::boot(self, attempt)?;
+            return self.ready(target, port, expected_key);
+        }
         let tools = &attempt.software.tools;
         let name = attempt.name();
         let mut arguments = ["create", "--name", name.as_str(), "--runtime"]
@@ -943,6 +1083,7 @@ impl Owner {
         let target = Target {
             attempt: attempt.clone(),
             id,
+            apple: None,
         };
         self.record.state = State::Created {
             target: target.clone(),
@@ -957,6 +1098,15 @@ impl Owner {
             .ok_or(Error::Invalid)?
             .parse()
             .map_err(|_| Error::Invalid)?;
+        self.ready(target, port, expected_key)
+    }
+
+    fn ready(
+        &mut self,
+        target: Target,
+        port: NonZeroU16,
+        expected_key: Option<&lease::Key>,
+    ) -> Result<(), Error> {
         let deadline = Instant::now() + Duration::from_secs(60);
         let host_key = loop {
             if self
@@ -967,7 +1117,7 @@ impl Owner {
             {
                 break public_key(&self.prepared.data_root().join("host-key.pub"))?;
             }
-            if Instant::now() >= deadline || !self.observe(&target)?.state.running {
+            if Instant::now() >= deadline || !self.observe(&target)?.running {
                 return Err(Error::Retained);
             }
             thread::sleep(Duration::from_millis(50));
@@ -1030,7 +1180,10 @@ impl Owner {
         };
         let old = connection.clone();
         released(self.prepared.data_root())?;
-        if !Self::absent(&old)? {
+        if old.target.apple.is_some() {
+            apple::clean_exit(self, &old.target)?;
+        }
+        if !self.absent(&old)? {
             return Err(Error::Retained);
         }
         // Never overwrite the old owner's roots: a failed candidate is not rollback evidence.
@@ -1044,12 +1197,16 @@ impl Owner {
             .join(nonce.as_str());
         let software =
             Software::install(candidate.clone(), tools.clone(), self.pool().system, &roots)?;
-        let bytes = podman(
+        let (metadata, _) = Software::metadata(
             &software.tools,
-            &["image", "inspect", software.image.as_str()],
+            &software.image,
+            software
+                .reference
+                .as_ref()
+                .unwrap_or_else(|| software.candidate.image()),
+            self.pool().system,
         )?;
-        let metadata: serde_json::Value = serde_json::from_slice(&bytes)?;
-        if metadata[0]["Config"]["Labels"]["wrix.nix-pool.upgrade-version"] != "1" {
+        if metadata["config"]["Labels"]["wrix.nix-pool.upgrade-version"] != "1" {
             return Err(Error::Invalid);
         }
         let mut previous = Vec::new();
@@ -1114,14 +1271,31 @@ impl Owner {
         let State::Released { connection } = &self.record.state else {
             return Err(Error::Retained);
         };
+        let tools = &connection.target.attempt.software.tools;
+        if tools.platform() == tools::Platform::Apple {
+            released(self.prepared.data_root())?;
+            apple::clean_exit(self, &connection.target)?;
+            let (container, skopeo) = tools.apple_image_commands()?;
+            return image::with_runtime_commands(&container, &skopeo, || self.resume_native());
+        }
+        self.resume_native()
+    }
+
+    fn resume_native(&mut self) -> Result<(), Error> {
+        let State::Released { connection } = &self.record.state else {
+            return Err(Error::Retained);
+        };
         let old = connection.clone();
         released(self.prepared.data_root())?;
+        if old.target.apple.is_some() {
+            apple::clean_exit(self, &old.target)?;
+        }
         old.target
             .attempt
             .software
             .tools
             .check(self.pool().system)?;
-        if !Self::absent(&old)? {
+        if !self.absent(&old)? {
             return Err(Error::Retained);
         }
         let software = &old.target.attempt.software;
@@ -1140,14 +1314,14 @@ impl Owner {
         image::install(
             &mut store,
             &image::InstallRequest::new(
-                image::Runtime::Podman,
+                software.tools.runtime(),
                 software.candidate.image(),
                 software.candidate.source(),
                 Some(&digest),
             )?,
         )?;
         if store.image_id(
-            image::Runtime::Podman,
+            software.tools.runtime(),
             &image::Target::Reference(software.candidate.image().clone()),
         )? != Some(software.image.clone())
         {

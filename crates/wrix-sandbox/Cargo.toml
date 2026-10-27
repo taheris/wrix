@@ -6,6 +6,7 @@ version.workspace = true
 
 [dependencies]
 rustix = { workspace = true }
+chrono = { workspace = true }
 displaydoc = { workspace = true }
 fs2 = { workspace = true }
 libc = { workspace = true }

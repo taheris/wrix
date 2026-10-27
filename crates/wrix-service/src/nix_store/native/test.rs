@@ -67,6 +67,8 @@ fn shutdown_cannot_select_a_process_program_or_filesystem_target() {
         r#"{"operation":"shutdown","program":"/bin/sh"}"#,
         r#"{"operation":"shutdown","path":"/nix"}"#,
         r#"{"operation":"shutdown","force":true}"#,
+        r#"{"operation":"shutdown","data_uid":501}"#,
+        r#"{"operation":"shutdown","data_owner":"501:20"}"#,
     ] {
         assert!(serde_json::from_str::<Operation>(request).is_err());
     }

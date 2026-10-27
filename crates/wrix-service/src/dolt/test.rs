@@ -715,6 +715,103 @@ fn source_symlinks_cannot_adopt_peer_native_storage() -> TestResult {
 }
 
 #[test]
+fn readiness_reads_only_selected_ready_native_registrations_without_mutation() -> TestResult {
+    let fixture = Fixture::new()?;
+    let authorization = fixture
+        .controller
+        .authorize(&fixture.namespace, Permission::Sql)?;
+    let manager = fixture.manager(&authorization, Branch::parse("beads")?)?;
+    fixture.backup(&manager)?;
+    let original = manager.register()?;
+    let path = manager.root.join("registration.json");
+    let before = fs::read(&path)?;
+    let credentials = super::readiness_credentials(
+        fixture.root.path(),
+        std::slice::from_ref(&fixture.namespace),
+    )?;
+    assert_eq!(credentials.len(), 1);
+    assert_eq!(credentials[0].database(), original.database());
+    assert_eq!(credentials[0].user(), original.user());
+    assert_eq!(credentials[0].password(), original.password());
+    assert!(super::readiness_credentials(fixture.root.path(), &[])?.is_empty());
+    assert_eq!(fs::read(path)?, before);
+    let missing = Namespace::from(&WorkspaceHash::parse(&"b".repeat(64))?);
+    assert!(
+        super::readiness_credentials(fixture.root.path(), std::slice::from_ref(&missing)).is_err()
+    );
+    assert!(
+        !fixture
+            .root
+            .path()
+            .join("host-control/dolt")
+            .join(missing.as_str())
+            .exists()
+    );
+    Ok(())
+}
+
+#[test]
+fn readiness_rejects_incomplete_native_registration_without_reprovisioning() -> TestResult {
+    let fixture = Fixture::new()?;
+    let authorization = fixture
+        .controller
+        .authorize(&fixture.namespace, Permission::Sql)?;
+    let manager = fixture.manager(&authorization, Branch::parse("beads")?)?;
+    fixture.backup(&manager)?;
+    let credentials = manager.register()?;
+    for phase in [Phase::Restoring, Phase::Imported] {
+        let mut record = manager.read_record()?.unwrap();
+        record.phase = phase;
+        manager.write_record(&record)?;
+        assert!(matches!(
+            super::readiness_credentials(
+                fixture.root.path(),
+                std::slice::from_ref(&fixture.namespace)
+            ),
+            Err(Error::Incomplete)
+        ));
+        assert!(
+            fixture
+                .tenant(&credentials, "SELECT COUNT(*) FROM marker")?
+                .status
+                .success()
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn readiness_and_manager_share_native_credential_identity_validation() -> TestResult {
+    let fixture = Fixture::new()?;
+    let authorization = fixture
+        .controller
+        .authorize(&fixture.namespace, Permission::Sql)?;
+    let manager = fixture.manager(&authorization, Branch::parse("beads")?)?;
+    fixture.backup(&manager)?;
+    manager.register()?;
+    let path = manager.root.join("registration.json");
+    let original = fs::read(&path)?;
+    for (field, value) in [
+        ("database", "peer"),
+        ("user", "wrixadmin"),
+        ("password", "invalid"),
+    ] {
+        let mut record: Value = serde_json::from_slice(&original)?;
+        record["credentials"][field] = Value::String(value.into());
+        super::atomic_json(&path, &record)?;
+        assert!(matches!(manager.read_record(), Err(Error::Incomplete)));
+        assert!(matches!(
+            super::readiness_credentials(
+                fixture.root.path(),
+                std::slice::from_ref(&fixture.namespace)
+            ),
+            Err(Error::Incomplete)
+        ));
+    }
+    Ok(())
+}
+
+#[test]
 fn sql_literals_preserve_quotes_and_backslashes() {
     assert_eq!(literal("a'b\\c"), "'a''b\\\\c'");
 }

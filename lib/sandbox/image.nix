@@ -49,9 +49,18 @@ let
     ;
   privateNix = import ./private-nix.nix { inherit (pkgs) lib; };
   sharedNixContract = import ./shared-nix.nix;
+  appleNixBridge = pkgs.pkgsStatic.stdenv.mkDerivation {
+    name = "wrix-apple-nix-bridge-1";
+    src = ./darwin/nix-bridge.c;
+    dontUnpack = true;
+    buildPhase = "$CC -static -std=c11 -Wall -Wextra -Werror -O2 -o wrix-apple-nix-bridge $src";
+    installPhase = "mkdir -p $out/bin; cp wrix-apple-nix-bridge $out/bin/";
+  };
   sharedNixClient = pkgs.replaceVars ./shared-nix-client.sh {
     STAT = "${pkgs.coreutils}/bin/stat";
     MKDIR = "${pkgs.coreutils}/bin/mkdir";
+    RM = "${pkgs.coreutils}/bin/rm";
+    LN = "${pkgs.coreutils}/bin/ln";
     SOCAT = "${pkgs.socat}/bin/socat";
     SSH = "${pkgs.openssh}/bin/ssh";
     TIMEOUT = "${pkgs.coreutils}/bin/timeout";
@@ -237,6 +246,7 @@ let
 
   leafContents = [
     pkgs.dockerTools.usrBinEnv
+    appleNixBridge
     pkgs.dockerTools.binSh
     pkgs.dockerTools.caCertificates
     profileEnv
@@ -334,6 +344,8 @@ let
     "wrix.nix.private" = toString privateNix.version;
     "wrix.nix.shared" = toString sharedNix.version;
     "wrix.nix.client" = "1";
+    "wrix.nix.apple.bridge.version" = "1";
+    "wrix.nix.apple.bridge.executable" = "${appleNixBridge}/bin/wrix-apple-nix-bridge";
     "wrix.nix.seed" = builtins.hashString "sha256" (
       builtins.unsafeDiscardStringContext sharedNix.seed_closure
     );
@@ -350,7 +362,7 @@ let
     contents = leafContents;
 
     extraCommands = ''
-      mkdir -p tmp home/wrix root run var/run var/cache var/tmp mnt/wrix/file mnt/wrix/dir
+      mkdir -p tmp home/wrix root run/wrix var/run var/cache var/tmp mnt/wrix/file mnt/wrix/dir
       chmod 1777 tmp var/cache var/tmp
       chmod 0755 run var/run
       chmod 777 home/wrix
@@ -359,6 +371,7 @@ let
       printf '%s\n' '${agent}' > etc/wrix/image-agent
       printf '%s\n' '${toString privateNix.version}' > etc/wrix/private-nix-version
       printf '%s\n' '${toString sharedNix.version}' > etc/wrix/shared-nix-version
+      ln -s ${appleNixBridge}/bin/wrix-apple-nix-bridge etc/wrix/apple-nix-bridge
       ${optionalString (agent == "direct") ''
         cp ${directExecutableFile} etc/wrix/direct-executable
       ''}

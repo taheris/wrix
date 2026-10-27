@@ -1,4 +1,5 @@
 //! Execution-bound client and read-only projection ownership. Drop/disconnect never releases either.
+pub mod bridge;
 mod mount;
 mod path;
 pub(crate) mod supervisor;
@@ -47,6 +48,9 @@ pub struct Delivery {
     port: NonZeroU16,
 }
 impl Delivery {
+    pub const fn plane(&self) -> Plane {
+        self.plane
+    }
     pub const fn pool(&self) -> &Key {
         &self.pool
     }
@@ -89,6 +93,12 @@ struct Record {
     generation: Vec<u8>,
     ticket: Ticket,
     lease: lease::Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    native_process: Option<wrix_sandbox::execution::apple::Process>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    broker_epoch: Option<lease::Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    port: Option<NonZeroU16>,
     state: State,
 }
 impl Record {
@@ -270,6 +280,7 @@ impl Owner {
                     || record.ticket != *ticket
                     || record.namespace.as_str() != issued.namespace().as_str()
                     || record.generation != issued.generation().as_bytes()
+                    || (plane == Plane::Apple && record.port != Some(connection.port))
                 {
                     return Err(Error::Invalid);
                 }
@@ -332,7 +343,7 @@ impl Owner {
                 }
                 destination.sync_all()?;
                 if matches!(issued.purpose(), Purpose::Worker { .. }) {
-                    worker::create(&root, connection.port)?;
+                    worker::create_on(&root, connection.port, plane)?;
                 }
                 let record = Record {
                     version: 1,
@@ -343,6 +354,9 @@ impl Owner {
                     ticket: ticket.clone(),
                     lease: random()?,
                     state: State::Registering,
+                    native_process: None,
+                    broker_epoch: None,
+                    port: Some(connection.port),
                 };
                 record.publish(&root)?;
                 File::open(&parent)?.sync_all()?;

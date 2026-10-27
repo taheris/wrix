@@ -39,6 +39,7 @@ pub struct Delivery {
     store: PathBuf,
     configuration: PathBuf,
     port: NonZeroU16,
+    apple: bool,
 }
 impl Delivery {
     /// Derive fixed service-private sources, not a caller-chosen mount root. This description grants no admission.
@@ -70,10 +71,16 @@ impl Delivery {
             store,
             configuration,
             port,
+            apple: false,
         })
     }
-    pub fn mounts(&self) -> [crate::execution::ProjectionMount; 3] {
-        [
+    pub fn apple(pool: Key, ticket: Ticket, port: NonZeroU16) -> Result<Self, Error> {
+        let mut delivery = Self::podman(pool, ticket, port)?;
+        delivery.apple = true;
+        Ok(delivery)
+    }
+    pub fn mounts(&self) -> Vec<crate::execution::ProjectionMount> {
+        let mut mounts = vec![
             crate::execution::ProjectionMount {
                 source: self.store.clone(),
                 destination: "/nix/store".into(),
@@ -89,7 +96,11 @@ impl Delivery {
                 destination: "/etc/nix/nix.conf".into(),
                 writable: false,
             },
-        ]
+        ];
+        if self.apple {
+            mounts.pop();
+        }
+        mounts
     }
     pub fn local_endpoint(&self) -> String {
         format!("169.254.1.2:{}/tcp", self.port)
@@ -102,14 +113,26 @@ impl Delivery {
             argument.push(":ro");
             command.arg("-v").arg(argument);
         }
-        command.arg("-e").arg(format!(
-            "WRIX_NETWORK_LOCAL_ENDPOINTS={}",
-            self.local_endpoint()
-        ));
+        if !self.apple {
+            command.arg("-e").arg(format!(
+                "WRIX_NETWORK_LOCAL_ENDPOINTS={}",
+                self.local_endpoint()
+            ));
+        }
     }
 }
 /// Re-observe native export identity and fixed configuration, not historical job readiness.
+pub trait Transport {}
 pub trait Session {
+    fn apple(&self) -> Result<std::process::Command, Error> {
+        Err(Error::Unavailable)
+    }
+    fn start_apple_bridge(
+        &self,
+        _: &crate::execution::apple::Worker,
+    ) -> Result<Box<dyn Transport>, Error> {
+        Err(Error::Unavailable)
+    }
     fn delivery(&self) -> Result<Delivery, Error>;
     fn podman(&self) -> Result<std::process::Command, Error>;
     fn krun_runtime(&self) -> Result<Option<PathBuf>, Error> {
@@ -117,6 +140,23 @@ pub trait Session {
     }
 }
 pub trait Factory {
+    fn apple_image_commands(
+        &self,
+    ) -> Result<(std::process::Command, std::process::Command), Error> {
+        Err(Error::Unavailable)
+    }
+    fn admit_apple(&self) -> Result<(), Error> {
+        Err(Error::Unavailable)
+    }
+    fn prepare_apple(
+        &self,
+        _: &Selection,
+        _: System,
+        _: &Ticket,
+        _: &Binding,
+    ) -> Result<Box<dyn Session>, Error> {
+        Err(Error::Unavailable)
+    }
     fn admit(&self) -> Result<(), Error>;
     fn admit_krun(&self) -> Result<(), Error> {
         Err(Error::Unavailable)
@@ -216,11 +256,17 @@ impl Attempt {
     pub fn prepare_krun(self, factory: &dyn Factory) -> Result<Prepared, Error> {
         self.prepare_on(factory, Runtime::Krun)
     }
+    pub fn prepare_apple(self, factory: &dyn Factory) -> Result<Prepared, Error> {
+        self.prepare_on(factory, Runtime::Apple)
+    }
     fn prepare_on(self, factory: &dyn Factory, runtime: Runtime) -> Result<Prepared, Error> {
         let pool = wrix_state::nix_store::admission::Guard::acquire(&self.selection, self.system)?
             .pool()
             .clone();
         let session = match runtime {
+            Runtime::Apple => {
+                factory.prepare_apple(&self.selection, self.system, &self.ticket, &self.image)?
+            }
             Runtime::Podman => {
                 factory.prepare_podman(&self.selection, self.system, &self.ticket, &self.image)?
             }
@@ -233,6 +279,7 @@ impl Attempt {
         if delivery.pool != pool
             || delivery.ticket != self.ticket
             || !runtime.matches(krun.as_ref())
+            || delivery.apple != matches!(runtime, Runtime::Apple)
         {
             return Err(Error::Delivery);
         }
@@ -244,13 +291,18 @@ impl Attempt {
         })
     }
 }
+#[derive(Clone, Copy)]
 enum Runtime {
     Podman,
     Krun,
+    Apple,
 }
 impl Runtime {
     const fn matches(self, krun: Option<&Krun>) -> bool {
-        matches!((self, krun), (Self::Podman, None) | (Self::Krun, Some(_)))
+        matches!(
+            (self, krun),
+            (Self::Podman | Self::Apple, None) | (Self::Krun, Some(_))
+        )
     }
 }
 #[derive(Eq, PartialEq)]
@@ -342,7 +394,11 @@ impl Prepared {
         &self.delivery
     }
     pub fn command(&self) -> Result<std::process::Command, Error> {
-        self.session.podman()
+        if self.delivery.apple {
+            self.session.apple()
+        } else {
+            self.session.podman()
+        }
     }
     pub fn krun_runtime(&self) -> Option<&std::path::Path> {
         self.krun.as_ref().map(Krun::as_path)
@@ -363,8 +419,11 @@ impl Prepared {
         self,
         command: &std::process::Command,
         interactive: bool,
-    ) -> Result<crate::execution::Running, Error> {
+    ) -> Result<Running, Error> {
         self.recheck_delivery()?;
+        if self.delivery.apple {
+            return self.spawn_apple(command, interactive);
+        }
         check_runtime(
             command,
             self.attempt.image.digest().as_str(),
@@ -395,6 +454,61 @@ impl Prepared {
             &self.delivery.mounts(),
         )?;
         self.recheck_delivery()?;
-        Ok(prepared.spawn()?)
+        Ok(Running::Podman(prepared.spawn()?))
+    }
+    fn spawn_apple(
+        self,
+        command: &std::process::Command,
+        interactive: bool,
+    ) -> Result<Running, Error> {
+        let runtime = self.session.apple()?;
+        if command.get_program() != runtime.get_program()
+            || command.get_current_dir() != runtime.get_current_dir()
+            || !command.get_envs().eq(runtime.get_envs())
+        {
+            return Err(Error::Delivery);
+        }
+        let guard = wrix_state::nix_store::admission::Guard::acquire(
+            &self.attempt.selection,
+            self.attempt.system,
+        )?;
+        if guard.pool() != &self.delivery.pool {
+            return Err(Error::Delivery);
+        }
+        let handoff = guard.handoff(self.attempt.ticket.clone())?;
+        let image = crate::image::Digest::parse(self.attempt.image.digest().as_str())
+            .map_err(|_| Error::Delivery)?;
+        let prepared = crate::execution::apple::Prepared::create(
+            handoff,
+            &self.attempt.ticket,
+            command,
+            interactive,
+            &image,
+            self.attempt.image.metadata().seed_closure.as_path(),
+            &self.delivery.mounts(),
+        )?;
+        self.recheck_delivery()?;
+        Ok(Running::Apple(prepared.spawn(self.session.as_ref())?))
+    }
+}
+pub enum Running {
+    Podman(crate::execution::Running),
+    Apple(crate::execution::apple::Running),
+}
+impl Running {
+    pub const fn child(&mut self) -> &mut std::process::Child {
+        match self {
+            Self::Podman(value) => value.child(),
+            Self::Apple(value) => value.child(),
+        }
+    }
+    pub fn wait_for_retirement(
+        &self,
+        budget: std::time::Duration,
+    ) -> Result<crate::execution::Observation, crate::execution::Error> {
+        match self {
+            Self::Podman(value) => value.wait_for_retirement(budget),
+            Self::Apple(value) => value.wait_for_retirement(budget),
+        }
     }
 }

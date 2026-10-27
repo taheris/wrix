@@ -9,6 +9,8 @@ use crate::lifecycle::{self, CacheMode, DoltTransport};
 pub enum Top {
     Capabilities,
     Start,
+    Update,
+    HostStatus,
     Recover,
     Repair,
     Rename,
@@ -40,6 +42,8 @@ impl Top {
         match input {
             "capabilities" => Some(Self::Capabilities),
             "start" => Some(Self::Start),
+            "update" => Some(Self::Update),
+            "--host" => Some(Self::HostStatus),
             "recover" => Some(Self::Recover),
             "repair" => Some(Self::Repair),
             "rename" => Some(Self::Rename),
@@ -75,7 +79,7 @@ impl Dolt {
 
 pub const CAPABILITIES: &str = "shared-services-v1\n";
 
-pub const HELP: &str = "Manage workspace services.\n\nUsage: wrix service <command> [options]\n\nCommands:\n  capabilities  Print the passive shared-service protocol marker.\n  start      Start the workspace services.\n  recover    Recover the absent or stopped selected cache owner without deleting data.\n  repair     Explicitly upgrade the recorded host controller, then recover services.\n  rename <name>  Rename an inactive selected owner without resetting its data.\n  stop       Stop the workspace services.\n  status     Show workspace service status.\n  logs       Print workspace service logs.\n  endpoints  Print workspace service endpoints.\n  dolt <status|socket|port|host|sandbox-endpoint|attach|gc|wait>       Manage the workspace Dolt service.\n  cache <config|status|publish|warm|rotate-key>        Manage the workspace project cache.\n  nix-store [enable|disable|gc]  Inspect approval or request scoped installed-store collection.\n\nOptions:\n  --no-cache  Disable project-cache handling for top-level service commands.\n  --sandbox-cache  Resolve the project-cache endpoint for sandbox reads (endpoints only).\n  -h, --help  Print help.\n";
+pub const HELP: &str = "Manage workspace services.\n\nUsage: wrix service <command> [options]\n\nCommands:\n  capabilities  Print the passive shared-service protocol marker.\n  start      Start the workspace services.\n  update     Activate the invoked host package for all host-user service roles and provisioned pools.\n  recover    Recover the absent or stopped selected cache owner without deleting data.\n  repair     Explicitly upgrade the recorded host controller, then recover services.\n  rename <name>  Rename an inactive selected owner without resetting its data.\n  stop [--host]  Stop this workspace, or explicitly shut down all host-user services.\n  --host     Show passive host-user deployment information.\n  status     Show workspace service status.\n  logs       Print workspace service logs.\n  endpoints  Print workspace service endpoints.\n  dolt <status|socket|port|host|sandbox-endpoint|attach|gc|wait>       Manage the workspace Dolt service.\n  cache <config|status|publish|warm|rotate-key>        Manage the workspace project cache.\n  nix-store [enable|disable|gc]  Inspect approval or request scoped installed-store collection.\n\nUpdate requires an existing deployment and has no --host, role, pool or image selector.\nRequired native backend transitions must finish before activation succeeds; protected old proxy connections may still drain.\nCeller/compiler clients may need to reconnect after admitted work drains; SQL sessions and proxy streams are not force-closed by update.\nSafe obsolete-generation cleanup must continue under controller supervision, not another invocation or GC.\n\nOptions:\n  --no-cache  Disable project-cache handling for top-level service commands.\n  --sandbox-cache  Resolve the project-cache endpoint for sandbox reads (endpoints only).\n  -h, --help  Print help.\n";
 pub const DOLT_HELP: &str = "Manage the workspace Dolt service.\n\nUsage: wrix service dolt <command>\n\nCommands:\n  status  Show Dolt service status and connection details.\n  socket  Print the Dolt Unix-socket path.\n  port    Print the Dolt TCP port.\n  host    Print the Dolt TCP host.\n  sandbox-endpoint  Print the sandbox-visible Dolt TCP endpoint.\n  attach  Print a command that connects to Dolt.\n  gc      Print the Dolt garbage-collection target.\n  wait    Wait until the Dolt service is ready.\n\nOptions:\n  -h, --help  Print help.\n";
 
 pub fn write_help(stdout: &mut impl Write) -> io::Result<()> {
@@ -93,11 +97,26 @@ pub fn run_top(command: Top, args: &[String], stdout: &mut impl Write) -> io::Re
         args
     };
     let (cache_mode, endpoint_view) = parse_options(command, options)?;
+    let host = args.iter().any(|arg| arg == "--host");
+    if host && (args.len() != 1 || !matches!(command, Top::Stop | Top::Status)) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "--host is supported only for service information and stop, without workspace options",
+        ));
+    }
     match command {
         Top::Capabilities => stdout.write_all(CAPABILITIES.as_bytes())?,
         Top::Start => {
             let status = lifecycle::start(cache_mode).map_err(io::Error::other)?;
             stdout.write_all(status.render().as_bytes())?;
+        }
+        Top::Update => {
+            let report = lifecycle::deployment::update().map_err(io::Error::other)?;
+            stdout.write_all(report.as_bytes())?;
+        }
+        Top::HostStatus => {
+            let report = lifecycle::deployment::status().map_err(io::Error::other)?;
+            stdout.write_all(report.as_bytes())?;
         }
         Top::Recover => {
             let report = lifecycle::recover().map_err(io::Error::other)?;
@@ -130,9 +149,17 @@ pub fn run_top(command: Top, args: &[String], stdout: &mut impl Write) -> io::Re
             let report = lifecycle::rename(&name).map_err(io::Error::other)?;
             stdout.write_all(report.as_bytes())?;
         }
+        Top::Stop if host => {
+            let report = lifecycle::deployment::stop().map_err(io::Error::other)?;
+            stdout.write_all(report.as_bytes())?;
+        }
         Top::Stop => {
             let status = lifecycle::stop(cache_mode).map_err(io::Error::other)?;
             stdout.write_all(status.render().as_bytes())?;
+        }
+        Top::Status if host => {
+            let report = lifecycle::deployment::status().map_err(io::Error::other)?;
+            stdout.write_all(report.as_bytes())?;
         }
         Top::Status => {
             let status = lifecycle::status(cache_mode).map_err(io::Error::other)?;
@@ -338,11 +365,17 @@ fn parse_options(command: Top, args: &[String]) -> io::Result<(CacheMode, Endpoi
             "--no-cache"
                 if !matches!(
                     command,
-                    Top::Recover | Top::Repair | Top::Rename | Top::Capabilities
+                    Top::Recover
+                        | Top::Repair
+                        | Top::Rename
+                        | Top::Capabilities
+                        | Top::Update
+                        | Top::HostStatus
                 ) =>
             {
                 cache_mode = CacheMode::Disabled;
             }
+            "--host" if matches!(command, Top::Stop | Top::Status) => (),
             "--sandbox-cache" if command == Top::Endpoints => {
                 endpoint_view = EndpointView::SandboxCache;
             }
@@ -366,6 +399,8 @@ mod test {
     fn top_command_parser_accepts_public_service_commands() {
         assert_eq!(Top::parse("capabilities"), Some(Top::Capabilities));
         assert_eq!(Top::parse("start"), Some(Top::Start));
+        assert_eq!(Top::parse("update"), Some(Top::Update));
+        assert_eq!(Top::parse("--host"), Some(Top::HostStatus));
         assert_eq!(Top::parse("recover"), Some(Top::Recover));
         assert_eq!(Top::parse("repair"), Some(Top::Repair));
         assert_eq!(Top::parse("rename"), Some(Top::Rename));
@@ -388,10 +423,45 @@ mod test {
 
     #[test]
     fn recovery_rejects_cache_opt_out_and_scope_overrides() {
-        for command in [Top::Recover, Top::Repair, Top::Rename] {
+        for command in [
+            Top::Recover,
+            Top::Repair,
+            Top::Rename,
+            Top::Update,
+            Top::HostStatus,
+        ] {
             for option in ["--no-cache", "--host", "--sandbox-cache", "unexpected"] {
                 assert!(parse_options(command, &[option.into()]).is_err());
             }
+        }
+    }
+
+    #[test]
+    fn update_rejects_every_selector_before_dispatch() {
+        for option in [
+            "--host",
+            "--force",
+            "--wait",
+            "--no-cache",
+            "gateway",
+            "image",
+            "pool",
+        ] {
+            let mut output = Vec::new();
+            let error = super::run_top(Top::Update, &[option.into()], &mut output).unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+            assert_eq!(output, [] as [u8; 0]);
+        }
+    }
+
+    #[test]
+    fn host_shutdown_rejects_workspace_options_before_dispatch() {
+        for args in [
+            ["--host", "--host"],
+            ["--host", "--no-cache"],
+            ["--host", "--sandbox-cache"],
+        ] {
+            assert!(super::run_top(Top::Stop, &args.map(String::from), &mut Vec::new()).is_err());
         }
     }
 

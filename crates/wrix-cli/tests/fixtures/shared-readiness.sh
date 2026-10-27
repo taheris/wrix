@@ -22,8 +22,8 @@ if [[ "${1:-}" == exec && "${3:-}" == sh ]]; then
     printf '%s\0' "$@" >>"${WRIX_TEST_CALLS:?}"
     probe_args="${WRIX_TEST_RUN_ARGS:?}"
   fi
-  expected='export DOLT_CLI_PASSWORD="$(cat -- "$1/admin.password")"; exec dolt --host 127.0.0.1 --port 3306 --no-tls --password "$DOLT_CLI_PASSWORD" --user wrixadmin --use-db controller sql -r json -q '\''SELECT @@GLOBAL.secure_file_priv AS secure_file_priv'\'''
-  if [[ "$#" != 7 || "$3" != sh || "$4" != -c || "$5" != "$expected" || "$6" != wrix-ready ]]; then
+  expected='export DOLT_CLI_PASSWORD="$(cat -- "$1/admin.password")"; exec dolt --host 127.0.0.1 --port "$2" --no-tls --user wrixadmin --use-db controller sql -r json -q '\''SELECT @@GLOBAL.secure_file_priv AS secure_file_priv'\'''
+  if [[ "$#" != 8 || "$3" != sh || "$4" != -c || "$5" != "$expected" || "$6" != wrix-ready || ( "$8" != 3306 && "$8" != 13306 ) ]]; then
     printf 'unsupported native management probe\n' >&2
     exit 64
   fi

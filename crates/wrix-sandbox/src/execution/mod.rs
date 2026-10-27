@@ -1,5 +1,6 @@
 //! Host-only Podman lifetime reconciliation for exact, durably bound container IDs.
 
+pub mod apple;
 mod containment;
 pub mod retirement;
 pub use containment::{Prepared, Running};
@@ -215,7 +216,11 @@ pub fn reconcile(workspace: &Path, ticket: &Ticket) -> Result<Observation, Error
     };
     let id = match phase {
         Phase::Retired(_) => return Ok(Observation::Retired),
-        Phase::Reserved | Phase::Cancelled | Phase::Launching => return Ok(Observation::Protected),
+        Phase::Reserved
+        | Phase::Cancelled
+        | Phase::Launching
+        | Phase::AppleBound(_)
+        | Phase::AppleRetired(_) => return Ok(Observation::Protected),
         Phase::Bound(id) => id,
     };
     let observation = remove(&Command::new("podman"), Environment::Inherited, &id, || {

@@ -729,46 +729,14 @@ impl<'a> Manager<'a> {
     }
 
     fn read_record(&self) -> Result<Option<Record>, Error> {
-        let path = self.root.join("registration.json");
-        let file = match File::options()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(&path)
-        {
-            Ok(file) => file,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error.into()),
-        };
-        let metadata = file.metadata()?;
-        if !metadata.is_file()
-            || metadata.nlink() != 1
-            || metadata.mode() & 0o077 != 0
-            || metadata.uid() != fs::metadata(&self.root)?.uid()
-            || metadata.len() > 16_384
-        {
-            return Err(Error::UnsafePath);
-        }
-        let mut bytes = Vec::new();
-        file.take(16_385).read_to_end(&mut bytes)?;
-        if bytes.len() > 16_384 {
-            return Err(Error::UnsafePath);
-        }
-        let record: Record = serde_json::from_slice(&bytes)?;
-        if record.version != 1
-            || record.namespace != crate::control::Namespace::from(&self.namespace)
-            || record.branch != self.branch
-            || record.credentials.database != self.database()
-            || record.credentials.user != self.user()
-            || record.credentials.password.len() != 64
-            || !record
-                .credentials
-                .password
-                .bytes()
-                .all(|byte| byte.is_ascii_hexdigit())
+        let record = read_record(&self.root, &self.namespace)?;
+        if record
+            .as_ref()
+            .is_some_and(|record| record.branch != self.branch)
         {
             return Err(Error::Incomplete);
         }
-        Ok(Some(record))
+        Ok(record)
     }
 
     fn write_record(&self, record: &Record) -> Result<(), Error> {
@@ -823,6 +791,73 @@ impl<'a> Manager<'a> {
         }
         Ok(rows)
     }
+}
+
+/// Read existing ready registrations only; this never creates state or changes authorization.
+pub fn readiness_credentials(
+    host_root: &Path,
+    namespaces: &[crate::control::Namespace],
+) -> Result<Vec<Credentials>, Error> {
+    namespaces
+        .iter()
+        .map(|namespace| {
+            let namespace =
+                WorkspaceHash::parse(namespace.as_str()).map_err(|_| Error::Unauthorized)?;
+            let root = host_root.join("host-control/dolt").join(namespace.as_str());
+            check_directory(&root)?;
+            let metadata = fs::metadata(&root)?;
+            if metadata.mode() & 0o077 != 0 {
+                return Err(Error::UnsafePath);
+            }
+            let record = read_record(&root, &namespace)?.ok_or(Error::Incomplete)?;
+            if record.phase != Phase::Ready {
+                return Err(Error::Incomplete);
+            }
+            Ok(record.credentials)
+        })
+        .collect()
+}
+
+fn read_record(root: &Path, namespace: &WorkspaceHash) -> Result<Option<Record>, Error> {
+    let path = root.join("registration.json");
+    let file = match File::options()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(&path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let metadata = file.metadata()?;
+    if !metadata.is_file()
+        || metadata.nlink() != 1
+        || metadata.mode() & 0o077 != 0
+        || metadata.uid() != fs::metadata(root)?.uid()
+        || metadata.len() > 16_384
+    {
+        return Err(Error::UnsafePath);
+    }
+    let mut bytes = Vec::new();
+    file.take(16_385).read_to_end(&mut bytes)?;
+    if bytes.len() > 16_384 {
+        return Err(Error::UnsafePath);
+    }
+    let record: Record = serde_json::from_slice(&bytes)?;
+    if record.version != 1
+        || record.namespace != crate::control::Namespace::from(namespace)
+        || record.credentials.database != database_name(namespace)
+        || record.credentials.user != namespace.as_str()[..32]
+        || record.credentials.password.len() != 64
+        || !record
+            .credentials
+            .password
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(Error::Incomplete);
+    }
+    Ok(Some(record))
 }
 
 impl Executor {

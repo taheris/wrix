@@ -4,6 +4,7 @@ mod assignment;
 pub mod cache;
 mod deployment;
 mod endpoint;
+pub mod gateway;
 mod pool;
 pub use pool::Status as PoolPreparation;
 pub(crate) mod maintenance;
@@ -106,6 +107,25 @@ pub(crate) fn existing_deployment(
         return Err(Error::PrivateRoot);
     }
     deployment::load(&root)
+}
+
+/// Existing namespace readiness does not admit or reactivate any workspace.
+pub(crate) fn required_sql(state: &Path) -> Result<Vec<Namespace>, Error> {
+    let root = state.join("control/authority");
+    if !root.try_exists()? {
+        let registrations = state.join("host-control/dolt");
+        if registrations.try_exists()? && fs::read_dir(registrations)?.next().transpose()?.is_some()
+        {
+            return Err(Error::InvalidRegistration);
+        }
+        return Ok(Vec::new());
+    }
+    let registry = registration::Store::open(&root)?.lock()?;
+    Ok(registry
+        .iter()
+        .filter(|(_, policy)| policy.dolt == Access::Allowed)
+        .map(|(namespace, _)| namespace.clone())
+        .collect())
 }
 
 /// An independent host-management credential, never a cache/proxy traffic token.
@@ -370,11 +390,13 @@ impl PoolAuthorization {
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Operation {
     Inspect {},
+    InspectCore {},
     InspectNixPool {},
     InspectNixExecution {},
     InspectNixWorker {},
     InspectNixPodmanWorker {},
     InspectNixKrunWorker {},
+    InspectNixAppleWorker {},
     PrepareNixWorker {
         id: wrix_state::nix_store::admission::request::Id,
     },
@@ -447,6 +469,10 @@ struct Request {
 #[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "result", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Reply {
+    CoreInterface {
+        version: u16,
+        ports: [std::num::NonZeroU16; 4],
+    },
     Snapshot {
         version: u16,
         namespaces: BTreeMap<Namespace, Policy>,
@@ -484,6 +510,7 @@ pub struct Controller {
     assignments: assignment::Store,
     cache_issuer: Option<PathBuf>,
     pool_jobs: pool::Queue,
+    pub(crate) gateway: tokio::sync::RwLock<Option<std::sync::Arc<gateway::Issuer>>>,
 }
 
 impl Controller {
@@ -505,6 +532,9 @@ impl Controller {
             return Err(Error::PrivateRoot);
         }
         let ownership = registration::Ownership::acquire(root)?;
+        if deployment::load(root)?.is_some() && !root.join("namespaces.json").try_exists()? {
+            return Err(Error::InvalidRegistration);
+        }
         let registrations = registration::Store::open(root)?;
         registrations.initialize(&ownership)?;
         let endpoints = endpoint::Store::open(root)?;
@@ -515,6 +545,15 @@ impl Controller {
             None => deployment::create(root)?,
         };
         let credential = Credential::load(root)?;
+        let mut epoch = [0_u8; 32];
+        File::open("/dev/urandom")?.read_exact(&mut epoch)?;
+        let mut marker = tempfile::NamedTempFile::new_in(root)?;
+        marker.write_all(&epoch)?;
+        marker.as_file().sync_all()?;
+        marker
+            .persist(root.join("native-epoch"))
+            .map_err(|error| error.error)?;
+        File::open(root)?.sync_all()?;
         let listener = UnixListener::bind(root.join("control.sock"))?;
         fs::set_permissions(root.join("control.sock"), fs::Permissions::from_mode(0o600))?;
         let controller = Self {
@@ -528,6 +567,7 @@ impl Controller {
             assignments,
             cache_issuer: None,
             pool_jobs: pool::Queue::default(),
+            gateway: tokio::sync::RwLock::new(None),
         };
         controller.pool_jobs.recover_startup(&controller);
         Ok(controller)
@@ -539,6 +579,15 @@ impl Controller {
         let path = address.as_pathname().ok_or(Error::PrivateRoot)?;
         fs::remove_file(path)?;
         Ok(())
+    }
+
+    pub(crate) fn authority_root(&self) -> Result<PathBuf, Error> {
+        self.listener
+            .local_addr()?
+            .as_pathname()
+            .and_then(Path::parent)
+            .map(Path::to_path_buf)
+            .ok_or(Error::PrivateRoot)
     }
 
     /// Stable host identity survives controller restarts and namespace retirement.
@@ -706,11 +755,29 @@ impl Controller {
 
     fn apply(&self, operation: Operation) -> Result<Reply, Error> {
         match operation {
+            Operation::InspectCore {} => {
+                return Ok(self
+                    .endpoints
+                    .bound_ports()?
+                    .map_or(Reply::Incompatible, |ports| Reply::CoreInterface {
+                        version: 1,
+                        ports,
+                    }));
+            }
+            Operation::InspectNixAppleWorker {} => {
+                let host = wrix_state::host::Host::discover().map_err(io::Error::other)?;
+                crate::nix_store::lifecycle::gate::check_clear(&host)?;
+                crate::nix_store::owner::backend::tools::Tools::from_env()?
+                    .view_check(wrix_state::nix_store::admission::request::Plane::Apple)?;
+                return Ok(Reply::PoolInterface { version: 1 });
+            }
             Operation::InspectNixPool {}
             | Operation::InspectNixExecution {}
             | Operation::InspectNixWorker {}
             | Operation::InspectNixPodmanWorker {}
             | Operation::InspectNixKrunWorker {} => {
+                let host = wrix_state::host::Host::discover().map_err(io::Error::other)?;
+                crate::nix_store::lifecycle::gate::check_clear(&host)?;
                 return Ok(Reply::PoolInterface { version: 1 });
             }
             Operation::PrepareNixPool { id } => {
@@ -732,6 +799,7 @@ impl Controller {
             | Operation::Retire { namespace }
             | Operation::AdmitCache { namespace } => Some(self.registrations.lease(namespace)?),
             Operation::Inspect {}
+            | Operation::InspectCore {}
             | Operation::IssueCache { .. }
             | Operation::InspectNixPool {}
             | Operation::PrepareNixPool { .. }
@@ -742,11 +810,13 @@ impl Controller {
             | Operation::InspectNixWorker {}
             | Operation::PrepareNixWorker { .. }
             | Operation::InspectNixPodmanWorker {}
-            | Operation::InspectNixKrunWorker {} => None,
+            | Operation::InspectNixKrunWorker {}
+            | Operation::InspectNixAppleWorker {} => None,
         };
         let mut namespaces = self.registrations.lock()?;
         Ok(match operation {
-            Operation::IssueCache { .. }
+            Operation::InspectCore {}
+            | Operation::IssueCache { .. }
             | Operation::InspectNixPool {}
             | Operation::PrepareNixPool { .. }
             | Operation::InspectNixPoolPreparation { .. }
@@ -756,7 +826,8 @@ impl Controller {
             | Operation::InspectNixWorker {}
             | Operation::PrepareNixWorker { .. }
             | Operation::InspectNixPodmanWorker {}
-            | Operation::InspectNixKrunWorker {} => return Err(Error::PermissionDenied),
+            | Operation::InspectNixKrunWorker {}
+            | Operation::InspectNixAppleWorker {} => return Err(Error::PermissionDenied),
             Operation::Inspect {} => Reply::Snapshot {
                 version: VERSION,
                 namespaces: (*namespaces).clone(),
@@ -858,6 +929,12 @@ pub struct Client {
 }
 
 impl Client {
+    pub(crate) fn check_native_host(&self, host: &wrix_state::host::Host) -> Result<(), Error> {
+        if self.socket != host.roots().state().join("control/authority/control.sock") {
+            return Err(Error::PrivateRoot);
+        }
+        Ok(())
+    }
     pub fn open(root: &Path) -> Result<Self, Error> {
         let metadata = fs::symlink_metadata(root)?;
         if !metadata.is_dir() || metadata.mode() & 0o077 != 0 || root.canonicalize()? != root {
@@ -973,6 +1050,24 @@ impl Client {
         .await
     }
 
+    /// Freeze Apple worker authority separately from host and Podman projection authority.
+    pub async fn prepare_nix_apple_worker(
+        &self,
+        selection: &wrix_state::context::Selection,
+        system: wrix_core::nix_store::pool::System,
+        ticket: &wrix_state::execution::Ticket,
+        image: &wrix_core::nix_store::binding::Binding,
+    ) -> Result<wrix_state::nix_store::admission::request::Id, Error> {
+        self.prepare_worker_on(
+            selection,
+            system,
+            ticket,
+            image,
+            wrix_state::nix_store::admission::request::Plane::Apple,
+        )
+        .await
+    }
+
     /// Freeze separate-VM worker preparation while retaining Podman's private source namespace.
     pub async fn prepare_nix_krun_worker(
         &self,
@@ -1008,6 +1103,7 @@ impl Client {
             Plane::Host => Operation::InspectNixWorker {},
             Plane::Podman => Operation::InspectNixPodmanWorker {},
             Plane::Krun => Operation::InspectNixKrunWorker {},
+            Plane::Apple => Operation::InspectNixAppleWorker {},
         };
         if self.request(probe).await? != (Reply::PoolInterface { version: 1 }) {
             return Err(Error::PoolInterface);
@@ -1021,6 +1117,7 @@ impl Client {
                 Plane::Host => guard.request_worker(ticket, image),
                 Plane::Podman => guard.request_podman_worker(ticket, image),
                 Plane::Krun => guard.request_krun_worker(ticket, image),
+                Plane::Apple => guard.request_apple_worker(ticket, image),
             }
         })
         .await

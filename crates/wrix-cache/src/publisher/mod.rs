@@ -18,7 +18,16 @@ use wrix_core::{
     path::{Workspace, WorkspaceHash, WorkspaceHashParseError},
 };
 
-use crate::config::{Roots, Settings};
+use crate::{
+    backend::publication::{
+        Publisher,
+        workflow::realization::{self, Installable},
+    },
+    config::{Roots, Settings},
+};
+
+mod graph;
+mod pending;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -55,6 +64,14 @@ pub enum Error {
     Publication(#[from] crate::backend::publication::Error),
     /// {0}
     Backend(#[from] crate::backend::Error),
+    /// {0}
+    Realization(#[from] realization::Failure),
+    /// invalid selected native derivation graph inventory
+    GraphInventory,
+    /// pending publication protection does not match its retained native roots
+    PendingProtection,
+    /// selected publication requires the matching immutable Wrix native post-build hook; activate the configured host environment before building
+    NativeHook,
     /// Celler view was rotated, but local key/status recording failed; no rollback occurred: {source}
     RotationRecording { source: Box<Error> },
 }
@@ -226,10 +243,26 @@ pub fn run_hook_record(record: HookRecord<'_>, settings: Settings) -> Result<Rep
     if paths.scope.is_some() && manifest != paths.publish_roots_path() {
         return Err(wrix_state::store::Error::Conflict.into());
     }
+    if !paths.settings.enable {
+        return Ok(Report {
+            lines: vec![String::from("project cache integration disabled")],
+        });
+    }
     let roots = read_manifest_roots(manifest)?;
     let matching = roots
-        .into_iter()
-        .find(|root| root.drv_path == drv_path)
+        .iter()
+        .filter(|root| root.drv_path == drv_path)
+        .filter(|root| {
+            root.name.starts_with(graph::PREFIX)
+                || !paths
+                    .settings
+                    .publish
+                    .exclude_roots
+                    .iter()
+                    .any(|excluded| excluded == &root.name || excluded == &root.installable)
+        })
+        .max_by_key(|root| root.name.starts_with(graph::PREFIX))
+        .cloned()
         .map(|root| Root {
             out_paths: split_paths(out_paths),
             ..root
@@ -240,6 +273,22 @@ pub fn run_hook_record(record: HookRecord<'_>, settings: Settings) -> Result<Rep
         });
     };
     paths.ensure_control()?;
+    if let Some(scope) = root.name.strip_prefix(graph::PREFIX) {
+        let selected = roots
+            .into_iter()
+            .filter(|candidate| candidate.name == root.name)
+            .collect::<Vec<_>>();
+        let mut outputs = graph::realized(&selected)?;
+        outputs.extend(root.out_paths);
+        outputs.sort();
+        outputs.dedup();
+        pending::capture(&paths, drv_path, &outputs, Some(scope))?;
+        return Ok(Report {
+            lines: vec![String::from(
+                "protected selected graph outputs pending successful native build",
+            )],
+        });
+    }
     run_automatic_publish(&paths, workspace_hash, &root)
 }
 
@@ -259,33 +308,18 @@ fn run(workspace: &Workspace, paths: &Paths, mode: Mode) -> Result<Report> {
             })
         }),
         Mode::Warm { checks } => with_explicit_lock(paths, || {
-            let configured = discover_roots(RootSet::Publish, &paths.settings, cwd)?;
             let warm = discover_roots(RootSet::Warm { checks }, &paths.settings, cwd)?;
-            paths.authorize()?;
-            write_manifest(&paths.publish_roots_path(), workspace.hash(), &configured)?;
-            build_roots(&warm, cwd)?;
-            let selected = warm
-                .iter()
-                .map(|root| root.installable.as_str())
-                .collect::<HashSet<_>>();
-            let roots = configured
-                .iter()
-                .filter(|root| selected.contains(root.installable.as_str()))
-                .cloned()
-                .collect();
-            let realized = realized_roots(roots, cwd)?;
-            let pending = read_pending(paths)?;
-            publish_roots(paths, workspace.hash(), &realized.roots, pending)
+            build_roots(paths, workspace.hash(), &warm, cwd)
         }),
         Mode::RotateKey => with_explicit_lock(paths, || rotate_key(paths, workspace.hash())),
     }
 }
 
 fn run_automatic_publish(paths: &Paths, workspace: &WorkspaceHash, root: &Root) -> Result<Report> {
+    let protection = pending::capture(paths, &root.drv_path, &root.out_paths, None)?;
     let mut lines = Vec::new();
     let timeout = Duration::from_millis(paths.settings.lock_timeout_ms);
     let Some(lock) = OperationLock::acquire(paths, Some(timeout), &mut lines)? else {
-        record_pending(paths, &root.drv_path, &root.out_paths)?;
         lines.push(String::from(
             "warning: project cache lock timeout; recorded pending publish",
         ));
@@ -295,9 +329,19 @@ fn run_automatic_publish(paths: &Paths, workspace: &WorkspaceHash, root: &Root) 
     let result = publish_hook_root(paths, workspace, root);
     let release = lock.release();
     match (result, release) {
-        (Ok(mut report), Ok(())) => lines.append(&mut report.lines),
+        (Ok(mut report), Ok(())) => {
+            pending::complete(
+                paths,
+                &Pending {
+                    path: protection,
+                    created_at_epoch: now_epoch()?,
+                    drv_path: root.drv_path.clone(),
+                    out_paths: root.out_paths.clone(),
+                },
+            )?;
+            lines.append(&mut report.lines);
+        }
         (Err(error), _) | (_, Err(error)) => {
-            record_pending(paths, &root.drv_path, &root.out_paths)?;
             write_cache_status(paths, true, Some("warning"), Some(&error.to_string()))?;
             lines.push(format!(
                 "warning: automatic project cache publish failed: {error}"
@@ -631,24 +675,139 @@ fn parse_path_info_paths(input: &str) -> Result<Vec<String>> {
     Ok(paths)
 }
 
-fn build_roots(roots: &[Root], cwd: &Path) -> Result<()> {
+fn build_roots(
+    paths: &Paths,
+    workspace: &WorkspaceHash,
+    roots: &[Root],
+    cwd: &Path,
+) -> Result<Report> {
     if roots.is_empty() {
-        return Ok(());
+        return Ok(Report {
+            lines: vec![String::from("no selected warm roots")],
+        });
     }
-    let mut command = Command::new(nix_bin()?);
-    command.current_dir(cwd).arg("build").arg("--no-link");
-    for root in roots {
-        command.arg(&root.installable);
+    let publisher = Publisher::load(&paths.state_root, workspace)?;
+    let selected = roots
+        .iter()
+        .map(|root| Installable::parse(root.installable.clone()))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let admitted = roots
+        .iter()
+        .filter(|root| {
+            !paths
+                .settings
+                .publish
+                .exclude_roots
+                .iter()
+                .any(|excluded| excluded == &root.name || excluded == &root.installable)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if !admitted.is_empty() && paths.settings.require_trusted_nix {
+        require_native_hook(cwd)?;
     }
-    let output = command
+    let scope_file = tempfile::Builder::new()
+        .prefix("scope-")
+        .tempfile_in(&paths.state_root)?;
+    let scope = scope_file
+        .path()
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or(Error::GraphInventory)?;
+    let graph = graph::discover(&admitted, cwd, scope)?;
+    let manifest_path = paths.publish_roots_path();
+    let mut registered = match read_document(&manifest_path)? {
+        Some(bytes) => roots_from_bytes(&manifest_path, &bytes)?,
+        None => Vec::new(),
+    };
+    registered.extend(graph.clone());
+    write_manifest_exact(&manifest_path, workspace, &registered)?;
+    let result = build_registered(paths, &publisher, &selected, &admitted, &graph, cwd, scope);
+    registered.retain(|root| root.name != format!("{}{scope}", graph::PREFIX));
+    let cleanup = write_manifest_exact(&manifest_path, workspace, &registered);
+    match (result, cleanup) {
+        (Ok(report), Ok(())) => Ok(report),
+        (Err(error), _) | (_, Err(error)) => Err(error),
+    }
+}
+
+fn require_native_hook(cwd: &Path) -> Result<()> {
+    let output = Command::new(nix_bin()?)
+        .current_dir(cwd)
+        .args(["config", "show", "post-build-hook"])
         .stdin(Stdio::null())
-        .stderr(Stdio::piped())
         .output()?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(process_failed("nix build", &output.stderr))
+    if !output.status.success() {
+        return Err(process_failed(
+            "nix config show post-build-hook",
+            &output.stderr,
+        ));
     }
+    let hook = String::from_utf8_lossy(&output.stdout);
+    let hook = Path::new(hook.trim());
+    if !hook.starts_with("/nix/store")
+        || hook
+            .file_name()
+            .is_none_or(|name| name != "wrix-cache-post-build-hook")
+    {
+        return Err(Error::NativeHook);
+    }
+    Ok(())
+}
+
+fn build_registered(
+    paths: &Paths,
+    publisher: &Publisher,
+    selected: &[Installable],
+    admitted: &[Root],
+    graph: &[Root],
+    cwd: &Path,
+    scope: &str,
+) -> Result<Report> {
+    let existing = graph::realized(graph)?;
+    if !existing.is_empty() {
+        let root = graph.first().ok_or(Error::GraphInventory)?;
+        pending::capture(paths, &root.drv_path, &existing, Some(scope))?;
+    }
+    let rooted = realization::realize(publisher, cwd, selected)?;
+    pending::approve(paths, scope)?;
+    let pending = read_pending(paths)?
+        .into_iter()
+        .filter(|record| pending::ready(&record.path))
+        .collect::<Vec<_>>();
+    let mut candidates = graph::realized(graph)?.into_iter().collect::<BTreeSet<_>>();
+    if admitted.len() == selected.len() {
+        candidates.extend(rooted.paths().iter().map(|path| path.display().to_string()));
+    } else {
+        for root in realized_roots(admitted.to_vec(), cwd)?.roots {
+            candidates.extend(root.out_paths);
+        }
+    }
+    for record in &pending {
+        candidates.extend(record.out_paths.iter().cloned());
+    }
+    let outputs = candidates.into_iter().collect::<Vec<_>>();
+    let protected = publisher.prepare(&outputs.iter().map(PathBuf::from).collect::<Vec<_>>())?;
+    let closure = closure_paths(&outputs)?.into_iter().collect();
+    let filtered = subtract_upstream(paths, closure)?;
+    let prepared = rooted.handoff(
+        publisher,
+        &filtered.iter().map(PathBuf::from).collect::<Vec<_>>(),
+    )?;
+    protected.discard()?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let count = runtime.block_on(prepared.publish())?;
+    for record in &pending {
+        pending::complete(paths, record)?;
+    }
+    write_cache_status(paths, true, Some("ok"), None)?;
+    Ok(Report {
+        lines: vec![format!(
+            "published {count} project cache paths through Celler"
+        )],
+    })
 }
 
 fn publish_roots(
@@ -662,6 +821,28 @@ fn publish_roots(
         .iter()
         .map(|root| root.drv_path.as_str())
         .collect::<HashSet<_>>();
+    let selected = roots
+        .iter()
+        .flat_map(|root| root.out_paths.iter())
+        .chain(
+            pending
+                .iter()
+                .filter(|record| {
+                    !pending::held(&record.path)
+                        && (root_drvs.contains(record.drv_path.as_str())
+                            || pending::ready(&record.path))
+                })
+                .flat_map(|record| record.out_paths.iter()),
+        )
+        .map(PathBuf::from)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let protected = if selected.is_empty() {
+        None
+    } else {
+        Some(Publisher::load(&paths.state_root, workspace)?.prepare(&selected)?)
+    };
     let mut publishable = BTreeSet::new();
     let mut lines = Vec::new();
     for root in roots {
@@ -671,18 +852,23 @@ fn publish_roots(
     }
     let mut completed_pending = Vec::new();
     for record in pending {
-        if root_drvs.contains(record.drv_path.as_str()) {
+        if !pending::held(&record.path)
+            && (root_drvs.contains(record.drv_path.as_str()) || pending::ready(&record.path))
+        {
             for path in closure_paths(&record.out_paths)? {
                 publishable.insert(path);
             }
-            completed_pending.push(record.path.clone());
+            completed_pending.push(record);
         }
     }
     let filtered = subtract_upstream(paths, publishable)?;
     let count = publish_selected(paths, workspace, &filtered)?;
-    for path in completed_pending {
-        remove_pending(&path)?;
-        lines.push(format!("drained pending: {}", path.display()));
+    if let Some(protected) = protected {
+        protected.discard()?;
+    }
+    for record in completed_pending {
+        pending::complete(paths, &record)?;
+        lines.push(format!("drained pending: {}", record.path.display()));
     }
     retire_obsolete_closure_metadata(paths)?;
     write_cache_status(paths, true, Some("ok"), None)?;
@@ -835,18 +1021,17 @@ fn read_pending(paths: &Paths) -> Result<Vec<Pending>> {
     Ok(pending)
 }
 
-fn record_pending(paths: &Paths, drv_path: &str, out_paths: &[String]) -> Result<PathBuf> {
+fn record_pending_named(
+    paths: &Paths,
+    drv_path: &str,
+    out_paths: &[String],
+    filename: &str,
+) -> Result<PathBuf> {
     paths.authorize()?;
     if !wrix_state::namespace::is_host_root(&paths.state_root)? {
         fs::create_dir_all(paths.pending_dir())?;
     }
     let created_at_epoch = now_epoch()?;
-    let filename = format!(
-        "{}-{}-{}.json",
-        created_at_epoch,
-        std::process::id(),
-        safe_pending_name(drv_path)
-    );
     let path = paths.pending_dir().join(filename);
     let record = PendingRecord {
         created_at_epoch: Some(created_at_epoch),
@@ -897,6 +1082,9 @@ fn purge_expired_pending(paths: &Paths) -> Result<()> {
 }
 
 fn pending_expired(path: &Path, record: &PendingRecord, retention_secs: u64) -> Result<bool> {
+    if pending::protected(path) {
+        return Ok(false);
+    }
     let created_at = pending_created_at(path, record)?;
     Ok(now_epoch()?.saturating_sub(created_at) > retention_secs)
 }
@@ -914,6 +1102,18 @@ fn read_manifest_roots(path: &Path) -> Result<Vec<Root>> {
 }
 
 fn write_manifest(path: &Path, hash: &WorkspaceHash, roots: &[Root]) -> Result<()> {
+    let mut merged = roots.to_vec();
+    if let Some(bytes) = read_document(path)? {
+        merged.extend(
+            roots_from_bytes(path, &bytes)?
+                .into_iter()
+                .filter(|root| root.name.starts_with(graph::PREFIX)),
+        );
+    }
+    write_manifest_exact(path, hash, &merged)
+}
+
+fn write_manifest_exact(path: &Path, hash: &WorkspaceHash, roots: &[Root]) -> Result<()> {
     let manifest = RootManifest {
         schema_version: Some(1),
         workspace_hash: Some(hash.as_str().to_owned()),
@@ -1177,26 +1377,6 @@ fn split_paths(input: &str) -> Vec<String> {
         .collect()
 }
 
-fn safe_marker_name(input: &str) -> String {
-    input
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect()
-}
-
-fn safe_pending_name(input: &str) -> String {
-    Path::new(input)
-        .file_name()
-        .and_then(|value| value.to_str())
-        .map_or_else(|| safe_marker_name(input), safe_marker_name)
-}
-
 fn now_epoch() -> Result<u64> {
     system_time_epoch(SystemTime::now())
 }
@@ -1242,7 +1422,7 @@ fn read_document(path: &Path) -> Result<Option<Vec<u8>>> {
 
 #[cfg(test)]
 mod test {
-    use super::{parse_path_info_paths, roots_from_file, safe_marker_name};
+    use super::{parse_path_info_paths, roots_from_file};
     use std::fs;
 
     #[test]
@@ -1267,14 +1447,5 @@ mod test {
         )
         .unwrap();
         assert_eq!(paths, vec![String::from("/nix/store/aaa-root")]);
-    }
-
-    #[test]
-    fn marker_names_are_filesystem_safe() {
-        assert_eq!(
-            safe_marker_name("packages.x86_64-linux.demo"),
-            "packages.x86_64-linux.demo"
-        );
-        assert_eq!(safe_marker_name("checks/a b"), "checks_a_b");
     }
 }

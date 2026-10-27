@@ -1,0 +1,381 @@
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -15,5 +15,8 @@
+ extern crate sccache;
+ 
+ fn main() {
++    if let Some(code) = sccache::work_drain::entry() {
++        std::process::exit(code);
++    }
+     sccache::main();
+ }
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -46,6 +46,7 @@
+ mod net;
+ mod protocol;
+ pub mod server;
++pub mod work_drain;
+ #[doc(hidden)]
+ pub mod util;
+ 
+--- a/src/server.rs
++++ b/src/server.rs
+@@ -97,6 +97,7 @@
+ 
+ /// Get the time the server should idle for before shutting down, in seconds.
+ fn get_idle_timeout() -> u64 {
++    if crate::work_drain::configured() { return 0; }
+     // A value of 0 disables idle shutdown entirely.
+     env::var("SCCACHE_IDLE_TIMEOUT")
+         .ok()
+@@ -676,6 +677,8 @@
+             wait,
+         } = self;
+ 
++        let managed = crate::work_drain::Running::start(&runtime)?;
++
+         // Create our "server future" which will simply handle all incoming
+         // connections in separate tasks.
+         let server = async move {
+@@ -728,15 +731,20 @@
+                 server = server.fuse() => server,
+                 _res = shutdown.fuse() => Ok(()),
+                 _res = shutdown_idle.fuse() => Ok::<_, io::Error>(()),
++                _res = crate::work_drain::stopped().fuse() => Ok::<_, io::Error>(()),
+             }
+         })?;
+ 
+         const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+-        info!(
+-            "moving into the shutdown phase now, waiting at most {} seconds \
+-             for all client requests to complete",
+-            SHUTDOWN_TIMEOUT.as_secs()
+-        );
++        if managed.is_some() {
++            info!("native work/output/cache drained; closing idle transports and releasing storage without a forced deadline");
++        } else {
++            info!(
++                "moving into the shutdown phase now, waiting at most {} seconds \
++                 for all client requests to complete",
++                SHUTDOWN_TIMEOUT.as_secs()
++            );
++        }
+ 
+         // Once our server has shut down either due to inactivity or a manual
+         // request we still need to give a bit of time for all active
+@@ -745,7 +753,12 @@
+         //
+         // Note that we cap the amount of time this can take, however, as we
+         // don't want to wait *too* long.
+-        runtime.block_on(async { time::timeout(SHUTDOWN_TIMEOUT, wait).await })?;
++        if let Some(managed) = managed {
++            runtime.block_on(wait);
++            managed.finish(&runtime)?;
++        } else {
++            runtime.block_on(async { time::timeout(SHUTDOWN_TIMEOUT, wait).await })?;
++        }
+ 
+         info!("ok, fully shutting down now");
+ 
+@@ -864,6 +877,11 @@
+             match req.into_inner() {
+                 Request::Compile(compile) => {
+                     debug!("handle_client: compile");
++                    if let Err(error) = crate::work_drain::origin(&compile.cwd, &compile.env_vars) {
++                        return Ok(Message::WithoutBody(Response::Compile(
++                            CompileResponse::UnsupportedCompiler(OsString::from(format!("managed originating compiler view unavailable: {error}"))),
++                        )));
++                    }
+                     me.stats.lock().await.compile_requests += 1;
+                     me.handle_compile(compile).await
+                 }
+@@ -886,7 +904,13 @@
+                     me.zero_stats().await;
+                     Ok(Message::WithoutBody(Response::ZeroStats))
+                 }
++                Request::WorkDrainHello => {
++                    if !crate::work_drain::configured() { bail!("native compiler owner is not in managed work-drain mode"); }
++                    Ok(Message::WithoutBody(Response::WorkDrainHello))
++                },
++                Request::OutputDelivered => Ok(Message::WithoutBody(Response::OutputDelivered)),
+                 Request::Shutdown => {
++                    if crate::work_drain::configured() { bail!("managed native role requires authorized clean release"); }
+                     debug!("handle_client: shutdown");
+                     let mut tx = me.tx.clone();
+                     future::try_join(
+@@ -1091,43 +1115,65 @@
+         .split();
+         let mut sink = sink.sink_err_into::<Error>();
+ 
+-        let (reqs_tx, mut reqs_rx) = tokio::sync::mpsc::unbounded_channel();
++        let (reqs_tx, mut reqs_rx) = tokio::sync::mpsc::unbounded_channel::<(SccacheRequest, Option<crate::work_drain::state::Guard>)>();
+ 
+         let me = Arc::new(self);
+ 
+-        // The reader loop below feeds requests into `reqs_tx`; this task drains
+-        // them, calls the service, and writes responses back to the sink.
+-        //
+-        // `_handle` must stay bound for the lifetime of `bind` (not `let _ =`,
+-        // which would drop it immediately): it is an `AbortOnDropHandle`, so
+-        // dropping it aborts this task and its in-flight compile subtasks. That
+-        // is the cancellation we want once the client disconnects and the reader
+-        // loop below exits.
+-        let _handle = util::spawn(async move {
+-            while let Some(req) = reqs_rx.recv().await {
+-                match util::spawn(me.clone().call(req)).await?? {
+-                    Message::WithoutBody(message) => {
+-                        sink.send(Frame::Message { message }).await?;
++        // Detachment preserves admitted native jobs after a transport disconnect.
++        let _handler = tokio::spawn(async move {
++            let mut delivery: Option<crate::work_drain::state::Guard> = None;
++            while let Some((req, mut work)) = reqs_rx.recv().await {
++                let acknowledged = matches!(&req, Message::WithoutBody(Request::OutputDelivered));
++                if acknowledged { drop(delivery.take()); }
++                else if let Some(pending) = delivery.take() {
++                    pending.uncertain();
++                    bail!("native originating output receipt is required before another request");
++                }
++                let result = async {
++                    match util::spawn(me.clone().call(req)).await?? {
++                        Message::WithoutBody(message) => {
++                            sink.send(Frame::Message { message }).await?;
++                        }
++                        Message::WithBody(message, body) => {
++                            sink.send(Frame::Message { message }).await?;
++                            let (finished, needs_receipt) = match util::spawn(body).await?? {
++                                Response::CompileFinished(result) if crate::work_drain::configured() => (Response::ManagedCompileFinished(result), true),
++                                response => (response, false),
++                            };
++                            sink.send(Frame::Body { chunk: Some(finished) }).await?;
++                            sink.send(Frame::Body { chunk: None }).await?;
++                            if needs_receipt { delivery = work.take(); }
++                        }
+                     }
+-                    Message::WithBody(message, body) => {
+-                        sink.send(Frame::Message { message }).await?;
+-                        sink.send(Frame::Body {
+-                            chunk: Some(util::spawn(body).await??),
+-                        })
+-                        .await?;
+-                        sink.send(Frame::Body { chunk: None }).await?;
+-                    }
++                    Ok::<_, Error>(())
++                }.await;
++                if let Err(error) = result {
++                    if let Some(work) = work.take() { work.uncertain(); }
++                    if let Some(work) = delivery.take() { work.uncertain(); }
++                    return Err(error);
+                 }
+             }
+-
++            if let Some(work) = delivery { work.uncertain(); }
+             Ok::<_, Error>(())
+         });
+ 
+-        // Read requests until the client disconnects (stream ends) or the
+-        // stream errors. A send error means the handler task above has ended,
+-        // so we stop reading in that case too.
+-        while let Some(req) = stream.next().await {
+-            reqs_tx.send(req?)?;
++        let mut confirmed = !crate::work_drain::configured();
++        loop {
++            let request = tokio::select! {
++                request = stream.next() => request,
++                _ = crate::work_drain::stopped() => None,
++            };
++            let Some(request) = request else { break; };
++            let request = request?;
++            if matches!(&request, Message::WithoutBody(Request::WorkDrainHello)) { confirmed = true; }
++            if !confirmed && matches!(&request, Message::WithoutBody(Request::Compile(_))) {
++                bail!("managed native work/output-drain protocol confirmation required");
++            }
++            // Output receipts belong to already-admitted work and remain accepted during drain.
++            let work = if matches!(&request, Message::WithoutBody(Request::OutputDelivered)) {
++                if crate::work_drain::configured() { Some(crate::work_drain::tracker().background()) } else { None }
++            } else { crate::work_drain::admitted()? };
++            reqs_tx.send((request, work))?;
+         }
+ 
+         Ok(())
+@@ -1476,6 +1522,7 @@
+                 .catch_unwind()
+                 .await
+                 .map_err(|e| {
++                    if crate::work_drain::configured() { crate::work_drain::tracker().fail(); }
+                     let panic = e
+                         .downcast_ref::<&str>()
+                         .map(|s| &**s)
+--- a/src/protocol.rs
++++ b/src/protocol.rs
+@@ -35,6 +35,10 @@
+     StoragePutPreprocessorEntry { key: String, entry_bytes: Vec<u8> },
+     /// Merge per-invocation stats into the daemon's running totals.
+     RecordStats(Box<ServerStats>),
++    /// Confirms originating output handling for the preceding native compilation.
++    OutputDelivered,
++    /// Native managed work/output-drain protocol confirmation.
++    WorkDrainHello,
+ }
+ 
+ /// A server response.
+@@ -68,6 +72,12 @@
+     StoragePutPreprocessorEntry(Result<(), String>),
+     /// Response for `Request::RecordStats`.
+     RecordStats,
++    /// Native output delivery receipt.
++    OutputDelivered,
++    /// Native managed work/output-drain protocol confirmation.
++    WorkDrainHello,
++    /// Managed compilation requires an originating output receipt.
++    ManagedCompileFinished(CompileFinished),
+ }
+ 
+ /// Possible responses from the server for a `Compile` request.
+--- a/src/commands.rs
++++ b/src/commands.rs
+@@ -317,6 +317,9 @@
+     startup_timeout: Option<Duration>,
+ ) -> Result<ServerConnection> {
+     trace!("connect_or_start_server({addr})");
++    if env::var_os("WRIX_SCCACHE_MANAGED").is_some() {
++        return connect_to_server(addr).context("managed native compiler is unavailable; local daemon startup is forbidden");
++    }
+     match connect_to_server(addr) {
+         Ok(server) => Ok(server),
+         Err(ref e)
+@@ -528,12 +531,14 @@
+ where
+     T: CommandCreatorSync,
+ {
++    let mut receipt = false;
+     let result = match &response {
+         CompileResponse::CompileStarted => {
+             debug!("Server sent CompileStarted");
+             // Wait for CompileFinished.
+             match conn.read_one_response() {
+                 Ok(Response::CompileFinished(result)) => Some(result),
++                Ok(Response::ManagedCompileFinished(result)) => { receipt = true; Some(result) },
+                 Ok(_) => bail!("unexpected response from server"),
+                 Err(e) => {
+                     match e.downcast_ref::<io::Error>() {
+@@ -563,9 +568,24 @@
+         _ => None,
+     };
+ 
+-    handle_compile_result(
++    if env::var_os("WRIX_SCCACHE_REQUIRE_NATIVE").is_some() && !receipt && !matches!(response, CompileResponse::UnsupportedCompiler(_)) {
++        bail!("native compiler probe received no managed execution/output receipt; local fallback is forbidden");
++    }
++    if result.is_none() && matches!(response, CompileResponse::CompileStarted) && env::var_os("WRIX_SCCACHE_MANAGED").is_some() {
++        bail!("managed native compile outcome is uncertain; refusing local replay");
++    }
++    let exit = handle_compile_result(
+         creator, runtime, response, result, exe, cmdline, cwd, stdout, stderr,
+-    )
++    )?;
++    if receipt {
++        stdout.flush()?;
++        stderr.flush()?;
++        match conn.request(Request::OutputDelivered)? {
++            Response::OutputDelivered => (),
++            _ => bail!("native compiler output receipt was not accepted"),
++        }
++    }
++    Ok(exit)
+ }
+ 
+ /// Dispatch the outcome of a compile, whether received from the daemon over IPC
+@@ -646,6 +666,12 @@
+     T: CommandCreatorSync,
+ {
+     trace!("do_compile");
++    if env::var_os("WRIX_SCCACHE_MANAGED").is_some() {
++        match conn.request(Request::WorkDrainHello)? {
++            Response::WorkDrainHello => (),
++            _ => bail!("native compiler lacks the managed work/output-drain protocol"),
++        }
++    }
+     let exe_path = which_in(exe, path, cwd)?;
+     let res = request_compile(&mut conn, &exe_path, &cmdline, cwd, env_vars)?;
+     handle_compile_response(
+@@ -915,6 +941,9 @@
+ 
+             let jobserver = Client::new();
+             let conn = connect_or_start_server(&get_addr(), startup_timeout)?;
++            if config.client_side_mode && env::var_os("WRIX_SCCACHE_MANAGED").is_some() {
++                bail!("managed native compilation requires service-side execution");
++            }
+             if config.client_side_mode {
+                 // Under make -jN each CLI process gets only 2 worker threads;
+                 // one for preprocessing/compilation and one for IPC.  The
+--- a/src/lru_disk_cache/mod.rs
++++ b/src/lru_disk_cache/mod.rs
+@@ -349,6 +349,7 @@
+             size,
+         } = entry;
+         file.flush()?;
++        if crate::work_drain::configured() { file.as_file().sync_all()?; }
+         let real_size = file.as_file().metadata()?.len();
+         // If the file is larger than the size that had been advertized, ensure
+         // we have enough space for it.
+@@ -361,7 +362,15 @@
+         self.pending_size -= size;
+         let path = self.rel_to_abs_path(&key);
+         fs::create_dir_all(path.parent().unwrap())?;
+-        file.persist(path).map_err(|e| e.error)?;
++        file.persist(&path).map_err(|e| e.error)?;
++        if crate::work_drain::configured() {
++            let mut directory = path.parent().unwrap().to_path_buf();
++            loop {
++                File::open(&directory)?.sync_all()?;
++                if directory == self.root { break; }
++                directory = directory.parent().unwrap().to_path_buf();
++            }
++        }
+         self.lru.insert(key, real_size);
+         Ok(())
+     }
+@@ -385,6 +394,7 @@
+             .and_then(|_| {
+                 let t = FileTime::now();
+                 set_file_times(&path, t, t)?;
++                if crate::work_drain::configured() { File::open(&path)?.sync_all()?; }
+                 File::open(path).map_err(Into::into)
+             })
+     }
+--- a/src/cache/cache.rs
++++ b/src/cache/cache.rs
+@@ -657,6 +657,14 @@
+     config: &Config,
+     pool: &tokio::runtime::Handle,
+ ) -> Result<Arc<dyn Storage>> {
++    if crate::work_drain::configured() {
++        let dir = std::env::var_os("SCCACHE_DIR").ok_or_else(|| anyhow!("managed native cache directory is required"))?;
++        if !std::path::Path::new(&dir).is_absolute() { return Err(anyhow!("managed native cache directory must be absolute")); }
++        return Ok(Arc::new(DiskCache::new(
++            dir, 50 * 1024 * 1024 * 1024, pool,
++            PreprocessorCacheModeConfig::default(), crate::cache::CacheMode::ReadWrite, vec![],
++        )));
++    }
+     // Check for multi-level cache configuration
+     if let Some(multilevel) = MultiLevelStorage::from_config(config, pool)? {
+         return Ok(Arc::new(multilevel));
+--- a/src/cache/disk.rs
++++ b/src/cache/disk.rs
+@@ -219,6 +219,7 @@
+         &self.basedirs
+     }
+     async fn get_preprocessor_cache_entry(&self, key: &str) -> Result<Option<Box<dyn ReadSeek>>> {
++        if crate::work_drain::configured() { return Ok(None); }
+         let key = normalize_key(key);
+         Ok(self
+             .preprocessor_cache
+@@ -233,6 +234,7 @@
+         key: &str,
+         preprocessor_cache_entry: PreprocessorCacheEntry,
+     ) -> Result<()> {
++        if crate::work_drain::configured() { return Err(anyhow!("managed native cache has one LRU; secondary cache admission is disabled")); }
+         if self.rw_mode == CacheMode::ReadOnly {
+             return Err(anyhow!("Cannot write to a read-only cache"));
+         }

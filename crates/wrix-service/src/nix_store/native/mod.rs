@@ -183,16 +183,25 @@ fn role_root() -> Result<(), Error> {
 }
 
 fn private_file(path: &Path) -> Result<Vec<u8>, Error> {
-    let metadata = fs::symlink_metadata(path)?;
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)?;
+    let metadata = file.metadata()?;
     if !metadata.is_file()
-        || metadata.uid() != 0
+        || metadata.uid() != bootstrap::ownership::uid(path)?
         || metadata.nlink() != 1
         || metadata.mode() & 0o077 != 0
         || metadata.len() > MAX_MESSAGE
     {
         return Err(Error::Invalid);
     }
-    Ok(fs::read(path)?)
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut std::io::Read::take(file, MAX_MESSAGE + 1), &mut bytes)?;
+    if bytes.len() as u64 > MAX_MESSAGE {
+        return Err(Error::Invalid);
+    }
+    Ok(bytes)
 }
 
 fn configuration() -> Result<Configuration, Error> {
@@ -467,7 +476,7 @@ async fn seed(
         .open(&archive)?;
     let metadata = input.metadata()?;
     if !metadata.is_file()
-        || metadata.uid() != 0
+        || metadata.uid() != bootstrap::ownership::uid(&archive)?
         || metadata.nlink() != 1
         || metadata.mode() & 0o077 != 0
         || metadata.len() > 8_589_934_592
@@ -788,7 +797,7 @@ pub fn storage() -> Result<bootstrap::Storage, Error> {
             .open(Path::new(DATA).join("store.ext4"))?;
         let metadata = file.metadata()?;
         if !metadata.is_file()
-            || metadata.uid() != 0
+            || metadata.uid() != bootstrap::ownership::owner()?.0
             || metadata.nlink() != 1
             || metadata.mode() & 0o777 != 0o600
             || metadata.len() != bootstrap::CAPACITY

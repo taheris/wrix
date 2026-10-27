@@ -20,6 +20,9 @@ let
     ;
 
   imageBuilderPkgs = if asTarball then hostPkgs else pkgs;
+  compiler = import ../../crates/wrix-service/src/lifecycle/drain/native/compiler.nix {
+    inherit pkgs;
+  };
 
   imageTagLib = import ../util/image-tag.nix { };
   imageName = if pool == null then "wrix-service" else "wrix-nix-pool";
@@ -47,6 +50,9 @@ let
         dolt
         celler
         supervisor
+        compiler
+        pkgs.rustc
+        pkgs.curl
         util-linux
       ]
     else

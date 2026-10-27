@@ -1,6 +1,8 @@
 #[path = "common/celler.rs"]
 mod celler;
 mod common;
+#[path = "common/controller.rs"]
+mod controller;
 #[path = "common/service_binding.rs"]
 mod service_binding;
 
@@ -10,6 +12,7 @@ use common::{TestResult, host_wrix_command_with_path, run_command, set_mode};
 use serde_json::{Value, json};
 
 struct Fixture {
+    controller: controller::Server,
     server: celler::Server,
     sql: std::os::unix::net::UnixListener,
     root: tempfile::TempDir,
@@ -50,7 +53,12 @@ impl Fixture {
         set_mode(&data.join("run"), 0o700)?;
         let sql = std::os::unix::net::UnixListener::bind(data.join("run/dolt.sock"))?;
         sql.set_nonblocking(true)?;
+        #[cfg(target_os = "linux")]
+        let controller = controller::Server::start_supervised(root.path())?;
+        #[cfg(not(target_os = "linux"))]
+        let controller = controller::Server::start(root.path())?;
         Ok(Self {
+            controller,
             server,
             sql,
             root,
@@ -85,6 +93,7 @@ impl Fixture {
             .env_remove("WRIX_SERVICE_IMAGE_SOURCE")
             .env_remove("WRIX_SERVICE_IMAGE_SOURCE_KIND")
             .env_remove("WRIX_SERVICE_IMAGE_DIGEST");
+        self.controller.configure(&mut command)?;
         Ok(command)
     }
 
@@ -137,7 +146,7 @@ fn shared_readiness_fixture_accepts_only_the_native_management_probe() -> TestRe
         .iter()
         .position(|arg| *arg == b"exec")
         .ok_or("missing native readiness probe")?;
-    let args: Vec<_> = calls[start..start + 7]
+    let args: Vec<_> = calls[start..start + 8]
         .iter()
         .map(|arg| std::ffi::OsStr::from_bytes(arg))
         .collect();

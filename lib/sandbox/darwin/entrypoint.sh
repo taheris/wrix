@@ -5,6 +5,9 @@ set -euo pipefail
 . /network-ready.sh
 
 # shellcheck source=/dev/null
+. /shared-nix-client.sh
+
+# shellcheck source=/dev/null
 . /beads-sandbox.sh
 
 # VirtioFS presents workspace files as guest root. Keep that real identity:

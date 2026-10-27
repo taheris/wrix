@@ -388,6 +388,7 @@ let
       platforms = native;
       capabilities = [ "container-runtime" ];
     };
+  sharedNixNativePlatforms = import ./store/platform-native.nix { inherit pkgs wrix; };
   ciRequirements = pkgs.writeText "test-ci-requirements.json" (
     builtins.toJSON (
       builtins.listToAttrs (
@@ -574,7 +575,15 @@ let
           capabilities = [ "container-runtime" ];
         }
       )
-    ];
+    ]
+    ++ map (
+      runtime:
+      (mkCiApp sharedNixNativePlatforms.${runtime} "test-shared-nix-${runtime}")
+      // {
+        platforms = if pkgs.stdenv.hostPlatform.isDarwin then [ "aarch64-darwin" ] else linux;
+        capabilities = [ "container-runtime" ];
+      }
+    ) (builtins.attrNames sharedNixNativePlatforms);
 
   ciAppNameLines = concatStringsSep "\n" (map (app: "      ${app.name}") ciApps);
   ciAppDerivations = builtins.listToAttrs (

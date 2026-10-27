@@ -18,26 +18,25 @@ pub(super) enum Approval {
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum Blocker {
+    RuntimeUnavailable,
     RestrictedNetwork,
     IncompatibleImage,
-    UnsupportedRuntime,
     ApprovalUnavailable,
     ApprovalRequired,
     RepositoryRequired,
-    RuntimeUnavailable,
 }
 
 impl Blocker {
     pub(super) const fn message(self) -> &'static str {
         match self {
+            Self::RuntimeUnavailable => {
+                "Shared installed Nix execution is unavailable until packaged scoped runtime acceptance passes; no private fallback is performed."
+            }
             Self::RestrictedNetwork => {
                 "Shared installed Nix stores require network=open; select private mode for restricted workers."
             }
             Self::IncompatibleImage => {
                 "Shared installed Nix stores require a compatible versioned image and seed closure."
-            }
-            Self::UnsupportedRuntime => {
-                "Shared installed Nix transport is not accepted for this worker runtime; select private mode."
             }
             Self::ApprovalUnavailable => {
                 "Shared installed Nix stores require checked host workspace authority; select private mode in a worker."
@@ -48,16 +47,21 @@ impl Blocker {
             Self::RepositoryRequired => {
                 "Shared installed Nix stores require an actual canonical Git repository; select private mode for scratch directories."
             }
-            Self::RuntimeUnavailable => {
-                "Shared installed Nix execution is unavailable in this version; select private mode until production worker delivery and lifetime acceptance is verified."
-            }
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum NativeAcceptance {
+    NotRequested,
+    Unverified,
 }
 
 #[derive(Debug, Serialize)]
 pub(super) struct Admission {
     pub mode: Mode,
+    pub native_acceptance: NativeAcceptance,
     pub approval: Approval,
     pub blockers: Vec<Blocker>,
 }
@@ -76,16 +80,16 @@ pub(super) fn resolve(
     if mode == Mode::Private {
         return Ok(Admission {
             mode,
+            native_acceptance: NativeAcceptance::NotRequested,
             approval: Approval::NotRequested,
             blockers: Vec::new(),
         });
     }
-    let mut blockers = Vec::new();
+    // Native source wiring and focused tests do not establish packaged platform acceptance.
+    // Keep public Run/Spawn refusal before staging or issuance on every unproved runtime.
+    let mut blockers = vec![Blocker::RuntimeUnavailable];
     if network != NetworkMode::Open {
         blockers.push(Blocker::RestrictedNetwork);
-    }
-    if super::Platform::CURRENT != super::Platform::Linux || super::env_flag("WRIX_MICROVM") {
-        blockers.push(Blocker::UnsupportedRuntime);
     }
     let immutable_image = request.profile_config.image.digest.is_some()
         && match &request.kind {
@@ -136,10 +140,9 @@ pub(super) fn resolve(
         }
         Err(error) => return Err(error.into()),
     };
-    // Metadata approval is not build isolation, resource ownership or export protection.
-    blockers.push(Blocker::RuntimeUnavailable);
     Ok(Admission {
         mode,
+        native_acceptance: NativeAcceptance::Unverified,
         approval,
         blockers,
     })

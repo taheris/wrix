@@ -52,29 +52,37 @@ pub async fn rotate_private(
     let token = Authority::open(issuer_root)?.publication_token(&namespace)?;
     let client = Client::new(endpoint, namespace.clone(), &token)?;
     wrix_core::private_directory::prepare_with_parents(state_root)?;
-    let _lock = acquire(state_root, lock_timeout).await?;
+    let lock = acquire(state_root, lock_timeout).await?;
     let intent = read_intent(state_root)?;
     if super::super::retirement::is_retired(state_root, workspace)? && intent.is_none() {
         return Err(Error::Retired);
     }
     validate_binding(state_root, workspace, endpoint, issuer_root, &namespace)?;
     retained_key(state_root)?;
-    let prior = if let Some(intent) = intent {
-        if intent.workspace != workspace.as_str()
-            || intent.endpoint != endpoint
-            || intent.issuer != issuer_root
-            || intent.retention_seconds != retention.as_secs()
-        {
-            return Err(Error::Binding);
+    let recorded = intent
+        .map(|intent| {
+            if intent.workspace != workspace.as_str()
+                || intent.endpoint != endpoint
+                || intent.issuer != issuer_root
+                || intent.retention_seconds != retention.as_secs()
+            {
+                return Err(Error::Binding);
+            }
+            intent
+                .prior_key
+                .as_deref()
+                .map(CachePublicKey::parse)
+                .transpose()
+                .map_err(|_| Error::Binding)
+        })
+        .transpose()?;
+    let session = super::super::workflow::Session::open(&client).await?;
+    let client = session.client();
+    let prior = async {
+        if let Some(prior) = recorded {
+            return Ok(prior);
         }
-        intent
-            .prior_key
-            .as_deref()
-            .map(CachePublicKey::parse)
-            .transpose()
-            .map_err(|_| Error::Binding)?
-    } else {
-        let prior = current_key(&client).await?;
+        let prior = current_key(client).await?;
         let intent = Intent {
             workspace: workspace.as_str().to_owned(),
             endpoint: endpoint.to_owned(),
@@ -83,10 +91,18 @@ pub async fn rotate_private(
             prior_key: prior.as_ref().map(|key| key.as_str().to_owned()),
         };
         write_intent(state_root, &intent)?;
-        prior
+        Ok::<_, Error>(prior)
+    }
+    .await;
+    let prior = match prior {
+        Ok(prior) => prior,
+        Err(error) => {
+            session.finish().await.map_err(Error::WorkflowCompletion)?;
+            return Err(error);
+        }
     };
     let operation = async {
-        let current = current_key(&client).await?;
+        let current = current_key(client).await?;
         let key = if prior.is_some() && current == prior {
             client.rotate(retention).await?
         } else {
@@ -103,17 +119,18 @@ pub async fn rotate_private(
         )?;
         Ok(key)
     };
-    let key = operation
-        .await
-        .map_err(|source| Error::RotationIncomplete {
-            source: Box::new(source),
-        })?;
+    let result = operation.await;
+    session.finish().await.map_err(Error::WorkflowCompletion)?;
+    let key = result.map_err(|source| Error::RotationIncomplete {
+        source: Box::new(source),
+    })?;
     fs::remove_file(state_root.join(JOURNAL)).map_err(|source| Error::RotationIncomplete {
         source: Box::new(source.into()),
     })?;
     File::open(state_root)
         .and_then(|directory| directory.sync_all())
         .map_err(Error::RotationRecorded)?;
+    fs2::FileExt::unlock(&lock).map_err(Error::UnlockCommitted)?;
     Ok(key)
 }
 

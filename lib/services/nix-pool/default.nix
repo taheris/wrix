@@ -13,7 +13,7 @@ let
   sshdConf = writeText "nix-pool-sshd.conf" ''
     Port 2222
     ListenAddress 0.0.0.0
-    HostKey /var/lib/wrix/nix-pool/host-key
+    HostKey /run/wrix-nix-pool/host-key
     PidFile /run/wrix-nix-pool/sshd.pid
     AuthorizedKeysFile none
     AuthorizedKeysCommand /run/wrix-nix-pool/keys keys %u
@@ -35,7 +35,7 @@ let
     UsePAM no
     Subsystem sftp internal-sftp
     Match User nix-export
-      ChrootDirectory /var/lib/wrix/nix-pool/export-root
+      ChrootDirectory /run/wrix-nix-pool/export-root
   '';
   passwd = writeText "nix-pool-passwd" ''
     root:x:0:0:Pool administrator:/var/empty:/bin/sh
@@ -119,7 +119,8 @@ let
     root=/var/lib/wrix/nix-pool
     [[ $(id -u) == 0 && ! -e /etc/wrix/image-agent && -f /etc/wrix/nix-pool-service ]]
     [[ $(</etc/wrix/nix-pool-service) == 1 && $(readlink -e "$root") == "$root" ]]
-    [[ $(stat -c '%u:%g:%a' "$root") == 0:0:700 ]]
+    data_owner=$(</run/wrix-nix-pool-data-owner)
+    [[ $(stat -c '%u:%g:%a' "$root") == "$data_owner:700" ]]
     export HOME=/var/empty
     export NIX_CONF_DIR=${filesystem}/etc/nix
     export NIX_USER_CONF_FILES=/dev/null
@@ -166,7 +167,11 @@ let
         fallocate --length=8589934592 "$root/store.ext4"
       fi
       mkfs.ext4 -q -F -m 0 -E nodiscard,lazy_itable_init=0,lazy_journal_init=0 "$root/store.ext4"
-      fallocate --length=8589934592 "$root/store.ext4"
+      if [[ "$storage_mode" == allocate ]]; then
+        fallocate --length=8589934592 "$root/store.ext4"
+      else
+        [[ $(${owner}/bin/wrix-nix-pool-owner storage) == preallocated ]]
+      fi
       sync "$root/store.ext4"
       install -d -m 0700 "$root/filesystem" "$root/leases" "$root/incoming"
       ssh-keygen -q -t ed25519 -N "" -C "" -f "$root/host-key"
@@ -221,6 +226,14 @@ let
       sync "$storage/nix/var/nix/gcroots/bootstrap" "$storage/nix/var/nix"
       ${owner}/bin/wrix-nix-pool-owner seal
     fi
+    if [[ "$data_owner" != 0:0 ]]; then
+      if [[ "$storage_mode" != resume && "$storage_mode" != upgrade ]]; then
+        install -d -m 0755 "$storage/export-root" "$root/export-root"
+      fi
+      [[ -d "$storage/export-root" && ! -L "$storage/export-root" ]]
+      [[ $(stat -c '%u:%g:%a' "$storage/export-root") == 0:0:755 ]]
+      mount --bind "$storage/export-root" "$root/export-root"
+    fi
     mount --bind "$storage/nix" /nix
     [[ -f /etc/resolv.conf && ! -L /etc/resolv.conf ]]
     mount --bind ${filesystem}/etc/resolv.conf /etc/resolv.conf
@@ -274,12 +287,20 @@ let
     [[ -f /etc/wrix/nix-pool-service && ! -L /var/lib/wrix/nix-pool ]]
     [[ $(</etc/wrix/nix-pool-service) == 1 ]]
     root=/var/lib/wrix/nix-pool
-    [[ $(readlink -e "$root") == "$root" && $(stat -c '%u:%g:%a' "$root") == 0:0:700 ]]
+    data_owner=''${WRIX_NIX_POOL_DATA_OWNER:-0:0}
+    [[ "$data_owner" =~ ^(0|[1-9][0-9]*):(0|[1-9][0-9]*)$ ]]
+    [[ $(readlink -e "$root") == "$root" && $(stat -c '%u:%g:%a' "$root") == "$data_owner:700" ]]
+    if [[ "$data_owner" != 0:0 ]]; then
+      [[ $(findmnt -n -o FSTYPE --mountpoint "$root") == virtiofs ]]
+    fi
+    [[ ! -e /run/wrix-nix-pool-data-owner && ! -L /run/wrix-nix-pool-data-owner ]]
+    (set -o noclobber; printf '%s\n' "$data_owner" > /run/wrix-nix-pool-data-owner)
+    [[ $(stat -c '%u:%g:%a:%h' /run/wrix-nix-pool-data-owner) == 0:0:600:1 ]]
     lock="$root/ownership.lock"
     if [[ ! -e "$lock" && ! -L "$lock" ]]; then
       (set -o noclobber; : > "$lock")
     fi
-    [[ -f "$lock" && ! -L "$lock" && $(stat -c '%u:%g:%a:%h' "$lock") == 0:0:600:1 ]]
+    [[ -f "$lock" && ! -L "$lock" && $(stat -c '%u:%g:%a:%h' "$lock") == "$data_owner:600:1" ]]
     exec env -i HOME=/var/empty PATH=${runtime}/bin:/bin:/usr/bin \
       ${runtime}/bin/flock --exclusive --nonblock --conflict-exit-code 73 "$lock" ${initialize}
   '';

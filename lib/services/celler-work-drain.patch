@@ -1,0 +1,366 @@
+--- a/attic/src/util.rs
++++ b/attic/src/util.rs
+@@ -1,7 +1,6 @@
+ //! Misc utilities.
+ 
+ use std::future::Future;
+-use std::mem;
+ 
+ use tokio::task;
+ 
+@@ -25,8 +24,8 @@
+         Self { f: Some(f) }
+     }
+ 
+-    pub fn cancel(self) {
+-        mem::forget(self);
++    pub fn cancel(mut self) {
++        drop(self.f.take());
+     }
+ }
+ 
+@@ -35,6 +34,8 @@
+     F::Output: Send + 'static,
+ {
+     fn drop(&mut self) {
+-        task::spawn(self.f.take().unwrap());
++        if let Some(future) = self.f.take() {
++            task::spawn(future);
++        }
+     }
+ }
+--- a/server/src/main.rs
++++ b/server/src/main.rs
+@@ -36,6 +36,10 @@
+     /// The console server will listen on its default port.
+     #[clap(long)]
+     tokio_console: bool,
++
++    /// Execute a private native lifecycle command.
++    #[clap(long, hide = true)]
++    work_drain: Option<attic_server::work_drain::Command>,
+ }
+ 
+ #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+@@ -62,6 +66,11 @@
+ #[tokio::main]
+ async fn main() -> Result<()> {
+     let opts = Opts::parse();
++    if let Some(command) = opts.work_drain {
++        use std::io::Write;
++        std::io::stdout().write_all(&attic_server::work_drain::invoke(command).await?)?;
++        return Ok(());
++    }
+ 
+     init_logging(opts.tokio_console);
+     dump_version();
+@@ -75,6 +84,9 @@
+         ServerMode::Monolithic => {
+             attic_server::run_migrations(config.clone()).await?;
+ 
++            if let Some(socket) = env::var_os("WRIX_CELLER_DRAIN_SOCKET") {
++                return attic_server::work_drain::run(opts.listen, config, &PathBuf::from(socket), true).await;
++            }
+             let (api_server, _) = join!(
+                 attic_server::run_api_server(opts.listen, config.clone()),
+                 attic_server::gc::run_garbage_collection(config.clone()),
+@@ -83,6 +95,9 @@
+             api_server?;
+         }
+         ServerMode::ApiServer => {
++            if let Some(socket) = env::var_os("WRIX_CELLER_DRAIN_SOCKET") {
++                return attic_server::work_drain::run(opts.listen, config, &PathBuf::from(socket), false).await;
++            }
+             attic_server::run_api_server(opts.listen, config).await?;
+         }
+         ServerMode::GarbageCollector => {
+--- a/server/src/lib.rs
++++ b/server/src/lib.rs
+@@ -20,6 +20,7 @@
+ pub mod database;
+ pub mod error;
+ pub mod gc;
++pub mod work_drain;
+ mod middleware;
+ mod narinfo;
+ pub mod nix_manifest;
+@@ -227,40 +228,47 @@
+         state.config.listen.to_owned()
+     };
+ 
+-    let rest = Router::new()
++    let rest = router(state.clone());
++
++    eprintln!("Listening on {:?}...", listen);
++
++    let listener = TcpListener::bind(&listen).await?;
++
++    let (server_ret, _) = tokio::join!(axum::serve(listener, rest).into_future(), async {
++        if state.config.database.heartbeat {
++            let _ = state.run_db_heartbeat().await;
++        }
++    },);
++
++    server_ret?;
++
++    Ok(())
++}
++
++/// Runs database migrations.
++pub async fn run_migrations(config: Config) -> Result<()> {
++    eprintln!("Running migrations...");
++
++    let state = StateInner::new(config).await;
++    let db = state.database().await?;
++    Migrator::up(db, None).await?;
++    db.clone().close().await?;
++
++    Ok(())
++}
++
++pub(crate) fn router(state: State) -> Router {
++    Router::new()
+         .merge(api::get_router())
++        .merge(work_drain::routes())
+         .fallback(fallback)
+         // middlewares
++        .layer(axum::middleware::from_fn(work_drain::admission))
+         .layer(axum::middleware::from_fn(apply_auth))
+         .layer(axum::middleware::from_fn(set_visibility_header))
+         .layer(axum::middleware::from_fn(init_request_state))
+         .layer(axum::middleware::from_fn(restrict_host))
+         .layer(Extension(state.clone()))
+         .layer(TraceLayer::new_for_http())
+-        .layer(CatchPanicLayer::new());
+-
+-    eprintln!("Listening on {:?}...", listen);
+-
+-    let listener = TcpListener::bind(&listen).await?;
+-
+-    let (server_ret, _) = tokio::join!(axum::serve(listener, rest).into_future(), async {
+-        if state.config.database.heartbeat {
+-            let _ = state.run_db_heartbeat().await;
+-        }
+-    },);
+-
+-    server_ret?;
+-
+-    Ok(())
+-}
+-
+-/// Runs database migrations.
+-pub async fn run_migrations(config: Config) -> Result<()> {
+-    eprintln!("Running migrations...");
+-
+-    let state = StateInner::new(config).await;
+-    let db = state.database().await?;
+-    Migrator::up(db, None).await?;
+-
+-    Ok(())
+-}
++        .layer(CatchPanicLayer::new())
++}
+--- a/server/src/gc.rs
++++ b/server/src/gc.rs
+@@ -54,10 +54,15 @@
+     tracing::info!("Running garbage collection...");
+ 
+     let state = StateInner::new(config).await;
+-    run_time_based_garbage_collection(&state).await?;
+-    run_reap_orphan_nars(&state).await?;
+-    run_reap_orphan_chunks(&state).await?;
+-
++    collect_state(&state).await?;
++    if let Some(db) = state.database.get() { db.clone().close().await?; }
++    Ok(())
++}
++
++pub(crate) async fn collect_state(state: &State) -> Result<()> {
++    run_time_based_garbage_collection(state).await?;
++    run_reap_orphan_nars(state).await?;
++    run_reap_orphan_chunks(state).await?;
+     Ok(())
+ }
+ 
+--- a/server/src/database/mod.rs
++++ b/server/src/database/mod.rs
+@@ -334,7 +334,9 @@
+         let database = self.database.clone();
+         let nar_id = self.nar.id;
+ 
++        let work = crate::work_drain::background();
+         task::spawn(async move {
++            let _work = work;
+             tracing::debug!("Unlocking NAR");
+ 
+             let one = Value::Unsigned(Some(1));
+@@ -348,6 +350,7 @@
+                 .to_owned();
+ 
+             if let Err(e) = database.execute(&decr_holders).await {
++                crate::work_drain::fail();
+                 tracing::warn!("Failed to decrement holders count: {}", e);
+             }
+         });
+@@ -373,7 +376,9 @@
+         let database = self.database.clone();
+         let chunk_id = self.chunk.id;
+ 
++        let work = crate::work_drain::background();
+         task::spawn(async move {
++            let _work = work;
+             tracing::debug!("Unlocking chunk");
+ 
+             let one = Value::Unsigned(Some(1));
+@@ -387,6 +392,7 @@
+                 .to_owned();
+ 
+             if let Err(e) = database.execute(&decr_holders).await {
++                crate::work_drain::fail();
+                 tracing::warn!("Failed to decrement holders count: {}", e);
+             }
+         });
+--- a/server/src/api/v1/upload_path.rs
++++ b/server/src/api/v1/upload_path.rs
+@@ -68,6 +68,7 @@
+ struct UploadChunkResult {
+     guard: ChunkGuard,
+     deduplicated: bool,
++    _work: crate::work_drain::state::Guard,
+ }
+ 
+ trait UploadPathNarInfoExt {
+@@ -317,6 +318,7 @@
+         insertion.last_insert_id
+     };
+ 
++    let cleanup_work = crate::work_drain::background();
+     let cleanup = Finally::new({
+         let database = database.clone();
+         let nar_model = nar::ActiveModel {
+@@ -325,9 +327,11 @@
+         };
+ 
+         async move {
++            let _work = cleanup_work;
+             tracing::warn!("Error occurred - Cleaning up NAR entry");
+ 
+             if let Err(e) = Nar::delete(nar_model).exec(&database).await {
++                crate::work_drain::fail();
+                 tracing::warn!("Failed to unregister failed NAR: {}", e);
+             }
+         }
+@@ -360,7 +364,9 @@
+             let state = state.clone();
+             let require_proof_of_possession = state.config.require_proof_of_possession;
+ 
++            let work = crate::work_drain::background();
+             spawn(async move {
++                let _work = work;
+                 let chunk = upload_chunk(
+                     data,
+                     compression_type,
+@@ -575,6 +581,7 @@
+     state: State,
+     require_proof_of_possession: bool,
+ ) -> ServerResult<UploadChunkResult> {
++    let work = crate::work_drain::background();
+     let compression: Compression = compression_type.into();
+ 
+     let given_chunk_hash = data.hash();
+@@ -607,6 +614,7 @@
+         }
+ 
+         return Ok(UploadChunkResult {
++            _work: work,
+             guard: existing_chunk,
+             deduplicated: true,
+         });
+@@ -644,6 +652,7 @@
+         insertion.last_insert_id
+     };
+ 
++    let cleanup_work = crate::work_drain::background();
+     let cleanup = Finally::new({
+         let database = database.clone();
+         let chunk_model = chunk::ActiveModel {
+@@ -654,13 +663,16 @@
+         let key = key.clone();
+ 
+         async move {
++            let _work = cleanup_work;
+             tracing::warn!("Error occurred - Cleaning up uploaded file and chunk entry");
+ 
+             if let Err(e) = backend.delete_file(key).await {
++                crate::work_drain::fail();
+                 tracing::warn!("Failed to clean up failed upload: {}", e);
+             }
+ 
+             if let Err(e) = Chunk::delete(chunk_model).exec(&database).await {
++                crate::work_drain::fail();
+                 tracing::warn!("Failed to unregister failed chunk: {}", e);
+             }
+         }
+@@ -727,6 +739,7 @@
+     Ok(UploadChunkResult {
+         guard,
+         deduplicated: false,
++        _work: work,
+     })
+ }
+ 
+--- a/server/src/storage/local.rs
++++ b/server/src/storage/local.rs
+@@ -57,6 +57,8 @@
+     fs::write(&version_path, format!("{}", version))
+         .await
+         .map_err(ServerError::storage_error)?;
++    File::open(&version_path).await.map_err(ServerError::storage_error)?.sync_all().await.map_err(ServerError::storage_error)?;
++    File::open(storage_path).await.map_err(ServerError::storage_error)?.sync_all().await.map_err(ServerError::storage_error)?;
+     Ok(())
+ }
+ 
+@@ -118,6 +120,16 @@
+         Ok(Self { config })
+     }
+ 
++    async fn sync_parent(&self, name: &str) -> ServerResult<()> {
++        let mut directory = self.get_path(name).parent().unwrap().to_path_buf();
++        loop {
++            File::open(&directory).await.map_err(ServerError::storage_error)?.sync_all().await.map_err(ServerError::storage_error)?;
++            if directory == self.config.path { break; }
++            directory = directory.parent().unwrap().to_path_buf();
++        }
++        Ok(())
++    }
++
+     fn get_path(&self, p: &str) -> PathBuf {
+         let level1 = &p[0..1];
+         let level2 = &p[0..2];
+@@ -154,6 +166,8 @@
+             .await
+             .map_err(ServerError::storage_error)?;
+ 
++        file.sync_all().await.map_err(ServerError::storage_error)?;
++        self.sync_parent(&name).await?;
+         Ok(RemoteFile::Local(LocalRemoteFile { name }))
+     }
+ 
+@@ -161,7 +175,7 @@
+         fs::remove_file(self.get_path(&name))
+             .await
+             .map_err(ServerError::storage_error)?;
+-
++        self.sync_parent(&name).await?;
+         Ok(())
+     }
+ 
+@@ -178,7 +192,7 @@
+         fs::remove_file(self.get_path(&file.name))
+             .await
+             .map_err(ServerError::storage_error)?;
+-
++        self.sync_parent(&file.name).await?;
+         Ok(())
+     }
+ 

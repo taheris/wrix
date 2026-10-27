@@ -36,9 +36,12 @@ pub async fn provision_private(
     let token = Authority::open(issuer_root)?.publication_token(&namespace)?;
     let client = Client::new(endpoint, namespace.clone(), &token)?;
     wrix_core::private_directory::prepare_with_parents(state_root)?;
-    let _lock = acquire(state_root, lock_timeout).await?;
+    let lock = acquire(state_root, lock_timeout).await?;
     rotation::ensure_clear(state_root)?;
-    let key = client.register(retention).await?;
+    let session = super::workflow::Session::open(&client).await?;
+    let result = session.client().register(retention).await;
+    session.finish().await.map_err(Error::WorkflowCompletion)?;
+    let key = result?;
     let record = || {
         record_key(state_root, &key)?;
         Publisher::install_issuer(
@@ -54,6 +57,7 @@ pub async fn provision_private(
     record().map_err(|source| Error::RegistrationCommitted {
         source: Box::new(source),
     })?;
+    FileExt::unlock(&lock).map_err(Error::UnlockCommitted)?;
     Ok(key)
 }
 
@@ -70,22 +74,30 @@ pub async fn provision_common(
     let token = Authority::open(issuer_root)?.publication_token(&namespace)?;
     let client = Client::new(endpoint, namespace, &token)?;
     wrix_core::private_directory::prepare_with_parents(state_root)?;
-    let _lock = acquire(state_root, lock_timeout).await?;
-    let retention = match client.configuration().await? {
-        None => retention,
-        Some(config) => match config.retention_period {
-            Some(attic::api::v1::cache_config::RetentionPeriodConfig::Period(seconds))
-                if seconds > 0 =>
-            {
-                Duration::from_secs(u64::from(seconds))
-            }
-            _ => return Err(crate::backend::Error::Retention.into()),
-        },
-    };
-    let key = client.register(retention).await?;
+    let lock = acquire(state_root, lock_timeout).await?;
+    let session = super::workflow::Session::open(&client).await?;
+    let client = session.client();
+    let result = async {
+        let retention = match client.configuration().await? {
+            None => retention,
+            Some(config) => match config.retention_period {
+                Some(attic::api::v1::cache_config::RetentionPeriodConfig::Period(seconds))
+                    if seconds > 0 =>
+                {
+                    Duration::from_secs(u64::from(seconds))
+                }
+                _ => return Err(crate::backend::Error::Retention),
+            },
+        };
+        client.register(retention).await
+    }
+    .await;
+    session.finish().await.map_err(Error::WorkflowCompletion)?;
+    let key = result?;
     record_key(state_root, &key).map_err(|source| Error::RegistrationCommitted {
         source: Box::new(source),
     })?;
+    FileExt::unlock(&lock).map_err(Error::UnlockCommitted)?;
     Ok(key)
 }
 

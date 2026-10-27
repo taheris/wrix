@@ -22,6 +22,38 @@ fn fixture() -> (Digest, Compatibility, Observation) {
     (digest, compatibility, observation)
 }
 #[test]
+fn apple_seed_binds_configuration_receipt_separately_from_native_index() {
+    let (config, compatibility, labels) = fixture();
+    let native = "b".repeat(64);
+    let image = serde_json::json!([{"id":native,"configuration":{"descriptor":{"digest":format!("sha256:{native}")}},"variants":[{"platform":{"os":"linux","architecture":"amd64"},"config":{"os":"linux","architecture":"amd64","config":{"Labels":labels.configuration.labels}}}]}]);
+    let bytes = serde_json::to_vec(&image).unwrap();
+    let observed = apple::observation(&bytes, System::X86_64Linux, &config, &native).unwrap();
+    assert_eq!(
+        Image::binding(System::X86_64Linux, &config, &compatibility, &observed)
+            .unwrap()
+            .as_str(),
+        "a".repeat(64)
+    );
+    assert!(apple::observation(&bytes, System::X86_64Linux, &config, config.as_str()).is_err());
+    assert!(apple::observation(&bytes, System::Aarch64Linux, &config, &native).is_err());
+    let mut duplicate = image;
+    let variant = duplicate[0]["variants"][0].clone();
+    duplicate[0]["variants"]
+        .as_array_mut()
+        .unwrap()
+        .push(variant);
+    assert!(
+        apple::observation(
+            &serde_json::to_vec(&duplicate).unwrap(),
+            System::X86_64Linux,
+            &config,
+            &native
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn seed_binding_requires_exact_native_image_architecture_and_factory_closure_label() {
     let (digest, compatibility, mut observation) = fixture();
     assert!(Image::binding(System::X86_64Linux, &digest, &compatibility, &observation).is_ok());

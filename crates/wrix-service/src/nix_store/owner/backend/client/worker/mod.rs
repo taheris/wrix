@@ -12,6 +12,22 @@ pub const DIRECTORY: &str = "/run/wrix/nix-pool";
 pub const STORE: &str = "unix:///run/wrix/nix-client/daemon.sock";
 const FILES: [&str; 5] = ["key", "known-hosts", "ssh_config", "nix.conf", "version"];
 
+fn configuration_on(
+    port: NonZeroU16,
+    plane: wrix_state::nix_store::admission::request::Plane,
+) -> String {
+    let configuration = configuration(port);
+    if plane == wrix_state::nix_store::admission::request::Plane::Apple {
+        configuration
+            .replace("HostName 169.254.1.2", "HostName 127.0.0.1")
+            .replace(
+                "ProxyCommand none",
+                "ProxyCommand /etc/wrix/apple-nix-bridge connect",
+            )
+    } else {
+        configuration
+    }
+}
 fn configuration(port: NonZeroU16) -> String {
     format!(
         "Host wrix-nix-pool\n HostName 169.254.1.2\n Port {port}\n User nix-client\n IdentityFile {DIRECTORY}/key\n UserKnownHostsFile {DIRECTORY}/known-hosts\n GlobalKnownHostsFile /dev/null\n HostKeyAlias [127.0.0.1]:{port}\n StrictHostKeyChecking yes\n BatchMode yes\n IdentitiesOnly yes\n IdentityAgent none\n ClearAllForwardings yes\n RequestTTY no\n PermitLocalCommand no\n ProxyCommand none\n ControlMaster no\n"
@@ -41,21 +57,57 @@ fn nix_configuration() -> String {
     )
 }
 
+#[cfg(test)]
 pub(super) fn create(root: &Path, port: NonZeroU16) -> Result<(), Error> {
+    create_on(
+        root,
+        port,
+        wrix_state::nix_store::admission::request::Plane::Podman,
+    )
+}
+pub(super) fn create_on(
+    root: &Path,
+    port: NonZeroU16,
+    plane: wrix_state::nix_store::admission::request::Plane,
+) -> Result<(), Error> {
     let key = read(root, "key")?;
     let known = read(root, "known-hosts")?;
     let directory = root.join("worker");
     fs::DirBuilder::new().mode(0o700).create(&directory)?;
     write(&directory, "key", &key)?;
     write(&directory, "known-hosts", &known)?;
-    write(&directory, "ssh_config", configuration(port).as_bytes())?;
+    write(
+        &directory,
+        "ssh_config",
+        configuration_on(port, plane).as_bytes(),
+    )?;
     write(&directory, "nix.conf", nix_configuration().as_bytes())?;
-    write(&directory, "version", b"1\n")?;
+    write(
+        &directory,
+        "version",
+        if plane == wrix_state::nix_store::admission::request::Plane::Apple {
+            b"2\n"
+        } else {
+            b"1\n"
+        },
+    )?;
     File::open(&directory)?.sync_all()?;
     File::open(root)?.sync_all()?;
     Ok(())
 }
+#[cfg(test)]
 fn inspect(root: &Path, port: NonZeroU16) -> Result<PathBuf, Error> {
+    inspect_on(
+        root,
+        port,
+        wrix_state::nix_store::admission::request::Plane::Podman,
+    )
+}
+fn inspect_on(
+    root: &Path,
+    port: NonZeroU16,
+    plane: wrix_state::nix_store::admission::request::Plane,
+) -> Result<PathBuf, Error> {
     let directory = root.join("worker");
     check_directory(&directory)?;
     let names: std::collections::BTreeSet<_> = fs::read_dir(&directory)?
@@ -64,8 +116,13 @@ fn inspect(root: &Path, port: NonZeroU16) -> Result<PathBuf, Error> {
     let expected: std::collections::BTreeSet<_> =
         FILES.iter().map(std::ffi::OsString::from).collect();
     if names != expected
-        || read(&directory, "version")? != b"1\n"
-        || read(&directory, "ssh_config")? != configuration(port).as_bytes()
+        || read(&directory, "version")?
+            != if plane == wrix_state::nix_store::admission::request::Plane::Apple {
+                b"2\n"
+            } else {
+                b"1\n"
+            }
+        || read(&directory, "ssh_config")? != configuration_on(port, plane).as_bytes()
         || read(&directory, "nix.conf")? != nix_configuration().as_bytes()
         || read(&directory, "key")? != read(root, "key")?
         || read(&directory, "known-hosts")? != read(root, "known-hosts")?
@@ -75,7 +132,7 @@ fn inspect(root: &Path, port: NonZeroU16) -> Result<PathBuf, Error> {
     Ok(directory)
 }
 impl Delivery {
-    fn tools(&self) -> Result<super::super::Tools, Error> {
+    pub(super) fn tools(&self) -> Result<super::super::Tools, Error> {
         let host = wrix_state::host::Host::discover().map_err(std::io::Error::other)?;
         let control = host
             .roots()
@@ -101,6 +158,11 @@ impl Delivery {
         let super::super::State::Serving { connection } = record.state else {
             return Err(Error::Retained);
         };
+        if self.plane == wrix_state::nix_store::admission::request::Plane::Apple
+            && connection.port != self.port
+        {
+            return Err(Error::Retained);
+        }
         Ok(connection.target.attempt.software.tools)
     }
     /// Use the protected owner's exact package and rootless namespace environment, never an ambient PATH executable.
@@ -112,7 +174,8 @@ impl Delivery {
     pub fn krun_runtime(&self) -> Result<Option<PathBuf>, Error> {
         match self.plane {
             wrix_state::nix_store::admission::request::Plane::Krun => Ok(Some(self.tools()?.vm())),
-            wrix_state::nix_store::admission::request::Plane::Podman => Ok(None),
+            wrix_state::nix_store::admission::request::Plane::Podman
+            | wrix_state::nix_store::admission::request::Plane::Apple => Ok(None),
             wrix_state::nix_store::admission::request::Plane::Host => Err(Error::Invalid),
         }
     }
@@ -121,6 +184,25 @@ impl Delivery {
         if !self.plane.is_podman_namespace() {
             return Err(Error::Invalid);
         }
+        self.configuration()
+    }
+    pub fn apple_configuration(&self) -> Result<PathBuf, Error> {
+        if self.plane != wrix_state::nix_store::admission::request::Plane::Apple {
+            return Err(Error::Invalid);
+        }
+        self.configuration()
+    }
+    pub fn apple(&self) -> Result<std::process::Command, Error> {
+        self.apple_configuration()?;
+        Ok(self.tools()?.command(super::super::Program::Container))
+    }
+    pub fn start_apple_bridge(
+        &self,
+        worker: &wrix_sandbox::execution::apple::Worker,
+    ) -> Result<super::bridge::Bridge, Error> {
+        super::bridge::broker::start(self, worker)
+    }
+    fn configuration(&self) -> Result<PathBuf, Error> {
         let root = self.key.parent().ok_or(Error::Invalid)?;
         let record = Record::read(root)?;
         if record.plane != self.plane
@@ -129,6 +211,8 @@ impl Delivery {
             || record.lease != self.lease
             || self.store != root.join("store")
             || self.known_hosts != root.join("known-hosts")
+            || (self.plane == wrix_state::nix_store::admission::request::Plane::Apple
+                && record.port != Some(self.port))
         {
             return Err(Error::Invalid);
         }
@@ -141,7 +225,7 @@ impl Delivery {
         {
             return Err(Error::Retained);
         }
-        inspect(root, self.port)
+        inspect_on(root, self.port, self.plane)
     }
 }
 
@@ -157,6 +241,22 @@ mod test {
         write(root.path(), "key", b"execution-key").unwrap();
         write(root.path(), "known-hosts", b"pinned-key").unwrap();
         root
+    }
+    #[test]
+    fn apple_ssh_uses_local_bridge_with_the_original_loopback_server_pin() {
+        use wrix_state::nix_store::admission::request::Plane;
+        let root = fixture();
+        let port = NonZeroU16::new(2222).unwrap();
+        create_on(root.path(), port, Plane::Apple).unwrap();
+        assert!(inspect_on(root.path(), port, Plane::Apple).is_ok());
+        assert!(inspect_on(root.path(), port, Plane::Podman).is_err());
+        let configuration =
+            String::from_utf8(read(&root.path().join("worker"), "ssh_config").unwrap()).unwrap();
+        assert!(configuration.contains("ProxyCommand /etc/wrix/apple-nix-bridge connect"));
+        assert!(configuration.contains("HostKeyAlias [127.0.0.1]:2222"));
+        assert!(!configuration.contains("169.254.1.2"));
+        assert!(!configuration.contains("host.container.internal"));
+        assert!(configuration.contains("StrictHostKeyChecking yes"));
     }
     #[test]
     fn fixed_worker_configuration_is_exact_and_never_repaired_or_replaced() {

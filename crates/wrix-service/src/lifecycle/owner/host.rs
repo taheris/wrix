@@ -77,7 +77,7 @@ pub(in crate::lifecycle) fn ensure(
     {
         return Err(super::Error::Conflict.into());
     }
-    let selected = match candidate.as_ref().or(previous) {
+    let mut selected = match candidate.as_ref().or(previous) {
         Some(owner) => owner.clone(),
         None => Selected {
             runtime: runtime.kind,
@@ -176,8 +176,7 @@ pub(in crate::lifecycle) fn ensure(
             crate::dolt::server::socket::retire(&root.join("service-data/dolt"))?;
             backend_operation(runtime, &selected, "start")?;
         }
-        ready(root, &issuer, selected.port)?;
-        sql_ready(runtime, &selected, root)?;
+        ready_all(runtime, &selected, root, &issuer)?;
         if candidate.is_some() {
             commit(&selected, previous, guard)?;
             fs::remove_file(candidate_root.join("celler-owner.json"))?;
@@ -196,14 +195,29 @@ pub(in crate::lifecycle) fn ensure(
                 message: String::from_utf8_lossy(&output.stderr).into_owned(),
             });
         }
-        ready(root, &issuer, selected.port)?;
-        sql_ready(runtime, &selected, root)?;
+        ready_all(runtime, &selected, root, &issuer)?;
+        if candidate.is_some() {
+            commit(&selected, previous, guard)?;
+            fs::remove_file(candidate_root.join("celler-owner.json"))?;
+        }
         return Ok(selected);
     }
     if status == RuntimeStatus::Stopped {
         runtime.remove(&selected.container)?;
     }
-    let shared = super::super::shared::Record::prepare(guard)?;
+    let host = wrix_state::host::Host::discover().map_err(std::io::Error::other)?;
+    let public = super::super::generation::controller(&host)?;
+    let shared = super::super::shared::Record::prepare_native(guard, public[0])?;
+    if previous.is_none() && candidate.is_none() {
+        selected.port = public[1];
+    }
+    if selected.port != public[1]
+        || shared
+            .public_sql_port()
+            .is_some_and(|port| port != public[0])
+    {
+        return Err(Error::Operation { message: "stable retained role endpoints were not bound; free them and repeat explicit host maintenance before opening backend data".into() });
+    }
     let data = root.join("service-data/dolt");
     crate::dolt::private_directory(&data)?;
     wrix_cache::backend::layout::runtime::install(layout.metadata())?;
@@ -223,15 +237,21 @@ pub(in crate::lifecycle) fn ensure(
     let image = resumed_runtime.ensure_image_at(root)?;
     let recovered = Selected {
         workspace: None,
-        recipe: image.clone_recipe(),
+        recipe: Some(image.clone_recipe()),
         ..selected.clone()
     };
     wrix_core::private_directory::prepare_with_parents(&candidate_root)?;
     recovered.persist(&candidate_root)?;
+    let boot = crate::gateway::Secret::generate().map_err(std::io::Error::other)?;
     let mut command = Command::new(&runtime.binary);
-    command.args(["run", "-d", "--name", selected.container.as_str()]);
+    command
+        .args(["run", "-d", "--name", selected.container.as_str()])
+        .arg("--label")
+        .arg(format!("wrix.service.boot={}", boot.expose()))
+        .args(["-e", "WRIX_BACKEND_BOOT"])
+        .env("WRIX_BACKEND_BOOT", boot.expose());
     if runtime.kind == RuntimeKind::Podman {
-        command.args(["--restart=unless-stopped", "--pull=never"]);
+        command.args(["--restart=no", "--pull=never"]);
     }
     command
         .args([
@@ -245,7 +265,16 @@ pub(in crate::lifecycle) fn ensure(
         .arg("--label")
         .arg(format!("{CACHE_BACKEND_LABEL}={CACHE_BACKEND_VERSION}"))
         .arg("-p")
-        .arg(format!("127.0.0.1:{}:8080", selected.port));
+        .arg(format!(
+            "127.0.0.1:{}:8080",
+            shared.cache_port(selected.port)
+        ))
+        .arg("--label")
+        .arg(format!(
+            "wrix.cache.native-port={}",
+            shared.cache_port(selected.port)
+        ))
+        .args(["-e", "WRIX_CELLER_DRAIN_SOCKET=/run/wrix/celler/drain.sock"]);
     for mount in layout.mounts() {
         command.arg("-v").arg(format!(
             "{}:{}:rw",
@@ -258,12 +287,21 @@ pub(in crate::lifecycle) fn ensure(
             .arg("--label")
             .arg(format!("wrix.workspace.hash={workspace}"));
     }
+    let compiler = root.join("service-data/compiler");
+    crate::dolt::private_directory(&compiler)?;
+    command
+        .arg("-v")
+        .arg(format!("{}:{}:rw", compiler.display(), compiler.display()));
     command.args(shared.arguments(&data));
     let output = command
         .arg(image.as_str())
         .arg("wrix-shared-service")
         .arg(&data)
-        .arg(shared.transport())
+        .arg(if shared.native_ports().is_some() {
+            "tcp"
+        } else {
+            shared.transport()
+        })
         .stdin(Stdio::null())
         .output()?;
     if !output.status.success() {
@@ -275,11 +313,26 @@ pub(in crate::lifecycle) fn ensure(
             ),
         );
     }
-    ready(root, &issuer, selected.port)?;
-    sql_ready(runtime, &recovered, root)?;
+    ready_all(runtime, &recovered, root, &issuer)?;
     commit(&recovered, previous, guard)?;
     fs::remove_file(candidate_root.join("celler-owner.json"))?;
     Ok(recovered)
+}
+
+fn ready_all(runtime: &Runtime, selected: &Selected, root: &Path, issuer: &Path) -> Result<()> {
+    ready(
+        root,
+        issuer,
+        runtime.native_cache_port(&selected.container, selected.port)?,
+    )?;
+    sql_ready(runtime, selected, root)?;
+    if let Some((sql, cache, compiler)) =
+        super::super::shared::Record::at(&root.join("host-lifecycle"))?
+            .and_then(|record| record.native_ports())
+    {
+        super::super::generation::ensure(selected, sql, cache, compiler)?;
+    }
+    Ok(())
 }
 
 fn unix_endpoint(root: &Path) -> Result<bool> {
@@ -306,19 +359,85 @@ fn backend_operation(runtime: &Runtime, selected: &Selected, operation: &str) ->
     Ok(())
 }
 
-fn sql_ready(runtime: &Runtime, selected: &Selected, root: &Path) -> Result<()> {
+pub(in crate::lifecycle) fn sql_ready(
+    runtime: &Runtime,
+    selected: &Selected,
+    root: &Path,
+) -> Result<()> {
     let unix = unix_endpoint(root)?;
+    let native = super::super::shared::Record::at(&root.join("host-lifecycle"))?
+        .is_some_and(|record| record.native_ports().is_some());
+    let port = if native { "13306" } else { "3306" };
+    let namespaces = crate::control::required_sql(root).map_err(std::io::Error::other)?;
+    let credentials = crate::dolt::readiness_credentials(root, &namespaces)?;
     let deadline = std::time::Instant::now() + Duration::from_secs(15);
     loop {
         let data = root.join("service-data/dolt");
         let output = Command::new("timeout").args(["--signal=KILL", "2"]).arg(&runtime.binary)
-            .args(["exec", selected.container.as_str(), "sh", "-c", "export DOLT_CLI_PASSWORD=\"$(cat -- \"$1/admin.password\")\"; exec dolt --host 127.0.0.1 --port 3306 --no-tls --password \"$DOLT_CLI_PASSWORD\" --user wrixadmin --use-db controller sql -r json -q 'SELECT @@GLOBAL.secure_file_priv AS secure_file_priv'", "wrix-ready"])
-            .arg(&data).output()?;
+            .args(["exec", selected.container.as_str(), "sh", "-c", "export DOLT_CLI_PASSWORD=\"$(cat -- \"$1/admin.password\")\"; exec dolt --host 127.0.0.1 --port \"$2\" --no-tls --user wrixadmin --use-db controller sql -r json -q 'SELECT @@GLOBAL.secure_file_priv AS secure_file_priv'", "wrix-ready"])
+            .arg(&data).arg(port).output()?;
         if output.status.success() {
             let value: serde_json::Value =
                 serde_json::from_slice(&output.stdout).map_err(std::io::Error::other)?;
             if value["rows"][0]["secure_file_priv"] != "/dev/null" {
                 return Err(crate::dolt::Error::UnsafeServer.into());
+            }
+            for credentials in &credentials {
+                let output = Command::new("timeout")
+                    .args(["--signal=KILL", "2"])
+                    .arg(&runtime.binary)
+                    .args(["exec", "-e"])
+                    .arg(format!("DOLT_CLI_PASSWORD={}", credentials.password()))
+                    .args([
+                        selected.container.as_str(),
+                        "dolt",
+                        "--host",
+                        "127.0.0.1",
+                        "--port",
+                        port,
+                        "--no-tls",
+                        "--user",
+                        credentials.user(),
+                        "--use-db",
+                        credentials.database(),
+                        "sql",
+                        "-r",
+                        "json",
+                        "-q",
+                        "SELECT DATABASE() AS wrix_namespace",
+                    ])
+                    .output()?;
+                if !output.status.success() {
+                    return Err(crate::dolt::Error::Unauthorized.into());
+                }
+                let value: serde_json::Value =
+                    serde_json::from_slice(&output.stdout).map_err(std::io::Error::other)?;
+                if value["rows"].as_array().map(Vec::len) != Some(1)
+                    || value["rows"][0]["wrix_namespace"] != credentials.database()
+                {
+                    return Err(crate::dolt::Error::Unauthorized.into());
+                }
+            }
+            if native {
+                let output = Command::new(&runtime.binary)
+                    .args([
+                        "exec",
+                        selected.container.as_str(),
+                        "wrix-shared-service",
+                        "sql-drain",
+                        "abort",
+                    ])
+                    .output()?;
+                if !output.status.success() {
+                    return Err(crate::dolt::Error::Incomplete.into());
+                }
+                let response: super::super::drain::Response =
+                    serde_json::from_slice(&output.stdout).map_err(std::io::Error::other)?;
+                if !response.accepted
+                    || response.status.phase != super::super::drain::Phase::Serving
+                {
+                    return Err(crate::dolt::Error::Incomplete.into());
+                }
             }
             if !unix || crate::dolt::server::socket::ready(&data) {
                 return Ok(());
@@ -334,7 +453,7 @@ fn sql_ready(runtime: &Runtime, selected: &Selected, root: &Path) -> Result<()> 
         }
         if std::time::Instant::now() >= deadline {
             return Err(crate::dolt::Error::Native {
-                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+                stderr: "authenticated native Dolt readiness did not complete".into(),
             }
             .into());
         }
@@ -360,7 +479,11 @@ fn commit(
     Ok(())
 }
 
-pub(super) fn validate(runtime: &Runtime, owner: &Selected, status: RuntimeStatus) -> Result<()> {
+pub(in crate::lifecycle) fn validate(
+    runtime: &Runtime,
+    owner: &Selected,
+    status: RuntimeStatus,
+) -> Result<()> {
     let identity = match &owner.workspace {
         Some(workspace) => {
             runtime
@@ -389,9 +512,11 @@ pub(super) fn validate(runtime: &Runtime, owner: &Selected, status: RuntimeStatu
             .as_deref()
             != Some(CACHE_BACKEND_VERSION)
         || (status == RuntimeStatus::Running
-            && !runtime
-                .published_ports(owner.container.as_str())?
-                .contains(&owner.port.get()))
+            && !runtime.published_ports(owner.container.as_str())?.contains(
+                &runtime
+                    .native_cache_port(&owner.container, owner.port)?
+                    .get(),
+            ))
         || (owner.recipe.is_some()
             && runtime.container_image_id(&owner.container)?
                 != owner.recipe.as_ref().map(|recipe| recipe.image_id.clone()))
@@ -404,7 +529,7 @@ pub(super) fn validate(runtime: &Runtime, owner: &Selected, status: RuntimeStatu
     Ok(())
 }
 
-fn ready(root: &Path, issuer: &Path, port: NonZeroU16) -> Result<()> {
+pub(in crate::lifecycle) fn ready(root: &Path, issuer: &Path, port: NonZeroU16) -> Result<()> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;

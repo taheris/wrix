@@ -78,6 +78,20 @@ fn a_receipt_for_another_native_index_is_not_a_cache_miss() {
 }
 
 #[test]
+fn native_inspection_must_match_requested_id_and_its_descriptor() {
+    let id = "a".repeat(64);
+    let expected = ImageId::parse(&format!("sha256:{id}")).unwrap();
+    let value = json!([{"id":id,"configuration":{"descriptor":{"digest":format!("sha256:{id}")}}}]);
+    require_id(&serde_json::to_vec(&value).unwrap(), &expected).unwrap();
+    let wrong = ImageId::parse(&"b".repeat(64)).unwrap();
+    assert!(require_id(&serde_json::to_vec(&value).unwrap(), &wrong).is_err());
+    let mut malformed = value;
+    malformed[0]["configuration"]["descriptor"]["digest"] =
+        json!(format!("sha256:{}", "c".repeat(64)));
+    assert!(require_id(&serde_json::to_vec(&malformed).unwrap(), &expected).is_err());
+}
+
+#[test]
 fn a_symlink_receipt_is_not_followed() {
     let root = tempfile::tempdir().unwrap();
     fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();

@@ -19,7 +19,9 @@ let
         relative = removePrefix "${toString ../..}/" path;
       in
       builtins.match "crates/[^/]+/tests(/.*)?" relative == null
-      && rustProfile.craneLib.filterCargoSources path type;
+      && (
+        relative == "lib/sandbox/network-bootstrap.sh" || rustProfile.craneLib.filterCargoSources path type
+      );
     extraSrcs = {
       "crates/wrix-cache/tests" = ../../crates/wrix-cache/tests;
       "crates/wrix-cli/tests" = ../../crates/wrix-cli/tests;
@@ -32,7 +34,10 @@ let
       "tests/store/cleanup-native-fixtures.py" = ../../tests/store/cleanup-native-fixtures.py;
       "lib/util/git-ssh-setup.sh" = ../util/git-ssh-setup.sh;
       "lib/services/host-nix-config.sh" = ./host-nix-config.sh;
-      "lib/sandbox/network-bootstrap.sh" = ../sandbox/network-bootstrap.sh;
+      "lib/sandbox/darwin/nix-bridge.c" = ../sandbox/darwin/nix-bridge.c;
+      "lib/services/celler-work-drain-state.rs" = ./celler-work-drain-state.rs;
+      "crates/wrix-service/src/lifecycle/drain/native" =
+        ../../crates/wrix-service/src/lifecycle/drain/native;
       "tests/standalone/notify-runtime.sh" = ../../tests/standalone/notify-runtime.sh;
     };
     nativeBuildInputs = [ pkgs.git ];
@@ -69,6 +74,7 @@ let
   controllerRuntime = pkgs.symlinkJoin {
     name = "wrix-controller-runtime";
     paths = [
+      workspace.bin
       pkgs.nix
       pkgs.skopeo
       pkgs.git
@@ -82,6 +88,11 @@ let
       pkgs.coreutils
       pkgs.fuse3
       (import ../sandbox/linux/krun-runtime.nix { linuxPkgs = pkgs; })
+    ]
+    ++ optionals pkgs.stdenv.hostPlatform.isDarwin [
+      pkgs.coreutils
+      pkgs.sshfs-fuse
+      (import ./nix-pool/apple-host.nix { inherit pkgs; })
     ];
   };
   poolHostTools = pkgs.writeText "wrix-nix-pool-host-tools.json" (
@@ -105,12 +116,7 @@ let
             if nixPoolImage == null then
               ""
             else
-              ''--set WRIX_NIX_POOL_PACKAGE_BINDING "${poolBinding}" ${
-                if pkgs.stdenv.hostPlatform.isLinux then
-                  ''--set WRIX_NIX_POOL_HOST_TOOLS "${poolHostTools}"''
-                else
-                  ""
-              }''
+              ''--set WRIX_NIX_POOL_PACKAGE_BINDING "${poolBinding}" --set WRIX_NIX_POOL_HOST_TOOLS "${poolHostTools}"''
           }
       '';
   controllerBinding = import ./control-binding.nix {
@@ -148,7 +154,7 @@ let
       "WRIX_NIX_POOL_PACKAGE_BINDING"
       "${poolBinding}"
     ]
-    ++ optionals (nixPoolImage != null && pkgs.stdenv.hostPlatform.isLinux) [
+    ++ optionals (nixPoolImage != null) [
       "--set"
       "WRIX_NIX_POOL_HOST_TOOLS"
       "${poolHostTools}"
@@ -172,6 +178,7 @@ let
           pkgs.podman
           (import ../sandbox/linux/krun-runtime.nix { linuxPkgs = pkgs; })
         ]
+        ++ optionals pkgs.stdenv.hostPlatform.isDarwin [ pkgs.container ]
       )}"
     ]
   );
@@ -328,6 +335,12 @@ in
       ''
         install -Dm755 "${workspace.bin}/bin/wrix-service-supervisor" "$out/bin/wrix-service-supervisor"
         install -Dm755 "${workspace.bin}/bin/wrix-shared-service" "$out/bin/wrix-shared-service"
+        install -Dm755 "${
+          import ./gateway.nix {
+            inherit pkgs;
+            rustPackage = workspace.bin;
+          }
+        }/bin/wrix-egress-gateway" "$out/bin/wrix-egress-gateway"
       '';
   nixPoolOwner = pkgs.runCommand "wrix-nix-pool-owner" { meta = binaryMeta "wrix-nix-pool-owner"; } ''
     install -Dm755 "${workspace.bin}/bin/wrix-nix-pool-owner" "$out/bin/wrix-nix-pool-owner"

@@ -35,6 +35,9 @@ fn protection_inventory_counts_uncertain_and_live_records_but_not_released_histo
             ticket,
             lease: "c".repeat(32).try_into().unwrap(),
             state,
+            native_process: None,
+            broker_epoch: None,
+            port: None,
         }
         .publish(&root)
         .unwrap();

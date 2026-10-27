@@ -4,10 +4,36 @@ use std::{env, fmt::Write as _, fs, os::unix::fs::PermissionsExt, process::Comma
 
 use serde_json::{Value, json};
 use wrix_sandbox::image::{
-    self, CommandStore, Digest, ImageRef, InstallRequest, Runtime, Source, SourceKind, Store,
+    self, CommandStore, Digest, ImageId, ImageRef, InstallRequest, Runtime, Source, SourceKind,
+    Store, Target,
 };
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
+
+#[test]
+fn apple_native_id_is_resolved_to_an_actual_reference_and_rechecked() -> TestResult {
+    let desired = digest('a');
+    let fixture = Fixture::new(&[(
+        "wrix-selected:test",
+        json!([{
+            "id": "a".repeat(64),
+            "configuration": {"descriptor": {"digest": desired}}
+        }]),
+    )])?;
+    assert_eq!(
+        fixture.run_selected(&desired, false, Some(&desired))?,
+        Some("a".repeat(64))
+    );
+    assert_eq!(
+        fixture.calls()?,
+        [
+            "image list --format json",
+            "image inspect wrix-selected:test",
+            "image inspect wrix-selected:test"
+        ]
+    );
+    Ok(())
+}
 
 #[test]
 fn apple_digest_lookup_finds_named_image_after_untagged_image() -> TestResult {
@@ -188,7 +214,14 @@ fn image_lookup_child() -> TestResult {
     );
     let desired = Digest::parse(&env::var("WRIX_TEST_IMAGE_LOOKUP_DIGEST")?)?;
     let mut store = CommandStore;
-    let result = if env::var_os("WRIX_TEST_IMAGE_LOOKUP_INSTALL").is_some() {
+    let result = if let Some(id) = env::var_os("WRIX_TEST_IMAGE_LOOKUP_NATIVE_ID") {
+        store
+            .image_id(
+                Runtime::Container,
+                &Target::Id(ImageId::parse(id.to_str().ok_or("invalid native id")?)?),
+            )?
+            .map(|id| id.as_str().to_owned())
+    } else if env::var_os("WRIX_TEST_IMAGE_LOOKUP_INSTALL").is_some() {
         image::install(
             &mut store,
             &InstallRequest::new(
@@ -241,6 +274,15 @@ impl Fixture {
     }
 
     fn run(&self, desired: &str, install: bool) -> TestResult<Option<String>> {
+        self.run_selected(desired, install, None)
+    }
+
+    fn run_selected(
+        &self,
+        desired: &str,
+        install: bool,
+        native_id: Option<&str>,
+    ) -> TestResult<Option<String>> {
         let path = env::join_paths(
             std::iter::once(self.root.path().join("bin"))
                 .chain(env::split_paths(&env::var_os("PATH").unwrap_or_default())),
@@ -251,7 +293,11 @@ impl Fixture {
             .env("PATH", path)
             .env("WRIX_TEST_IMAGE_LOOKUP_STATE", self.root.path())
             .env("WRIX_TEST_IMAGE_LOOKUP_DIGEST", desired)
-            .env_remove("WRIX_TEST_IMAGE_LOOKUP_INSTALL");
+            .env_remove("WRIX_TEST_IMAGE_LOOKUP_INSTALL")
+            .env_remove("WRIX_TEST_IMAGE_LOOKUP_NATIVE_ID");
+        if let Some(id) = native_id {
+            command.env("WRIX_TEST_IMAGE_LOOKUP_NATIVE_ID", id);
+        }
         if install {
             command.env("WRIX_TEST_IMAGE_LOOKUP_INSTALL", "1");
         }

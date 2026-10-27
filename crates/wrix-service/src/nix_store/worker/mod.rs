@@ -31,6 +31,19 @@ struct Source {
     delivery: super::owner::backend::client::Delivery,
 }
 impl Session for Source {
+    fn apple(&self) -> Result<std::process::Command, Error> {
+        Ok(self.delivery.apple().map_err(io::Error::other)?)
+    }
+    fn start_apple_bridge(
+        &self,
+        worker: &wrix_sandbox::execution::apple::Worker,
+    ) -> Result<Box<dyn wrix_sandbox::nix_store::Transport>, Error> {
+        Ok(Box::new(
+            self.delivery
+                .start_apple_bridge(worker)
+                .map_err(io::Error::other)?,
+        ))
+    }
     fn krun_runtime(&self) -> Result<Option<std::path::PathBuf>, Error> {
         self.delivery
             .krun_runtime()
@@ -40,15 +53,29 @@ impl Session for Source {
         Ok(self.delivery.podman().map_err(io::Error::other)?)
     }
     fn delivery(&self) -> Result<Delivery, Error> {
-        let directory = self
-            .delivery
-            .podman_configuration()
-            .map_err(io::Error::other)?;
-        let delivery = Delivery::podman(
-            self.delivery.pool().clone(),
-            self.delivery.ticket().clone(),
-            self.delivery.port(),
-        )?;
+        let (directory, delivery) = if self.delivery.plane() == Plane::Apple {
+            (
+                self.delivery
+                    .apple_configuration()
+                    .map_err(io::Error::other)?,
+                Delivery::apple(
+                    self.delivery.pool().clone(),
+                    self.delivery.ticket().clone(),
+                    self.delivery.port(),
+                )?,
+            )
+        } else {
+            (
+                self.delivery
+                    .podman_configuration()
+                    .map_err(io::Error::other)?,
+                Delivery::podman(
+                    self.delivery.pool().clone(),
+                    self.delivery.ticket().clone(),
+                    self.delivery.port(),
+                )?,
+            )
+        };
         let mounts = delivery.mounts();
         if mounts[0].source != self.delivery.store() || mounts[1].source != directory {
             return Err(Error::Delivery);
@@ -57,6 +84,55 @@ impl Session for Source {
     }
 }
 impl Factory for Connected {
+    fn apple_image_commands(
+        &self,
+    ) -> Result<(std::process::Command, std::process::Command), Error> {
+        self.admit_apple()?;
+        let host = Capability::discover()?;
+        self.client
+            .check_native_host(&host)
+            .map_err(io::Error::other)?;
+        let package = Package::load(&host.roots().state().join("control/package.json"))
+            .map_err(io::Error::other)?;
+        Ok(super::owner::backend::tools::Tools::for_package(&package)
+            .and_then(|tools| tools.apple_image_commands())
+            .map_err(io::Error::other)?)
+    }
+    fn admit_apple(&self) -> Result<(), Error> {
+        worker_host(Plane::Apple)?;
+        let host = Capability::discover()?;
+        self.client
+            .check_native_host(&host)
+            .map_err(io::Error::other)?;
+        match self
+            .runtime
+            .block_on(self.client.request(Operation::InspectNixAppleWorker {}))
+            .map_err(io::Error::other)?
+        {
+            Reply::PoolInterface { version: 1 } => Ok(()),
+            _ => Err(Error::Unavailable),
+        }
+    }
+    fn prepare_apple(
+        &self,
+        selection: &Selection,
+        system: System,
+        ticket: &Ticket,
+        image: &Binding,
+    ) -> Result<Box<dyn Session>, Error> {
+        self.admit_apple()?;
+        let pool = wrix_state::nix_store::admission::Guard::acquire(selection, system)?
+            .pool()
+            .clone();
+        self.runtime.block_on(prepare(
+            &self.client,
+            selection,
+            &pool,
+            ticket,
+            image,
+            Plane::Apple,
+        ))
+    }
     fn admit(&self) -> Result<(), Error> {
         podman_host()
     }
@@ -105,6 +181,26 @@ impl Factory for Connected {
     }
 }
 impl Factory for Host {
+    fn apple_image_commands(
+        &self,
+    ) -> Result<(std::process::Command, std::process::Command), Error> {
+        self.admit_apple()?;
+        Ok(super::owner::backend::tools::Tools::from_env()
+            .and_then(|tools| tools.apple_image_commands())
+            .map_err(io::Error::other)?)
+    }
+    fn admit_apple(&self) -> Result<(), Error> {
+        Self::admit_on(Plane::Apple)
+    }
+    fn prepare_apple(
+        &self,
+        selection: &Selection,
+        system: System,
+        ticket: &Ticket,
+        image: &Binding,
+    ) -> Result<Box<dyn Session>, Error> {
+        Self::prepare_on(selection, system, ticket, image, Plane::Apple)
+    }
     fn admit(&self) -> Result<(), Error> {
         Self::admit_on(Plane::Podman)
     }
@@ -132,7 +228,7 @@ impl Factory for Host {
 }
 impl Host {
     fn admit_on(plane: Plane) -> Result<(), Error> {
-        podman_host()?;
+        worker_host(plane)?;
         Package::from_env().map_err(io::Error::other)?;
         super::image::Candidate::from_env().map_err(io::Error::other)?;
         super::owner::backend::tools::Tools::from_env()
@@ -210,12 +306,20 @@ impl Host {
         })
     }
 }
-fn podman_host() -> Result<(), Error> {
-    if !cfg!(target_os = "linux") {
+fn worker_host(plane: Plane) -> Result<(), Error> {
+    let supported = match plane {
+        Plane::Apple => cfg!(all(target_os = "macos", target_arch = "aarch64")),
+        Plane::Podman | Plane::Krun => cfg!(target_os = "linux"),
+        Plane::Host => false,
+    };
+    if !supported {
         return Err(Error::Unavailable);
     }
     Capability::discover()?;
     Ok(())
+}
+fn podman_host() -> Result<(), Error> {
+    worker_host(Plane::Podman)
 }
 async fn prepare(
     client: &Client,
@@ -235,6 +339,11 @@ async fn prepare(
         Plane::Krun => {
             client
                 .prepare_nix_krun_worker(selection, pool.system, ticket, image)
+                .await
+        }
+        Plane::Apple => {
+            client
+                .prepare_nix_apple_worker(selection, pool.system, ticket, image)
                 .await
         }
         Plane::Host => return Err(Error::Delivery),

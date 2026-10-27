@@ -362,6 +362,71 @@ fn explicit_upgrade_never_stops_foreign_units_or_replaces_package_after_failed_m
 }
 
 #[test]
+fn explicit_host_stop_preserves_package_and_roots_after_native_stop_failure_and_retry() {
+    let directory = tempfile::tempdir().unwrap();
+    let lifecycle = Lifecycle::lock(&directory.path().join("controller")).unwrap();
+    let old = package("recorded");
+    let bytes = serde_json::to_vec(&old).unwrap();
+    fs::write(lifecycle.root.join("package.json"), &bytes).unwrap();
+    fs::write(
+        lifecycle.root.join("wrix-host-controller.service"),
+        unit_contents(&lifecycle.root, &old),
+    )
+    .unwrap();
+    fs::create_dir(lifecycle.root.join("roots")).unwrap();
+    std::os::unix::fs::symlink(
+        "/nix/store/recorded-controller",
+        lifecycle.root.join("roots/controller"),
+    )
+    .unwrap();
+    let native = upgrade_manager(directory.path(), &lifecycle.root, false);
+    let original = fs::read_to_string(&native.supervisor).unwrap();
+    fs::write(
+        &native.supervisor,
+        original.replace("touch", "exit 73; touch"),
+    )
+    .unwrap();
+    assert!(lifecycle.stop_owned(&native).is_err());
+    assert!(lifecycle.root.join("stopped").is_file());
+    assert_eq!(
+        fs::read(lifecycle.root.join("package.json")).unwrap(),
+        bytes
+    );
+    fs::write(&native.supervisor, original).unwrap();
+    lifecycle.stop_owned(&native).unwrap();
+    assert!(directory.path().join("native-stopped").exists());
+    assert_eq!(
+        fs::read_link(lifecycle.root.join("roots/controller")).unwrap(),
+        Path::new("/nix/store/recorded-controller")
+    );
+    assert!(!directory.path().join("native-started").exists());
+}
+
+#[test]
+fn explicit_host_stop_refuses_foreign_units_before_recording_shutdown() {
+    let directory = tempfile::tempdir().unwrap();
+    let lifecycle = Lifecycle::lock(&directory.path().join("controller")).unwrap();
+    let old = package("recorded");
+    fs::write(
+        lifecycle.root.join("package.json"),
+        serde_json::to_vec(&old).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        lifecycle.root.join("wrix-host-controller.service"),
+        unit_contents(&lifecycle.root, &old),
+    )
+    .unwrap();
+    let native = upgrade_manager(directory.path(), &lifecycle.root, true);
+    assert!(matches!(
+        lifecycle.stop_owned(&native),
+        Err(Error::UnitConflict(_))
+    ));
+    assert!(!lifecycle.root.join("stopped").exists());
+    assert!(!directory.path().join("native-stopped").exists());
+}
+
+#[test]
 fn unit_paths_escape_specifiers_and_shell_metacharacters_without_a_shell() {
     assert_eq!(
         systemd_path(Path::new("/a% b\"")),

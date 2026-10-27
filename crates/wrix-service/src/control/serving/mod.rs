@@ -1,5 +1,8 @@
 //! Controller-owned serving lifetime for private control and the shared data front door.
 
+pub mod apple;
+mod native;
+
 use std::{future::Future, net::SocketAddr, num::NonZeroUsize};
 
 use super::{Controller, Error};
@@ -49,19 +52,28 @@ impl Host {
             controller,
             front_door,
         } = self;
+        let selection = front_door.selection();
         let forwarding = front_door.serve(std::future::pending());
         tokio::pin!(forwarding, shutdown);
-        let result = loop {
-            tokio::select! {
-                () = &mut shutdown => break Ok(()),
-                result = &mut forwarding => break result.map_err(Error::from),
-                request = controller.serve_one() => {
-                    if let Err(error) = request {
-                        tracing::warn!(%error, "private controller request failed");
+        let result = {
+            let attachment = native::run(&controller, selection);
+            tokio::pin!(attachment);
+            loop {
+                tokio::select! {
+                    () = &mut shutdown => break Ok(()),
+                    result = &mut forwarding => break result.map_err(Error::from),
+                    result = &mut attachment => break result,
+                    request = controller.serve_one() => {
+                        if let Err(error) = request {
+                            tracing::warn!(%error, "private controller request failed");
+                        }
                     }
                 }
             }
         };
+        if let Some(issuer) = controller.gateway.read().await.as_ref() {
+            issuer.revoke_all().await;
+        }
         controller.close()?;
         result
     }

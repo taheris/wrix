@@ -1,7 +1,9 @@
 //! Runtime host authority for one private publication view.
 
+pub mod protection;
 pub mod registration;
 pub mod retirement;
+pub mod workflow;
 
 use std::{
     fs::{self, DirBuilder, File, OpenOptions},
@@ -74,6 +76,8 @@ pub enum Error {
     RotationRecorded(io::Error),
     /// timed out waiting for the namespace publication lock; no backend request was dispatched
     LockTimeout,
+    /// publication state is committed, but namespace lock release is unconfirmed; inspect before retrying: {0}
+    UnlockCommitted(io::Error),
     /// Celler registration succeeded, but local key or publication authority recording failed; backend changes remain active: {source}
     RegistrationCommitted { source: Box<Error> },
     /// {0}
@@ -88,6 +92,10 @@ pub enum Error {
     Backend(#[from] super::Error),
     /// Celler publication authority was replaced, but directory durability could not be confirmed: {0}
     InstallationCommitted(io::Error),
+    /// {0}
+    Protection(#[from] protection::Failure),
+    /// publication admission completion is uncertain; reconcile retained native workflow before update: {0}
+    WorkflowCompletion(super::Error),
 }
 
 #[derive(Deserialize, Serialize)]
@@ -108,6 +116,36 @@ struct Binding {
 pub struct Publisher {
     authority: Credential,
     retention: Duration,
+    state_root: PathBuf,
+}
+
+/// Synchronously acquired protection; cancellation retains native roots for reconciliation.
+pub struct Prepared {
+    client: Client,
+    paths: Vec<PathBuf>,
+    protection: protection::Protection,
+}
+
+impl Prepared {
+    /// Explicitly discard a preparation before any backend work has been admitted.
+    pub fn discard(self) -> Result<()> {
+        self.protection.release()?;
+        Ok(())
+    }
+
+    /// Native publication admission covers all requests, including idle HTTP gaps.
+    pub async fn publish(self) -> Result<usize> {
+        if self.paths.is_empty() {
+            self.protection.release()?;
+            return Ok(0);
+        }
+        let session = workflow::Session::open(&self.client).await?;
+        let result = session.client().publish_selected(&self.paths).await;
+        session.finish().await.map_err(Error::WorkflowCompletion)?;
+        let published = result?;
+        self.protection.release()?;
+        Ok(published)
+    }
 }
 
 enum Credential {
@@ -276,6 +314,7 @@ impl Publisher {
         Ok(Self {
             authority,
             retention,
+            state_root: state_root.to_path_buf(),
         })
     }
 
@@ -284,18 +323,37 @@ impl Publisher {
         self.retention
     }
 
-    /// Missing paths remain missing; native store and backend failures propagate unchanged.
+    /// Call synchronously while originating native temporary roots or out-links still exist.
+    pub fn prepare(&self, paths: &[PathBuf]) -> Result<Prepared> {
+        let client = self.authority.client()?.into_owned();
+        let protection = protection::Protection::acquire(&self.state_root, paths)?;
+        Ok(Prepared {
+            client,
+            paths: paths.to_vec(),
+            protection,
+        })
+    }
+
+    /// Existing realized paths only; native store and backend failures propagate unchanged.
     pub async fn publish_selected(&self, paths: &[PathBuf]) -> Result<usize> {
-        Ok(self.authority.client()?.publish_selected(paths).await?)
+        self.prepare(paths)?.publish().await
     }
 
     /// Callers serialize registration with the selected namespace's publication lock.
     pub async fn register(&self) -> Result<CachePublicKey> {
-        Ok(self.authority.client()?.register(self.retention).await?)
+        let client = self.authority.client()?;
+        let session = workflow::Session::open(&client).await?;
+        let result = session.client().register(self.retention).await;
+        session.finish().await.map_err(Error::WorkflowCompletion)?;
+        Ok(result?)
     }
 
     /// Callers serialize rotation with the selected namespace's publication lock.
     pub async fn rotate(&self) -> Result<CachePublicKey> {
-        Ok(self.authority.client()?.rotate(self.retention).await?)
+        let client = self.authority.client()?;
+        let session = workflow::Session::open(&client).await?;
+        let result = session.client().rotate(self.retention).await;
+        session.finish().await.map_err(Error::WorkflowCompletion)?;
+        Ok(result?)
     }
 }

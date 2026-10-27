@@ -20,6 +20,10 @@ pub struct Bound {
     container: Container,
 }
 impl Launching {
+    pub const fn ticket(&self) -> &Ticket {
+        &self.ticket
+    }
+
     pub(crate) fn commit(
         host: Host,
         context: Context,
@@ -45,6 +49,25 @@ impl Launching {
             context,
             ticket,
         })
+    }
+    pub fn bind_apple(
+        self,
+        identity: super::apple::Identity,
+    ) -> Result<super::apple::Bound, Error> {
+        super::transition(
+            &self.host,
+            &self.context,
+            &self.ticket,
+            &Phase::Launching,
+            &Phase::AppleBound(identity.clone()),
+        )?;
+        Ok(super::apple::Bound::new(
+            self.host,
+            self.generation,
+            self.context,
+            self.ticket,
+            identity,
+        ))
     }
     pub fn bind(self, container: Container) -> Result<Bound, Error> {
         super::bind(&self.host, &self.context, &self.ticket, &container)?;

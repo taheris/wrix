@@ -1,12 +1,17 @@
 mod apple;
 pub mod binding;
 mod cache;
+pub mod compiler;
 mod coordination;
 pub mod credential;
+pub mod deployment;
 mod dolt;
+pub mod drain;
+pub mod generation;
 mod managed;
 mod owner;
 pub mod shared;
+pub mod sql;
 pub mod supervisor;
 
 use std::{
@@ -263,24 +268,15 @@ pub enum RuntimeStatus {
     Missing,
 }
 
-enum PreparedImage {
-    Pinned(Box<owner::Recipe>),
-    Reference(ImageRef),
-}
+struct PreparedImage(Box<owner::Recipe>);
 
 impl PreparedImage {
     fn as_str(&self) -> &str {
-        match self {
-            Self::Pinned(recipe) => recipe.image_id.as_str(),
-            Self::Reference(reference) => reference.as_str(),
-        }
+        self.0.image_id.as_str()
     }
 
-    fn clone_recipe(&self) -> Option<owner::Recipe> {
-        match self {
-            Self::Pinned(recipe) => Some((**recipe).clone()),
-            Self::Reference(_) => None,
-        }
+    fn clone_recipe(&self) -> owner::Recipe {
+        (*self.0).clone()
     }
 }
 
@@ -475,6 +471,7 @@ impl Plan {
         Ok(())
     }
 
+    #[cfg(test)]
     fn has_services(&self) -> bool {
         self.owns_cache() || self.dolt.is_some()
     }
@@ -850,40 +847,37 @@ pub fn rename(name: &ContainerName) -> Result<String> {
 }
 
 pub fn start(cache_mode: CacheMode) -> Result<Status> {
-    wrix_state::host::Host::discover().map_err(io::Error::other)?;
+    let host = wrix_state::host::Host::discover().map_err(io::Error::other)?;
     let (mut plan, _lock) = locked_plan(cache_mode)?;
     plan.authorize()?;
+    deployment::resume(&host)?;
+    let _pools = crate::nix_store::lifecycle::gate::shared(&host).map_err(io::Error::other)?;
     supervisor::transition::ensure_clear(plan.paths().state_root(), plan.workspace().hash())?;
-    let host_lock = (plan.has_services() || plan.cache_enabled())
-        .then(|| host_lifecycle_lock(plan.paths()))
-        .transpose()?;
-    if let Some(guard) = &host_lock {
-        plan.reconcile_owner(guard)?;
-        let runtime = Runtime::from_env()?;
-        runtime.binding.as_ref().ok_or(binding::Error::Missing)?;
-        let legacy_namespace = if plan.selected_owner.is_some() && shared::is_managed(&plan)? {
-            None
-        } else {
-            Some(plan.workspace().hash())
-        };
-        shared::check_inventory(&runtime, plan.selected_owner.as_ref(), legacy_namespace)?;
-        let selected =
-            owner::host::ensure(&runtime, guard, plan.selected_owner.as_ref(), None, false)?;
-        plan.reconcile_owner(guard)?;
-        plan.container_name = selected.container;
-        plan.shared = true;
-        let record = shared::Record::read(plan.paths())?.ok_or(owner::Error::Invalid)?;
-        if plan.dolt.is_some() {
-            plan.dolt = Some(record.endpoint(shared::host_root(&plan)?));
-            managed::configure(plan.workspace().canonical_path())?;
-            shared::register(&plan, &runtime)?;
-        }
-        if plan.cache_enabled() {
-            let prepared = cache::prepare(&plan, RuntimeStatus::Running)?;
-            cache::activate(&plan, &prepared)?;
-        }
-        plan.ensure_layout_locked()?;
-        return status_for_plan(plan);
+    let host_lock = host_lifecycle_lock(plan.paths())?;
+    let guard = &host_lock;
+    plan.reconcile_owner(guard)?;
+    let runtime = Runtime::from_env()?;
+    runtime.binding.as_ref().ok_or(binding::Error::Missing)?;
+    generation::preflight_controller(&host)?;
+    let legacy_namespace = if plan.selected_owner.is_some() && shared::is_managed(&plan)? {
+        None
+    } else {
+        Some(plan.workspace().hash())
+    };
+    shared::check_inventory(&runtime, plan.selected_owner.as_ref(), legacy_namespace)?;
+    let selected = owner::host::ensure(&runtime, guard, plan.selected_owner.as_ref(), None, false)?;
+    plan.reconcile_owner(guard)?;
+    plan.container_name = selected.container;
+    plan.shared = true;
+    let record = shared::Record::read(plan.paths())?.ok_or(owner::Error::Invalid)?;
+    if plan.dolt.is_some() {
+        plan.dolt = Some(record.endpoint(shared::host_root(&plan)?));
+        managed::configure(plan.workspace().canonical_path())?;
+        shared::register(&plan, &runtime)?;
+    }
+    if plan.cache_enabled() {
+        let prepared = cache::prepare(&plan, RuntimeStatus::Running)?;
+        cache::activate(&plan, &prepared)?;
     }
     plan.ensure_layout_locked()?;
     status_for_plan(plan)
@@ -1498,6 +1492,18 @@ impl Runtime {
         Ok(())
     }
 
+    fn native_cache_port(&self, name: &ContainerName, selected: NonZeroU16) -> Result<NonZeroU16> {
+        self.inspect_label(name.as_str(), "wrix.cache.native-port")?
+            .map_or_else(
+                || Ok(selected),
+                |port| {
+                    port.parse().map_err(|_| Error::Operation {
+                        message: "native cache port label is invalid".into(),
+                    })
+                },
+            )
+    }
+
     fn validate_selected_owner(&self, plan: &Plan) -> Result<()> {
         let Some(owner) = &plan.selected_owner else {
             return Ok(());
@@ -1543,7 +1549,7 @@ impl Runtime {
                 != Some("true")
             || !self
                 .published_ports(owner.container.as_str())?
-                .contains(&owner.port.get())
+                .contains(&self.native_cache_port(&owner.container, owner.port)?.get())
             || (owner.recipe.is_some()
                 && self.container_image_id(&owner.container)?
                     != owner.recipe.as_ref().map(|recipe| recipe.image_id.clone()))
@@ -1993,9 +1999,6 @@ impl Runtime {
             )?,
         )?;
         if self.image_exists(candidate.image())? {
-            if self.kind == RuntimeKind::Container {
-                return Ok(PreparedImage::Reference(candidate.image().clone()));
-            }
             let target = Target::Reference(candidate.image().clone());
             let image_id = store
                 .image_id(runtime, &target)?
@@ -2003,13 +2006,19 @@ impl Runtime {
                     message: "installed service image has no immutable native identity".into(),
                 })?;
             let image_id = parse_image_id(image_id.as_str())?;
-            if image_id != digest {
+            let verified = match self.kind {
+                RuntimeKind::Podman => image_id == digest,
+                RuntimeKind::Container => {
+                    store.image_digest(runtime, &target)?.as_ref() == Some(&digest)
+                }
+            };
+            if !verified {
                 return Err(Error::Operation {
                     message: "installed service image does not match the bound content digest"
                         .into(),
                 });
             }
-            Ok(PreparedImage::Pinned(Box::new(owner::Recipe {
+            Ok(PreparedImage(Box::new(owner::Recipe {
                 binding: candidate.clone(),
                 image_id,
                 config_digest: digest,
@@ -2612,10 +2621,11 @@ mod test {
             "printf ''",
         ] {
             let (_root, runtime) = inspection_fixture(body);
-            assert!(matches!(
-                runtime.status_identifier("owner"),
-                Err(super::Error::Operation { .. })
-            ));
+            let result = runtime.status_identifier("owner");
+            assert!(
+                matches!(&result, Err(super::Error::Operation { .. })),
+                "uncertain inspection {body:?} returned {result:?}"
+            );
         }
     }
 

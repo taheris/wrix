@@ -26,6 +26,7 @@ const DOCUMENT: u64 = 65_536;
 enum Intent {
     #[default]
     Repair,
+    Shutdown,
     Update {
         candidate: crate::nix_store::image::Candidate,
         tools: Tools,
@@ -53,8 +54,10 @@ pub enum Error {
     Invalid,
     /// installed-store preparation, native work or a manager is busy; drain it before controller repair
     Busy,
-    /// interrupted installed-store maintenance fences new admissions; rerun service repair with the same host package
+    /// interrupted installed-store maintenance fences new admissions; repeat the recorded host operation with the same host package
     Pending,
+    /// host services are explicitly stopped; ordinary service start must resume the recorded deployment before installed-store admission
+    Stopped,
     /// installed-store maintenance belongs to a different host package or state generation
     Conflict,
     /// installed-store maintenance exceeds its bounded pool inventory
@@ -234,12 +237,32 @@ pub(crate) fn unmanaged_repair(host: &Host) -> Result<gate::Guard, Error> {
     Ok(guard)
 }
 
+/// Passive inventory only; absence of pool tools never authorizes omitting a provisioned owner.
+pub(crate) fn needs_binding(host: &Host) -> Result<bool, Error> {
+    let deployment = crate::control::existing_deployment(host).map_err(io::Error::other)?;
+    Ok(Marker::read(host)?.is_some() || !census(host, deployment.as_ref())?.is_empty())
+}
+
 /// Pool portion of an explicit whole-deployment update, not a separate pool selector.
 ///
 /// Begin before changing core roles; complete only after compatible owned core-role readiness.
 /// Drop preserves intent and fences admission. Candidate failure never silently resumes the old software.
 pub struct Update<'a>(Repair<'a>);
 impl<'a> Update<'a> {
+    /// An unprovisioned deployment still retains census exclusion through core activation.
+    pub fn unprovisioned(host: &'a Host) -> Result<Self, Error> {
+        let guard = gate::exclusive(host)?;
+        let deployment = crate::control::existing_deployment(host).map_err(io::Error::other)?;
+        if deployment.is_none() || needs_binding(host)? {
+            return Err(Error::Conflict);
+        }
+        Ok(Self(Repair {
+            host,
+            marker: None,
+            _gate: guard,
+        }))
+    }
+
     pub fn begin(
         host: &'a Host,
         target: &Package,
@@ -262,6 +285,79 @@ impl<'a> Update<'a> {
 
     pub fn complete(self) -> Result<(), Error> {
         self.0.complete()
+    }
+}
+
+/// Pool shutdown retains all native data and roots. Busy or uncertain readers cannot be forced out.
+pub struct Shutdown<'a>(ShutdownState<'a>);
+
+enum ShutdownState<'a> {
+    Transaction(Repair<'a>),
+    Retained {
+        host: &'a Host,
+        marker: Marker,
+        _gate: gate::Guard,
+    },
+}
+
+impl<'a> Shutdown<'a> {
+    pub fn begin(host: &'a Host, target: &Package) -> Result<Self, Error> {
+        let guard = gate::exclusive(host)?;
+        if let Some(marker) = Marker::read(host)?
+            && marker.intent != Intent::Shutdown
+        {
+            let deployment = crate::control::existing_deployment(host).map_err(io::Error::other)?;
+            let pools = census(host, deployment.as_ref())?;
+            marker.check(
+                host,
+                &marker.target,
+                &marker.intent,
+                deployment.as_ref(),
+                &pools,
+            )?;
+            let mut owners = owners(host, &marker.deployment, &pools, true)?;
+            for (owner, state) in &mut owners {
+                if *state != MaintenanceState::Released {
+                    owner.shutdown()?;
+                }
+            }
+            drop(owners);
+            return Ok(Self(ShutdownState::Retained {
+                host,
+                marker,
+                _gate: guard,
+            }));
+        }
+        drop(guard);
+        Repair::begin_intent(host, target, Intent::Shutdown)
+            .map(|operation| Self(ShutdownState::Transaction(operation)))
+    }
+
+    /// Call after core/controller shutdown. Interrupted updates retain their exact intent.
+    pub fn complete(self) -> Result<(), Error> {
+        match self.0 {
+            ShutdownState::Transaction(operation) => operation.complete(),
+            ShutdownState::Retained { host, marker, .. } => {
+                if Marker::read(host)?.as_ref() != Some(&marker) {
+                    return Err(Error::Conflict);
+                }
+                let pools = census(host, Some(&marker.deployment))?;
+                marker.check(
+                    host,
+                    &marker.target,
+                    &marker.intent,
+                    Some(&marker.deployment),
+                    &pools,
+                )?;
+                if owners(host, &marker.deployment, &pools, true)?
+                    .iter()
+                    .any(|(_, state)| *state != MaintenanceState::Released)
+                {
+                    return Err(Error::Conflict);
+                }
+                Ok(())
+            }
+        }
     }
 }
 
@@ -371,6 +467,7 @@ impl<'a> Repair<'a> {
             if matches!(entry, Entry::Serving(_)) && *state == MaintenanceState::Released {
                 match &marker.intent {
                     Intent::Repair => owner.resume()?,
+                    Intent::Shutdown => continue,
                     Intent::Update { candidate, tools } => owner.update(candidate, tools)?,
                 }
                 owner.maintenance_state(false)?;

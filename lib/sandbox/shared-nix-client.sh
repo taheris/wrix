@@ -12,7 +12,20 @@ wrix_start_nix_client() {
   for file in key known-hosts ssh_config nix.conf version; do
     [[ -f "$configuration/$file" && ! -L "$configuration/$file" && "$("@STAT@" -c '%u:%g:%a:%h' "$configuration/$file")" == 0:0:600:1 ]] || return 1
   done
-  [[ "$(< "$configuration/version")" == 1 && ! -e "$runtime" && ! -L "$runtime" ]] || return 1
+  [[ ! -e "$runtime" && ! -L "$runtime" ]] || return 1
+  case "$(< "$configuration/version")" in
+    1) ;;
+    2)
+      for ((attempt = 0; attempt < 300; attempt++)); do
+        if [[ -S /run/wrix/apple-nix-bridge/socket ]]; then break; fi
+        "@SLEEP@" 0.1
+      done
+      [[ -S /run/wrix/apple-nix-bridge/socket ]] || return 1
+      "@RM@" -f /etc/nix/nix.conf
+      "@LN@" -s "$configuration/nix.conf" /etc/nix/nix.conf
+      ;;
+    *) return 1 ;;
+  esac
   "@MKDIR@" -m 0700 "$runtime"
   "@SOCAT@" "UNIX-LISTEN:$runtime/daemon.sock,mode=600,fork,max-children=16" "EXEC:@SSH@ -F $configuration/ssh_config nix-client@wrix-nix-pool nix-daemon --stdio" &
   relay=$!

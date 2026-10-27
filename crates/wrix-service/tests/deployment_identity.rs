@@ -75,7 +75,8 @@ async fn concurrent_controller_ownership_creates_only_one_deployment_identity() 
             "management.key",
             "control.sock",
             "namespaces.lock",
-            "namespaces.json"
+            "namespaces.json",
+            "native-epoch"
         ]
         .into_iter()
         .map(std::ffi::OsString::from)

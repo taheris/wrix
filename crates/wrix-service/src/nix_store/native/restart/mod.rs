@@ -11,10 +11,18 @@ use std::{
     path::Path,
 };
 
+fn owner(path: &Path) -> Result<u32, Error> {
+    if path.starts_with(super::DATA) {
+        super::bootstrap::ownership::uid(path)
+    } else {
+        Ok(rustix::process::geteuid().as_raw())
+    }
+}
+
 fn directory(path: &Path, mode: u32) -> Result<(), Error> {
     let metadata = fs::symlink_metadata(path)?;
     if !metadata.is_dir()
-        || metadata.uid() != rustix::process::geteuid().as_raw()
+        || metadata.uid() != owner(path)?
         || metadata.mode() & 0o777 != mode
         || path.canonicalize()? != path
     {
@@ -30,7 +38,7 @@ fn read(path: &Path) -> Result<Vec<u8>, Error> {
         .open(path)?;
     let metadata = file.metadata()?;
     if !metadata.is_file()
-        || metadata.uid() != rustix::process::geteuid().as_raw()
+        || metadata.uid() != owner(path)?
         || metadata.mode() & 0o777 != 0o600
         || metadata.nlink() != 1
         || metadata.len() > 4096

@@ -29,11 +29,24 @@ fn install(case: &Case, name: &str) -> (Digest, wrix_core::nix_store::binding::B
     let digest = Digest::parse(fs::read_to_string(&case.digest_file).unwrap().trim()).unwrap();
     let reference = ImageRef::parse(name).unwrap();
     let source = Source::parse(&case.source, case.source_kind).unwrap();
-    image::install(
-        &mut image::CommandStore,
-        &InstallRequest::new(Runtime::Podman, &reference, &source, Some(&digest)).unwrap(),
-    )
-    .unwrap();
+    let runtime = if cfg!(target_os = "macos") {
+        Runtime::Container
+    } else {
+        Runtime::Podman
+    };
+    let request = InstallRequest::new(runtime, &reference, &source, Some(&digest)).unwrap();
+    if runtime == Runtime::Container {
+        use wrix_sandbox::nix_store::Factory;
+        let (container, skopeo) = wrix_service::nix_store::worker::Host
+            .apple_image_commands()
+            .expect("UNAVAILABLE: package-frozen Apple image commands");
+        image::with_runtime_commands(&container, &skopeo, || {
+            image::install(&mut image::CommandStore, &request)
+        })
+        .unwrap();
+    } else {
+        image::install(&mut image::CommandStore, &request).unwrap();
+    }
     let binding =
         wrix_core::nix_store::binding::Binding::new(digest.as_str(), case.shared.clone()).unwrap();
     (digest, binding)
@@ -41,7 +54,11 @@ fn install(case: &Case, name: &str) -> (Digest, wrix_core::nix_store::binding::B
 pub(super) fn binding() -> wrix_core::nix_store::binding::Binding {
     install(&fixture().primary, "wrix-pool-worker-seed:latest").1
 }
+pub(super) fn next_binding() -> wrix_core::nix_store::binding::Binding {
+    install(&fixture().next, "wrix-pool-worker-seed-next:latest").1
+}
 
+#[cfg(target_os = "linux")]
 pub(super) fn exercise(
     owner: &Owner,
     issued: &wrix_state::nix_store::admission::request::Accepted,
