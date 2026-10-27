@@ -179,7 +179,6 @@ pub(super) fn exercise(
         owner.inspect().unwrap(),
         wrix_service::nix_store::native::Reply::Ready { .. }
     ));
-    super::super::super::interrupt::pause(workspace);
     fs::write(workspace.join("workers-go"), b"go").unwrap();
     await_file(workspace, "first-done", &mut [&mut first, &mut second]);
     await_file(workspace, "second-done", &mut [&mut first, &mut second]);

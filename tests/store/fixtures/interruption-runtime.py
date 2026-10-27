@@ -34,6 +34,21 @@ if name == "native":
         sys.exit(7 if scenario == "early-exit" else 0)
     if scenario == "empty-ready":
         save({"running": False, "containers": False, "images": False, "views": [], "migrated": False})
+    identity = root.stat()
+    nonce = os.environ["WRIX_TEST_POOL_INTERRUPT_NONCE"]
+    progress = {"version": 1, "phase": "worker-image", "nonce": "e" * 64 if scenario == "foreign-progress" else nonce, "device": identity.st_dev, "inode": identity.st_ino}
+    pending = root / ".wrix-native-test-progress.pending"
+    pending.write_text(json.dumps(progress))
+    pending.chmod(0o600)
+    pending.rename(root / ".wrix-native-test-progress.json")
+    if scenario == "term-resistant-helper":
+        ready = root / "helper-ready"
+        helper = subprocess.Popen([sys.executable, "-c", "import signal, sys, time; from pathlib import Path; signal.signal(signal.SIGTERM, signal.SIG_IGN); Path(sys.argv[1]).touch(); time.sleep(60)", str(ready)], process_group=0)
+        (root / "escaped-pid").write_text(str(helper.pid))
+        deadline = time.monotonic() + 5
+        while not ready.exists():
+            assert helper.poll() is None and time.monotonic() < deadline
+            time.sleep(0.01)
     if scenario != "timeout":
         identity = root.stat()
         nonce = os.environ["WRIX_TEST_POOL_INTERRUPT_NONCE"]
@@ -91,6 +106,8 @@ elif name == "podman":
         if present:
             print("\n".join(key * 64 for key in ("1", "2", "3")))
     elif operation == "images":
+        if scenario == "inspection-failure" and state["migrated"]:
+            sys.exit(1)
         assert arguments == ["images", "--no-trunc", "--format", "{{.ID}}"]
         if state["images"]:
             print("sha256:" + "4" * 64)

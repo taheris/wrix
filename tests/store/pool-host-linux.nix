@@ -159,7 +159,12 @@ pkgs.writeShellApplication {
       ${pkgs.bash}/bin/bash ${./run-native-test.sh}
       ${wrix.rustPackage.cacheBackendTests}/bin/workspace-admission-tests
       --ignored --exact
-      nix_store::admission::request::native::supervised_controller_prepares_after_requester_exit_and_preserves_native_owner
+      ${
+        if interrupt then
+          "nix_store::admission::request::native::interruption::interrupts_packaged_controller_with_two_live_workers"
+        else
+          "nix_store::admission::request::native::supervised_controller_prepares_after_requester_exit_and_preserves_native_owner"
+      }
       --nocapture
     )
     ${

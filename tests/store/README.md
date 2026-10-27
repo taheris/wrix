@@ -317,7 +317,12 @@ needed:
 nix run .#legacyPackages.x86_64-linux.ciApps.test-shared-nix-interruption-linux
 ```
 
-The app runs only the supervised-controller/worker test. It waits at most ten
+The app runs a focused packaged-controller test: one pool, one worker-image
+installation and two real SDK workers. It does not first run the broad
+requester-loss, maintenance, seed/resume or factory-lifetime scenarios; the
+normal host-owner app still runs those unchanged. Authenticated setup phases
+(controller, image, each worker and worker evaluations) appear in progress
+output. Image import and native boot still take real time. It waits at most ten
 minutes for an atomic, invocation-nonce and fixture-inode-bound checkpoint after
 both real workers finish their initial Nix evaluation. Before signalling its
 owned supervisor with SIGTERM, it independently requires the pool and both
@@ -336,6 +341,15 @@ is checked separately. Cleanup failures, early exits, readiness timeouts,
 hanging helpers and namespace changes fail the harness; they are not
 interruption passes. No force/lazy unmount or broad host-container deletion is
 performed.
+
+Before signalling helpers, and again on their ten-second graceful-stop timeout,
+the harness saves PID/parent/group/session, executable, command line, signal
+masks, thread states and kernel wait channel. Proc directory descriptors pin
+observations against PID reuse; unavailable fields retain explicit errors.
+Failure cleanup keeps the original namespace witness alive and attempts the
+final namespace and host inventory even after a helper or supervisor failure.
+Partial inspection replies are retained too. Resource absence after fallback
+cleanup does not turn a failed graceful stop into a pass.
 
 The app always retains its fixture and private registry. Full native output,
 namespace snapshots, packaged and checkout Git revisions, exact test command,

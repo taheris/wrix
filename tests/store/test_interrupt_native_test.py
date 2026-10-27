@@ -81,6 +81,11 @@ class InterruptionTest(unittest.TestCase):
         self.assertIn("foreign", result["error"])
         self.assertNotIn("signal", result)
 
+    def test_foreign_progress_cannot_describe_the_owned_fixture(self):
+        result, _ = self.run_case("foreign-progress", 1)
+        self.assertIn("foreign or malformed native progress", result["error"])
+        self.assertNotIn("signal", result)
+
     def test_world_readable_checkpoint_is_rejected(self):
         result, _ = self.run_case("unsafe-ready", 1)
         self.assertIn("unsafe native readiness", result["error"])
@@ -94,6 +99,44 @@ class InterruptionTest(unittest.TestCase):
         result, _ = self.run_case("cleanup-failure", 1)
         self.assertEqual(result["native_exit"], 1)
         self.assertIn("expected intentional SIGTERM", result["error"])
+
+    def test_cleanup_failure_still_retains_final_inventory(self):
+        result, _ = self.run_case("cleanup-failure", 1)
+        after = json.loads((self.output / "namespace-after.json").read_text())
+        self.assertTrue(after["containers"])
+        self.assertFalse(result["resource_inventory"]["verified"])
+        self.assertTrue((self.output / "host-after.mountinfo").is_file())
+
+    def test_resistant_helper_retains_identity_and_inventory_without_passing(self):
+        result, _ = self.run_case("term-resistant-helper", 1)
+        self.assertEqual(result["native_exit"], 143)
+        self.assertIn("did not exit gracefully", result["error"])
+        self.assertEqual(result["outcome"], "failed")
+        pid = int((self.root / "escaped-pid").read_text())
+        records = json.loads((self.output / "helpers-after-term.json").read_text())
+        helper = next(record for record in records if record["pid"] == pid)
+        self.assertEqual(helper["session"], result["supervisor_pid"])
+        self.assertIn("SIG_IGN", " ".join(helper["cmdline"]))
+        self.assertTrue(helper["exe"])
+        self.assertIn("wchan", helper)
+        self.assertTrue(helper["threads"])
+        ignored = next(line.split()[1] for line in helper["status"].splitlines() if line.startswith("SigIgn:"))
+        self.assertTrue(int(ignored, 16) & (1 << (signal.SIGTERM - 1)))
+        self.assertTrue(result["resource_inventory"]["verified"])
+        self.assertEqual(json.loads((self.output / "namespace-after.json").read_text())["containers"], [])
+        stat_path = Path(f"/proc/{pid}/stat")
+        if stat_path.exists():
+            self.assertEqual(stat_path.read_text().rsplit(")", 1)[1].split()[0], "Z")
+
+    def test_failed_namespace_inspection_retains_partial_reply_and_fails_closed(self):
+        result, _ = self.run_case("inspection-failure", 1)
+        after = json.loads((self.output / "namespace-after.json").read_text())
+        self.assertEqual(after["namespace"], "mnt:[1]")
+        self.assertEqual(after["containers"], [])
+        self.assertIn("error", after)
+        self.assertNotIn("images", after)
+        self.assertFalse(result["resource_inventory"]["verified"])
+        self.assertEqual(result["native_exit"], 143)
 
     def test_replacement_empty_namespace_is_not_absence_proof(self):
         result, _ = self.run_case("changed-namespace", 1)
@@ -122,6 +165,8 @@ class InterruptionTest(unittest.TestCase):
         self.assertNotIn("signal", result)
         self.assertIn("deadline", result["error"])
         self.assertIn("Waiting for pool", output)
+        self.assertIn("Native setup: worker-image", output)
+        self.assertEqual(result["setup_phase"], "worker-image")
         self.assertTrue((self.root / ".wrix-native-test-resources-stopped").exists())
 
     def test_escaped_helper_is_reaped_and_unrelated_process_is_not_signalled(self):

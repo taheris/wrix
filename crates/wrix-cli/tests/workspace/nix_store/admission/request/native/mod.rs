@@ -1,5 +1,6 @@
 //! Actual supervised controller, private IPC and caller-independent native provisioning.
 mod client;
+mod interruption;
 mod maintenance;
 mod seed;
 mod worker;
@@ -280,6 +281,10 @@ fn supervised_controller_prepares_after_requester_exit_and_preserves_native_owne
         fs::write(directory.join("native-finished"), b"released").unwrap();
         return;
     }
+    run_fixture(NAME);
+}
+
+fn run_fixture(name: &str) {
     let (fixture, checkout) = setup();
     let fixture = NativeFixture::new(fixture);
     deployment(&fixture);
@@ -295,7 +300,7 @@ fn supervised_controller_prepares_after_requester_exit_and_preserves_native_owne
         fixture.root.path(),
         false,
         &std::env::current_exe().unwrap(),
-        &["--ignored", "--exact", NAME, "--nocapture"],
+        &["--ignored", "--exact", name, "--nocapture"],
     );
     command
         .env(CALLER, &checkout)

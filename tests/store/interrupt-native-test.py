@@ -21,6 +21,8 @@ import uuid
 sys.dont_write_bytecode = True
 READY = ".wrix-native-test-ready.json"
 NONCE = "WRIX_TEST_POOL_INTERRUPT_NONCE"
+PROGRESS = ".wrix-native-test-progress.json"
+PHASES = {"controller", "worker-image", "first-worker", "second-worker", "worker-evaluations"}
 
 
 def cleanup_module(path):
@@ -38,25 +40,30 @@ def write_json(path, value):
     temporary.replace(path)
 
 
-def checkpoint(cleanup, registry, nonce):
+def checkpoint(cleanup, registry, nonce, report):
     entries = cleanup.registry_entries(registry)
     if len(entries) > 1:
         raise RuntimeError("interruption requires exactly one disposable fixture")
     for root in entries:
         cleanup.checked_root(root, registered=True)
-        try:
-            descriptor = os.open(root / READY, os.O_RDONLY | os.O_NOFOLLOW)
-        except FileNotFoundError:
-            return None
-        with os.fdopen(descriptor) as stream:
-            info = os.fstat(stream.fileno())
-            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1 or info.st_size > 4096:
-                raise RuntimeError("unsafe native readiness checkpoint")
-            record = json.load(stream)
-        identity = root.stat()
-        if record != {"version": 1, "phase": "workers-ready", "nonce": nonce, "device": identity.st_dev, "inode": identity.st_ino}:
-            raise RuntimeError("foreign or malformed native readiness checkpoint")
-        return root
+        for filename, label in ((PROGRESS, "progress"), (READY, "readiness")):
+            try:
+                descriptor = os.open(root / filename, os.O_RDONLY | os.O_NOFOLLOW)
+            except FileNotFoundError:
+                continue  # Neither progress nor readiness has to exist during setup.
+            with os.fdopen(descriptor) as stream:
+                info = os.fstat(stream.fileno())
+                if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1 or info.st_size > 4096:
+                    raise RuntimeError(f"unsafe native {label} checkpoint")
+                record = json.load(stream)
+            identity = root.stat()
+            phase = record.get("phase")
+            phases = PHASES if filename == PROGRESS else {"workers-ready"}
+            if phase not in phases or record != {"version": 1, "phase": phase, "nonce": nonce, "device": identity.st_dev, "inode": identity.st_ino}:
+                raise RuntimeError(f"foreign or malformed native {label} checkpoint")
+            if filename == READY:
+                return root
+            report(root, phase)
     return None
 
 
@@ -106,6 +113,61 @@ def signal_session_members(leader, kind):
     return signalled
 
 
+def helper_diagnostics(leader):
+    records = []
+    for pid in session_members(leader):
+        record = {"pid": pid}
+        try:
+            directory = os.open(f"/proc/{pid}", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        except (FileNotFoundError, ProcessLookupError):
+            continue  # The helper exited before its proc directory was pinned.
+        try:
+            def read(name):
+                descriptor = os.open(name, os.O_RDONLY, dir_fd=directory)
+                with os.fdopen(descriptor, "rb") as stream:
+                    return stream.read(65536).decode(errors="backslashreplace")
+
+            fields = read("stat").rsplit(")", 1)[1].split()
+            if int(fields[3]) != leader:
+                continue
+            record.update(state=fields[0], parent=int(fields[1]), group=int(fields[2]), session=int(fields[3]), start_ticks=int(fields[19]))
+            for name in ("cmdline", "status", "wchan"):
+                try:
+                    value = read(name)
+                    record[name] = value.split("\0")[:-1] if name == "cmdline" else value
+                except OSError as error:
+                    record[name + "_error"] = str(error)
+            for name in ("exe", "ns/mnt"):
+                try:
+                    record[name] = os.readlink(name, dir_fd=directory)
+                except OSError as error:
+                    record[name + "_error"] = str(error)
+            tasks = os.open("task", os.O_RDONLY | os.O_DIRECTORY, dir_fd=directory)
+            try:
+                record["threads"] = []
+                for tid in os.listdir(tasks):
+                    try:
+                        task = os.open(tid, os.O_RDONLY | os.O_DIRECTORY, dir_fd=tasks)
+                    except (FileNotFoundError, ProcessLookupError):
+                        continue  # This thread exited during the snapshot.
+                    try:
+                        descriptor = os.open("stat", os.O_RDONLY, dir_fd=task)
+                        with os.fdopen(descriptor) as stream:
+                            record["threads"].append({"tid": int(tid), "stat": stream.read()})
+                    except OSError as error:
+                        record["threads"].append({"tid": int(tid), "error": str(error)})
+                    finally:
+                        os.close(task)
+            finally:
+                os.close(tasks)
+        except OSError as error:
+            record["error"] = str(error)
+        finally:
+            os.close(directory)
+        records.append(record)
+    return records
+
+
 class Supervisor:
     """Keep the private session leader unreaped until its helpers have exited."""
 
@@ -128,9 +190,10 @@ class Supervisor:
         self.stop_deadline = time.monotonic() + self.stop_timeout
         os.kill(self.process.pid, signal.SIGTERM)
 
-    def stop_helpers(self, deadline, progress):
+    def stop_helpers(self, deadline, progress, capture):
         if not self.exited():
             raise RuntimeError("cannot reap assertion helpers before supervisor teardown")
+        capture("before-term")
         members = signal_session_members(self.process.pid, signal.SIGTERM)
         if members:
             progress(f"Stopping {len(members)} assertion helpers in the owned private session")
@@ -138,7 +201,8 @@ class Supervisor:
         while session_members(self.process.pid) and time.monotonic() < deadline:
             time.sleep(0.05)
         if session_members(self.process.pid):
-            raise RuntimeError("owned assertion helpers did not exit gracefully")
+            capture("after-term")
+            raise RuntimeError("owned assertion helpers did not exit gracefully; see helpers-after-term.json")
         return members
 
     def finish(self):
@@ -191,7 +255,7 @@ class Witness:
         os.set_blocking(self.process.stdout.fileno(), False)
         self.buffer = b""
 
-    def snapshot(self):
+    def snapshot(self, path):
         self.process.stdin.write(b"snapshot\n")
         self.process.stdin.flush()
         deadline = time.monotonic() + 60
@@ -212,6 +276,7 @@ class Witness:
                     raise RuntimeError("oversized namespace snapshot")
         line, self.buffer = self.buffer.split(b"\n", 1)
         record = json.loads(line)
+        write_json(path, record)
         if record.get("version") != 1 or "error" in record:
             raise RuntimeError(f"namespace inspection failed: {record}")
         return record
@@ -312,9 +377,40 @@ def run(args, cleanup):
     result = {"version": 1, "outcome": "failed", "command": command, "nonce": nonce, "registry": str(registry), "output": str(output), "revision": args.source_revision, "host_namespace": os.readlink("/proc/self/ns/mnt"), "started_at": datetime.now(timezone.utc).isoformat()}
     supervisor = None
     witness = None
+    subject = None
+    before = None
 
     def progress(message):
         print(f"[{time.monotonic() - started:6.1f}s] {message}", flush=True)
+
+    def capture_helpers(phase):
+        if supervisor and not supervisor.reaped:
+            records = helper_diagnostics(supervisor.process.pid)
+            write_json(output / f"helpers-{phase}.json", records)
+            for record in records:
+                progress(f"Owned helper {record['pid']}: state={record.get('state')} exe={record.get('exe')} wchan={record.get('wchan', '').strip()}")
+
+    def inventory():
+        result["resource_inventory"] = {"verified": False}
+        progress("Independently checking host and retained original Podman namespace after teardown")
+        try:
+            host_inventory = output / "host-after.mountinfo"
+            host_inventory.write_text(Path("/proc/self/mountinfo").read_text())
+            result["resource_inventory"]["host_mountinfo"] = str(host_inventory)
+            after = witness.snapshot(output / "namespace-after.json")
+            if before is None:
+                raise RuntimeError("no pre-interruption namespace identity to verify against")
+            verify_after(subject, before, after, cleanup)
+            result["resource_inventory"]["verified"] = True
+        except Exception as error:
+            result["resource_inventory"]["error"] = f"{type(error).__name__}: {error}"
+            raise
+
+    def report_phase(root, phase):
+        result["fixture"] = str(root)
+        if result.get("setup_phase") != phase:
+            result["setup_phase"] = phase
+            progress(f"Native setup: {phase}")
 
     def wait_until(predicate, deadline, phase):
         next_report = 0
@@ -323,7 +419,7 @@ def run(args, cleanup):
             if now >= deadline:
                 raise TimeoutError(f"{phase} exceeded its deadline")
             if now >= next_report:
-                progress(phase)
+                progress(phase + f"; current setup: {result.get('setup_phase', 'fixture initialization')}")
                 next_report = now + 15
             time.sleep(0.1)
 
@@ -343,7 +439,7 @@ def run(args, cleanup):
                 if supervisor.exited():
                     result["native_exit"] = supervisor.finish()
                     raise RuntimeError("native test exited before verified readiness")
-                root = checkpoint(cleanup, registry, nonce)
+                root = checkpoint(cleanup, registry, nonce, report_phase)
                 return root is not None
 
             wait_until(ready, started + args.ready_timeout, "Waiting for pool and two workers (readiness deadline applies)")
@@ -352,8 +448,7 @@ def run(args, cleanup):
             subject = cleanup.Cleanup(root, args.tools, registered=True)
             progress("Workers ready; checking native objects and pinning original Podman namespace")
             witness = Witness(subject, Path(__file__).resolve(), args.cleanup, ns_log, progress)
-            before = witness.snapshot()
-            write_json(output / "namespace-before.json", before)
+            before = witness.snapshot(output / "namespace-before.json")
             verify_before(subject, before, cleanup)
             progress("Verified native readiness and original Podman namespace; sending SIGTERM to owned supervisor")
             supervisor.signal()
@@ -363,14 +458,11 @@ def run(args, cleanup):
             wait_until(supervisor.exited, deadline, "Waiting for graceful native teardown")
             result["native_exit"] = supervisor.exit_code
             result["native_exit_elapsed_seconds"] = time.monotonic() - started
-            result["assertion_helpers_terminated"] = supervisor.stop_helpers(deadline, progress)
+            result["assertion_helpers_terminated"] = supervisor.stop_helpers(deadline, progress, capture_helpers)
             result["native_exit"] = supervisor.finish()
             if result["native_exit"] != 143:
                 raise RuntimeError(f"native supervisor exited {result['native_exit']}, expected intentional SIGTERM exit 143")
-            progress("Independently checking host and retained original Podman namespace after teardown")
-            after = witness.snapshot()
-            write_json(output / "namespace-after.json", after)
-            verify_after(subject, before, after, cleanup)
+            inventory()
             witness.close()
             witness = None
             result["outcome"] = "passed"
@@ -383,6 +475,12 @@ def run(args, cleanup):
             signal.signal(kind, signal.SIG_IGN)
         if supervisor:
             try:
+                capture_helpers("before-abort")
+            except Exception as error:
+                result["outcome"] = "failed"
+                result["helper_diagnostics_error"] = str(error)
+                progress(f"Helper diagnostics failed; still attempting owned cleanup: {error}")
+            try:
                 supervisor.abort(progress)
             except Exception as error:
                 result["outcome"] = "failed"
@@ -390,6 +488,11 @@ def run(args, cleanup):
             if supervisor.exit_code is not None:
                 result["native_exit"] = supervisor.exit_code
         if witness:
+            try:
+                inventory()
+            except Exception as error:
+                result["outcome"] = "failed"
+                progress(f"Final inventory failed: {error}")
             try:
                 witness.close()
             except Exception as error:
