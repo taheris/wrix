@@ -286,6 +286,7 @@ let
             nativeBuildInputs = [
               pkgs.python3
               pkgs.bash
+              pkgs.git
             ];
           }
           ''
@@ -295,6 +296,8 @@ let
             ${pkgs.python3}/bin/python3 ${./store}/test_interrupt_native_test.py
             WRIX_TEST_BOOTSTRAP_PROCESS_SCRIPT=${../lib/services/nix-pool/bootstrap-process.sh} \
               ${pkgs.python3}/bin/python3 ${./store}/test_bootstrap_process.py
+            WRIX_TEST_GIT_BOOTSTRAP_SCRIPT=${../lib/util/git-ssh-setup.sh} \
+              ${pkgs.python3}/bin/python3 ${./sandbox}/test_git_bootstrap.py
             touch "$out"
           '';
     }

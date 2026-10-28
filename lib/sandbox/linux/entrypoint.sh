@@ -9,7 +9,7 @@ set -euo pipefail
 
 # krun transports argv through the environment; decode it only after NET_ADMIN is gone.
 if [[ "${WRIX_KRUN_INIT:-}" == "1" ]]; then
-  git config --global safe.directory /workspace
+  git -C / config --global safe.directory /workspace
   ARGS=()
   if [[ -n "${WRIX_KRUN_CMD:-}" ]]; then
     eval "ARGS=($WRIX_KRUN_CMD)"
@@ -35,11 +35,6 @@ if [[ -f "$KNOWN_HOSTS_SRC" ]]; then
   /bin/bash /install-known-hosts.sh "$KNOWN_HOSTS_SRC" / runtime
 fi
 
-cd /workspace
-
-# shellcheck source=/dev/null
-. /git-ssh-setup.sh "${WRIX_EFFECTIVE_GIT_SIGN:-0}"
-
 # The process runs as rootless container-root mapped to the invoking host user
 # (default boundary) or host-user->root (krun). Either way paths under
 # /workspace and nix's libgit2 caches ($XDG_CACHE_HOME) can present an owner
@@ -47,7 +42,12 @@ cd /workspace
 # across workspace and cache mounts. Trust all paths: single identity,
 # rootless container or ephemeral VM. Covers git ops
 # and nix's git fetcher alike.
-git config --global --replace-all safe.directory '*'
+# Global bootstrap must not first discover a not-yet-trusted workspace repository.
+git -C / config --global --replace-all safe.directory '*'
+
+cd /workspace
+# shellcheck source=/dev/null
+. /git-ssh-setup.sh "${WRIX_EFFECTIVE_GIT_SIGN:-0}"
 
 # Install the image's hook bundle as specified by specs/image-builder.md § Hook Installation.
 if [[ -f /workspace/.pre-commit-config.yaml ]] \

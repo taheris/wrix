@@ -9,7 +9,7 @@ set -euo pipefail
 wrix_git_global_value() {
   local key="$1"
   local value
-  if value=$(git config --global --get "$key"); then
+  if value=$(git -C / config --global --get "$key"); then
     [[ -n "$value" ]] || return 1
     printf '%s\n' "$value"
     return 0
@@ -48,8 +48,8 @@ wrix_configure_git_identity() {
     committer_email="$author_email"
   fi
 
-  git config --global --replace-all user.name "$author_name"
-  git config --global --replace-all user.email "$author_email"
+  git -C / config --global --replace-all user.name "$author_name"
+  git -C / config --global --replace-all user.email "$author_email"
 
   export GIT_AUTHOR_NAME="$author_name"
   export GIT_AUTHOR_EMAIL="$author_email"
@@ -103,8 +103,8 @@ wrix_signing_principals() {
 wrix_configure_git_signing() {
   local allowed_signers configured_email principal pubkey pubkey_tmp
 
-  git config --global --replace-all gpg.format ssh
-  git config --global --replace-all user.signingkey "$WRIX_SIGNING_KEY"
+  git -C / config --global --replace-all gpg.format ssh
+  git -C / config --global --replace-all user.signingkey "$WRIX_SIGNING_KEY"
 
   mkdir -p "$HOME/.config/git"
   pubkey_tmp="$HOME/.config/git/signing_key.pub.tmp"
@@ -120,7 +120,7 @@ wrix_configure_git_signing() {
       printf '%s %s\n' "$principal" "$pubkey" >> "$allowed_signers"
     done < <(wrix_signing_principals "$configured_email")
     rm -f "$pubkey_tmp"
-    git config --global --replace-all gpg.ssh.allowedSignersFile "$allowed_signers"
+    git -C / config --global --replace-all gpg.ssh.allowedSignersFile "$allowed_signers"
   else
     rm -f "$pubkey_tmp"
   fi
@@ -130,7 +130,7 @@ wrix_configure_git_deploy() {
   local key_arg effective_home
   printf -v key_arg '%q' "$WRIX_DEPLOY_KEY"
   export GIT_SSH_COMMAND="ssh -F /dev/null -i $key_arg -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none -o IdentityFile=none -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/etc/ssh/ssh_known_hosts -o GlobalKnownHostsFile=/dev/null"
-  git config --global --replace-all core.sshCommand "$GIT_SSH_COMMAND"
+  git -C / config --global --replace-all core.sshCommand "$GIT_SSH_COMMAND"
 
   effective_home=$(wrix_effective_user_home)
   write_wrix_ssh_config "$HOME"
