@@ -10,6 +10,7 @@ import re
 import shutil
 import signal
 import stat
+import time
 import subprocess
 import sys
 
@@ -165,12 +166,94 @@ class Cleanup:
             XDG_STATE_HOME=str(self.root / "home/.local/state"),
             XDG_RUNTIME_DIR=str(self.root / "runtime"),
         )
+        self.public_manager = self.read_public_manager()
+        if self.public_manager is not None:
+            self.environment["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=" + str(self.root / "runtime/bus")
         self.storage = self.root / "home/.local/share/containers/storage"
         self.podman = [
             self.program("podman"), "--remote=false", "--root", str(self.storage),
             "--runroot", str(self.root / "runtime/containers"),
             "--tmpdir", str(self.root / "runtime/libpod/tmp"),
         ]
+
+    def read_public_manager(self):
+        path = self.root / "private-user-manager/ownership.json"
+        if not path.exists():
+            return None
+        info = path.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1:
+            raise RuntimeError("invalid private manager ownership receipt")
+        proof = json.loads(path.read_text())
+        group = Path(proof["cgroup"])
+        if (proof["version"] != 1 or group.resolve() != group
+                or not group.is_relative_to("/sys/fs/cgroup")
+                or group.name != "wx-doaia-public-" + self.root.name + ".scope"):
+            raise RuntimeError("invalid owned private manager cgroup")
+        if group.exists():
+            actual = group.stat()
+            if actual.st_uid != os.getuid() or (actual.st_dev, actual.st_ino) != (proof["device"], proof["inode"]):
+                raise RuntimeError("private manager cgroup identity changed")
+        return proof
+
+    def manager_alive(self):
+        proof = self.public_manager
+        if proof is None:
+            return False
+        pid = proof["pid"]
+        try:
+            fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+            if fields[19] != proof["start_ticks"]:
+                raise RuntimeError("private manager birth identity changed")
+            if fields[0] == "Z":
+                return False
+            if os.path.realpath(f"/proc/{pid}/exe") != proof["executable"]:
+                raise RuntimeError("private manager process identity changed")
+            membership = Path(f"/proc/{pid}/cgroup").read_text().strip()
+            actual = Path("/sys/fs/cgroup") / membership.removeprefix("0::/")
+            if not actual.is_relative_to(Path(proof["cgroup"])):
+                raise RuntimeError("private manager escaped its owned cgroup")
+            return True
+        except FileNotFoundError:
+            return False
+
+    def stop_public_controller(self):
+        if self.public_manager is None or not self.manager_alive():
+            return
+        if self.tools is None or not self.tools.is_absolute():
+            raise RuntimeError("private manager teardown requires fixed package tools")
+        controller = self.run([self.program("systemctl"), "--user", "show", "wrix-host-controller.service", "--property=FragmentPath", "--value"])
+        if controller.strip():
+            selected = Path(controller.strip())
+            expected = self.root / "home/.local/state/wrix/control/wrix-host-controller.service"
+            linked = self.root / "home/.config/systemd/user/wrix-host-controller.service"
+            if selected not in (expected, linked) or selected.resolve() != expected or not selected.samefile(expected):
+                raise RuntimeError("foreign controller in private test manager")
+            self.run([self.program("systemctl"), "--user", "stop", "wrix-host-controller.service"])
+
+    def stop_public_manager(self):
+        proof = self.public_manager
+        if proof is None:
+            return
+        group = Path(proof["cgroup"])
+        if not group.exists():
+            if self.manager_alive():
+                raise RuntimeError("private manager lost its owned cgroup")
+            return
+        if self.manager_alive():
+            self.run([self.program("systemctl"), "--user", "stop", "dbus.socket", "dbus.service"])
+            self.run([self.program("systemctl"), "--user", "--force", "exit"])
+        # Only this fixture's inode-checked fresh subtree is authorized, after
+        # its native containers and exports have been removed. No global unit
+        # or sibling process can be selected by the receipt.
+        (group / "cgroup.kill").write_text("1\n")
+        deadline = time.monotonic() + 5
+        while "populated 1" in (group / "cgroup.events").read_text():
+            if time.monotonic() >= deadline:
+                raise RuntimeError("private manager subtree remains populated")
+            time.sleep(.02)
+        for directory in sorted((p for p in group.rglob("*") if p.is_dir()), key=lambda p: len(p.parts), reverse=True):
+            directory.rmdir()
+        group.rmdir()
 
     def program(self, name):
         return str(self.tools / name) if self.tools else name
@@ -271,6 +354,19 @@ class Cleanup:
                     entry.unlink()
         runtime = self.root / "runtime"
         if runtime.exists():
+            # Stock private systemd creates mode-000 inaccessible directories.
+            # Teardown is already receipted and mount-free. Change only owned
+            # directories in this exact disposable runtime, never symlink targets.
+            def writable_directories(path):
+                info = path.lstat()
+                if not stat.S_ISDIR(info.st_mode):
+                    return
+                if info.st_uid != os.getuid():
+                    raise RuntimeError("foreign directory in stopped fixture runtime")
+                os.chmod(path, stat.S_IMODE(info.st_mode) | 0o700, follow_symlinks=False)
+                for child in path.iterdir():
+                    writable_directories(child)
+            writable_directories(runtime)
             shutil.rmtree(runtime)
         (self.root / MARKER).unlink(missing_ok=True)
         (self.root / STOPPED).unlink()
@@ -296,6 +392,7 @@ class Cleanup:
         if self.is_stopped():
             self.check_host_mounts()
             return
+        self.stop_public_controller()
         has_storage = self.storage.exists()
         if has_storage:
             runtime = self.root / "runtime"
@@ -327,6 +424,7 @@ class Cleanup:
             self.run(self.podman + ["unshare", self.program("chmod"), "--recursive", "u+rwX", str(self.storage)])
             self.run(self.podman + ["system", "migrate"])
         self.check_host_mounts()
+        self.stop_public_manager()
         self.record_stopped()
 
 

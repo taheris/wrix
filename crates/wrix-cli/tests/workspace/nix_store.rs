@@ -432,12 +432,22 @@ fn approved_shared_preflight_is_passive_but_execution_still_requires_runtime_acc
             "--json",
         ],
     );
-    assert!(!preview.status.success());
+    let qualified = cfg!(all(target_os = "linux", target_arch = "x86_64"));
+    assert_eq!(
+        preview.status.success(),
+        qualified,
+        "{}",
+        String::from_utf8_lossy(&preview.stderr)
+    );
     let report: serde_json::Value = serde_json::from_slice(&preview.stdout).unwrap();
     assert_eq!(report["plan"]["nix_store"]["approval"], "enabled");
     assert_eq!(
         report["plan"]["nix_store"]["blockers"],
-        serde_json::json!(["runtime_unavailable"])
+        if qualified {
+            serde_json::json!([])
+        } else {
+            serde_json::json!(["runtime_unavailable"])
+        }
     );
     assert_eq!(snapshot(&fixture.state()), before);
     let actual = fixture.application(
@@ -451,10 +461,13 @@ fn approved_shared_preflight_is_passive_but_execution_still_requires_runtime_acc
         ],
     );
     assert!(!actual.status.success());
-    assert!(
-        String::from_utf8_lossy(&actual.stderr)
-            .contains("Shared installed Nix execution is unavailable")
-    );
+    let stderr = String::from_utf8_lossy(&actual.stderr);
+    let expected = if qualified {
+        "host cache credential issuance is unavailable"
+    } else {
+        "Shared installed Nix execution is unavailable"
+    };
+    assert!(stderr.contains(expected), "{stderr}");
     assert_eq!(snapshot(&fixture.state()), before);
     assert!(!fixture.root.path().join("checkout/.wrix").exists());
     assert!(!fixture.state().join("service-data/nix").exists());

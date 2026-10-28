@@ -376,7 +376,8 @@ fn check_runtime(
             match argument.as_bytes() {
                 b"-e" | b"--env" | b"-v" | b"--volume" | b"--mount" | b"-w" | b"--workdir"
                 | b"--entrypoint" | b"--name" | b"--label" | b"--network" | b"--memory"
-                | b"--cpus" | b"--pids-limit" | b"--userns" | b"--user" | b"--cap-add" => {
+                | b"--cpus" | b"--pids-limit" | b"--userns" | b"--user" | b"--cap-add"
+                | b"--security-opt" => {
                     args.next().ok_or(Error::Delivery)?;
                 }
                 b"-i" | b"-t" | b"-it" | b"--interactive" | b"--tty" | b"--init" => (),

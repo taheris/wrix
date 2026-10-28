@@ -100,11 +100,19 @@ fn store_preflight_reports_mode_without_preparing_or_starting_shared_work() -> T
         assert!(!shared.success);
         let value: Value = serde_json::from_str(&shared.stdout)?;
         assert_eq!(value["plan"]["nix_store"]["mode"], "shared");
-        assert!(
-            value["plan"]["nix_store"]["blockers"]
-                .as_array()
-                .unwrap()
-                .contains(&json!("runtime_unavailable"))
+        assert_eq!(
+            value["plan"]["nix_store"]["native_acceptance"],
+            if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+                "linux_podman"
+            } else {
+                "unverified"
+            }
+        );
+        let blockers = value["plan"]["nix_store"]["blockers"].as_array().unwrap();
+        assert!(blockers.contains(&json!("incompatible_image")));
+        assert_eq!(
+            blockers.contains(&json!("runtime_unavailable")),
+            !cfg!(all(target_os = "linux", target_arch = "x86_64"))
         );
         assert!(
             value["findings"]
@@ -136,13 +144,12 @@ fn unproved_shared_launch_fails_before_service_runtime_staging_or_journal() -> T
             spawn,
         )?;
         assert!(!result.success);
-        assert!(
-            result
-                .stderr
-                .contains("Shared installed Nix execution is unavailable"),
-            "{}",
-            result.stderr
-        );
+        let message = if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            "Shared installed Nix stores require a compatible versioned image and seed closure"
+        } else {
+            "Shared installed Nix execution is unavailable"
+        };
+        assert!(result.stderr.contains(message), "{}", result.stderr);
         assert!(!root.path().join("argv").exists());
         assert!(!workspace.join(".wrix").exists());
     }

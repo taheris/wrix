@@ -25,7 +25,7 @@ pkgs.runCommand "shared-nix-host-binding"
       ${wrix.rustPackage.wrix}/bin/wrix service nix-store > "$TMPDIR/two"
     for report in "$TMPDIR/one" "$TMPDIR/two"; do
       grep -Fx 'pool service image: ${wrix.nixPoolImage.ref} (package-selected candidate)' "$report"
-      grep -Fx 'installed-store worker delivery: unavailable; shared launches are not enabled' "$report"
+      grep -Fx 'installed-store worker delivery: launch-specific; inspect runtime, image and approval with wrix run --dry-run --json' "$report"
     done
     if WRIX_NIX_POOL_IMAGE=untrusted-project-override \
       ${wrix.rustPackage.wrix}/bin/wrix service nix-store > "$TMPDIR/rejected" 2>&1; then

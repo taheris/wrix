@@ -133,6 +133,23 @@ class CleanupTest(unittest.TestCase):
                 subject.finish()
         self.assertFalse(any("chown" in call.args[0] for call in run.call_args_list))
 
+    def test_stopped_private_manager_inaccessible_directory_and_peer_symlink(self):
+        runtime = self.root / "runtime"
+        inaccessible = runtime / "systemd/inaccessible/dir"
+        inaccessible.mkdir(parents=True)
+        peer = self.root.parent / (self.root.name + "-peer")
+        peer.mkdir(mode=0o500)
+        self.addCleanup(lambda: (peer.chmod(0o700), peer.rmdir()))
+        (runtime / "peer").symlink_to(peer, target_is_directory=True)
+        inaccessible.chmod(0)
+        inaccessible.parent.chmod(0o555)
+        subject = cleanup.Cleanup(self.root)
+        subject.record_stopped()
+        with patch.object(cleanup, "host_mounts", return_value=[]):
+            subject.remove_files()
+        self.assertFalse(self.root.exists())
+        self.assertEqual(peer.stat().st_mode & 0o777, 0o500)
+
     def test_partial_file_deletion_retains_runtime_marker_and_retry_receipt(self):
         storage = self.root / "home/.local/share/containers/storage"
         storage.mkdir(parents=True)

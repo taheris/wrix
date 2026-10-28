@@ -366,3 +366,34 @@ fn native_vm_boundary_rejects_reused_kernels_and_missing_prior_negative_lookup()
     different["prior_miss"] = json!(false);
     assert!(std::panic::catch_unwind(|| independent(Platform::Krun, &ready, &different)).is_err());
 }
+
+/// Measurements from actual public CLI workers; no factory grant is issued here.
+pub(super) fn public_report(platform: Platform, control: &Path, workers: &[Value]) -> Value {
+    let mut observations = Vec::new();
+    let mut builds = 0;
+    let mut requests = 0;
+    let mut bytes = 0;
+    for (name, guest) in ["first", "second", "replacement"].into_iter().zip(workers) {
+        let substitution =
+            activities(&fs::read(control.join(format!("{name}-substitution-events.log"))).unwrap());
+        let realization =
+            activities(&fs::read(control.join(format!("{name}-build-events.log"))).unwrap());
+        builds += realization.selected_derivation_builds;
+        requests += substitution.upstream_nar_requests;
+        bytes += substitution.upstream_nar_bytes;
+        if name == "replacement" {
+            assert_eq!(substitution.upstream_nar_requests, 0);
+            assert_eq!(substitution.upstream_nar_bytes, 0);
+            assert_eq!(substitution.native_substitutions, 0);
+            assert_eq!(substitution.copy_path, 0);
+            assert_eq!(realization.selected_derivation_builds, 0);
+        }
+        observations.push(json!({"worker":name,"guest":guest,"substitution":substitution,"realization":realization}));
+    }
+    assert_eq!(builds, 1);
+    assert!(
+        requests > 0 && bytes > 0,
+        "missing actual cold public NAR positive control"
+    );
+    json!({"boundary":"actual packaged public CLI Run PTY and Spawn with production Host admission and stock private user supervision", "platform":format!("{platform:?}"),"workers":observations,"preflight_unapproved_denied":true,"stopped_controller_readiness_denied":true,"real_worker_failure_retired":true,"launcher_loss_and_approval_withdrawal_survived":true,"controller_restart_survived":true,"all_clients_released":true,"scoped_collection_passed":true})
+}

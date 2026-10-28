@@ -104,6 +104,7 @@ fn option_operands_cannot_masquerade_as_runtime_selection_or_the_image_boundary(
         "-w",
         "--workdir",
         "--entrypoint",
+        "--security-opt",
         "--label",
         "--name",
     ] {
@@ -128,4 +129,38 @@ fn option_operands_cannot_masquerade_as_runtime_selection_or_the_image_boundary(
         .arg(path)
         .arg(&image);
     assert!(check_runtime(&command, &image, Some(path)).is_err());
+}
+
+#[test]
+fn public_seccomp_operand_preserves_the_exact_runtime_and_image_boundary() {
+    let path = Path::new("/nix/store/00000000000000000000000000000000-runtime/bin/krun");
+    let image = format!("sha256:{}", "a".repeat(64));
+    for runtime in [None, Some(path)] {
+        let mut command = Command::new("podman");
+        command.args([
+            "run",
+            "--rm",
+            "--security-opt",
+            "seccomp=/nix/store/checked-policy.json",
+            "--cap-add=NET_ADMIN",
+        ]);
+        if let Some(path) = runtime {
+            command.arg("--runtime").arg(path);
+        }
+        command.arg(&image);
+        assert!(check_runtime(&command, &image, runtime).is_ok());
+        assert!(
+            check_runtime(
+                &command,
+                &image,
+                if runtime.is_some() { None } else { Some(path) }
+            )
+            .is_err()
+        );
+    }
+    let mut incomplete = Command::new("podman");
+    incomplete
+        .args(["run", "--rm", "--security-opt"])
+        .arg(&image);
+    assert!(check_runtime(&incomplete, &image, None).is_err());
 }

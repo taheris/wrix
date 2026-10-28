@@ -52,7 +52,7 @@ nix_pool_bootstrap_root_kernel() {
 }
 
 nix_pool_prepare_supervisor() {
-  local cgroup="$1" proc="$2" pid="$3" chain supervisor="$1/wrix-nix-pool-supervisor"
+  local cgroup="$1" proc="$2" pid="$3" chain supervisor="$1/wrix-nix-pool-supervisor" field first rest
   local -a initial=()
   local -A allowed=()
   [[ ! -e "$supervisor" && ! -L "$supervisor" ]] || return 1
@@ -65,6 +65,17 @@ nix_pool_prepare_supervisor() {
       printf '%s\n' "$pid" > "$supervisor/cgroup.procs"
     elif ! nix_pool_bootstrap_kernel "$pid" "$proc"; then
       printf 'Unexpected native bootstrap process %s; resource admission refused.\n' "$pid" >&2
+      # Refusal diagnostics exclude command arguments, environment and credentials.
+      if [[ -r "$proc/$pid/status" ]]; then
+        while read -r field first rest; do
+          case "$field" in
+            Name:|Tgid:|Pid:|PPid:|Uid:|Kthread:)
+              printf '%s %s %s\n' "$field" "$first" "$rest" >&2 ;;
+          esac
+        done < "$proc/$pid/status"
+      else
+        printf 'Native bootstrap process status disappeared before classification.\n' >&2
+      fi
       return 1
     fi
   done

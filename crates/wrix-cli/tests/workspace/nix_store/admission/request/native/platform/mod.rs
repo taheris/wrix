@@ -2,6 +2,8 @@
 mod boundary;
 mod fault;
 mod observation;
+#[cfg(target_os = "linux")]
+mod public;
 mod worker;
 
 use super::*;
@@ -116,6 +118,16 @@ fn package_native_selectors_resolve_to_compiled_tests() {
             "native selector would run zero tests: {name}"
         );
     }
+    #[cfg(target_os = "linux")]
+    for name in [
+        "nix_store::admission::request::native::platform::public::podman_public_run_and_spawn_reuse_installed_store",
+        "nix_store::admission::request::native::platform::public::krun_public_run_and_spawn_reuse_installed_store",
+    ] {
+        assert!(
+            listed.lines().any(|line| line == format!("{name}: test")),
+            "public selector would run zero tests: {name}"
+        );
+    }
 }
 fn run(platform: Platform, name: &str) {
     run_case(platform, name, exercise, false);
@@ -178,16 +190,21 @@ fn run_case(platform: Platform, name: &str, case: fn(Platform, &Path), retain: b
             .status
             .success()
     );
-    deployment(&fixture);
-    let first = success(&fixture, &checkout, &["enable"]);
-    let second = success(&fixture, &linked, &["enable"]);
-    assert_eq!(
-        super::super::super::super::repository(&first),
-        super::super::super::super::repository(&second)
-    );
+    let public = name.contains("::public::");
+    if !public {
+        deployment(&fixture);
+        let first = success(&fixture, &checkout, &["enable"]);
+        let second = success(&fixture, &linked, &["enable"]);
+        assert_eq!(
+            super::super::super::super::repository(&first),
+            super::super::super::super::repository(&second)
+        );
+    }
     let peer = fixture.repository("peer");
-    success(&fixture, &peer, &["enable"]);
-    public_gate(&fixture, &checkout);
+    if !public {
+        success(&fixture, &peer, &["enable"]);
+        public_gate(&fixture, &checkout);
+    }
     let mut command = isolation::command(
         fixture.root.path(),
         false,
@@ -203,6 +220,21 @@ fn run_case(platform: Platform, name: &str, case: fn(Platform, &Path), retain: b
     for variable in INPUTS {
         command.env(variable, std::env::var_os(variable).unwrap());
     }
+    for variable in [
+        "WRIX_TEST_POOL_PYTHON",
+        "WRIX_TEST_POOL_PUBLIC_CLI",
+        "WRIX_TEST_POOL_PUBLIC_RUN",
+        "WRIX_TEST_POOL_NEXT_PROFILE",
+        "WRIX_TEST_POOL_SYSTEMD",
+        "WRIX_TEST_POOL_MANAGER",
+        "WRIX_TEST_POOL_SYSTEMCTL",
+        "WRIX_TEST_POOL_BUSCTL",
+        "WRIX_TEST_POOL_DBUS",
+    ] {
+        if let Some(value) = std::env::var_os(variable) {
+            command.env(variable, value);
+        }
+    }
     for variable in ["USER", "LOGNAME", "DBUS_SESSION_BUS_ADDRESS"] {
         if let Some(value) = std::env::var_os(variable) {
             command.env(variable, value);
@@ -210,7 +242,13 @@ fn run_case(platform: Platform, name: &str, case: fn(Platform, &Path), retain: b
     }
     Running(command.spawn().unwrap()).finish();
     let report = fs::read_to_string(fixture.root.path().join("native-measurements.json")).unwrap();
-    eprintln!("isolated native capability observations (NOT public dispatch acceptance): {report}");
+    if public {
+        eprintln!("actual packaged public Run/Spawn observations: {report}");
+    } else {
+        eprintln!(
+            "isolated native capability observations (NOT public dispatch acceptance): {report}"
+        );
+    }
     if retain {
         eprintln!(
             "negative recovery control retains fenced native data and roots: {}",
@@ -250,11 +288,11 @@ fn public_gate(fixture: &Fixture, checkout: &Path) {
     fs::write(&spawn, serde_json::to_vec(&public_spawn(checkout)).unwrap()).unwrap();
     let before = crate::fixture::snapshot(&fixture.state());
     let profile = profile.to_str().unwrap();
-    let run = fixture.application(
+    let mut run = fixture.application_command(
         checkout,
         &["--profile-config", profile, "run", "--nix-store", "shared"],
     );
-    let spawn = fixture.application(
+    let mut spawn = fixture.application_command(
         checkout,
         &[
             "--profile-config",
@@ -264,14 +302,22 @@ fn public_gate(fixture: &Fixture, checkout: &Path) {
             spawn.to_str().unwrap(),
         ],
     );
-    for output in [run, spawn] {
+    for output in [
+        run.env("WRIX_NETWORK", "limit").output().unwrap(),
+        spawn.env("WRIX_NETWORK", "limit").output().unwrap(),
+    ] {
         assert!(
             !output.status.success(),
-            "unproved public dispatch was enabled by isolated native acceptance"
+            "restricted public sharing was enabled"
         );
         assert!(
-            String::from_utf8_lossy(&output.stderr)
-                .contains("Shared installed Nix execution is unavailable"),
+            String::from_utf8_lossy(&output.stderr).contains(
+                if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+                    "require network=open"
+                } else {
+                    "Shared installed Nix execution is unavailable"
+                }
+            ),
             "public dispatch failed for an unrelated reason: {}",
             String::from_utf8_lossy(&output.stderr)
         );

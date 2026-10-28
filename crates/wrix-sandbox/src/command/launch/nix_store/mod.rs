@@ -56,6 +56,17 @@ impl Blocker {
 pub(super) enum NativeAcceptance {
     NotRequested,
     Unverified,
+    LinuxPodman,
+    LinuxKrun,
+}
+
+/// Metadata cannot qualify a host/runtime pair without actual packaged acceptance.
+fn acceptance(platform: super::Platform, architecture: &str, microvm: bool) -> NativeAcceptance {
+    match (platform, architecture, microvm) {
+        (super::Platform::Linux, "x86_64", false) => NativeAcceptance::LinuxPodman,
+        (super::Platform::Linux, "x86_64", true) => NativeAcceptance::LinuxKrun,
+        _ => NativeAcceptance::Unverified,
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -85,9 +96,15 @@ pub(super) fn resolve(
             blockers: Vec::new(),
         });
     }
-    // Native source wiring and focused tests do not establish packaged platform acceptance.
-    // Keep public Run/Spawn refusal before staging or issuance on every unproved runtime.
-    let mut blockers = vec![Blocker::RuntimeUnavailable];
+    let native_acceptance = acceptance(
+        super::Platform::CURRENT,
+        std::env::consts::ARCH,
+        super::env_flag("WRIX_MICROVM"),
+    );
+    let mut blockers = Vec::new();
+    if matches!(native_acceptance, NativeAcceptance::Unverified) {
+        blockers.push(Blocker::RuntimeUnavailable);
+    }
     if network != NetworkMode::Open {
         blockers.push(Blocker::RestrictedNetwork);
     }
@@ -142,8 +159,33 @@ pub(super) fn resolve(
     };
     Ok(Admission {
         mode,
-        native_acceptance: NativeAcceptance::Unverified,
+        native_acceptance,
         approval,
         blockers,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn qualification_is_bound_to_actual_linux_architecture_and_runtime() {
+        for platform in [
+            super::super::Platform::Linux,
+            super::super::Platform::Darwin,
+        ] {
+            for architecture in ["x86_64", "aarch64", "unknown"] {
+                for microvm in [false, true] {
+                    let qualified = !matches!(
+                        acceptance(platform, architecture, microvm),
+                        NativeAcceptance::Unverified
+                    );
+                    assert_eq!(
+                        qualified,
+                        platform == super::super::Platform::Linux && architecture == "x86_64"
+                    );
+                }
+            }
+        }
+    }
 }

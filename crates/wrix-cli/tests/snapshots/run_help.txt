@@ -10,7 +10,7 @@ Tool caches: explicit launch choice > repository tool_caches.shared > shared def
 Private tool-cache mode does not disable caching or separate Nix/Celler policy.
 Restricted Rust requires private tool caches; use --no-cache with WRIX_NETWORK=limit.
 Installed stores: explicit mode > repository nix_store.mode > private default.
-Shared installed-store execution is unavailable in this version.
+Shared mode requires a qualified runtime, explicit host approval and network=open.
 
 Options:
   --profile-config <file>  Override generated project launch data with <file>.

@@ -13,7 +13,7 @@ use std::{
 };
 use wrix_state::{context::Selection, host::Host, nix_store::Approval};
 
-pub const HELP: &str = "Manage installed Nix store approval.\n\nUsage: wrix service nix-store [enable|disable|gc [--wait <duration>]]\n\nApproval explicitly binds the selected checked namespace to its canonical repository.\nEnable requires an existing host deployment; neither operation starts a pool.\nCollection never starts an owner; --wait bounds maintenance acquisition per pool (default 30s).\nZero wait attempts each available pool once without waiting.\nCollection requires recorded running owners; shared launch delivery remains unavailable in this version.\n";
+pub const HELP: &str = "Manage installed Nix store approval.\n\nUsage: wrix service nix-store [enable|disable|gc [--wait <duration>]]\n\nApproval explicitly binds the selected checked namespace to its canonical repository.\nEnable requires an existing host deployment; neither operation starts a pool.\nCollection never starts an owner; --wait bounds maintenance acquisition per pool (default 30s).\nZero wait attempts each available pool once without waiting.\nCollection requires recorded running owners; shared launches separately require runtime, image and host approval admission.\n";
 
 #[derive(Clone, Copy)]
 enum Operation {
@@ -146,7 +146,7 @@ pub fn run(args: &[String], stdout: &mut impl Write) -> io::Result<ExitCode> {
     }
     writeln!(
         stdout,
-        "installed-store worker delivery: unavailable; shared launches are not enabled"
+        "installed-store worker delivery: launch-specific; inspect runtime, image and approval with wrix run --dry-run --json"
     )?;
     Ok(ExitCode::SUCCESS)
 }

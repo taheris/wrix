@@ -10,12 +10,24 @@ workflow_failed() {
 }
 trap workflow_failed ERR
 name="$1"
-[[ "$name" == first || "$name" == second || "$name" == replacement || "$name" == peer || "$name" == fault ]]
+public=false
+case "$name" in
+  public-first|public-second|public-replacement|public-peer|public-invalid) public=true; name="${name#public-}" ;;
+esac
+[[ "$name" == first || "$name" == second || "$name" == replacement || "$name" == peer || "$name" == fault || ( "$public" == true && "$name" == invalid ) ]]
 [[ -d /control && -d /workspace/.git || -f /workspace/.git ]]
 workflow_phase=client-configuration
 [[ -f /run/wrix/nix-pool/ssh_config && -r /run/wrix/nix-pool/key ]]
 workflow_phase=private-state
 [[ ! -e /nix/var/nix/db/db.sqlite && ! -e /var/lib/wrix/nix-pool ]]
+if [[ "$public" == true && "$name" == invalid ]]; then
+  # Reach the real admitted worker and live endpoint before the injected agent
+  # failure; an earlier provisioning error cannot satisfy launch-failure coverage.
+  nix store info --json > /control/invalid-agent-store-info.json
+  jq -e '.trusted == false' /control/invalid-agent-store-info.json
+  printf '{"intentional_exit":23}\n' > /control/invalid-agent-reached.json
+  exit 23
+fi
 events="/control/$name-nix-events.log"
 : > "$events"
 if [[ "$name" == fault ]]; then
@@ -170,7 +182,10 @@ PY
 jq -n --arg path "$path" --rawfile run_stdout "/control/$name-run" --slurpfile io "/control/$name-io.json" --argjson elapsed_ns "$((finished - started))" '{path:$path,run_stdout:$run_stdout,io:$io[0],elapsed_ns:$elapsed_ns,build:true,develop:true,run:true,profile:true,cargo:true,clippy:true,nextest:true,check:true,readonly:true,untrusted:true,strict:true,signature_denied:true,repair_denied:true,options_denied:true,admin_denied:true,outside_denied:true,peer_denied:true,dynamic_visible:true}' > "/control/$name-done.json.tmp"
 mv "/control/$name-done.json.tmp" "/control/$name-done.json"
 if [[ "$name" == first ]]; then
-  while [[ ! -f /control/resources-go ]]; do sleep 0.05; done
+  if [[ "$public" == false ]]; then
+    while [[ ! -f /control/resources-go ]]; do sleep 0.05; done
+  fi
+  if [[ "$public" == false ]]; then
   printf '{}\n' > /control/resource-results.json
   for kind in public private ipv6 ordinary disk pids cpu; do
     workflow_phase="resource-$kind"
@@ -190,6 +205,7 @@ if [[ "$name" == first ]]; then
   [[ "$("$path/bin/probe")" == installed ]]
   jq --argjson oom_failed "$oom_failed" '{public_fod:.public,private_fod_denied:.private,ipv6_fod_denied:.ipv6,ordinary_network_denied:.ordinary,disk_bound:.disk,pids_bound:.pids,cpu_work_completed:.cpu,oom_failed:$oom_failed,live_output_preserved:true}' /control/resource-results.json > /control/first-resources.json.tmp
   mv /control/first-resources.json.tmp /control/first-resources.json
+  fi
   workflow_phase=controller-restart
   while [[ ! -f /control/recheck ]]; do sleep 0.05; done
   nix --log-format internal-json store info --json 2>> "$events" | jq -e '.trusted == false'

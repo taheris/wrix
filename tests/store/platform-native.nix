@@ -182,8 +182,22 @@ let
     runtime = wrix.rustPackage.controllerRuntime;
     image = wrix.serviceImage;
   };
+  publicRun = pkgs.replaceVars ./public-run.py { cli = "${wrix.rustPackage.wrix}/bin/wrix"; };
+  publicManager =
+    pkgs.runCommand "wrix-native-public-manager" { nativeBuildInputs = [ pkgs.stdenv.cc ]; }
+      ''
+        mkdir -p "$out/bin"
+        cc -Wall -Wextra -Werror -O2 -DWRIX_SYSTEMD='"${pkgs.systemd}/lib/systemd/systemd"' ${./public-manager.c} -o "$out/bin/wrix-native-public-manager"
+      '';
   app =
     platform: test: fault:
+    let
+      public = pkgs.lib.hasPrefix "public::" test;
+      poolBinding = if public then wrix.rustPackage.poolBinding else observerBinding;
+      controllerBinding =
+        if public then wrix.rustPackage.controllerBinding else observerControllerBinding;
+      controller = if public then wrix.rustPackage.controllerPackage else observerController;
+    in
     pkgs.writeShellScriptBin "test-shared-nix-${platform}" ''
       set -euo pipefail
       test -f ${observerCheck}
@@ -194,12 +208,22 @@ let
         export WRIX_TEST_POOL_CLEANUP_SCRIPT=${./cleanup-native-fixtures.py}
         export WRIX_TEST_POOL_PYTHON=${pkgs.python3}/bin/python3
       ''}
-      export WRIX_NIX_POOL_PACKAGE_BINDING=${observerBinding}
+      export WRIX_NIX_POOL_PACKAGE_BINDING=${poolBinding}
       export WRIX_NIX_POOL_HOST_TOOLS=${wrix.rustPackage.poolHostTools}
-      export WRIX_CONTROLLER_PACKAGE_BINDING=${observerControllerBinding}
-      export WRIX_TEST_POOL_CONTROLLER_BINDING=${observerControllerBinding}
-      export WRIX_TEST_POOL_CONTROLLER=${observerController}/bin/wrix-host-controller
+      export WRIX_CONTROLLER_PACKAGE_BINDING=${controllerBinding}
+      export WRIX_TEST_POOL_CONTROLLER_BINDING=${controllerBinding}
+      export WRIX_TEST_POOL_CONTROLLER=${controller}/bin/wrix-host-controller
       export WRIX_TEST_POOL_PROFILE=${worker.image.profileConfig}
+      export WRIX_TEST_POOL_NEXT_PROFILE=${nextWorker.image.profileConfig}
+      export WRIX_TEST_POOL_PUBLIC_CLI=${wrix.rustPackage.wrix}/bin/wrix
+      export WRIX_TEST_POOL_PUBLIC_RUN=${publicRun}
+      ${optionalString (!isDarwin) ''
+        export WRIX_TEST_POOL_SYSTEMD=${pkgs.systemd}/lib/systemd/systemd
+        export WRIX_TEST_POOL_MANAGER=${publicManager}/bin/wrix-native-public-manager
+        export WRIX_TEST_POOL_SYSTEMCTL=${pkgs.systemd}/bin/systemctl
+        export WRIX_TEST_POOL_BUSCTL=${pkgs.systemd}/bin/busctl
+        export WRIX_TEST_POOL_DBUS=${pkgs.dbus}/bin/dbus-daemon
+      ''}
       export WRIX_TEST_POOL_WORKER_IMAGE=${images}
       export WRIX_TEST_POOL_NATIVE_INPUTS=${nativeInputs}
       export WRIX_TEST_POOL_UNSIGNED=${unsigned}
@@ -234,4 +258,10 @@ optionalAttrs isDarwin {
     app "krun" "krun_native_workers_reuse_installed_store_across_independent_vms"
       "krun_native_daemon_death_retains_roots_and_refuses_replay";
   podman = app "podman" "podman_native_workers_reuse_installed_store" null;
+}
+// optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
+  public-podman =
+    app "public-podman" "public::podman_public_run_and_spawn_reuse_installed_store"
+      null;
+  public-krun = app "public-krun" "public::krun_public_run_and_spawn_reuse_installed_store" null;
 }

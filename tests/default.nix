@@ -586,7 +586,13 @@ let
       runtime:
       (mkCiApp sharedNixNativePlatforms.${runtime} "test-shared-nix-${runtime}")
       // {
-        platforms = if pkgs.stdenv.hostPlatform.isDarwin then [ "aarch64-darwin" ] else linux;
+        platforms =
+          if runtime == "public-podman" || runtime == "public-krun" then
+            [ "x86_64-linux" ]
+          else if pkgs.stdenv.hostPlatform.isDarwin then
+            [ "aarch64-darwin" ]
+          else
+            linux;
         capabilities = [ "container-runtime" ] ++ optionals pkgs.stdenv.hostPlatform.isLinux [ "kvm" ];
       }
     ) (builtins.attrNames sharedNixNativePlatforms);

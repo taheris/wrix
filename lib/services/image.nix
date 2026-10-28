@@ -52,6 +52,7 @@ let
         supervisor
         compiler
         pkgs.rustc
+        pkgs.stdenv.cc
         pkgs.curl
         util-linux
       ]

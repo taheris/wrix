@@ -62,8 +62,7 @@ pub(super) async fn run(controller: &Controller, selection: Selection) -> Result
         .await;
         if let Err(error) = result {
             tracing::error!(%error, "native generation attachment or retirement remains incomplete");
-            Status::publish(&authority, &plan, State::Failed, retiring.len())
-                .map_err(std::io::Error::other)?;
+            publish(&authority, &plan, State::Failed, retiring.len()).await?;
         }
     }
 }
@@ -207,7 +206,7 @@ async fn reconcile(
     for number in completed {
         retiring.remove(&number);
     }
-    Status::publish(
+    publish(
         authority,
         plan,
         if retiring.is_empty() && plan.backend_open() {
@@ -217,6 +216,23 @@ async fn reconcile(
         },
         retiring.len(),
     )
-    .map_err(std::io::Error::other)?;
+    .await?;
     Ok(())
+}
+
+// Native pool initialization can saturate the same filesystem. Durable core
+// status still precedes acknowledgment, but its fsync must not stall private
+// admission IPC and turn a healthy queued preparation into a client timeout.
+async fn publish(
+    authority: &Path,
+    plan: &Plan,
+    state: State,
+    retiring: usize,
+) -> Result<(), Error> {
+    let authority = authority.to_owned();
+    let plan = plan.clone();
+    tokio::task::spawn_blocking(move || Status::publish(&authority, &plan, state, retiring))
+        .await
+        .map_err(std::io::Error::other)?
+        .map_err(|error| std::io::Error::other(error).into())
 }
