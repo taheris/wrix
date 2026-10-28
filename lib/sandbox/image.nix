@@ -58,6 +58,7 @@ let
   };
   sharedNixClient = pkgs.replaceVars ./shared-nix-client.sh {
     STAT = "${pkgs.coreutils}/bin/stat";
+    FINDMNT = "${pkgs.util-linux}/bin/findmnt";
     MKDIR = "${pkgs.coreutils}/bin/mkdir";
     RM = "${pkgs.coreutils}/bin/rm";
     LN = "${pkgs.coreutils}/bin/ln";

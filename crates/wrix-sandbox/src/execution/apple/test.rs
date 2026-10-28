@@ -50,17 +50,26 @@ fn native_projection_requires_the_exact_readonly_views_without_extra_capabilitie
             destination: "/run/wrix/nix-pool".into(),
             writable: false,
         },
+        ProjectionMount {
+            source: "/selected/execution/worker/state".into(),
+            destination: "/nix/var/nix".into(),
+            writable: false,
+        },
     ];
     let mut config = snapshot(&resource("stopped", None)).configuration;
     config["mounts"] = serde_json::json!([
         {"type":{"virtiofs":{}},"source":"/selected/execution/store","destination":"/nix/store","options":["ro"]},
-        {"type":{"virtiofs":{}},"source":"/selected/execution/worker","destination":"/run/wrix/nix-pool","options":["ro"]}
+        {"type":{"virtiofs":{}},"source":"/selected/execution/worker","destination":"/run/wrix/nix-pool","options":["ro"]},
+        {"type":{"virtiofs":{}},"source":"/selected/execution/worker/state","destination":"/nix/var/nix","options":["ro"]}
     ]);
     let index = crate::image::Digest::parse(&format!("sha256:{}", "a".repeat(64))).unwrap();
     assert!(verify_projection(&config, &index, "arm64", &mounts).is_ok());
     for (pointer, replacement) in [
         ("/mounts/0/options", serde_json::json!(["rw"])),
         ("/mounts/1/source", serde_json::json!("/state/db")),
+        ("/mounts/2/source", serde_json::json!("/state/db")),
+        ("/mounts/2/options", serde_json::json!(["rw"])),
+        ("/mounts/2/destination", serde_json::json!("/nix/var")),
         (
             "/image/descriptor/digest",
             serde_json::json!(format!("sha256:{}", "b".repeat(64))),

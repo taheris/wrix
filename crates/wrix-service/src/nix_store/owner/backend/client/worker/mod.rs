@@ -4,7 +4,7 @@ use std::{
     fs::{self, File},
     io::{Read, Write},
     num::NonZeroU16,
-    os::unix::fs::DirBuilderExt,
+    os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
 };
 
@@ -74,6 +74,9 @@ pub(super) fn create_on(
     let known = read(root, "known-hosts")?;
     let directory = root.join("worker");
     fs::DirBuilder::new().mode(0o700).create(&directory)?;
+    let state = directory.join("state");
+    fs::DirBuilder::new().mode(0o700).create(&state)?;
+    fs::set_permissions(&state, fs::Permissions::from_mode(0o755))?;
     write(&directory, "key", &key)?;
     write(&directory, "known-hosts", &known)?;
     write(
@@ -113,8 +116,21 @@ fn inspect_on(
     let names: std::collections::BTreeSet<_> = fs::read_dir(&directory)?
         .map(|entry| entry.map(|entry| entry.file_name()))
         .collect::<Result<_, _>>()?;
-    let expected: std::collections::BTreeSet<_> =
-        FILES.iter().map(std::ffi::OsString::from).collect();
+    let expected: std::collections::BTreeSet<_> = FILES
+        .iter()
+        .copied()
+        .chain(["state"])
+        .map(std::ffi::OsString::from)
+        .collect();
+    let state = directory.join("state");
+    let metadata = fs::symlink_metadata(&state)?;
+    if !metadata.is_dir()
+        || metadata.uid() != rustix::process::geteuid().as_raw()
+        || metadata.mode() & 0o7777 != 0o755
+        || fs::read_dir(&state)?.next().transpose()?.is_some()
+    {
+        return Err(Error::Retained);
+    }
     if names != expected
         || read(&directory, "version")?
             != if plane == wrix_state::nix_store::admission::request::Plane::Apple {
@@ -273,6 +289,32 @@ mod test {
         )
         .unwrap();
         assert!(inspect(root.path(), port).is_err());
+    }
+    #[test]
+    fn private_state_cover_must_stay_empty_and_unknown_payload_is_preserved() {
+        let root = fixture();
+        let port = NonZeroU16::new(2222).unwrap();
+        create(root.path(), port).unwrap();
+        let state = root.path().join("worker/state");
+        assert!(fs::read_dir(&state).unwrap().next().is_none());
+        fs::write(state.join("db.sqlite"), b"unknown retained data").unwrap();
+        assert!(inspect(root.path(), port).is_err());
+        assert_eq!(
+            fs::read(state.join("db.sqlite")).unwrap(),
+            b"unknown retained data"
+        );
+    }
+    #[test]
+    fn private_state_cover_cannot_be_substituted_with_a_directory_alias() {
+        let root = fixture();
+        let port = NonZeroU16::new(2222).unwrap();
+        create(root.path(), port).unwrap();
+        let state = root.path().join("worker/state");
+        let original = root.path().join("original-state");
+        fs::rename(&state, &original).unwrap();
+        std::os::unix::fs::symlink(&original, &state).unwrap();
+        assert!(inspect(root.path(), port).is_err());
+        assert!(original.is_dir());
     }
     #[test]
     fn worker_configuration_rejects_extra_entries_and_substituted_keys() {

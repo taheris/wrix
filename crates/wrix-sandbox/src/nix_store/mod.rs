@@ -96,9 +96,14 @@ impl Delivery {
                 destination: "/etc/nix/nix.conf".into(),
                 writable: false,
             },
+            crate::execution::ProjectionMount {
+                source: self.configuration.join("state"),
+                destination: "/nix/var/nix".into(),
+                writable: false,
+            },
         ];
         if self.apple {
-            mounts.pop();
+            mounts.retain(|mount| mount.destination != std::path::Path::new("/etc/nix/nix.conf"));
         }
         mounts
     }

@@ -2,6 +2,38 @@ use super::*;
 use std::{path::Path, process::Command};
 
 #[test]
+fn every_shared_plane_covers_the_baked_private_database_with_managed_readonly_empty_state() {
+    for apple in [false, true] {
+        let delivery = Delivery {
+            pool: Key {
+                repository: "1".repeat(32).try_into().unwrap(),
+                system: System::X86_64Linux,
+            },
+            ticket: Ticket::parse(&"2".repeat(64)).unwrap(),
+            store: "/owned/execution/store".into(),
+            configuration: "/owned/execution/worker".into(),
+            port: NonZeroU16::new(2222).unwrap(),
+            apple,
+        };
+        let mounts = delivery.mounts();
+        let state = mounts
+            .iter()
+            .find(|mount| mount.destination == Path::new("/nix/var/nix"))
+            .unwrap();
+        assert_eq!(state.source, Path::new("/owned/execution/worker/state"));
+        assert!(!state.writable);
+        assert!(mounts.iter().all(|mount| !mount.writable));
+        let mut command = Command::new("native-runtime");
+        delivery.configure(&mut command);
+        let arguments: Vec<_> = command.get_args().collect();
+        assert!(
+            arguments.windows(2).any(|pair| pair[0] == "-v"
+                && pair[1] == "/owned/execution/worker/state:/nix/var/nix:ro")
+        );
+    }
+}
+
+#[test]
 fn krun_sessions_require_an_immutable_native_runtime_not_a_podman_grant_or_alias() {
     let path =
         Krun::parse("/nix/store/00000000000000000000000000000000-runtime/bin/krun".into()).unwrap();

@@ -98,6 +98,8 @@ fn factory_delivery_derives_only_fixed_execution_private_sources_and_exact_endpo
         assert_eq!(mounts[0].source, expected.join("store"));
         assert_eq!(mounts[1].source, expected.join("worker"));
         assert_eq!(mounts[2].source, expected.join("worker/nix.conf"));
+        assert_eq!(mounts[3].source, expected.join("worker/state"));
+        assert_eq!(mounts[3].destination, std::path::Path::new("/nix/var/nix"));
         assert!(mounts.iter().all(|mount| !mount.writable));
         let mut command = std::process::Command::new("podman");
         delivery.configure(&mut command);
@@ -105,16 +107,17 @@ fn factory_delivery_derives_only_fixed_execution_private_sources_and_exact_endpo
             .get_args()
             .map(std::ffi::OsStr::to_os_string)
             .collect();
-        assert_eq!(args.len(), 8);
+        assert_eq!(args.len(), 10);
         assert_eq!(args[0], "-v");
         assert_eq!(args[2], "-v");
         assert_eq!(args[4], "-v");
-        for index in [1, 3, 5] {
+        assert_eq!(args[6], "-v");
+        for index in [1, 3, 5, 7] {
             assert!(args[index].to_str().unwrap().ends_with(":ro"));
         }
-        assert_eq!(args[6], "-e");
+        assert_eq!(args[8], "-e");
         assert_eq!(
-            args[7],
+            args[9],
             "WRIX_NETWORK_LOCAL_ENDPOINTS=169.254.1.2:12345/tcp"
         );
         assert!(!expected.exists());

@@ -13,6 +13,11 @@ wrix_start_nix_client() {
     [[ -f "$configuration/$file" && ! -L "$configuration/$file" && "$("@STAT@" -c '%u:%g:%a:%h' "$configuration/$file")" == 0:0:600:1 ]] || return 1
   done
   [[ ! -e "$runtime" && ! -L "$runtime" ]] || return 1
+  [[ -d /nix/var/nix && ! -L /nix/var/nix && ! -e /nix/var/nix/db && ! -L /nix/var/nix/db ]] || return 1
+  case ",$("@FINDMNT@" -n -o VFS-OPTIONS --mountpoint /nix/var/nix)," in
+    *,ro,*) ;;
+    *) return 1 ;;
+  esac
   case "$(< "$configuration/version")" in
     1) ;;
     2)

@@ -1,10 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
+set -E
 umask 077
+workflow_phase=admission
+workflow_failed() {
+  local status="$?"
+  printf 'Native installed workflow failed in %s (status %s).\n' "$workflow_phase" "$status" >&2
+  exit "$status"
+}
+trap workflow_failed ERR
 name="$1"
 [[ "$name" == first || "$name" == second || "$name" == replacement || "$name" == peer || "$name" == fault ]]
 [[ -d /control && -d /workspace/.git || -f /workspace/.git ]]
+workflow_phase=client-configuration
 [[ -f /run/wrix/nix-pool/ssh_config && -r /run/wrix/nix-pool/key ]]
+workflow_phase=private-state
 [[ ! -e /nix/var/nix/db/db.sqlite && ! -e /var/lib/wrix/nix-pool ]]
 events="/control/$name-nix-events.log"
 : > "$events"
@@ -33,6 +43,7 @@ if [[ "$name" == peer ]]; then
   [[ "$(< "$peer_path")" == peer-only ]]
   exit 0
 fi
+workflow_phase=evaluation
 started=$(date +%s%N)
 boot=$(< /proc/sys/kernel/random/boot_id)
 machine=$(uname -m)
@@ -47,6 +58,7 @@ fi
 jq -n --arg system "$WRIX_NATIVE_SYSTEM" --arg machine "$machine" --arg boot_id "$boot" --arg path "$path" --argjson prior_miss "$prior_miss" '{system:$system,machine:$machine,boot_id:$boot_id,path:$path,prior_miss:$prior_miss}' > "/control/$name-ready.json.tmp"
 mv "/control/$name-ready.json.tmp" "/control/$name-ready.json"
 while [[ ! -f /control/go ]]; do sleep 0.05; done
+workflow_phase=pool-isolation
 peer_path=$(< /control/peer-path)
 [[ ! -e "$peer_path" ]]
 if nix path-info "$peer_path" > "/control/$name-peer-denied" 2>&1; then
@@ -56,18 +68,27 @@ fi
 grep -Ei 'not valid|not in the Nix store|does not exist|cannot build missing' "/control/$name-peer-denied"
 nix --log-format internal-json store info --json 2>> "$events" > "/control/$name-store-info.json"
 jq -e '.trusted == false' "/control/$name-store-info.json"
+workflow_phase=substitution
 nix-store --log-format internal-json --realise "$WRIX_NATIVE_COLD_PATH" > "/control/$name-substituted-path" 2> "/control/$name-substitution-events.log"
 [[ "$(< "/control/$name-substituted-path")" == "$WRIX_NATIVE_COLD_PATH" ]]
 [[ "$("$WRIX_NATIVE_COLD_PATH/bin/hello")" == 'Hello, world!' ]]
+workflow_phase=build
 nix --log-format internal-json build --impure --file "$WRIX_NATIVE_WORKFLOW" --out-link "/workspace/$name-result" 2> "/control/$name-build-events.log"
 [[ -e "$path/bin/probe" && "$(< "$path/build-uid")" != 0 ]]
+workflow_phase=run
 nix --log-format internal-json run --impure --file "$WRIX_NATIVE_WORKFLOW" 2>> "$events" > "/control/$name-run"
 [[ "$(< "/control/$name-run")" == installed ]]
+workflow_phase=develop
+# The child shell consumes the installed development environment value.
+# shellcheck disable=SC2016
 nix --log-format internal-json develop --impure --override-flake nixpkgs "path:$WRIX_NATIVE_BASH_FLAKE" --file "$WRIX_NATIVE_WORKFLOW" --command bash -euc '[[ "$WRIX_POOL_TEST" == installed ]]' 2>> "$events"
+workflow_phase=profile
 mkdir -p "$HOME/.local/state/nix/profiles"
 nix --log-format internal-json profile install --impure --file "$WRIX_NATIVE_WORKFLOW" --profile "$HOME/.local/state/nix/profiles/native-test" 2>> "$events"
 [[ "$("$HOME/.local/state/nix/profiles/native-test/bin/probe")" == installed ]]
+workflow_phase=checks
 nix --log-format internal-json flake check --impure --no-write-lock-file "path:$WRIX_NATIVE_CHECKS" 2>> "$events"
+workflow_phase=rust-workflow
 project="/workspace/native-rust-$name"
 mkdir "$project"
 cp -R "$WRIX_NATIVE_PROJECT/." "$project/"
@@ -79,6 +100,7 @@ chmod -R u+w "$project"
   cargo nextest run --locked --offline
   [[ "$(./target/debug/native-installed-workflow)" == native-installed ]]
 )
+workflow_phase=untrusted-boundary
 if touch /nix/store/native-worker-mutation; then
   printf 'Writable worker projection\n' >&2
   exit 65

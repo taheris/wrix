@@ -131,7 +131,7 @@ fn verify_projection(
         || config["capAdd"] != serde_json::json!(["CAP_NET_ADMIN"])
         || config["publishedPorts"] != serde_json::json!([])
         || config["publishedSockets"] != serde_json::json!([])
-        || mounts.len() != 2
+        || mounts.len() != 3
     {
         return Err(Error::Delivery);
     }
@@ -140,6 +140,8 @@ fn verify_projection(
         || mounts[0].source.file_name() != Some("store".as_ref())
         || mounts[1].source.file_name() != Some("worker".as_ref())
         || mounts[0].source.parent() != mounts[1].source.parent()
+        || mounts[2].destination != Path::new("/nix/var/nix")
+        || mounts[2].source != mounts[1].source.join("state")
     {
         return Err(Error::Delivery);
     }
@@ -221,13 +223,16 @@ impl Binding {
         &self.identity
     }
     pub fn matches_delivery(&self, store: &Path, configuration: &Path) -> bool {
-        self.mounts.len() == 2
+        self.mounts.len() == 3
             && self.mounts[0].source == store
             && self.mounts[0].destination == Path::new("/nix/store")
             && !self.mounts[0].writable
             && self.mounts[1].source == configuration
             && self.mounts[1].destination == Path::new("/run/wrix/nix-pool")
             && !self.mounts[1].writable
+            && self.mounts[2].source == configuration.join("state")
+            && self.mounts[2].destination == Path::new("/nix/var/nix")
+            && !self.mounts[2].writable
     }
     /// Rechecks the private generation-fenced binding, original PID, image receipt and entire native config.
     pub fn bridge_command(

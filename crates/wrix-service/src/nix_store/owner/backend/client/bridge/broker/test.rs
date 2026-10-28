@@ -23,7 +23,8 @@ fn fixture() -> (tempfile::TempDir, Record, Client) {
             "executable":"/nix/store/00000000000000000000000000000000-helper/bin/wrix-apple-nix-bridge",
             "expected":digest,"seed":"/nix/store/00000000000000000000000000000000-seed"},
         "mounts":[{"Source":root.join("store"),"Destination":"/nix/store","RW":false},
-            {"Source":root.join("worker"),"Destination":"/run/wrix/nix-pool","RW":false}]
+            {"Source":root.join("worker"),"Destination":"/run/wrix/nix-pool","RW":false},
+            {"Source":root.join("worker/state"),"Destination":"/nix/var/nix","RW":false}]
     })).unwrap();
     let delivery = Delivery {
         plane: Plane::Apple,
