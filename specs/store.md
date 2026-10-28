@@ -220,15 +220,22 @@ safe reconciliation before readmission.
 
 ### Selection Acceptance
 
-- Run/spawn resolve the independent strict mode and reject unapproved,
-  incompatible, unsupported and restricted shared requests before effects.
+- Run/spawn resolve the independent strict mode without bypassing policy
+  parsing.
   [test](../crates/wrix-sandbox/tests/shared_nix.rs::invocation_overrides_store_policy_but_never_skips_strict_policy_parsing)
+- Restricted shared requests fail even with compatible image metadata.
   [test](../crates/wrix-sandbox/tests/shared_nix.rs::shared_store_under_limit_is_blocked_even_with_capability_metadata)
+- Unsupported host/runtime pairs remain unqualified despite capability claims.
   [test](../crates/wrix-sandbox/src/command/launch/nix_store/mod.rs::tests::qualification_is_bound_to_actual_linux_architecture_and_runtime)
+- Public Podman Run/Spawn reject unapproved and incompatible requests before
+  effects and admit approved shared work through production preparation.
   [system](test-ci:test-shared-nix-public-podman)
+- Public krun Run/Spawn enforce the same admission through independent VMs.
   [system](test-ci:test-shared-nix-public-krun)
 - Preflight reports mode, approval and required preparation without mutation.
   [test](../crates/wrix-sandbox/tests/shared_nix.rs::store_preflight_reports_mode_without_preparing_or_starting_shared_work)
+- Approved preflight remains passive and cannot substitute for native
+  preparation.
   [test](../crates/wrix-cli/tests/workspace_admission.rs::nix_store::approved_shared_preflight_is_passive_but_execution_still_requires_runtime_acceptance)
 
 ### Pool Acceptance
@@ -239,28 +246,30 @@ safe reconciliation before readmission.
   [test](../crates/wrix-cli/tests/workspace_admission.rs::nix_store::linked_checkouts_share_one_repository_only_after_explicit_membership_and_disable_together)
 - Canonical clones share only their approved repository/system pool; ordinary
   peer-pool reads and host-management requests fail with known-live controls.
-  [system](test-ci:test-shared-nix-public-podman)
   [system](test-ci:test-shared-nix-public-krun)
 
 ### Operation Acceptance
 
-- Actual CLI dispatch implements passive information, host-only enable/disable
-  and scoped bounded native GC without broadening existing GC commands.
+- Actual CLI information is passive; host-only enable does not create
+  deployments.
   [test](../crates/wrix-cli/tests/workspace_admission.rs::nix_store::installed_store_information_is_passive_and_enable_never_creates_a_deployment)
+- Collection rejects invalid scope and wait arguments before host effects.
   [test](../crates/wrix-cli/tests/workspace_admission.rs::nix_store::store_collection_rejects_invalid_scope_and_wait_arguments_before_host_effects)
+- Unavailable collection neither provisions a pool nor reports empty success.
   [test](../crates/wrix-cli/tests/workspace_admission.rs::nix_store::unavailable_store_collection_never_provisions_or_reports_empty_success)
+- Public Podman enable/disable and bounded native GC preserve live protections
+  without broadening existing GC commands.
   [system](test-ci:test-shared-nix-public-podman)
-  [system](test-ci:test-shared-nix-public-krun)
+- Public krun enable/disable and native GC preserve the same scope and
+  protections. [system](test-ci:test-shared-nix-public-krun)
 
 ### Execution Acceptance
 
 - Root and relayed clients remain untrusted with repair, signature and option
   negative controls against the actual admitted endpoint.
-  [system](test-ci:test-shared-nix-podman)
   [system](test-ci:test-shared-nix-krun)
 - Actual strict build-user sandboxes enforce filesystem, ordinary/fixed-output
   egress and service-owned resource bounds without production fallback.
-  [system](test-ci:test-shared-nix-podman)
   [system](test-ci:test-shared-nix-krun)
 
 ### Image Acceptance
@@ -278,17 +287,21 @@ safe reconciliation before readmission.
 
 - Production root handoff and native GC preserve live inputs, out-links,
   profiles and shells across client loss and daemon/controller restart.
-  [system](test-ci:test-shared-nix-public-podman)
   [system](test-ci:test-shared-nix-public-krun)
+- Native daemon loss retains uncertain readers, data and software roots and
+  refuses unclean replay rather than removing protection.
   [system](test-ci:test-shared-nix-krun)
 
 ### Lifecycle Acceptance
 
-- Production ownership/update transitions reject live or uncertain replacement
-  and retain data and pins across safe drain, failed candidate and restart.
+- Ownership updates require recorded release before any candidate effect.
   [test](../crates/wrix-service/src/nix_store/owner/backend/test.rs::update_requires_recorded_release_before_any_candidate_effect)
+- Released metadata without a native checkpoint cannot acquire a candidate.
   [test](../crates/wrix-service/src/nix_store/owner/backend/test.rs::released_metadata_without_native_checkpoint_cannot_acquire_a_candidate)
+- Fresh maintenance cannot reinterpret an uncertain stop as clean release.
   [test](../crates/wrix-service/src/nix_store/lifecycle/test.rs::fresh_maintenance_cannot_capture_an_uncertain_stop_as_release)
+- Native ownership retains data and pins across safe drain, failed restart and
+  resumed serving, without concurrent owners.
   [system](test-ci:test-shared-nix-krun)
 
 ### Platform Acceptance
