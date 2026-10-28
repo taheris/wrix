@@ -77,7 +77,7 @@ in
     mkProfileImages
     ;
   inherit beads serviceImage;
-  inherit (sandboxLib) nixPoolImage;
+  inherit (sandboxLib) nixPoolImage nixPoolOwner;
 
   rustPackage = rustCli;
 }

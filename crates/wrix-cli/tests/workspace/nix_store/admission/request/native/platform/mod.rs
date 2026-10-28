@@ -412,4 +412,5 @@ fn exercise(platform: Platform, caller: &Path) {
     peer_owner.shutdown().unwrap();
     drop(peer_owner);
     local.close().unwrap();
+    observation::verify_resources(&caller.join("native-control"));
 }

@@ -2,6 +2,13 @@
 set -euo pipefail
 
 runtime="${0##*/}"
+# Each external engine owns separate named containers and immutable launch recipes.
+records="${WRIX_TEST_RUNNING:?}.owners/$runtime"
+mkdir -p "$records"
+selected="${!#}"
+[[ "$selected" != --type=container ]] || selected="${4:-}"
+recipe="$records/$selected"
+
 printf '%s\0' "$@" >>"${WRIX_TEST_CALLS:?}"
 snapshot() {
   "${WRIX_TEST_JQ_BIN:?}" --arg image "${WRIX_TEST_IMAGE_ID:-$WRIX_TEST_DIGEST}" -Rsc '
@@ -17,13 +24,11 @@ snapshot() {
     [{configuration: {id: values("--name")[0], labels: $labels, publishedPorts: $ports,
         image: {descriptor: {digest: (if $args[-4] | startswith("sha256:") then $args[-4] else $image end)}}},
       status: {state: "running"}}]
-  ' "${WRIX_TEST_RUN_ARGS:?}"
+  ' "$recipe"
 }
 is_running() {
-  local owner=''
-  [[ -f "${WRIX_TEST_RUNNING:?}" ]] || return 1
-  IFS= read -r owner <"$WRIX_TEST_RUNNING" || return 1
-  [[ "$owner" == "$runtime" ]]
+  [[ -f "$recipe" ]] || return 1
+  [[ ! -L "$recipe" || -f "${WRIX_TEST_RUNNING:?}" ]]
 }
 if [[ "$runtime" == skopeo ]]; then
   case "${1:-} ${2:-}" in
@@ -86,16 +91,16 @@ case "${1:-} ${2:-}" in
   'info --format') printf 'overlay@/tmp/wrix-fixture-store+/tmp/wrix-fixture-runroot\n' ;;
   'images --format') ;;
   'ps -a')
-    if is_running; then
+    for recipe in "$records"/*; do
+      is_running || continue
       snapshot | "${WRIX_TEST_JQ_BIN:?}" -r '.[].configuration.id'
-    fi
+    done
     ;;
   'list --all')
-    if is_running; then
+    for recipe in "$records"/*; do
+      is_running || continue
       snapshot
-    else
-      printf '[]\n'
-    fi
+    done | "${WRIX_TEST_JQ_BIN:?}" -s 'add // []'
     ;;
   'container exists') is_running ;;
   inspect*)
@@ -131,8 +136,24 @@ case "${1:-} ${2:-}" in
     snapshot | "${WRIX_TEST_JQ_BIN:?}" -r '.[0].configuration.publishedPorts[] | "\(.containerPort)/tcp -> \(.hostAddress):\(.hostPort)"'
     ;;
   'run -d')
-    printf '%s\0' "$@" >"${WRIX_TEST_RUN_ARGS:?}"
-    printf '%s\n' "$runtime" >"${WRIX_TEST_RUNNING:?}"
+    name=""
+    previous=""
+    for argument in "$@"; do
+      [[ "$previous" != --name ]] || name="$argument"
+      previous="$argument"
+    done
+    [[ "$name" =~ ^[a-zA-Z0-9_-]+$ ]]
+    recipe="$records/$name"
+    rm -f "$recipe"
+    printf '%s\0' "$@" >"$recipe"
+    if [[ "${!#}" != gateway ]]; then
+      cp "$recipe" "${WRIX_TEST_RUN_ARGS:?}"
+      rm "$recipe"
+      ln -s "${WRIX_TEST_RUN_ARGS:?}" "$recipe"
+      printf '%s\n' "$runtime" >"${WRIX_TEST_RUNNING:?}"
+    else
+      native_gateway "$@"
+    fi
     ;;
   *) printf 'unexpected service runtime arguments: %s\n' "$*" >&2; exit 64 ;;
 esac

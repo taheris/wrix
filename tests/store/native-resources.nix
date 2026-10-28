@@ -15,7 +15,10 @@ let
       printf ok > "$out"
     '';
     private = ''
+      ${core}/bin/id >&2
+      ${core}/bin/cat /proc/self/cgroup /proc/self/uid_map >&2
       if denial=$( (exec 3<>/dev/tcp/127.0.0.1/18443) 2>&1); then exit 1; fi
+      printf '%s\n' "$denial" >&2
       [[ "$denial" == *Operation?not?permitted* ]]
       printf ok > "$out"
     '';

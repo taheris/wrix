@@ -12,6 +12,15 @@ pub const DIRECTORY: &str = "/run/wrix/nix-pool";
 pub const STORE: &str = "unix:///run/wrix/nix-client/daemon.sock";
 const FILES: [&str; 5] = ["key", "known-hosts", "ssh_config", "nix.conf", "version"];
 
+const fn version(plane: wrix_state::nix_store::admission::request::Plane) -> &'static [u8] {
+    use wrix_state::nix_store::admission::request::Plane;
+    match plane {
+        Plane::Host | Plane::Podman => b"1\n",
+        Plane::Apple => b"2\n",
+        Plane::Krun => b"3\n",
+    }
+}
+
 fn configuration_on(
     port: NonZeroU16,
     plane: wrix_state::nix_store::admission::request::Plane,
@@ -85,15 +94,7 @@ pub(super) fn create_on(
         configuration_on(port, plane).as_bytes(),
     )?;
     write(&directory, "nix.conf", nix_configuration().as_bytes())?;
-    write(
-        &directory,
-        "version",
-        if plane == wrix_state::nix_store::admission::request::Plane::Apple {
-            b"2\n"
-        } else {
-            b"1\n"
-        },
-    )?;
+    write(&directory, "version", version(plane))?;
     File::open(&directory)?.sync_all()?;
     File::open(root)?.sync_all()?;
     Ok(())
@@ -132,12 +133,7 @@ fn inspect_on(
         return Err(Error::Retained);
     }
     if names != expected
-        || read(&directory, "version")?
-            != if plane == wrix_state::nix_store::admission::request::Plane::Apple {
-                b"2\n"
-            } else {
-                b"1\n"
-            }
+        || read(&directory, "version")? != version(plane)
         || read(&directory, "ssh_config")? != configuration_on(port, plane).as_bytes()
         || read(&directory, "nix.conf")? != nix_configuration().as_bytes()
         || read(&directory, "key")? != read(root, "key")?
@@ -273,6 +269,21 @@ mod test {
         assert!(!configuration.contains("169.254.1.2"));
         assert!(!configuration.contains("host.container.internal"));
         assert!(configuration.contains("StrictHostKeyChecking yes"));
+    }
+    #[test]
+    fn krun_state_preparation_version_cannot_be_reinterpreted_as_podman_delivery() {
+        use wrix_state::nix_store::admission::request::Plane;
+        let root = fixture();
+        let port = NonZeroU16::new(2222).unwrap();
+        create_on(root.path(), port, Plane::Krun).unwrap();
+        assert_eq!(
+            read(&root.path().join("worker"), "version").unwrap(),
+            b"3\n"
+        );
+        assert!(inspect_on(root.path(), port, Plane::Krun).is_ok());
+        assert!(inspect_on(root.path(), port, Plane::Podman).is_err());
+        fs::write(root.path().join("worker/version"), b"1\n").unwrap();
+        assert!(inspect_on(root.path(), port, Plane::Krun).is_err());
     }
     #[test]
     fn fixed_worker_configuration_is_exact_and_never_repaired_or_replaced() {

@@ -551,6 +551,7 @@ in
     validateRuntimeSecrets
     validateNetworkRules
     ;
+  inherit (imageRustCli) nixPoolOwner;
   inherit (manifest) mkProfileImages;
   capabilities = {
     privateNix = privateNix.version;

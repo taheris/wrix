@@ -2,6 +2,7 @@
   pkgs,
   owner,
   sshdConf,
+  network,
 }:
 
 pkgs.writeShellScriptBin "wrix-nix-pool-daemon" ''
@@ -65,6 +66,8 @@ pkgs.writeShellScriptBin "wrix-nix-pool-daemon" ''
   printf '96\n' > "$base/control/pids.max"
   printf '536870912\n' > "$base/memory.min"
   printf '536870912\n' > "$base/work/memory.min"
+  resource_phase=network-policy
+  ${network.install}/bin/wrix-nix-pool-egress
   resource_phase=private-transport
   mkdir -m 0755 /run/wrix-nix-pool
   data_owner=$(</run/wrix-nix-pool-data-owner)

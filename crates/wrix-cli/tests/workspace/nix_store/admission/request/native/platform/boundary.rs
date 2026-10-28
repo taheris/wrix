@@ -1,53 +1,100 @@
 //! Test-only observations run inside the separately bound service VM, never on the physical host store.
 use super::*;
-use serde::Deserialize;
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Inputs {
-    python: PathBuf,
-    probe: PathBuf,
+#[derive(Clone, Copy)]
+pub(super) enum Observation {
+    Boot,
+    Serve,
+    Snapshot,
+    Stop,
+    KillDaemon,
 }
-impl Inputs {
-    fn load(binding: &wrix_core::nix_store::binding::Binding) -> Self {
-        let inputs: Self = serde_json::from_slice(
-            &fs::read(std::env::var_os("WRIX_TEST_POOL_NATIVE_INPUTS").unwrap()).unwrap(),
-        )
-        .unwrap();
-        let closure = fs::read_to_string(binding.metadata().seed_closure.as_path()).unwrap();
-        for path in [&inputs.python, &inputs.probe] {
-            let root = path
-                .ancestors()
-                .find(|path| path.parent() == Some(Path::new("/nix/store")))
-                .expect("immutable guest fixture path");
-            assert!(
-                closure.lines().any(|line| Path::new(line) == root),
-                "native observation executable is absent from the actual seeded image: {path:?}"
-            );
-        }
-        inputs
-    }
-    fn command(&self, runtime: &Command, owner: &str, operation: &str) -> Command {
-        let mut command = worker::recipe(runtime);
-        command
-            .arg("exec")
-            .arg(owner)
-            .arg(&self.python)
-            .arg(&self.probe)
-            .arg(operation);
-        command
-    }
+
+pub(super) fn command(
+    runtime: &Command,
+    host: &wrix_state::host::Host,
+    selection: &Selection,
+    observation: Observation,
+) -> Command {
+    let pool = Admission::acquire(selection, system())
+        .unwrap()
+        .pool()
+        .clone();
+    let root = host
+        .roots()
+        .state()
+        .join("control/nix")
+        .join(pool.repository.to_string())
+        .join(pool.system.as_str());
+    let record = worker::pool_record(host, selection);
+    assert_eq!(record["state"]["phase"], "serving");
+    let port = record["state"]["connection"]["port"].as_u64().unwrap();
+    let mut command = Command::new(
+        Path::new(runtime.get_program())
+            .parent()
+            .unwrap()
+            .join("ssh"),
+    );
+    command.env_clear().envs(
+        runtime
+            .get_envs()
+            .filter_map(|(key, value)| value.map(|value| (key, value))),
+    );
+    command
+        .args([
+            "-F",
+            "/dev/null",
+            "-T",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "IdentitiesOnly=yes",
+            "-o",
+            "IdentityAgent=none",
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            "GlobalKnownHostsFile=/dev/null",
+            "-o",
+            "ClearAllForwardings=yes",
+            "-o",
+            "ConnectTimeout=2",
+            "-o",
+            "ServerAliveInterval=15",
+            "-o",
+            "ServerAliveCountMax=3",
+            "-o",
+        ])
+        .arg(format!(
+            "UserKnownHostsFile=\"{}\"",
+            root.join("known-hosts").display()
+        ))
+        .arg("-p")
+        .arg(port.to_string())
+        .arg("-i")
+        .arg(root.join("admin"))
+        .arg("root@127.0.0.1")
+        .arg(match observation {
+            Observation::Boot => "wrix-native-observe-boot-id",
+            Observation::Serve => "wrix-native-observe-serve",
+            Observation::Snapshot => "wrix-native-observe-snapshot",
+            Observation::Stop => "wrix-native-observe-stop",
+            Observation::KillDaemon => "wrix-native-observe-kill-daemon",
+        });
+    command
 }
 pub(super) fn kill_daemon(
     runtime: &Command,
-    owner: &str,
-    binding: &wrix_core::nix_store::binding::Binding,
+    host: &wrix_state::host::Host,
+    selection: &Selection,
 ) -> serde_json::Value {
-    let inputs = Inputs::load(binding);
-    let output = inputs
-        .command(runtime, owner, "kill-daemon")
+    let output = command(runtime, host, selection, Observation::KillDaemon)
         .output()
         .unwrap();
+    assert!(
+        output.status.success(),
+        "native daemon signal command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let proof: serde_json::Value = serde_json::from_slice(&output.stdout)
         .expect("native daemon signal receipt; uncertain signaling is not a pass");
     assert!(proof["signaled_native_daemon"].as_u64().unwrap() > 1);
@@ -56,24 +103,22 @@ pub(super) fn kill_daemon(
 }
 pub(super) struct Probe {
     process: Running,
-    inputs: Inputs,
-    runtime: Command,
-    owner: String,
+    snapshot: Command,
+    stop: Command,
 }
 impl Probe {
     pub(super) fn start(
         runtime: &Command,
-        owner: &str,
-        binding: &wrix_core::nix_store::binding::Binding,
+        host: &wrix_state::host::Host,
+        selection: &Selection,
         control: &Path,
     ) -> Self {
-        let inputs = Inputs::load(binding);
         let log = control.join("service-native-control.json");
-        let mut command = inputs.command(runtime, owner, "serve");
-        command
+        let mut launch = command(runtime, host, selection, Observation::Serve);
+        launch
             .stdout(fs::File::create(&log).unwrap())
             .stderr(fs::File::create(control.join("service-native-control.stderr")).unwrap());
-        let mut process = Running(command.spawn().unwrap());
+        let mut process = Running(launch.spawn().unwrap());
         let deadline = Instant::now() + BUDGET;
         loop {
             let bytes = fs::read(&log).unwrap();
@@ -95,9 +140,8 @@ impl Probe {
         }
         Self {
             process,
-            inputs,
-            runtime: worker::recipe(runtime),
-            owner: owner.to_owned(),
+            snapshot: command(runtime, host, selection, Observation::Snapshot),
+            stop: command(runtime, host, selection, Observation::Stop),
         }
     }
     pub(super) fn snapshot(&mut self) -> serde_json::Value {
@@ -105,11 +149,7 @@ impl Probe {
             self.process.0.try_wait().unwrap().is_none(),
             "known-live controls disappeared"
         );
-        let output = self
-            .inputs
-            .command(&self.runtime, &self.owner, "snapshot")
-            .output()
-            .unwrap();
+        let output = self.snapshot.output().unwrap();
         assert!(
             output.status.success(),
             "native service observation failed: {}",
@@ -122,11 +162,7 @@ impl Probe {
         value
     }
     pub(super) fn stop(mut self) {
-        let output = self
-            .inputs
-            .command(&self.runtime, &self.owner, "stop")
-            .output()
-            .unwrap();
+        let output = self.stop.output().unwrap();
         assert!(
             output.status.success(),
             "native control stop failed: {}",

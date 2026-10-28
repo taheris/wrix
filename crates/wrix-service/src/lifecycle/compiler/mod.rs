@@ -44,7 +44,7 @@ fn checked(command: &mut Command) -> Result<Vec<u8>, Error> {
 /// Success requires a supervised native process, its Unix protocol and a compiled executable.
 /// An installed sccache binary or a quiet transport is not sufficient evidence.
 pub fn ready() -> Result<(), Error> {
-    ready_at(
+    ready_on(
         Path::new(SOCKET),
         Path::new(PID),
         Path::new("/run/wrix/compiler/execution"),
@@ -52,7 +52,8 @@ pub fn ready() -> Result<(), Error> {
     )
 }
 
-fn ready_at(socket: &Path, pid: &Path, views: &Path, compiler: &Path) -> Result<(), Error> {
+/// Verify a native owner using its bound transport and execution view.
+pub fn ready_on(socket: &Path, pid: &Path, views: &Path, compiler: &Path) -> Result<(), Error> {
     let metadata = fs::symlink_metadata(socket)?;
     if !metadata.file_type().is_socket() || metadata.uid() != rustix::process::geteuid().as_raw() {
         return Err(Error::Incomplete);
@@ -397,7 +398,7 @@ mod test {
             );
             std::thread::sleep(Duration::from_millis(20));
         }
-        ready_at(&socket, &pid, &root.path().join("execution"), &binary).unwrap();
+        ready_on(&socket, &pid, &root.path().join("execution"), &binary).unwrap();
         for action in ["begin", "release"] {
             checked(
                 Command::new(&binary)
@@ -407,7 +408,7 @@ mod test {
             .unwrap();
         }
         assert!(process.0.wait().unwrap().success());
-        assert!(ready_at(&socket, &pid, &root.path().join("execution"), &binary).is_err());
+        assert!(ready_on(&socket, &pid, &root.path().join("execution"), &binary).is_err());
     }
 
     #[test]
@@ -416,7 +417,7 @@ mod test {
         let socket = root.path().join("socket");
         fs::write(&socket, "not a native listener").unwrap();
         assert!(matches!(
-            ready_at(
+            ready_on(
                 &socket,
                 &root.path().join("pid"),
                 &root.path().join("execution"),

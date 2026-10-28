@@ -25,10 +25,11 @@ let
     fi
     [[ ! -e /sys/fs/bpf/wrix-nix-pool ]]
     ${pkgs.bpftools}/bin/bpftool prog loadall ${object} /sys/fs/bpf/wrix-nix-pool
-    ${pkgs.bpftools}/bin/bpftool cgroup attach /sys/fs/cgroup connect4 pinned /sys/fs/bpf/wrix-nix-pool/connect4
-    ${pkgs.bpftools}/bin/bpftool cgroup attach /sys/fs/cgroup connect6 pinned /sys/fs/bpf/wrix-nix-pool/connect6
-    ${pkgs.bpftools}/bin/bpftool cgroup attach /sys/fs/cgroup sendmsg4 pinned /sys/fs/bpf/wrix-nix-pool/sendmsg4
-    ${pkgs.bpftools}/bin/bpftool cgroup attach /sys/fs/cgroup sendmsg6 pinned /sys/fs/bpf/wrix-nix-pool/sendmsg6
+    [[ -d /sys/fs/cgroup/wrix-nix-pool/work && ! -L /sys/fs/cgroup/wrix-nix-pool/work ]]
+    ${pkgs.bpftools}/bin/bpftool cgroup attach /sys/fs/cgroup/wrix-nix-pool/work connect4 pinned /sys/fs/bpf/wrix-nix-pool/connect4
+    ${pkgs.bpftools}/bin/bpftool cgroup attach /sys/fs/cgroup/wrix-nix-pool/work connect6 pinned /sys/fs/bpf/wrix-nix-pool/connect6
+    ${pkgs.bpftools}/bin/bpftool cgroup attach /sys/fs/cgroup/wrix-nix-pool/work sendmsg4 pinned /sys/fs/bpf/wrix-nix-pool/sendmsg4
+    ${pkgs.bpftools}/bin/bpftool cgroup attach /sys/fs/cgroup/wrix-nix-pool/work sendmsg6 pinned /sys/fs/bpf/wrix-nix-pool/sendmsg6
   '';
 in
 {

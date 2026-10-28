@@ -4,6 +4,12 @@
 # Prefix for the cache-only external runtime fixture. This models just the
 # native management readiness query; namespace SQL is never emulated here.
 set -euo pipefail
+native_gateway() {
+  "${WRIX_TEST_SQL_CLIENT:?}" "${WRIX_TEST_ROLES_CONTROL:?}" gateway "$@"
+}
+if [[ "$#" == 4 && "$1" == exec && "$3" == wrix-shared-service && "$4" == compiler-ready ]]; then
+  exec "${WRIX_TEST_SQL_CLIENT:?}" "${WRIX_TEST_ROLES_CONTROL:?}" compiler-ready
+fi
 if [[ "${1:-}" == start && -n "${WRIX_TEST_RUNTIME_JSON:-}" ]]; then
   [[ "$#" == 2 ]]
   printf '%s\n' "$*" >>"${WRIX_TEST_RUNTIME_LOG:?}"
@@ -13,6 +19,16 @@ if [[ "${1:-}" == start && -n "${WRIX_TEST_RUNTIME_JSON:-}" ]]; then
   # Restart the external cache daemon from the retained original launch recipe.
   tr '\0' '\n' <"${WRIX_TEST_RUN_ARGS:?}.nul" >"$WRIX_TEST_RUN_ARGS"
   exit 0
+fi
+if [[ "$#" == 5 && "$1" == exec && "$3" == wrix-shared-service && "$4" == sql-drain && "$5" == abort ]]; then
+  if [[ -n "${WRIX_TEST_RUNTIME_JSON:-}" ]]; then
+    printf '%s\n' "$*" >>"${WRIX_TEST_RUNTIME_LOG:?}"
+    "${WRIX_TEST_JQ_BIN:?}" -e --arg name "$2" 'any(.[]; .configuration.id == $name and .status.state == "running" and .configuration.labels["wrix.dolt.shared"] == "native-v1")' "$WRIX_TEST_RUNTIME_JSON" >/dev/null
+  else
+    printf '%s\0' "$@" >>"${WRIX_TEST_CALLS:?}"
+    [[ -f "${WRIX_TEST_RUNNING:?}" ]]
+  fi
+  exec "${WRIX_TEST_SQL_CLIENT:?}" "${WRIX_TEST_SQL_CONTROL:?}"
 fi
 if [[ "${1:-}" == exec && "${3:-}" == sh ]]; then
   if [[ -n "${WRIX_TEST_RUNTIME_JSON:-}" ]]; then

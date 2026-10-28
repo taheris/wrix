@@ -20,13 +20,25 @@ impl Maintenance {
     pub fn start(root: &Path) -> TestResult<Self> {
         // Seed real private authority, then emulate only the cached-v1 ownership
         // boundary. The upgraded daemon and authenticated IPC remain native.
-        drop(super::controller::Server::start(root)?);
+        let control = root.join("state/wrix/control");
+        if !control.join("authority/namespaces.json").exists() {
+            drop(super::controller::Server::start(root)?);
+        }
         let binding = PathBuf::from(
             std::env::var_os("WRIX_TEST_CONTROLLER_BINDING")
                 .ok_or("missing controller fixture binding")?,
         );
         let package = Package::load(&binding)?;
-        let control = root.join("state/wrix/control");
+        let declared: serde_json::Value = serde_json::from_slice(&fs::read(&binding)?)?;
+        let runtime = Path::new(
+            declared["runtime"]
+                .as_str()
+                .ok_or("missing controller runtime")?,
+        )
+        .join("bin");
+        let path = std::env::join_paths(std::iter::once(runtime).chain(std::env::split_paths(
+            &std::env::var_os("PATH").ok_or("missing PATH")?,
+        )))?;
         let registry = control.join("authority/namespaces.json");
         let mut policy: serde_json::Value = serde_json::from_slice(&fs::read(&registry)?)?;
         policy["version"] = serde_json::json!(1);
@@ -38,6 +50,11 @@ impl Maintenance {
             .arg("serve")
             .arg(&control)
             .arg(package.executable())
+            .env("PATH", path)
+            .env(
+                "WRIX_TEST_BACKEND_ENV",
+                root.join("controller-backend-environment.json"),
+            )
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(fs::File::create(root.join("maintenance.stderr"))?)

@@ -21,6 +21,10 @@ fn set_mode(path: &Path, mode: u32) -> TestResult {
 }
 #[path = "../../wrix-cli/tests/common/celler.rs"]
 mod celler;
+#[path = "../../wrix-cli/tests/common/controller.rs"]
+mod controller;
+#[path = "../../wrix-cli/tests/common/native_backend.rs"]
+mod native_backend;
 #[path = "../../wrix-cli/tests/common/service_binding.rs"]
 #[expect(
     dead_code,
@@ -54,6 +58,7 @@ fn subprocess_entry() -> TestResult {
 }
 
 struct Fixture {
+    controller: controller::Server,
     root: tempfile::TempDir,
     _port: fs::File,
     _celler: celler::Server,
@@ -104,11 +109,7 @@ impl Fixture {
             fs::write(bin.join(name), include_str!("fixtures/shared-runtime.py"))?;
             set_mode(&bin.join(name), 0o755)?;
         }
-        fs::write(
-            bin.join("flock"),
-            "#!/usr/bin/env bash\nset -euo pipefail\nexec sleep 100000\n",
-        )?;
-        set_mode(&bin.join("flock"), 0o755)?;
+        native_backend::install(root.path())?;
         let native_bd = std::env::var("WRIX_REAL_BD_BIN").unwrap_or_else(|_| {
             "/nix/store/7aalmix7lxvs73apxl1pwkrvqw52snhm-beads-1.3.1/bin/bd".into()
         });
@@ -289,7 +290,9 @@ impl Fixture {
             native(&source, &["backup", "sync-url", &backup_url])?;
         }
         let celler = celler::Server::watch(root.path(), None);
+        let controller = controller::Server::start_supervised(root.path())?;
         Ok(Self {
+            controller,
             root,
             _port: port,
             _celler: celler,
@@ -307,8 +310,6 @@ impl Fixture {
                 "--signal=KILL",
                 "180",
                 "unshare",
-                "--user",
-                "--map-root-user",
                 "--mount",
                 "--propagation",
                 "private",
@@ -353,6 +354,7 @@ impl Fixture {
             .env_remove("WRIX_SERVICE_IMAGE_DIGEST")
             .env_remove("LOOM_INSIDE")
             .env_remove("IS_SANDBOX");
+        self.controller.configure(&mut command)?;
         Ok(command)
     }
 
@@ -373,12 +375,16 @@ impl Fixture {
         if output["success"] != true {
             let log = self.root.path().join("service.log");
             return Err(format!(
-                "start failed: {output}; native service: {}",
+                "start failed: {output}; native service: {}; exec: {}; compiler: {}; beads out: {}; beads err: {}",
                 if log.exists() {
                     fs::read_to_string(log)?
                 } else {
                     "not created".into()
-                }
+                },
+                fs::read_to_string(self.root.path().join("native-exec.stderr"))?,
+                fs::read_to_string(self.root.path().join("compiler.log"))?,
+                fs::read_to_string(self.root.path().join("native-bd.out"))?,
+                fs::read_to_string(self.root.path().join("native-bd.err"))?
             )
             .into());
         }
@@ -436,12 +442,24 @@ fn native(source: &Path, args: &[&str]) -> TestResult {
 }
 
 fn sql(client: &Value, query: &str) -> TestResult<std::process::Output> {
+    let host = Path::new(
+        client["lock"]
+            .as_str()
+            .ok_or("missing native SQL fixture lock")?,
+    )
+    .ancestors()
+    .nth(5)
+    .ok_or("missing native SQL fixture host")?;
+    let endpoints: Value = serde_json::from_slice(&fs::read(
+        host.join("control/authority/role-endpoints.json"),
+    )?)?;
+    let port: u16 = serde_json::from_value(endpoints["ports"][0].clone())?;
     Ok(Command::new("dolt")
         .args([
             "--host",
             "127.0.0.1",
             "--port",
-            "3306",
+            &port.to_string(),
             "--no-tls",
             "--password",
             client["credentials"]["password"]
@@ -515,7 +533,14 @@ fn two_namespaces_start_register_sync_and_retire_on_one_native_shared_backend() 
     let retained_legacy = serde_json::to_vec(&legacy)?;
     fs::write(&legacy_path, &retained_legacy)?;
     let recovery = fixture.run(&fixture.first, &["service", "recover"])?;
-    assert_eq!(recovery["success"], true, "{recovery}");
+    assert_eq!(
+        recovery["success"],
+        true,
+        "{recovery}; native: {}; exec: {}; compiler: {}",
+        fs::read_to_string(fixture.root.path().join("service.log"))?,
+        fs::read_to_string(fixture.root.path().join("native-exec.stderr"))?,
+        fs::read_to_string(fixture.root.path().join("compiler.log"))?
+    );
     let first = fixture.start(&fixture.first)?;
     let second = fixture.start(&fixture.second)?;
     assert_eq!(
@@ -555,6 +580,22 @@ fn two_namespaces_start_register_sync_and_retire_on_one_native_shared_backend() 
         .map(serde_json::from_str)
         .collect::<Result<_, _>>()?;
     let runs: Vec<_> = calls.iter().filter(|call| call[0] == "run").collect();
+    assert_eq!(runs.len(), 2);
+    assert_eq!(
+        runs.iter()
+            .filter(|call| call
+                .windows(2)
+                .any(|pair| pair == ["--name", "wrix-gateway-1"]))
+            .count(),
+        1
+    );
+    let runs: Vec<_> = runs
+        .into_iter()
+        .filter(|call| {
+            call.windows(2)
+                .any(|pair| pair == ["--name", "wrix-host-service"])
+        })
+        .collect();
     assert_eq!(runs.len(), 1);
     assert!(
         !runs[0]
@@ -570,8 +611,27 @@ fn two_namespaces_start_register_sync_and_retire_on_one_native_shared_backend() 
             .iter()
             .any(|argument| argument == "wrix.service.scope=host")
     );
-    assert!(!runs[0].iter().any(|argument| argument.ends_with(":3306")
-        || argument.ends_with(":3307")
+    let native: Value = serde_json::from_slice(&fs::read(
+        fixture
+            .root
+            .path()
+            .join("state/wrix/control/authority/native-plan.json"),
+    )?)?;
+    let ports: Vec<_> = runs[0]
+        .windows(2)
+        .filter(|pair| pair[0] == "-p")
+        .map(|pair| pair[1].clone())
+        .collect();
+    assert_eq!(
+        ports,
+        [
+            format!("127.0.0.1:{}:8080", native["backend"]["cache"]),
+            format!("127.0.0.1:{}:3306", native["backend"]["sql"]),
+            format!("127.0.0.1:{}:4226", native["backend"]["compiler"]),
+            format!("127.0.0.1:{}:3307", native["backend"]["sync"]),
+        ]
+    );
+    assert!(!runs[0].iter().any(|argument| argument.ends_with(":13306")
         || argument.contains("host-control")
         || argument.contains("/first")
         || argument.contains("/second")));

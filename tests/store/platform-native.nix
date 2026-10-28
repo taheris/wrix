@@ -21,14 +21,19 @@ let
         name = "wrix-native-installed-platform";
         system = "${guest.stdenv.hostPlatform.system}";
         builder = bash + "/bin/bash";
+        stdenv = builtins.storePath "${guest.stdenvNoCC}";
         WRIX_POOL_TEST = "installed";
-        args = [ "-euc" (
+        args = [ "-e" (builtins.storePath "${guest.writeText "native-default-builder.sh" ''
+          source "$stdenv/setup"
+          genericBuild
+        ''}") ];
+        buildCommand = (
           "set -euo pipefail; [[ $(" + core + "/bin/id -u) != 0 ]]; " +
           "[[ ! -e /var/empty/native-platform-outside-build && ! -e /var/lib/wrix/nix-pool/host-key && ! -e /run/wrix-nix-pool && ! -e /workspace && ! -e /control ]]; " +
           core + "/bin/mkdir -p $out/bin; " + core + "/bin/id -u > $out/build-uid; " +
           core + "/bin/printf '#!" + bash + "/bin/bash\\necho installed\\n' > $out/bin/probe; " +
           core + "/bin/chmod +x $out/bin/probe"
-        ) ];
+        );
       };
     in drv // { meta.mainProgram = "probe"; }
   '';
@@ -144,21 +149,56 @@ let
       next = imageCase nextWorker;
     }
   );
+  observerOwner = import ./native-observer-owner.nix {
+    pkgs = guest;
+    owner = wrix.nixPoolOwner;
+  };
+  observerCheck = import ./native-observer-owner-check.nix { pkgs = guest; };
+  networkCheck = import ./network-policy-check.nix { pkgs = guest; };
+  observerPool = import ../../lib/services/nix-pool/default.nix {
+    pkgs = guest;
+    owner = observerOwner;
+  };
+  observerImage = import ../../lib/services/image.nix {
+    pkgs = guest;
+    hostPkgs = pkgs;
+    pool = observerPool;
+    asTarball = isDarwin;
+  };
+  observerBinding = import ../../lib/services/binding.nix {
+    inherit pkgs;
+    image = observerImage;
+  };
+  observerController = pkgs.writeShellScriptBin "wrix-host-controller" ''
+    set -euo pipefail
+    export WRIX_NIX_POOL_PACKAGE_BINDING=${observerBinding}
+    export WRIX_NIX_POOL_HOST_TOOLS=${wrix.rustPackage.poolHostTools}
+    export PATH=${wrix.rustPackage.controllerRuntime}/bin:"$PATH"
+    exec ${wrix.rustPackage.controllerRuntime}/bin/wrix-host-controller "$@"
+  '';
+  observerControllerBinding = import ../../lib/services/control-binding.nix {
+    inherit pkgs;
+    controller = observerController;
+    runtime = wrix.rustPackage.controllerRuntime;
+    image = wrix.serviceImage;
+  };
   app =
     platform: test: fault:
     pkgs.writeShellScriptBin "test-shared-nix-${platform}" ''
       set -euo pipefail
+      test -f ${observerCheck}
+      test -f ${networkCheck}
       ${optionalString (!isDarwin) ''
         export WRIX_TEST_POOL_CLEANUP_TOOLS
         WRIX_TEST_POOL_CLEANUP_TOOLS=$(${pkgs.jq}/bin/jq -er '.root + "/bin"' ${wrix.rustPackage.poolHostTools})
         export WRIX_TEST_POOL_CLEANUP_SCRIPT=${./cleanup-native-fixtures.py}
         export WRIX_TEST_POOL_PYTHON=${pkgs.python3}/bin/python3
       ''}
-      export WRIX_NIX_POOL_PACKAGE_BINDING=${wrix.rustPackage.poolBinding}
+      export WRIX_NIX_POOL_PACKAGE_BINDING=${observerBinding}
       export WRIX_NIX_POOL_HOST_TOOLS=${wrix.rustPackage.poolHostTools}
-      export WRIX_CONTROLLER_PACKAGE_BINDING=${wrix.rustPackage.controllerBinding}
-      export WRIX_TEST_POOL_CONTROLLER_BINDING=${wrix.rustPackage.controllerBinding}
-      export WRIX_TEST_POOL_CONTROLLER=${wrix.rustPackage.controllerPackage}/bin/wrix-host-controller
+      export WRIX_CONTROLLER_PACKAGE_BINDING=${observerControllerBinding}
+      export WRIX_TEST_POOL_CONTROLLER_BINDING=${observerControllerBinding}
+      export WRIX_TEST_POOL_CONTROLLER=${observerController}/bin/wrix-host-controller
       export WRIX_TEST_POOL_PROFILE=${worker.image.profileConfig}
       export WRIX_TEST_POOL_WORKER_IMAGE=${images}
       export WRIX_TEST_POOL_NATIVE_INPUTS=${nativeInputs}

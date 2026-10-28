@@ -221,23 +221,30 @@ fn retire(
         worker.running.wait_for_retirement(BUDGET).unwrap(),
         wrix_sandbox::execution::Observation::Retired
     );
-    released(host, selection, &worker.ticket, &worker.root);
+    assert!(
+        wrix_state::execution::terminal(host, selection.context().unwrap().key(), &worker.ticket)
+            .unwrap()
+            .is_some()
+    );
+    // The guest conservatively retains a closing lease until all native work
+    // and readers drain. Other live workers must not force early release.
 }
 pub(super) fn pool_record(
     host: &wrix_state::host::Host,
     selection: &Selection,
 ) -> serde_json::Value {
-    let pool = Admission::acquire(selection, system())
-        .unwrap()
-        .pool()
-        .clone();
+    let wrix_state::nix_store::Approval::Bound { repository, .. } =
+        wrix_state::nix_store::inspect(selection).unwrap()
+    else {
+        panic!("native owner observation requires existing checked membership");
+    };
     serde_json::from_slice(
         &fs::read(
             host.roots()
                 .state()
                 .join("control/nix")
-                .join(pool.repository.to_string())
-                .join(pool.system.as_str())
+                .join(repository.to_string())
+                .join(system().as_str())
                 .join("backend.json"),
         )
         .unwrap(),
@@ -326,15 +333,27 @@ pub(super) fn exercise(
         .as_str()
         .unwrap()
         .to_owned();
-    observation::service_boundary(platform, &first.runtime, &owner_id, &first_ready);
+    observation::service_boundary(
+        platform,
+        &first.runtime,
+        &owner_id,
+        &first_ready,
+        host,
+        selection,
+    );
     let mut peer_worker = launch(platform, factory, peer, host, &control, "peer", binding);
     milestone(
         &control,
         "peer-ready.json",
         &mut [&mut first, &mut second, &mut peer_worker],
     );
-    let mut probe = boundary::Probe::start(&first.runtime, &owner_id, binding, &control);
+    let mut probe = boundary::Probe::start(&first.runtime, host, selection, &control);
     let before = probe.snapshot();
+    fs::write(
+        control.join("service-before.json"),
+        serde_json::to_vec(&before).unwrap(),
+    )
+    .unwrap();
     fs::write(control.join("go"), b"go").unwrap();
     milestone(&control, "first-done.json", &mut [&mut first, &mut second]);
     milestone(&control, "second-done.json", &mut [&mut first, &mut second]);
@@ -350,11 +369,6 @@ pub(super) fn exercise(
     let after = probe.snapshot();
     boundary::resources(&before, &after);
     fs::write(
-        control.join("service-before.json"),
-        serde_json::to_vec(&before).unwrap(),
-    )
-    .unwrap();
-    fs::write(
         control.join("service-after.json"),
         serde_json::to_vec(&after).unwrap(),
     )
@@ -366,15 +380,17 @@ pub(super) fn exercise(
         .args(["service", "nix-store", "gc", "--wait", "0s"])
         .output()
         .unwrap();
-    assert!(
-        !failed_gc.status.success(),
-        "live native GC unexpectedly completed"
-    );
-    assert!(
-        String::from_utf8_lossy(&failed_gc.stderr).contains("busy")
-            || String::from_utf8_lossy(&failed_gc.stderr).contains("drain"),
-        "GC failed for an unrelated reason: {}",
-        String::from_utf8_lossy(&failed_gc.stderr)
+    fs::write(control.join("live-gc.stdout"), &failed_gc.stdout).unwrap();
+    fs::write(control.join("live-gc.stderr"), &failed_gc.stderr).unwrap();
+    assert_eq!(failed_gc.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8(failed_gc.stdout).unwrap(),
+        format!(
+            "{}: incomplete: maintenance access remained busy until its acquisition deadline\n",
+            system().as_str()
+        ),
+        "native CLI collection did not report scoped contention; stderr: {}",
+        String::from_utf8_lossy(&failed_gc.stderr),
     );
     assert_ne!(peer_worker.ticket, first.ticket);
     let first_ticket = first.ticket.clone();
@@ -444,9 +460,12 @@ pub(super) fn exercise(
     let replacement_done = observation::read(&control.join("replacement-done.json"));
     observation::workflows(&first_done, &replacement_done);
     fs::write(control.join("first-exit"), b"exit").unwrap();
-    released(host, selection, &first_ticket, &first_root);
     retire(host, selection, &control, "replacement", &mut replacement);
     retire(host, peer, &control, "peer", &mut peer_worker);
+    released(host, selection, &first_ticket, &first_root);
+    released(host, linked, &second.ticket, &second.root);
+    released(host, selection, &replacement.ticket, &replacement.root);
+    released(host, peer, &peer_worker.ticket, &peer_worker.root);
     observation::report(
         platform,
         &control,

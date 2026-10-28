@@ -27,8 +27,14 @@ case "$*" in
     exit 0
     ;;
   'run -d --name '*)
-    printf '%s\n' "$@" >"${WRIX_TEST_RUN_ARGS:?}"
-    printf '%s\0' "$@" >"${WRIX_TEST_RUN_ARGS}.nul"
+    if [[ "${!#}" == gateway ]]; then
+      native_gateway "$@"
+      launch_args="${WRIX_TEST_RUN_ARGS:?}.gateway"
+    else
+      printf '%s\n' "$@" >"${WRIX_TEST_RUN_ARGS:?}"
+      launch_args="${WRIX_TEST_RUN_ARGS}.nul"
+    fi
+    printf '%s\0' "$@" >"$launch_args"
     "${WRIX_TEST_JQ_BIN:?}" --arg image "sha256:${WRIX_TEST_DIGEST:?}" -Rsc --slurpfile previous "${WRIX_TEST_RUNTIME_REPLACEMENT:?}" --slurpfile current "${WRIX_TEST_RUNTIME_JSON:?}" '
       split("\u0000")[:-1] as $args |
       def values($flag): [range(0; ($args | length) - 1) as $i |
@@ -47,7 +53,7 @@ case "$*" in
         .configuration.labels = $labels | .configuration.publishedPorts = $ports |
         .configuration.image = {descriptor: {digest: (if $args[-4] | startswith("sha256:") then $args[-4] else $image end)}} | .status.state = "running"
       else . end)
-    ' "${WRIX_TEST_RUN_ARGS}.nul" >"${WRIX_TEST_RUNTIME_JSON:?}.new"
+    ' "$launch_args" >"${WRIX_TEST_RUNTIME_JSON:?}.new"
     mv "${WRIX_TEST_RUNTIME_JSON}.new" "$WRIX_TEST_RUNTIME_JSON"
     exit 0
     ;;

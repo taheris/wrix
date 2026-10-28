@@ -733,6 +733,12 @@ impl Owner {
     }
 
     pub(crate) fn ensure_ready(&mut self) -> Result<(), Error> {
+        if self.connection()?.target.attempt.software.tools.runtime() != image::Runtime::Container
+            && self.connection()?.target.attempt.budget != budget::Budget::HostIoPasst
+        {
+            // Retained older transports may be reconciled and drained, never issued to new clients.
+            return Err(Error::Retained);
+        }
         if matches!(self.record.state, State::Released { .. }) {
             self.resume()?;
         }
@@ -747,8 +753,14 @@ impl Owner {
         if !matches!(self.record.state, State::Serving { .. }) {
             return Err(Error::Retained);
         }
+        let connection = self.connection()?;
+        if connection.target.attempt.software.tools.runtime() != image::Runtime::Container
+            && connection.target.attempt.budget != budget::Budget::HostIoPasst
+        {
+            return Err(Error::Retained);
+        }
         self.rpc(
-            self.connection()?,
+            connection,
             &native::Operation::Inspect {},
             Some(Duration::from_secs(5)),
         )
@@ -988,7 +1000,7 @@ impl Prepared {
         )?;
         let nonce = random()?;
         let attempt = Attempt {
-            budget: budget::Budget::HostIo,
+            budget: budget::Budget::HostIoPasst,
             nonce,
             software,
         };

@@ -9,6 +9,8 @@ mod controller;
 #[cfg(target_os = "linux")]
 #[path = "common/maintenance.rs"]
 mod maintenance;
+#[path = "common/native_backend.rs"]
+mod native_backend;
 #[path = "common/native_celler.rs"]
 mod native_celler;
 #[path = "common/peer_runtime.rs"]
@@ -38,6 +40,40 @@ const APPLE_RUNTIME: &str = concat!(
 
 #[test]
 fn public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql() -> TestResult {
+    if std::env::var_os("WRIX_TEST_NATIVE_NETWORK").is_none() {
+        let output = Command::new("timeout")
+            .args([
+                "--signal=TERM",
+                "--kill-after=5",
+                "240",
+                "unshare",
+                "--user",
+                "--map-root-user",
+                "--mount",
+                "--net",
+                "--propagation",
+                "private",
+                "sh",
+                "-c",
+                "ip link set lo up; if test -f /etc/wrix/image-agent; then mount -t tmpfs -o mode=755 tmpfs /etc/wrix; fi; exec \"$@\"",
+                "fixture",
+            ])
+            .arg(std::env::current_exe()?)
+            .args([
+                "--exact",
+                "public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql",
+                "--nocapture",
+            ])
+            .env("WRIX_TEST_NATIVE_NETWORK", "1")
+            .output()?;
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return Ok(());
+    }
     let root = tempfile::Builder::new()
         .prefix("cli-native-")
         .tempdir_in(fs::canonicalize("/tmp")?)?;
@@ -66,18 +102,11 @@ fn public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql() -
     for name in ["podman", "container"] {
         fs::write(
             bin.join(name),
-            include_str!("fixtures/native-shared-runtime.py"),
+            include_str!("../../wrix-service/tests/fixtures/shared-runtime.py"),
         )?;
         set_mode(&bin.join(name), 0o755)?;
     }
-    // Celler's external container launch is represented by the existing HTTP
-    // boundary fixture; this process holds the entrypoint's external flock.
-    // Native SQL and Beads registration are never emulated.
-    fs::write(
-        bin.join("flock"),
-        "#!/usr/bin/env bash\nset -euo pipefail\nexec sleep 240\n",
-    )?;
-    set_mode(&bin.join("flock"), 0o755)?;
+    native_backend::install(root.path())?;
     let native_bd = std::env::var_os("WRIX_REAL_BD_BIN")
         .unwrap_or_else(|| "/nix/store/7aalmix7lxvs73apxl1pwkrvqw52snhm-beads-1.3.1/bin/bd".into());
     let native_package = root.path().join("native-package");
@@ -108,6 +137,10 @@ fn public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql() -
         shared.is_file(),
         "build the native wrix-shared-service fixture before running CLI conformance"
     );
+    #[cfg(target_os = "linux")]
+    let controller = controller::Server::start_supervised(root.path())?;
+    #[cfg(not(target_os = "linux"))]
+    let controller = controller::Server::start(root.path())?;
     let mut command = Command::new("timeout");
     command
         .args(["--signal=TERM", "--kill-after=5", "240", "bash"])
@@ -123,6 +156,16 @@ fn public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql() -
         .arg(root.path())
         .arg(env!("CARGO_BIN_EXE_wrix"))
         .env("WRIX_SHARED_BINARY", shared)
+        .env("WRIX_SHARED_FIXTURE", root.path())
+        .env("HOME", root.path().join("home"))
+        .env("XDG_STATE_HOME", root.path().join("state"))
+        .env("XDG_CACHE_HOME", root.path().join("cache"))
+        .env(
+            "PATH",
+            std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
+                &std::env::var_os("PATH").ok_or("missing PATH")?,
+            )))?,
+        )
         .env("WRIX_REAL_BD_BIN", native_bd)
         // The fixture owns its package binding, even in a bound host devshell.
         .env("WRIX_SERVICE_IMAGE", "wrix-fixture:ambient-conflict")
@@ -130,6 +173,7 @@ fn public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql() -
         .env("WRIX_SERVICE_IMAGE_SOURCE_KIND", "invalid-ambient-kind")
         .env("WRIX_SERVICE_IMAGE_DIGEST", "invalid-ambient-digest");
     common::set_isolated_git_env(&mut command);
+    controller.configure(&mut command)?;
     let output = run_command(&mut command)?;
     assert!(
         output.status.success(),
@@ -706,7 +750,7 @@ fn initialize_repository(path: &Path) -> TestResult {
 #[test]
 fn enclosing_repository_does_not_change_service_fixture_identity() -> TestResult {
     let outer = tempfile::Builder::new()
-        .prefix("service-fixture-enclosing-repository")
+        .prefix("outer-")
         .tempdir_in(fs::canonicalize("/tmp")?)?;
     initialize_repository(outer.path())?;
     let root = tempfile::Builder::new()
@@ -776,7 +820,7 @@ fn repeated_apple_service_start_preserves_busy_owned_endpoints() -> TestResult {
     let shared: Value =
         serde_json::from_slice(&fs::read(selected.parent().unwrap().join("shared.json"))?)?;
     let sql_port: u16 = serde_json::from_value(shared["sql_port"].clone())?;
-    let _sql = TcpListener::bind(("127.0.0.1", sql_port))?;
+    let _sql = std::net::TcpStream::connect(("127.0.0.1", sql_port))?;
 
     for _ in 0..2 {
         let output = fixture.run("start")?;
@@ -843,7 +887,9 @@ fn fresh_service_refuses_empty_dolt_source_without_discarding_it() -> TestResult
     assert_eq!(fs::read_to_string(marker)?, "not a native database");
     let log = fs::read_to_string(fixture.root.path().join("runtime.log"))?;
     assert_eq!(
-        log.lines().filter(|line| line.starts_with("run ")).count(),
+        log.lines()
+            .filter(|line| line.starts_with("run -d --name wrix-host-service "))
+            .count(),
         1
     );
     assert!(!log.lines().any(|line| line.starts_with("rm ")));
@@ -1342,7 +1388,17 @@ fn explicit_cache_rotation_restores_missing_publication_binding_after_key_confli
     let fixture = Fixture::shared_cache()?;
     let root = fixture.state_root()?;
     drop(fixture.server.borrow_mut().take());
-    let _native = native_celler::Server::start(fixture.root.path(), fixture.port("cache_http")?)?;
+    let native: Value = serde_json::from_slice(&fs::read(
+        fixture
+            .root
+            .path()
+            .join("state/wrix/control/authority/native-plan.json"),
+    )?)?;
+    let _native = native_celler::Server::start(
+        fixture.root.path(),
+        serde_json::from_value(native["backend"]["cache"].clone())?,
+        fixture.port("cache_http")?,
+    )?;
     let workspace = wrix_core::path::WorkspaceHash::parse(
         fixture.metadata["workspace_hash"]
             .as_str()
@@ -1866,19 +1922,19 @@ fn apple_cache_service_preserves_loopback_publication_and_narrow_managed_mounts(
         .filter(|pair| pair[0] == "-p")
         .map(|pair| pair[1])
         .collect();
-    let exported: Value = serde_json::from_str(&fixture.run("endpoints")?.stdout)?;
-    let selection = owner_selection(&fixture)?;
-    let shared: Value =
-        serde_json::from_slice(&fs::read(selection.parent().unwrap().join("shared.json"))?)?;
+    let native: Value = serde_json::from_slice(&fs::read(
+        fixture
+            .root
+            .path()
+            .join("state/wrix/control/authority/native-plan.json"),
+    )?)?;
     assert_eq!(
         publications,
         [
-            format!(
-                "127.0.0.1:{}:8080",
-                exported["endpoints"]["cache_http"]["port"]
-            ),
-            format!("127.0.0.1:{}:3306", shared["sql_port"]),
-            format!("127.0.0.1:{}:3307", shared["sync_port"]),
+            format!("127.0.0.1:{}:8080", native["backend"]["cache"]),
+            format!("127.0.0.1:{}:3306", native["backend"]["sql"]),
+            format!("127.0.0.1:{}:4226", native["backend"]["compiler"]),
+            format!("127.0.0.1:{}:3307", native["backend"]["sync"]),
         ]
     );
     let layout = wrix_cache::backend::layout::Layout::resolve(
@@ -1900,8 +1956,7 @@ fn apple_cache_service_preserves_loopback_publication_and_narrow_managed_mounts(
     assert!(!args.contains(":/cache:ro"));
     assert!(args.lines().any(|arg| arg == "wrix-shared-service"));
     assert!(args.lines().any(|arg| arg == "wrix.dolt.shared=native-v1"));
-    let host = selection.parent().unwrap().parent().unwrap();
-    let data = host.join("service-data/dolt");
+    let data = fixture.root.path().join("state/wrix/service-data/dolt");
     assert!(
         args.lines()
             .any(|arg| arg == format!("{}:{}:rw", data.display(), data.display()))
@@ -2163,11 +2218,13 @@ fn cache_namespaces_reuse_the_selected_shared_owner_and_retire_without_removing_
         "endpoints",
         "--sandbox-cache",
     ]))?;
-    assert!(output.status.success(), "{}", output.stderr);
-    let guest: Value = serde_json::from_str(&output.stdout)?;
-    assert_eq!(
-        guest["endpoints"]["cache_http"],
-        json!({"host": "192.168.64.12", "port": 8080})
+    assert!(!output.status.success());
+    assert!(
+        output
+            .stderr
+            .contains("no verified stable Apple guest data route"),
+        "{}",
+        output.stderr
     );
     let owner_identity = wrix_core::path::WorkspaceHash::parse(
         fixture.metadata["workspace_hash"].as_str().unwrap(),
@@ -2278,7 +2335,11 @@ fn recovery_recreates_only_absent_or_stopped_selected_owner_and_preserves_data()
         let args = fs::read_to_string(fixture.root.path().join("run.argv"))?;
         assert!(args.contains("wrix.service.scope=host"));
         assert!(!args.contains("/var/lib/wrix/beads"));
-        assert!(!args.contains("/run/wrix"));
+        assert!(
+            !args
+                .lines()
+                .any(|argument| argument.ends_with(":/run/wrix:rw"))
+        );
         assert!(fixture.root.path().join("run.argv").exists());
         let output = fixture.run("start")?;
         assert!(output.status.success(), "{}", output.stderr);
@@ -2328,9 +2389,8 @@ fn invalid_rename_arguments_fail_before_host_state_or_runtime_access() -> TestRe
         vec!["service", "rename", "--host"],
         vec!["service", "rename", "valid", "extra"],
     ] {
-        let output = Command::new(env!("CARGO_BIN_EXE_wrix"))
+        let output = host_wrix_command_with_path(root.path(), &[])?
             .args(arguments)
-            .current_dir(root.path())
             .env("HOME", root.path().join("home"))
             .env("XDG_STATE_HOME", root.path().join("state"))
             .env("WRIX_CONTAINER_RUNTIME", "/missing/runtime")
@@ -2340,6 +2400,10 @@ fn invalid_rename_arguments_fail_before_host_state_or_runtime_access() -> TestRe
             String::from_utf8_lossy(&output.stderr).contains("rename <name>")
                 || String::from_utf8_lossy(&output.stderr)
                     .contains("invalid service container name")
+                || String::from_utf8_lossy(&output.stderr)
+                    .contains("--host is supported only for service information and stop"),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
         );
         assert!(fs::read_dir(root.path())?.next().is_none());
     }
@@ -2424,6 +2488,12 @@ fn repair_upgrades_cached_controller_and_recovers_backend_with_native_authentica
     let fixture = Fixture::shared_cache()?;
     // The old controller established its frontend endpoints while its backend
     // was live; only afterward did that backend disappear, as on the host.
+    fixture
+        .controller
+        .borrow_mut()
+        .as_mut()
+        .ok_or("missing owned controller")?
+        .stop()?;
     let manager = maintenance::Maintenance::start(fixture.root.path())?;
     fixture.server.borrow_mut().take();
     fs::write(fixture.root.path().join("runtime.json"), b"[]")?;
@@ -2466,7 +2536,9 @@ fn repair_upgrades_cached_controller_and_recovers_backend_with_native_authentica
         wrix_service::control::supervision::Package::load(&manager.control.join("package.json"))?,
         manager.package
     );
-    let output = fixture.run("recover")?;
+    let mut command = fixture.command()?;
+    manager.configure(&mut command);
+    let output = run_command(command.args(["service", "recover"]))?;
     assert!(output.status.success(), "{}", output.stderr);
     Ok(())
 }
@@ -2702,7 +2774,7 @@ fn recovery_finishes_interrupted_initial_creation_without_the_original_repositor
     assert_eq!(
         calls
             .lines()
-            .filter(|line| line.starts_with("run "))
+            .filter(|line| line.starts_with("run -d --name wrix-host-service "))
             .count(),
         1
     );
@@ -2783,7 +2855,7 @@ fn recovery_preserves_selection_when_authenticated_readiness_fails() -> TestResu
     assert_eq!(
         calls
             .lines()
-            .filter(|line| line.starts_with("run "))
+            .filter(|line| line.starts_with("run -d --name wrix-host-service "))
             .count(),
         1
     );
@@ -2866,7 +2938,9 @@ fn concurrent_recovery_creates_one_owner() -> TestResult {
     }
     let log = fs::read_to_string(fixture.root.path().join("runtime.log"))?;
     assert_eq!(
-        log.lines().filter(|line| line.starts_with("run ")).count(),
+        log.lines()
+            .filter(|line| line.starts_with("run -d --name wrix-host-service "))
+            .count(),
         1,
         "{log}"
     );
@@ -3093,7 +3167,9 @@ fn concurrent_service_starts_share_one_lifecycle_owner() -> TestResult {
     }
     let log = fs::read_to_string(fixture.root.path().join("runtime.log"))?;
     assert_eq!(
-        log.lines().filter(|line| line.starts_with("run ")).count(),
+        log.lines()
+            .filter(|line| line.starts_with("run -d --name wrix-host-service "))
+            .count(),
         1,
         "{log}"
     );

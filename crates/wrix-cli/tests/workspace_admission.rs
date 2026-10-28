@@ -4,6 +4,7 @@
 
 #[path = "workspace/admission_fixture.rs"]
 mod admission_fixture;
+mod common;
 #[path = "workspace/fixture.rs"]
 mod fixture;
 #[path = "workspace/hardening.rs"]

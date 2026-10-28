@@ -1186,9 +1186,10 @@ valid unchanged key through the Celler publication/signing path.
 - Cache commands read repository policy outside direnv without mutation.
   [test](../crates/wrix-cli/tests/cache_config.rs::cache_config_reads_repository_policy_outside_direnv_without_mutation)
 
-- Repository cache opt-out suppresses cache-only startup; environment overrides
-  and explicit service flags take precedence.
-  [test](../crates/wrix-cli/tests/service_cache.rs::repository_cache_opt_out_suppresses_startup_and_environment_can_override_it)
+- Repository cache opt-out suppresses workspace publication and cache endpoints;
+  environment overrides and explicit service flags take precedence. Explicit
+  service startup still prepares the shared deployment's required native roles.
+  [test](../crates/wrix-cli/tests/service_cache.rs::repository_cache_opt_out_suppresses_publication_and_environment_can_override_it)
 
 - Automatic publishing uses immutable resolved settings without consulting
   repository policy or ambient cache configuration.

@@ -114,7 +114,7 @@ fn exercise(platform: Platform, caller: &Path) {
         owner.inspect().unwrap(),
         wrix_service::nix_store::native::Reply::Ready { .. }
     ));
-    let signal = boundary::kill_daemon(&worker.runtime, id, &binding);
+    let signal = boundary::kill_daemon(&worker.runtime, &host, &selection);
     let deadline = Instant::now() + BUDGET;
     loop {
         let mut command = worker::recipe(&worker.runtime);
@@ -157,6 +157,12 @@ fn exercise(platform: Platform, caller: &Path) {
     );
     fs::write(control.join("fault-recheck"), b"check").unwrap();
     worker::milestone(&control, "fault-disconnected.json", &mut [&mut worker]);
+    let disconnected = observation::read(&control.join("fault-disconnected.json"));
+    assert_eq!(disconnected["native_disconnect_observed"], true);
+    assert!(
+        (1..=255).contains(&disconnected["client_exit_status"].as_u64().unwrap()),
+        "actual native client must fail after service death"
+    );
     assert!(
         matches!(
             owner.resume(),
@@ -190,5 +196,5 @@ fn exercise(platform: Platform, caller: &Path) {
     );
     refuses_replay(&local, &selection);
     local.close().unwrap();
-    fs::write(caller.parent().unwrap().join("native-measurements.json"), serde_json::to_vec_pretty(&serde_json::json!({"boundary":"isolated daemon-loss negative control; NOT public dispatch acceptance","native_signal":signal,"retained_native_owner":id,"disk_identity":disk_identity,"software_roots_retained":software_roots.len()})).unwrap()).unwrap();
+    fs::write(caller.parent().unwrap().join("native-measurements.json"), serde_json::to_vec_pretty(&serde_json::json!({"boundary":"isolated daemon-loss negative control; NOT public dispatch acceptance","native_signal":signal,"native_disconnect":disconnected,"retained_native_owner":id,"disk_identity":disk_identity,"software_roots_retained":software_roots.len()})).unwrap()).unwrap();
 }

@@ -1,8 +1,84 @@
-use super::{Fixture, legacy_services, snapshot};
+use super::{Fixture, legacy_services};
+use crate::common::{self, TestResult, set_mode};
+#[path = "../common/celler.rs"]
+mod celler;
+#[path = "../common/controller.rs"]
+#[expect(
+    dead_code,
+    reason = "consolidation binds the real controller to an existing admitted host root"
+)]
+mod controller;
+#[path = "../common/service_binding.rs"]
+#[expect(
+    dead_code,
+    reason = "fresh shared startup provisions its own issuer through production lifecycle"
+)]
+mod service_binding;
+
+struct Services {
+    controller: controller::Server,
+    _celler: celler::Server,
+    _sql: std::os::unix::net::UnixListener,
+}
+impl Services {
+    fn new(fixture: &Fixture) -> TestResult<Self> {
+        let root = fixture.root.path();
+        let bin = root.join("bin");
+        service_binding::create(root, &bin, "nix-descriptor")?;
+        for name in ["podman", "container", "skopeo"] {
+            fs::write(
+                bin.join(name),
+                concat!(
+                    include_str!("../fixtures/shared-readiness.sh"),
+                    "\n",
+                    include_str!("../fixtures/service-runtime.sh")
+                ),
+            )?;
+            set_mode(&bin.join(name), 0o700)?;
+        }
+        fs::write(root.join("image"), "installed")?;
+        let data = fixture.state().join("service-data/dolt");
+        wrix_core::private_directory::prepare_with_parents(&data)?;
+        wrix_core::private_directory::prepare_with_parents(&data.join("run"))?;
+        let sql = std::os::unix::net::UnixListener::bind(data.join("run/dolt.sock"))?;
+        let controller = controller::Server::start_at(root, &fixture.state())?;
+        #[cfg(target_os = "linux")]
+        let controller = controller::Server::supervise(controller, root, &fixture.state())?;
+        Ok(Self {
+            controller,
+            _celler: celler::Server::watch(root, None),
+            _sql: sql,
+        })
+    }
+
+    fn configure(&self, fixture: &Fixture, command: &mut Command) -> TestResult {
+        let root = fixture.root.path();
+        let path = std::env::join_paths(std::iter::once(root.join("bin")).chain(
+            std::env::split_paths(&std::env::var_os("PATH").ok_or("missing PATH")?),
+        ))?;
+        command
+            .env("PATH", path)
+            .env(
+                "XDG_STATE_HOME",
+                fixture.state().parent().ok_or("missing state parent")?,
+            )
+            .env("XDG_CACHE_HOME", root.join("cache"))
+            .env("WRIX_SERVICE_PACKAGE_BINDING", root.join("binding.json"))
+            .env("WRIX_CONTAINER_RUNTIME", root.join("bin/podman"))
+            .env("WRIX_TEST_CALLS", root.join("calls"))
+            .env("WRIX_TEST_JQ_BIN", common::command_path("jq")?)
+            .env("WRIX_TEST_IMAGE", root.join("image"))
+            .env("WRIX_TEST_RUNNING", root.join("running"))
+            .env("WRIX_TEST_RUN_ARGS", root.join("run.argv"))
+            .env("WRIX_TEST_DIGEST", format!("sha256:{}", "a".repeat(64)));
+        self.controller.configure(command)
+    }
+}
+
 use std::{
+    collections::BTreeMap,
     fs,
-    os::unix::fs::PermissionsExt,
-    path::Path,
+    path::{Path, PathBuf},
     process::{Command, Output},
 };
 use wrix_core::path::WorkspaceHash;
@@ -14,6 +90,34 @@ const DOCUMENTS: [&str; 5] = [
     "pending",
     "gcroots",
 ];
+
+fn snapshot(path: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+    let mut files = BTreeMap::new();
+    if !path.exists() {
+        return files;
+    }
+    for entry in fs::read_dir(path).unwrap() {
+        let entry = entry.unwrap();
+        let kind = entry.file_type().unwrap();
+        if kind.is_dir() {
+            files.extend(snapshot(&entry.path()));
+        } else if kind.is_symlink() {
+            files.insert(
+                entry.path(),
+                fs::read_link(entry.path())
+                    .unwrap()
+                    .as_os_str()
+                    .as_encoded_bytes()
+                    .to_vec(),
+            );
+        } else if kind.is_file() {
+            files.insert(entry.path(), fs::read(entry.path()).unwrap());
+        } else {
+            files.insert(entry.path(), Vec::new());
+        }
+    }
+    files
+}
 
 fn prepare(fixture: &Fixture, checkout: &Path) {
     fs::write(
@@ -27,16 +131,12 @@ fn prepare(fixture: &Fixture, checkout: &Path) {
             .status
             .success()
     );
-    let runtime = fixture.root.path().join("podman");
-    let bash = fixture.install("bash");
-    fs::write(&runtime, format!("#!{}\nset -euo pipefail\nif [[ \"$#\" == 5 && \"$5\" == --type=container && \"$1\" == inspect && \"$2\" == --format && \"$3\" == '{{{{.State.Running}}}}' && \"$4\" == checkout-service ]]; then printf 'Error: no such container\\n' >&2; exit 125; fi\nprintf 'unexpected runtime arguments: %s\\n' \"$*\" >&2\nexit 64\n", bash.display())).unwrap();
-    fs::set_permissions(runtime, fs::Permissions::from_mode(0o700)).unwrap();
 }
 
-fn run(fixture: &Fixture, checkout: &Path, args: &[&str]) -> Output {
-    let output = fixture
-        .application_command(checkout, args)
-        .env("WRIX_CONTAINER_RUNTIME", fixture.inside("podman"))
+fn run(fixture: &Fixture, services: &Services, checkout: &Path, args: &[&str]) -> Output {
+    let mut command = fixture.application_command(checkout, args);
+    services.configure(fixture, &mut command).unwrap();
+    let output = command
         .env("WRIX_UPSTREAM_SUBSTITUTERS", "")
         .env(
             "WRIX_SYSTEM",
@@ -92,15 +192,31 @@ fn host_service_and_cache_commands_create_database_records_without_metadata_expo
     );
     let checkout = fixture.repository("checkout");
     prepare(&fixture, &checkout);
+    let services = Services::new(&fixture).unwrap();
     let key = WorkspaceHash::from_path(&checkout);
     let native = fixture.state().join("workspaces").join(key.as_str());
-    run(&fixture, &checkout, &["service", "start", "--no-cache"]);
+    run(
+        &fixture,
+        &services,
+        &checkout,
+        &["service", "start", "--no-cache"],
+    );
     keys(&native, &key);
     let keys_before = snapshot(&native.join("keys"));
     assert_eq!(keys_before.len(), 2);
-    run(&fixture, &checkout, &["service", "cache", "publish"]);
+    run(
+        &fixture,
+        &services,
+        &checkout,
+        &["service", "cache", "publish"],
+    );
     let before = snapshot(&fixture.state());
-    let status = run(&fixture, &checkout, &["service", "cache", "status"]);
+    let status = run(
+        &fixture,
+        &services,
+        &checkout,
+        &["service", "cache", "status"],
+    );
     assert!(String::from_utf8_lossy(&status.stdout).contains("publication roots: 0"));
     assert_eq!(snapshot(&fixture.state()), before);
     assert_eq!(snapshot(&native.join("keys")), keys_before);
@@ -138,6 +254,7 @@ fn host_mutations_preserve_imported_files_while_retiring_database_pending_and_cl
     fixture.initialize();
     let checkout = fixture.repository("checkout");
     prepare(&fixture, &checkout);
+    let services = Services::new(&fixture).unwrap();
     let key = WorkspaceHash::from_path(&checkout);
     let native = legacy_services(&fixture, &key, "checkout-service");
     fs::create_dir(native.join("pending")).unwrap();
@@ -161,9 +278,19 @@ fn host_mutations_preserve_imported_files_while_retiring_database_pending_and_cl
             .status
             .success()
     );
-    run(&fixture, &checkout, &["service", "start", "--no-cache"]);
+    run(
+        &fixture,
+        &services,
+        &checkout,
+        &["service", "start", "--no-cache"],
+    );
     keys(&native, &key);
-    run(&fixture, &checkout, &["service", "cache", "publish"]);
+    run(
+        &fixture,
+        &services,
+        &checkout,
+        &["service", "cache", "publish"],
+    );
     for (path, bytes) in legacy {
         assert_eq!(fs::read(&path).unwrap(), bytes, "{}", path.display());
     }
@@ -174,6 +301,11 @@ fn host_mutations_preserve_imported_files_while_retiring_database_pending_and_cl
         |row| row.get(0),
     ).unwrap();
     assert_eq!(count, 0);
-    let status = run(&fixture, &checkout, &["service", "cache", "status"]);
+    let status = run(
+        &fixture,
+        &services,
+        &checkout,
+        &["service", "cache", "status"],
+    );
     assert!(String::from_utf8_lossy(&status.stdout).contains("pending records: 0"));
 }

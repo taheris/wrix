@@ -2,11 +2,7 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
 
-static __always_inline int build_user(void)
-{
-    return (__u32)bpf_get_current_uid_gid() == 30001;
-}
-
+/* Attachment to the owned work subtree applies across native UID mappings. */
 static __always_inline int public_ipv4(__u32 address)
 {
     __u32 ip = bpf_ntohl(address);
@@ -31,27 +27,27 @@ static __always_inline int public_ipv4(__u32 address)
 SEC("cgroup/connect4")
 int connect4(struct bpf_sock_addr *context)
 {
-    return !build_user() || public_ipv4(context->user_ip4);
+    return public_ipv4(context->user_ip4);
 }
 
 SEC("cgroup/sendmsg4")
 int sendmsg4(struct bpf_sock_addr *context)
 {
-    return !build_user() || public_ipv4(context->user_ip4);
+    return public_ipv4(context->user_ip4);
 }
 
 SEC("cgroup/connect6")
 int connect6(struct bpf_sock_addr *context)
 {
     (void)context;
-    return !build_user();
+    return 0;
 }
 
 SEC("cgroup/sendmsg6")
 int sendmsg6(struct bpf_sock_addr *context)
 {
     (void)context;
-    return !build_user();
+    return 0;
 }
 
 char LICENSE[] SEC("license") = "GPL";

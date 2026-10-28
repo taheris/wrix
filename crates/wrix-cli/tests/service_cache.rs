@@ -348,12 +348,12 @@ fn cache_start_bootstraps_host_private_issuer_without_static_fallback() -> TestR
         format!("{}\n", celler::KEY)
     );
     let requests = fs::read_to_string(fixture.root.path().join("celler-requests"))?;
-    assert_eq!(
-        requests,
-        format!(
-            "GET /_api/v1/cache-config/wrix-common-v1\nGET /_api/v1/cache-config/wrix-common-v1\nPATCH /_api/v1/cache-config/wrix-common-v1\nGET /_api/v1/cache-config/wrix-common-v1\nGET /_api/v1/cache-config/{namespace}\nPATCH /_api/v1/cache-config/{namespace}\nGET /_api/v1/cache-config/{namespace}\nGET /_api/v1/cache-config/wrix-common-v1\nGET /_api/v1/cache-config/wrix-common-v1\nPATCH /_api/v1/cache-config/wrix-common-v1\nGET /_api/v1/cache-config/wrix-common-v1\n"
-        )
-    );
+    for selected in ["wrix-common-v1", namespace.as_str()] {
+        assert!(requests.contains(&format!("GET /_api/v1/cache-config/{selected}\n")));
+        assert!(requests.contains(&format!("PATCH /_api/v1/cache-config/{selected}\n")));
+        assert!(requests.contains(&format!("POST /_api/v1/workflow/{selected}\n")));
+        assert!(requests.contains(&format!("DELETE /_api/v1/workflow/{selected}\n")));
+    }
     Ok(())
 }
 
@@ -450,7 +450,7 @@ fn cache_start_preserves_conflicting_verifier_without_committing_private_authori
 }
 
 #[test]
-fn cache_opt_out_creates_no_issuer_authority() -> TestResult {
+fn cache_opt_out_creates_no_workspace_publication_authority() -> TestResult {
     let fixture = Fixture::new()?;
     let output = run_command(
         fixture
@@ -461,9 +461,11 @@ fn cache_opt_out_creates_no_issuer_authority() -> TestResult {
     let metadata = fixture.endpoints(false)?;
     let state = PathBuf::from(metadata["state_root"].as_str().unwrap());
     let host = state.parent().unwrap().parent().unwrap();
-    assert!(!host.join("host-control").exists());
-    assert!(!host.join("service-data/celler").exists());
-    assert!(!fixture.root.path().join("run.argv").exists());
+    wrix_cache::backend::issuer::Authority::open(&host.join("host-control/celler-issuer"))?;
+    assert!(host.join("service-data/celler").is_dir());
+    assert!(!state.join("celler-publisher.json").exists());
+    assert!(!state.join("keys/cache.pub").exists());
+    assert!(fixture.root.path().join("run.argv").is_file());
     Ok(())
 }
 
@@ -540,11 +542,11 @@ fn absent_xdg_variables_select_home_based_platform_roots() -> TestResult {
 }
 
 #[test]
-fn temp_cache_only_start_never_creates_a_service_container() -> TestResult {
+fn temporary_workspace_start_prepares_shared_backend_without_namespace_endpoints() -> TestResult {
     let fixture = Fixture::new()?;
     let output = run_command(fixture.command("podman")?.args(["service", "start"]))?;
     assert!(output.status.success(), "{}", output.stderr);
-    assert!(!fixture.root.path().join("run.argv").exists());
+    assert!(fixture.root.path().join("run.argv").is_file());
     let endpoints = run_command(fixture.command("podman")?.args(["service", "endpoints"]))?;
     assert!(endpoints.status.success(), "{}", endpoints.stderr);
     let metadata: Value = serde_json::from_str(&endpoints.stdout)?;
@@ -555,7 +557,7 @@ fn temp_cache_only_start_never_creates_a_service_container() -> TestResult {
 }
 
 #[test]
-fn repository_cache_opt_out_suppresses_startup_and_environment_can_override_it() -> TestResult {
+fn repository_cache_opt_out_suppresses_publication_and_environment_can_override_it() -> TestResult {
     let fixture = Fixture::new()?;
     fs::write(fixture.workspace.join("wrix.toml"), "cache.enable = false")?;
     let output = run_command(
@@ -565,7 +567,7 @@ fn repository_cache_opt_out_suppresses_startup_and_environment_can_override_it()
             .env("WRIX_SERVICE_ALLOW_TEMP_CACHE", "1"),
     )?;
     assert!(output.status.success(), "{}", output.stderr);
-    assert!(!fixture.root.path().join("run.argv").exists());
+    assert!(fixture.root.path().join("run.argv").is_file());
     let metadata = fixture.endpoints(true)?;
     assert!(metadata["endpoints"]["cache_http"].is_null());
     assert!(!PathBuf::from(metadata["cache_root"].as_str().unwrap()).exists());
@@ -671,14 +673,15 @@ fn celler_layout_separates_managed_cache_data_from_host_authority() -> TestResul
                     .any(|arg| arg.ends_with(b":/cache:ro"))
             );
         } else {
-            assert!(!fixture.root.path().join("run.argv").exists());
+            assert!(fixture.root.path().join("run.argv").is_file());
+            assert!(!state_root.join("celler-publisher.json").exists());
         }
     }
     Ok(())
 }
 
 #[test]
-fn enabled_service_prepares_only_private_shared_celler_data_and_opt_out_does_not() -> TestResult {
+fn service_prepares_private_shared_data_and_scopes_publication_to_cache_opt_in() -> TestResult {
     use std::os::unix::fs::PermissionsExt as _;
 
     for cache in [false, true] {
@@ -713,10 +716,10 @@ fn enabled_service_prepares_only_private_shared_celler_data_and_opt_out_does_not
         let state = PathBuf::from(metadata["state_root"].as_str().unwrap());
         assert_eq!(fs::metadata(&state)?.permissions().mode() & 0o777, 0o700);
         for mount in layout.mounts() {
-            assert_eq!(mount.source.is_dir(), cache);
+            assert!(mount.source.is_dir());
             assert!(!mount.source.starts_with(&fixture.workspace));
             assert!(!mount.source.starts_with(&state));
-            if cache {
+            {
                 assert_eq!(
                     fs::metadata(mount.source)?.permissions().mode() & 0o777,
                     0o700
@@ -915,7 +918,11 @@ fn service_start_uses_shared_image_digest_preflight_without_pruning() -> TestRes
                         fixture.root.path().join("binding.json"),
                     ),
             )?;
-            assert!(output.status.success(), "{}", output.stderr);
+            assert!(
+                output.status.success(),
+                "runtime={runtime} installed={installed}: {}",
+                output.stderr
+            );
             assert!(source.exists());
             let calls = String::from_utf8(fs::read(fixture.root.path().join("calls"))?)?;
             let args = calls.split('\0').collect::<Vec<_>>();
@@ -937,11 +944,7 @@ fn service_start_uses_shared_image_digest_preflight_without_pruning() -> TestRes
                 usize::from(!installed && runtime == "container")
             );
             let args = fs::read(fixture.root.path().join("run.argv"))?;
-            let target = if runtime == "podman" {
-                digest.as_bytes()
-            } else {
-                b"wrix-service:test"
-            };
+            let target = digest.as_bytes();
             assert!(args.split(|byte| *byte == 0).any(|arg| arg == target));
             if runtime == "podman" {
                 assert!(
@@ -994,14 +997,12 @@ fn selected_owner_preserves_its_record_when_the_callers_package_changes() -> Tes
         let key = fs::read(state.join("keys/cache.pub"))?;
         let selected: Value = serde_json::from_slice(&before)?;
         assert_eq!(selected["schema_version"], 3);
-        if runtime == "podman" {
+        {
             assert_eq!(selected["recipe"]["binding"]["image"], "wrix-service:test");
             assert_eq!(
                 selected["recipe"]["image_id"],
                 format!("sha256:{}", "a".repeat(64))
             );
-        } else {
-            assert!(selected.get("recipe").is_none());
         }
         let binding = fixture.root.path().join("binding.json");
         let mut caller: Value = serde_json::from_slice(&fs::read(&binding)?)?;
@@ -1020,10 +1021,6 @@ fn selected_owner_preserves_its_record_when_the_callers_package_changes() -> Tes
         let args = fs::read(fixture.root.path().join("run.argv"))?;
         let mut args: Vec<_> = args.split(|byte| *byte == 0).map(<[u8]>::to_vec).collect();
         let image = args.len() - 5;
-        if runtime == "container" {
-            assert_eq!(args[image], b"wrix-service:test");
-            continue;
-        }
         assert_eq!(args[image], format!("sha256:{}", "a".repeat(64)).as_bytes());
         args[image] = format!("sha256:{}", "b".repeat(64)).into_bytes();
         let changed = args.join(&0);

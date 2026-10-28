@@ -46,7 +46,8 @@ def cli(workspace, *args, success=True):
 
 def sql(client, query, success=True):
     creds = client['credentials']
-    return run(['dolt', '--host', '127.0.0.1', '--port', '3306', '--no-tls', '--password', creds['password'],
+    endpoints = json.loads((root / 'state/wrix/control/authority/role-endpoints.json').read_text())
+    return run(['dolt', '--host', '127.0.0.1', '--port', str(endpoints['ports'][0]), '--no-tls', '--password', creds['password'],
                 '--user', creds['user'], '--use-db', creds['database'], 'sql', '-r', 'json', '-q', query],
                root, {'DOLT_CLI_PASSWORD': creds['password']}, success)
 
@@ -162,7 +163,8 @@ try:
     assert len(json.loads(sql(renewed, 'SELECT * FROM marker').stdout)['rows']) == 4
     calls = [json.loads(line) for line in (root / 'runtime.log').read_text().splitlines()]
     runs = [call for call in calls if call[0] == 'run']
-    assert len(runs) == 1, runs
+    assert len(runs) == 2, runs
+    assert sorted(call[call.index('--name') + 1] for call in runs) == ['wrix-gateway-1', 'wrix-host-service'], runs
     assert not any(call[0] == 'rm' for call in calls), calls
     assert 'wrix.dolt.shared=native-v1' in runs[0]
     for workspace, client in zip(workspaces, clients):

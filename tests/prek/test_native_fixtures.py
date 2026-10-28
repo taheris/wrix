@@ -17,6 +17,8 @@ MEMBERS = {
     "WRIX_TEST_DEVSHELL_HOOK": "devshell-hook",
     "WRIX_TEST_CELLERD": "cellerd",
     "WRIX_TEST_CONTROLLER_BINDING": "controller-binding",
+    "WRIX_TEST_SCCACHE": "compiler",
+    "WRIX_TEST_SQL_CLIENT": "sql-client",
 }
 
 

@@ -240,6 +240,18 @@ pub async fn serve(data: &Path, gate: Gate) -> Result<(), io::Error> {
     let tcp = TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, 3306)).await?;
     let control = UnixListener::bind(CONTROL)?;
     fs::set_permissions(CONTROL, fs::Permissions::from_mode(0o600))?;
+    serve_on(data, gate, tcp, unix, control).await
+}
+
+/// Serve already-owned descriptors; the embedding supervisor retains the original data lock.
+/// Addresses and data authority are never selected by SQL clients or control messages.
+pub async fn serve_on(
+    data: &Path,
+    gate: Gate,
+    tcp: TcpListener,
+    unix: UnixListener,
+    control: UnixListener,
+) -> Result<(), io::Error> {
     let capacity = Arc::new(tokio::sync::Semaphore::new(1024));
     let control_capacity = Arc::new(tokio::sync::Semaphore::new(32));
     let mut tasks = JoinSet::new();

@@ -192,7 +192,7 @@ let
     inherit pkgs;
     celler = cellerPackage;
     packagedWrix = wrixPackage;
-    controller = controllerPackage;
+    controller = workspace.bin;
     inherit serviceImage;
     devshellHook = prekDevShellHook;
   };
@@ -323,6 +323,7 @@ in
   wrix = wrixPackage;
   binding = serviceBinding;
   inherit
+    controllerRuntime
     controllerBinding
     controllerPackage
     poolBinding

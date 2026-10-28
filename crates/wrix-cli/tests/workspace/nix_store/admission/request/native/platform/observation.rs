@@ -27,10 +27,21 @@ pub(super) fn independent(platform: Platform, first: &Value, second: &Value) {
     }
     assert_ne!(string(first, "machine"), "");
 }
-pub(super) fn service_boundary(platform: Platform, runtime: &Command, owner: &str, worker: &Value) {
-    let output = worker::execute(
-        runtime,
-        &["exec", owner, "/bin/cat", "/proc/sys/kernel/random/boot_id"],
+pub(super) fn service_boundary(
+    platform: Platform,
+    runtime: &Command,
+    owner: &str,
+    worker: &Value,
+    host: &wrix_state::host::Host,
+    selection: &Selection,
+) {
+    let output = boundary::command(runtime, host, selection, boundary::Observation::Boot)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "authenticated native boot observation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
     let boot = String::from_utf8(output.stdout).unwrap();
     assert_ne!(
@@ -225,22 +236,6 @@ pub(super) fn report(platform: Platform, control: &Path, workers: &[Value], elap
         "identical concurrent derivation was not observed building exactly once"
     );
     let resource_results = read(&control.join("first-resources.json"));
-    for field in [
-        "public_fod",
-        "private_fod_denied",
-        "ipv6_fod_denied",
-        "ordinary_network_denied",
-        "disk_bound",
-        "pids_bound",
-        "cpu_work_completed",
-        "oom_failed",
-        "live_output_preserved",
-    ] {
-        assert_eq!(
-            resource_results[field], true,
-            "missing actual resource result {field}"
-        );
-    }
     let report = json!({
         "service_before": read(&control.join("service-before.json")),
         "service_after": read(&control.join("service-after.json")),
@@ -261,6 +256,74 @@ pub(super) fn report(platform: Platform, control: &Path, workers: &[Value], elap
         serde_json::to_vec_pretty(&report).unwrap(),
     )
     .unwrap();
+}
+const RESOURCE_FIELDS: &[&str] = &[
+    "public_fod",
+    "private_fod_denied",
+    "ipv6_fod_denied",
+    "ordinary_network_denied",
+    "disk_bound",
+    "pids_bound",
+    "cpu_work_completed",
+    "oom_failed",
+    "live_output_preserved",
+];
+
+pub(super) fn verify_resources(control: &Path) {
+    let resource_results = read(&control.join("first-resources.json"));
+    for &field in RESOURCE_FIELDS {
+        assert_eq!(
+            resource_results[field], true,
+            "missing actual resource result {field}"
+        );
+    }
+    assert_eq!(
+        read(&control.join("service-after.json"))["unexpected_connections"],
+        json!([]),
+        "known-live controls observed an unauthorized connection"
+    );
+}
+
+#[test]
+fn resource_qualification_rejects_each_failed_or_missing_control_and_unexpected_connections() {
+    let root = tempfile::tempdir().unwrap();
+    let results = Value::Object(
+        RESOURCE_FIELDS
+            .iter()
+            .map(|field| ((*field).to_owned(), json!(true)))
+            .collect(),
+    );
+    let write = |results: &Value, connections: Value| {
+        fs::write(
+            root.path().join("first-resources.json"),
+            serde_json::to_vec(results).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            root.path().join("service-after.json"),
+            serde_json::to_vec(&json!({"unexpected_connections": connections})).unwrap(),
+        )
+        .unwrap();
+    };
+    write(&results, json!([]));
+    verify_resources(root.path());
+    for &field in RESOURCE_FIELDS {
+        for invalid in [json!(false), Value::Null] {
+            let mut rejected = results.clone();
+            rejected[field] = invalid;
+            write(&rejected, json!([]));
+            assert!(std::panic::catch_unwind(|| verify_resources(root.path())).is_err());
+        }
+        let mut missing = results.clone();
+        assert!(missing.as_object_mut().unwrap().remove(field).is_some());
+        write(&missing, json!([]));
+        assert!(std::panic::catch_unwind(|| verify_resources(root.path())).is_err());
+    }
+    write(
+        &results,
+        json!([{"peer": ["127.0.0.1", 18443], "bytes": 0}]),
+    );
+    assert!(std::panic::catch_unwind(|| verify_resources(root.path())).is_err());
 }
 
 #[test]

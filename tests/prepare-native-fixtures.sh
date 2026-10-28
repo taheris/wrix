@@ -12,8 +12,10 @@ main() {
     WRIX_TEST_DEVSHELL_HOOK
     WRIX_TEST_CELLERD
     WRIX_TEST_CONTROLLER_BINDING
+    WRIX_TEST_SCCACHE
+    WRIX_TEST_SQL_CLIENT
   )
-  local members=(hooks runner broken-runner builder-spec packaged-wrix devshell-hook cellerd controller-binding)
+  local members=(hooks runner broken-runner builder-spec packaged-wrix devshell-hook cellerd controller-binding compiler sql-client)
   local name index root fixtures="" missing=0 value
   local values=()
 

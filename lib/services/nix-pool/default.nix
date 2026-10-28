@@ -9,7 +9,14 @@ let
     ;
   network = import ./network.nix { inherit pkgs; };
   importer = import ./import.nix { inherit pkgs; };
-  resources = import ./resources.nix { inherit pkgs owner sshdConf; };
+  resources = import ./resources.nix {
+    inherit
+      pkgs
+      owner
+      sshdConf
+      network
+      ;
+  };
   sshdConf = writeText "nix-pool-sshd.conf" ''
     Port 2222
     ListenAddress 0.0.0.0
@@ -137,6 +144,17 @@ let
     export NIX_DAEMON_SOCKET_PATH=/nix/var/nix/daemon-socket/socket
     export SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
 
+    # TSI can retry a denied INET connection through VSOCK. Require a real
+    # virtio network device before opening or seeding the installed store.
+    bootstrap_phase=native-network
+    native_network=false
+    for driver in /sys/class/net/*/device/driver; do
+      if [[ $(readlink -e "$driver") == */virtio_net ]]; then
+        native_network=true
+      fi
+    done
+    [[ "$native_network" == true ]]
+
     refuse_retained() {
       printf 'Retained Nix state or uncertain ownership requires explicit host reconciliation.\n' >&2
       exit 73
@@ -185,8 +203,6 @@ let
       install -d -m 0700 "$root/filesystem" "$root/leases" "$root/incoming"
       ssh-keygen -q -t ed25519 -N "" -C "" -f "$root/host-key"
     fi
-    bootstrap_phase=network-policy
-    ${network.install}/bin/wrix-nix-pool-egress
     bootstrap_phase=filesystem-mount
     device=$(losetup --find --show "$root/store.ext4")
     mount -t ext4 -o nodev,nosuid "$device" "$root/filesystem"

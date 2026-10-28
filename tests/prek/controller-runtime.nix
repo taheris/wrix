@@ -1,5 +1,11 @@
 { pkgs }:
 let
+  backend =
+    name:
+    pkgs.writeScriptBin name ''
+      #!${pkgs.python3}/bin/python3
+      ${builtins.readFile ./backend-runtime.py}
+    '';
   manager = pkgs.writeShellScriptBin "systemctl" ''
     set -euo pipefail
     if [[ -n "''${WRIX_TEST_CONTROLLER_MANAGER:-}" ]]; then
@@ -30,5 +36,7 @@ pkgs.symlinkJoin {
   paths = [
     manager
     retention
+    (backend "container")
+    (backend "podman")
   ];
 }

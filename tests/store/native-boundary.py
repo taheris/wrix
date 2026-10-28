@@ -13,10 +13,22 @@ import sys
 
 ROOT = Path('/run/wrix-native-platform-control')
 OUTSIDE = Path('/var/empty/native-platform-outside-build')
+BPFTOOL = '@bpftool@'
+PORT = 18443
 
 
 def snapshot():
     base = Path('/sys/fs/cgroup/wrix-nix-pool')
+    devices = {driver.parent.parent.name: driver.resolve().name
+               for driver in Path('/sys/class/net').glob('*/device/driver')}
+    assert 'virtio_net' in devices.values(), devices
+    network = subprocess.run([BPFTOOL, '-j', 'cgroup', 'show',
+                              str(base / 'work'), 'effective'],
+                             check=True, capture_output=True)
+    processes = {}
+    for membership in base.rglob('cgroup.procs'):
+        processes[str(membership.relative_to(base))] = membership.read_text().splitlines()
+    unexpected = [json.loads(line) for line in (ROOT / 'unexpected').read_text().splitlines()]
     limits = {key: (base / key).read_text().strip() for key in (
         'cpu.max', 'memory.max', 'pids.max', 'work/memory.max', 'work/pids.max',
         'control/memory.max', 'control/pids.max', 'seed/memory.max', 'seed/pids.max')}
@@ -41,10 +53,10 @@ def snapshot():
     rows, nar_bytes = database.execute('select count(*), sum(narSize) from ValidPaths').fetchone()
     database.close()
     assert rows > 0 and nar_bytes > 0
-    with socket.create_connection(('127.0.0.1', 18443), timeout=3) as peer:
+    with socket.create_connection(('127.0.0.1', PORT), timeout=3) as peer:
         peer.sendall(b'probe\n')
         assert peer.recv(16) == b'ok\n'
-    with socket.create_connection(('::1', 18443), timeout=3) as peer:
+    with socket.create_connection(('::1', PORT), timeout=3) as peer:
         peer.sendall(b'probe\n')
         assert peer.recv(16) == b'ok\n'
     readable = subprocess.run([sys.executable, '-c',
@@ -52,9 +64,13 @@ def snapshot():
         user=30001, group=30000, check=True, capture_output=True)
     assert readable.stdout == b'known-live-readable-service-control\n'
     print(json.dumps({'limits': limits, 'events': events,
+                      'network_attachments': json.loads(network.stdout),
+                      'work_membership': processes,
+                      'unexpected_connections': unexpected,
                       'outside_readable_unprivileged': True,
                       'registered_paths': rows, 'registered_nar_bytes': nar_bytes,
                       'network_interfaces': Path('/proc/net/dev').read_text(),
+                      'network_devices': devices,
                       'block_io': Path('/proc/diskstats').read_text(),
                       'known_live_ipv4': True, 'known_live_ipv6': True}), flush=True)
 
@@ -63,55 +79,66 @@ def serve():
     ROOT.mkdir(mode=0o700)
     token = os.urandom(32).hex().encode()
     (ROOT / 'token').write_bytes(token)
+    (ROOT / 'unexpected').write_text('')
     with OUTSIDE.open('xb') as outside:
         outside.write(b'known-live-readable-service-control\n')
     OUTSIDE.chmod(0o644)
     listener = selectors.DefaultSelector()
     for family, host in ((socket.AF_INET, '127.0.0.1'), (socket.AF_INET6, '::1')):
         sock = socket.socket(family, socket.SOCK_STREAM)
-        sock.bind((host, 18443))
+        sock.bind((host, PORT))
         sock.listen(8)
         listener.register(sock, selectors.EVENT_READ)
     print(json.dumps({'ready': True, 'pid': os.getpid()}), flush=True)
     stopping = False
     while not stopping:
         for event, _ in listener.select(timeout=30):
-            connection, _ = event.fileobj.accept()
+            connection, address = event.fileobj.accept()
             with connection:
                 connection.settimeout(3)
                 message = connection.recv(128).strip()
                 if message == token:
                     stopping = True
-                else:
-                    assert message == b'probe', message
+                elif message != b'probe':
+                    with (ROOT / 'unexpected').open('a') as evidence:
+                        evidence.write(json.dumps({'peer': address, 'bytes': len(message)}) + '\n')
+                    continue
                 connection.sendall(b'ok\n')
     for key in list(listener.get_map().values()):
         listener.unregister(key.fileobj)
         key.fileobj.close()
     listener.close()
     (ROOT / 'token').unlink()
+    (ROOT / 'unexpected').unlink()
     OUTSIDE.unlink()
     ROOT.rmdir()
 
 
-assert os.geteuid() == 0
-assert Path('/etc/wrix/nix-pool-service').read_text() == '1\n'
-assert not Path('/etc/wrix/image-agent').exists()
-if sys.argv[1:] == ['serve']:
-    serve()
-elif sys.argv[1:] == ['snapshot']:
-    snapshot()
-elif sys.argv[1:] == ['stop']:
-    with socket.create_connection(('127.0.0.1', 18443), timeout=3) as peer:
-        peer.sendall((ROOT / 'token').read_bytes() + b'\n')
-        assert peer.recv(16) == b'ok\n'
-elif sys.argv[1:] == ['kill-daemon']:
-    configuration = json.loads(Path('/etc/wrix/nix-pool-native.json').read_text())
-    pid = int(Path('/run/wrix-nix-pool/daemon.pid').read_text())
-    assert pid > 1
-    assert os.path.realpath('/proc/' + str(pid) + '/exe') == os.path.realpath(configuration['nix_daemon'])
-    assert b'nix-daemon' in Path('/proc/' + str(pid) + '/cmdline').read_bytes()
-    os.kill(pid, signal.SIGKILL)
-    print(json.dumps({'signaled_native_daemon': pid, 'signal': int(signal.SIGKILL)}), flush=True)
-else:
-    raise SystemExit('invalid native service observation request')
+def main():
+    assert os.geteuid() == 0
+    assert Path('/etc/wrix/nix-pool-service').read_text() == '1\n'
+    assert not Path('/etc/wrix/image-agent').exists()
+    if sys.argv[1:] == ['boot-id']:
+        print(Path('/proc/sys/kernel/random/boot_id').read_text(), end='', flush=True)
+    elif sys.argv[1:] == ['serve']:
+        serve()
+    elif sys.argv[1:] == ['snapshot']:
+        snapshot()
+    elif sys.argv[1:] == ['stop']:
+        with socket.create_connection(('127.0.0.1', PORT), timeout=3) as peer:
+            peer.sendall((ROOT / 'token').read_bytes() + b'\n')
+            assert peer.recv(16) == b'ok\n'
+    elif sys.argv[1:] == ['kill-daemon']:
+        configuration = json.loads(Path('/etc/wrix/nix-pool-native.json').read_text())
+        pid = int(Path('/run/wrix-nix-pool/daemon.pid').read_text())
+        assert pid > 1
+        assert os.path.realpath('/proc/' + str(pid) + '/exe') == os.path.realpath(configuration['nix_daemon'])
+        assert b'nix-daemon' in Path('/proc/' + str(pid) + '/cmdline').read_bytes()
+        os.kill(pid, signal.SIGKILL)
+        print(json.dumps({'signaled_native_daemon': pid, 'signal': int(signal.SIGKILL)}), flush=True)
+    else:
+        raise SystemExit('invalid native service observation request')
+
+
+if __name__ == '__main__':
+    main()

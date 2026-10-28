@@ -16,6 +16,13 @@ let
     WRIX_TEST_PREK_BUILD_SPEC = import ./bundle-build-spec.nix { inherit pkgs; };
     WRIX_TEST_PACKAGED_WRIX = "${packagedWrix}/bin/wrix";
     WRIX_TEST_CELLERD = "${celler}/bin/cellerd";
+    WRIX_TEST_SCCACHE = "${
+      import ../../crates/wrix-service/src/lifecycle/drain/native/compiler.nix { inherit pkgs; }
+    }/bin/sccache";
+    WRIX_TEST_SQL_CLIENT = pkgs.writeScript "native-sql-wire-client" ''
+      #!${pkgs.python3}/bin/python3
+      ${builtins.readFile ../../crates/wrix-cli/tests/fixtures/sql-client.py}
+    '';
   }
   // optionalAttrs (controller != null && serviceImage != null) {
     WRIX_TEST_CONTROLLER_BINDING = import ../../lib/services/control-binding.nix {
@@ -55,6 +62,14 @@ in
       {
         name = "cellerd";
         path = environment.WRIX_TEST_CELLERD;
+      }
+      {
+        name = "compiler";
+        path = environment.WRIX_TEST_SCCACHE;
+      }
+      {
+        name = "sql-client";
+        path = environment.WRIX_TEST_SQL_CLIENT;
       }
     ]
     ++ optionals (controller != null && serviceImage != null) [

@@ -149,7 +149,11 @@ are not shared-service templates. Builds cannot read service
 signing/admin/issuer state, peer workspaces or peer pools. Ordinary and
 fixed-output derivations obey the public-network-only baseline, including denied
 loopback, private and management destinations. Hash verification after execution
-is not egress enforcement.
+is not egress enforcement. Linux krun pool-service VMs use virtio-net through
+packaged passt so guest network controls mediate build egress; TSI is not an
+accepted transport for these owners. The runtime binds networking-enabled
+upstream libkrun and its packaged passt helper without changing the guest kernel
+or worker isolation.
 
 Service-owned finite CPU, memory, PID, concurrent-build and disk-admission
 bounds apply before work; worker environment/options cannot enlarge them.

@@ -13,7 +13,7 @@ pub struct Server {
 }
 
 impl Server {
-    pub fn start(root: &Path, port: u16) -> super::TestResult<Self> {
+    pub fn start(root: &Path, port: u16, public: u16) -> super::TestResult<Self> {
         let layout = wrix_cache::backend::layout::Layout::resolve(
             if cfg!(target_os = "macos") {
                 wrix_cache::backend::layout::Platform::Darwin
@@ -28,7 +28,7 @@ impl Server {
         fs::create_dir(&data)?;
         fs::create_dir(data.join("archives"))?;
         let config = format!(
-            "listen = {address:?}\nallowed-hosts = [{address:?}]\napi-endpoint = {endpoint:?}\nsoft-delete-caches = false\nrequire-proof-of-possession = true\n\
+            "listen = {address:?}\nallowed-hosts = [{address:?}, {public_address:?}]\napi-endpoint = {endpoint:?}\nsoft-delete-caches = false\nrequire-proof-of-possession = true\n\
             [database]\nurl = {database:?}\n\
             [storage]\ntype = \"local\"\npath = {archives:?}\n\
             [chunking]\nnar-size-threshold = 0\nmin-size = 16384\navg-size = 65536\nmax-size = 262144\n\
@@ -36,7 +36,8 @@ impl Server {
             [garbage-collection]\ninterval = \"0s\"\n\
             [jwt]\nrs256-public-key-file = {verifier:?}\n",
             address = format!("127.0.0.1:{port}"),
-            endpoint = format!("http://127.0.0.1:{port}/"),
+            public_address = format!("127.0.0.1:{public}"),
+            endpoint = format!("http://127.0.0.1:{public}/"),
             database = format!("sqlite://{}?mode=rwc", data.join("metadata.db").display()),
             archives = data.join("archives").display().to_string(),
             verifier = layout.metadata().join("jwt.pub").display().to_string(),

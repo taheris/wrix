@@ -280,6 +280,7 @@ let
     // (import ./sandbox/pi-settings.nix { inherit pkgs wrix; })
     // piMcpTests.checks
     // optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+      krun-passt-package-binding = import ./sandbox/krun-runtime.nix { inherit pkgs; };
       native-fixture-cleanup =
         pkgs.runCommandLocal "native-fixture-cleanup"
           {

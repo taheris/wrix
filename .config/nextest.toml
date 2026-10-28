@@ -4,7 +4,7 @@ experimental = ["setup-scripts"]
 max-threads = 1
 
 [[profile.default.overrides]]
-filter = "package(wrix-service) | (package(wrix-cli) & (binary(service_cache) | binary(service_lifecycle)))"
+filter = "package(wrix-service) | (package(wrix-cli) & (binary(service_cache) | binary(service_lifecycle) | (binary(workspace_admission) & test(hardening::consolidation))))"
 test-group = "deployment-role-ports"
 [scripts.setup.isolated-host-roots]
 command = ["bash", "tests/prepare-isolated-host-roots.sh"]
@@ -17,5 +17,5 @@ setup = "isolated-host-roots"
 command = ["bash", "tests/prepare-native-fixtures.sh"]
 
 [[profile.default.scripts]]
-filter = "(package(wrix-cli) & (binary(service_cache) | binary(service_lifecycle) | binary(init_config) | binary(init_idempotency) | binary(init_prek) | binary(prek_bundle_build) | binary(prek_runtime))) | (package(wrix-cache) & (binary(celler_backend) | binary(host_signed_exclusion))) | (package(wrix-service) & binary(celler_auth))"
+filter = "(package(wrix-cli) & (binary(service_cache) | binary(service_lifecycle) | binary(init_config) | binary(init_idempotency) | binary(init_prek) | binary(prek_bundle_build) | binary(prek_runtime) | (binary(workspace_admission) & test(hardening::consolidation)))) | (package(wrix-cache) & (binary(celler_backend) | binary(host_signed_exclusion))) | (package(wrix-service) & (binary(celler_auth) | binary(shared_startup)))"
 setup = "packaging-fixtures"

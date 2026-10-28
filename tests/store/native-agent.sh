@@ -19,18 +19,31 @@ workflow_phase=private-state
 events="/control/$name-nix-events.log"
 : > "$events"
 if [[ "$name" == fault ]]; then
+  workflow_phase=fault-probe
   nix store info --json | jq -e '.trusted == false'
   fault_path=$(nix build --impure --file "$WRIX_NATIVE_WORKFLOW" --out-link /workspace/fault-result --print-out-paths)
   [[ "$("$fault_path/bin/probe")" == installed ]]
+  # After fail-stop the real shared projection is unavailable, including
+  # sleep and nix. Wait using the already-running shell, with no executable
+  # copy or private-store fallback. This FIFO's open writer prevents EOF.
+  mkfifo /tmp/wrix-native-fault-wait
+  exec {fault_wait_fd}<> /tmp/wrix-native-fault-wait
   printf '%s' "$fault_path" > /control/fault-path
   printf '{"native_client_live":true}\n' > /control/fault-ready.json
-  while [[ ! -f /control/fault-recheck ]]; do sleep 0.05; done
+  while [[ ! -f /control/fault-recheck ]]; do
+    read -r -t 0.05 -u "$fault_wait_fd" || :
+  done
   if nix store info --json > /control/fault-disconnect.log 2>&1; then
     printf 'Service endpoint survived unclean daemon death without fail-stop\n' >&2
     exit 74
+  else
+    fault_disconnect_status=$?
   fi
-  printf '{"native_disconnect_observed":true}\n' > /control/fault-disconnected.json
-  while [[ ! -f /control/fault-exit ]]; do sleep 0.05; done
+  printf '{"native_disconnect_observed":true,"client_exit_status":%s}\n' "$fault_disconnect_status" > /control/fault-disconnected.json
+  while [[ ! -f /control/fault-exit ]]; do
+    read -r -t 0.05 -u "$fault_wait_fd" || :
+  done
+  exec {fault_wait_fd}>&-
   exit 0
 fi
 if [[ "$name" == peer ]]; then
@@ -158,22 +171,32 @@ jq -n --arg path "$path" --rawfile run_stdout "/control/$name-run" --slurpfile i
 mv "/control/$name-done.json.tmp" "/control/$name-done.json"
 if [[ "$name" == first ]]; then
   while [[ ! -f /control/resources-go ]]; do sleep 0.05; done
+  printf '{}\n' > /control/resource-results.json
   for kind in public private ipv6 ordinary disk pids cpu; do
-    result=$(nix-build --no-out-link --option substituters '' --expr "(import $WRIX_NATIVE_RESOURCES) \"$kind\"" 2> "/control/resource-$kind.log")
-    [[ "$(< "$result")" == ok ]]
+    workflow_phase="resource-$kind"
+    succeeded=false
+    if result=$(nix-build --no-out-link --option substituters '' --expr "(import $WRIX_NATIVE_RESOURCES) \"$kind\"" 2> "/control/resource-$kind.log"); then
+      if [[ -f "$result" && "$(< "$result")" == ok ]]; then succeeded=true; fi
+    fi
+    jq --arg kind "$kind" --argjson succeeded "$succeeded" '. + {($kind): $succeeded}' /control/resource-results.json > /control/resource-results.json.tmp
+    mv /control/resource-results.json.tmp /control/resource-results.json
   done
+  workflow_phase=resource-memory
+  oom_failed=true
   if nix-build --no-out-link --option substituters '' --expr "(import $WRIX_NATIVE_RESOURCES) \"memory\"" > /control/resource-memory.log 2>&1; then
-    printf 'Unbounded service build memory\n' >&2
-    exit 72
+    oom_failed=false
   fi
   nix store info --json | jq -e '.trusted == false'
   [[ "$("$path/bin/probe")" == installed ]]
-  printf '{"public_fod":true,"private_fod_denied":true,"ipv6_fod_denied":true,"ordinary_network_denied":true,"disk_bound":true,"pids_bound":true,"cpu_work_completed":true,"oom_failed":true,"live_output_preserved":true}\n' > /control/first-resources.json
+  jq --argjson oom_failed "$oom_failed" '{public_fod:.public,private_fod_denied:.private,ipv6_fod_denied:.ipv6,ordinary_network_denied:.ordinary,disk_bound:.disk,pids_bound:.pids,cpu_work_completed:.cpu,oom_failed:$oom_failed,live_output_preserved:true}' /control/resource-results.json > /control/first-resources.json.tmp
+  mv /control/first-resources.json.tmp /control/first-resources.json
+  workflow_phase=controller-restart
   while [[ ! -f /control/recheck ]]; do sleep 0.05; done
   nix --log-format internal-json store info --json 2>> "$events" | jq -e '.trusted == false'
   nix --log-format internal-json build --impure --file "$WRIX_NATIVE_WORKFLOW" --out-link /workspace/after-controller-restart 2>> "$events"
   [[ "$("$path/bin/probe")" == installed ]]
   printf '{"native_client_survived":true}\n' > /control/first-resumed.json
 fi
+workflow_phase=retirement
 while [[ ! -f "/control/$name-exit" ]]; do sleep 0.05; done
 [[ "$("$HOME/.local/state/nix/profiles/native-test/bin/probe")" == installed ]]

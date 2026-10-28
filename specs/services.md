@@ -971,10 +971,10 @@ tenant or component compromise/fault isolation.
   pruning, MRU-eight eviction or a separate service-specific installer
   [test](../crates/wrix-cli/tests/service_cache.rs::service_start_uses_shared_image_digest_preflight_without_pruning)
 
-- Cache-only service startup is suppressed for temp-directory scratch
-  workspaces, so tests and integration runs do not create infrastructure solely
-  for scratch cache use
-  [test](../crates/wrix-cli/tests/service_cache.rs::temp_cache_only_start_never_creates_a_service_container)
+- Temp-directory scratch workspaces do not receive project-cache endpoints or
+  publication authority. Explicit service startup still prepares the shared
+  deployment's required native roles.
+  [test](../crates/wrix-cli/tests/service_cache.rs::temporary_workspace_start_prepares_shared_backend_without_namespace_endpoints)
 
 - Independent nested bead clones have independent standalone service identity;
   membership sharing follows [Workspace Admission](workspaces.md).
