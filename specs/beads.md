@@ -380,7 +380,7 @@ not by this spec.
 
 - The Linux launcher stages beads config/metadata but not `.beads/issues.jsonl`
   or other workspace beads files for sandboxed clients
-  [test](../crates/wrix-cli/tests/sandbox_launch.rs::launcher_stages_only_beads_config_and_metadata)
+  [test](../crates/wrix-sandbox/src/command/launch.rs::test::launcher_stages_only_beads_config_and_metadata)
 
 - A missing Dolt endpoint fails loudly instead of triggering JSONL auto-import
   or embedded Dolt recovery [system](verify:beads.no-embedded-fallback)

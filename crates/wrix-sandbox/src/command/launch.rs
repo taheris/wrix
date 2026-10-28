@@ -3271,6 +3271,34 @@ mod test {
     use crate::command::config::{MountMode, Platform, ProfileMount, SpawnMount};
 
     #[test]
+    fn launcher_stages_only_beads_config_and_metadata() {
+        use std::fs;
+
+        let workspace = tempfile::tempdir().unwrap();
+        let beads = workspace.path().join(".beads");
+        fs::create_dir(&beads).unwrap();
+        fs::write(beads.join("config.yaml"), "issue-prefix: wx\n").unwrap();
+        fs::write(beads.join("metadata.json"), r#"{"backend":"dolt"}"#).unwrap();
+        fs::write(beads.join("issues.jsonl"), "private issue\n").unwrap();
+        fs::write(beads.join("credentials"), "not client metadata\n").unwrap();
+
+        let source = Staging::with(|staging| {
+            let projected = super::stage_beads(workspace.path(), staging)?.unwrap();
+            for name in ["config.yaml", "metadata.json"] {
+                assert_eq!(fs::read(projected.join(name))?, fs::read(beads.join(name))?);
+            }
+            assert_eq!(fs::read_dir(&projected)?.count(), 2);
+            Ok(projected)
+        })
+        .unwrap();
+
+        assert!(!source.exists());
+        assert!(beads.join("issues.jsonl").is_file());
+        assert!(beads.join("credentials").is_file());
+        assert!(!beads.join("dolt").exists());
+    }
+
+    #[test]
     fn managed_beads_client_accepts_encoded_database_and_namespace_private_git() {
         for nibble in 0_u8..16 {
             let namespace = format!("{nibble:x}{}", "a".repeat(63));
