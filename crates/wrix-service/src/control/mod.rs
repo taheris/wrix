@@ -471,7 +471,8 @@ struct Request {
 pub enum Reply {
     CoreInterface {
         version: u16,
-        ports: [std::num::NonZeroU16; 4],
+        ports: [std::num::NonZeroU16; 5],
+        guest: Option<std::net::Ipv4Addr>,
     },
     Snapshot {
         version: u16,
@@ -756,12 +757,14 @@ impl Controller {
     fn apply(&self, operation: Operation) -> Result<Reply, Error> {
         match operation {
             Operation::InspectCore {} => {
+                let guest = self.endpoints.guest_address()?;
                 return Ok(self
                     .endpoints
                     .bound_ports()?
                     .map_or(Reply::Incompatible, |ports| Reply::CoreInterface {
-                        version: 1,
+                        version: 2,
                         ports,
+                        guest,
                     }));
             }
             Operation::InspectNixAppleWorker {} => {

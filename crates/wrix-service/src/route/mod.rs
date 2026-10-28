@@ -19,6 +19,9 @@ use rama_tcp::server::TcpListener;
 use thiserror::Error as ThisError;
 use tokio::{net::TcpStream, task::JoinSet};
 
+#[cfg(test)]
+mod guest_test;
+
 const BUFFER_BYTES: usize = 16 * 1024;
 const MAX_CONNECTIONS: usize = 1024;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -44,10 +47,17 @@ pub enum Role {
     CacheRead,
     Egress,
     Compiler,
+    Sync,
 }
 
 impl Role {
-    pub const ALL: [Self; 4] = [Self::Sql, Self::CacheRead, Self::Egress, Self::Compiler];
+    pub const ALL: [Self; 5] = [
+        Self::Sql,
+        Self::CacheRead,
+        Self::Egress,
+        Self::Compiler,
+        Self::Sync,
+    ];
 
     const fn index(self) -> usize {
         match self {
@@ -55,6 +65,7 @@ impl Role {
             Self::CacheRead => 1,
             Self::Egress => 2,
             Self::Compiler => 3,
+            Self::Sync => 4,
         }
     }
 }
@@ -67,26 +78,42 @@ pub enum Port {
 }
 
 /// A complete listener set allocated at creation, never extended by workspace registration.
-pub struct Listeners([TcpListener; 4]);
+pub struct Listeners([TcpListener; 5]);
 
 impl Listeners {
+    #[cfg(any(target_os = "macos", test))]
+    pub(crate) fn from_native(listeners: [tokio::net::TcpListener; 5]) -> Self {
+        Self(
+            listeners.map(|listener| {
+                TcpListener::from_tokio_tcp_listener(listener, Executor::default())
+            }),
+        )
+    }
+
     /// Bind the complete data listener set on physical-host loopback before publication.
     pub async fn bind(ports: [Port; 4]) -> Result<Self, Error> {
         let [sql, cache, egress, compiler] = ports;
+        Self::bind_with_sync([sql, cache, egress, compiler, Port::Available]).await
+    }
+
+    pub async fn bind_with_sync(ports: [Port; 5]) -> Result<Self, Error> {
+        let [sql, cache, egress, compiler, sync] = ports;
         Ok(Self([
             bind(sql).await?,
             bind(cache).await?,
             bind(egress).await?,
             bind(compiler).await?,
+            bind(sync).await?,
         ]))
     }
 
-    pub(crate) async fn bind_deployment(prior: [Option<NonZeroU16>; 4]) -> Result<Self, Error> {
+    pub(crate) async fn bind_deployment(prior: [Option<NonZeroU16>; 5]) -> Result<Self, Error> {
         Ok(Self([
             bind_role(Role::Sql, prior[0]).await?,
             bind_role(Role::CacheRead, prior[1]).await?,
             bind_role(Role::Egress, prior[2]).await?,
             bind_role(Role::Compiler, prior[3]).await?,
+            bind_role(Role::Sync, prior[4]).await?,
         ]))
     }
 
@@ -95,7 +122,7 @@ impl Listeners {
     }
 
     /// Split generation listeners from their host-only route capabilities before serving.
-    pub fn into_generation(self) -> Result<([TcpListener; 4], Generation), Error> {
+    pub fn into_generation(self) -> Result<([TcpListener; 5], Generation), Error> {
         let target = |role| -> Result<Arc<Target>, Error> {
             Ok(Arc::new(Target {
                 address: self.address(role)?,
@@ -107,6 +134,7 @@ impl Listeners {
             target(Role::CacheRead)?,
             target(Role::Egress)?,
             target(Role::Compiler)?,
+            target(Role::Sync)?,
         ]);
         Ok((self.0, generation))
     }
@@ -133,7 +161,7 @@ async fn bind_role(role: Role, prior: Option<NonZeroU16>) -> Result<TcpListener,
         }
     }
     let range = match role {
-        Role::Sql => 23_000..25_000,
+        Role::Sql | Role::Sync => 23_000..25_000,
         Role::CacheRead => 21_000..23_000,
         Role::Egress | Role::Compiler => return bind(Port::Available).await,
     };
@@ -157,10 +185,10 @@ struct Target {
 
 /// Host-owned capabilities refer only to the generation's creation-time data listeners.
 #[derive(Clone)]
-pub struct Generation([Arc<Target>; 4]);
+pub struct Generation([Arc<Target>; 5]);
 
 impl Generation {
-    pub(crate) fn from_native(addresses: [SocketAddr; 4]) -> Result<Self, Error> {
+    pub(crate) fn from_native(addresses: [SocketAddr; 5]) -> Result<Self, Error> {
         if addresses
             .iter()
             .any(|address| !address.ip().is_loopback() || address.port() == 0)
@@ -221,7 +249,7 @@ pub struct ReadyRoute {
 }
 
 #[derive(Clone, Default)]
-pub struct Selection(Arc<Mutex<[Option<Arc<Target>>; 4]>>);
+pub struct Selection(Arc<Mutex<[Option<Arc<Target>>; 5]>>);
 
 impl Selection {
     /// Switch only future admissions; accepted connections retain their original target.
@@ -255,6 +283,7 @@ impl Drop for Connection {
 /// One bounded front door for the deployment, independent of workspace count.
 pub struct FrontDoor {
     listeners: Listeners,
+    guest: Option<(Listeners, crate::control::serving::apple::Address)>,
     selection: Selection,
     capacity: usize,
 }
@@ -266,9 +295,30 @@ impl FrontDoor {
         }
         Ok(Self {
             listeners,
+            guest: None,
             selection: Selection::default(),
             capacity: capacity.get(),
         })
+    }
+
+    #[cfg(any(target_os = "macos", test))]
+    pub(crate) fn with_guest(
+        mut self,
+        listeners: Listeners,
+        address: crate::control::serving::apple::Address,
+    ) -> Self {
+        self.guest = Some((listeners, address));
+        self
+    }
+
+    async fn accept_guest(
+        &self,
+        role: Role,
+    ) -> io::Result<(rama_tcp::TcpStream, rama_net::address::SocketAddress)> {
+        match &self.guest {
+            Some((listeners, _)) => listeners.0[role.index()].accept().await,
+            None => std::future::pending().await,
+        }
     }
 
     pub fn selection(&self) -> Selection {
@@ -282,22 +332,35 @@ impl FrontDoor {
 
     /// Stop accepting on shutdown, then await existing streams without an idle deadline.
     pub async fn serve(self, shutdown: impl Future<Output = ()> + Send) -> Result<(), Error> {
-        let [sql, cache, egress, compiler] = &self.listeners.0;
+        let [sql, cache, egress, compiler, sync] = &self.listeners.0;
         let mut tasks = JoinSet::new();
         tokio::pin!(shutdown);
         loop {
-            let (role, accepted) = tokio::select! {
+            let (role, accepted, guest) = tokio::select! {
                 () = &mut shutdown => break,
                 result = tasks.join_next(), if !tasks.is_empty() => {
                     if let Some(result) = result { result?; }
                     continue;
                 }
-                stream = sql.accept() => (Role::Sql, stream),
-                stream = cache.accept() => (Role::CacheRead, stream),
-                stream = egress.accept() => (Role::Egress, stream),
-                stream = compiler.accept() => (Role::Compiler, stream),
+                stream = sql.accept() => (Role::Sql, stream, false),
+                stream = cache.accept() => (Role::CacheRead, stream, false),
+                stream = egress.accept() => (Role::Egress, stream, false),
+                stream = compiler.accept() => (Role::Compiler, stream, false),
+                stream = sync.accept() => (Role::Sync, stream, false),
+                stream = self.accept_guest(Role::Sql) => (Role::Sql, stream, true),
+                stream = self.accept_guest(Role::CacheRead) => (Role::CacheRead, stream, true),
+                stream = self.accept_guest(Role::Egress) => (Role::Egress, stream, true),
+                stream = self.accept_guest(Role::Compiler) => (Role::Compiler, stream, true),
+                stream = self.accept_guest(Role::Sync) => (Role::Sync, stream, true),
             };
-            let (stream, _) = accepted?;
+            let (stream, peer) = accepted?;
+            let peer: SocketAddr = peer.into();
+            if guest && !self.guest.as_ref().is_some_and(|(_, address)| {
+                matches!(peer.ip(), std::net::IpAddr::V4(ip) if address.accepts(ip))
+            }) {
+                tracing::warn!(?role, %peer, "guest-only role listener refused an outside-subnet peer");
+                continue;
+            }
             while let Some(result) = tasks.try_join_next() {
                 result?;
             }
@@ -330,6 +393,7 @@ impl FrontDoor {
             });
         }
         drop(self.listeners);
+        drop(self.guest);
         while let Some(result) = tasks.join_next().await {
             result?;
         }

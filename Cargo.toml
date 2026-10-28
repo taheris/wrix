@@ -31,7 +31,8 @@ displaydoc = "0.2.5"
 fs2 = "0.4.3"
 httparse = "1.10.1"
 humantime = "2.4.0"
-socket2 = "0.6.1"
+socket2 = { version = "0.6.1", features = ["all"] }
+nix = { version = "0.31.3", default-features = false, features = ["net"] }
 libc = { version = "0.2.186", features = ["extra_traits"] }
 rama-core = { version = "=0.4.0", default-features = false, features = ["std"] }
 rama-http = { version = "=0.4.0", default-features = false }

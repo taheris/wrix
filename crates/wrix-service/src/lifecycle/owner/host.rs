@@ -207,7 +207,7 @@ pub(in crate::lifecycle) fn ensure(
     }
     let host = wrix_state::host::Host::discover().map_err(std::io::Error::other)?;
     let public = super::super::generation::controller(&host)?;
-    let shared = super::super::shared::Record::prepare_native(guard, public[0])?;
+    let shared = super::super::shared::Record::prepare_native(guard, public[0], public[4])?;
     if previous.is_none() && candidate.is_none() {
         selected.port = public[1];
     }
@@ -326,11 +326,11 @@ fn ready_all(runtime: &Runtime, selected: &Selected, root: &Path, issuer: &Path)
         runtime.native_cache_port(&selected.container, selected.port)?,
     )?;
     sql_ready(runtime, selected, root)?;
-    if let Some((sql, cache, compiler)) =
+    if let Some((sql, cache, compiler, sync)) =
         super::super::shared::Record::at(&root.join("host-lifecycle"))?
             .and_then(|record| record.native_ports())
     {
-        super::super::generation::ensure(selected, sql, cache, compiler)?;
+        super::super::generation::ensure(selected, sql, cache, compiler, sync)?;
     }
     Ok(())
 }

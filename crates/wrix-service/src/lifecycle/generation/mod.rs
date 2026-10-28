@@ -267,6 +267,7 @@ struct Backend {
     sql: NonZeroU16,
     cache: NonZeroU16,
     compiler: NonZeroU16,
+    sync: NonZeroU16,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -326,12 +327,13 @@ impl Plan {
     pub(crate) const fn backend_open(&self) -> bool {
         self.backend_open
     }
-    pub(crate) fn routes(&self) -> [SocketAddr; 4] {
+    pub(crate) fn routes(&self) -> [SocketAddr; 5] {
         [
             self.backend.sql,
             self.backend.cache,
             self.gateway.data,
             self.backend.compiler,
+            self.backend.sync,
         ]
         .map(|port| SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port.get())))
     }
@@ -347,6 +349,7 @@ impl Plan {
             self.backend.sql.get(),
             self.backend.cache.get(),
             self.backend.compiler.get(),
+            self.backend.sync.get(),
         ]
         .iter()
         .all(|port| ports.contains(port))
@@ -525,7 +528,7 @@ pub(super) fn preflight_controller(host: &Host) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn controller(host: &Host) -> Result<[NonZeroU16; 4]> {
+pub(super) fn controller(host: &Host) -> Result<[NonZeroU16; 5]> {
     let root = host.roots().state().join("control");
     let package = Package::from_env().map_err(io::Error::other)?;
     let selected = match Package::load(&root.join("package.json")) {
@@ -555,8 +558,33 @@ pub(super) fn controller(host: &Host) -> Result<[NonZeroU16; 4]> {
         .enable_all()
         .build()?;
     match runtime.block_on(crate::control::Client::open(&root.join("authority")).map_err(io::Error::other)?.request(crate::control::Operation::InspectCore {})) {
-        Ok(crate::control::Reply::CoreInterface { version: 1, ports }) => Ok(ports),
+        Ok(crate::control::Reply::CoreInterface { version: 2, ports, .. }) => Ok(ports),
         Ok(_) | Err(_) => Err(Error::Operation { message: "running controller does not provide compatible native four-role routing and handoff; run `wrix service stop --host`, then `wrix service update`; no backend was replaced".into() }),
+    }
+}
+
+pub(crate) fn retained_sync_port(state: &Path) -> Result<Option<NonZeroU16>> {
+    Ok(super::shared::Record::at(&state.join("host-lifecycle"))?
+        .and_then(|record| record.public_sync_port()))
+}
+
+pub(super) fn guest_endpoint(state: &Path, role: crate::route::Role) -> Result<SocketAddrV4> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let client = crate::control::Client::open(&authority(state)).map_err(io::Error::other)?;
+    match runtime.block_on(client.request(crate::control::Operation::InspectCore {})).map_err(io::Error::other)? {
+        crate::control::Reply::CoreInterface { version: 2, ports, guest: Some(address) } if address.is_private() => {
+            let index = match role {
+                crate::route::Role::Sql => 0,
+                crate::route::Role::CacheRead => 1,
+                crate::route::Role::Egress => 2,
+                crate::route::Role::Compiler => 3,
+                crate::route::Role::Sync => 4,
+            };
+            Ok(SocketAddrV4::new(address, ports[index].get()))
+        }
+        _ => Err(Error::Operation { message: "the running controller has no verified stable Apple guest data route; explicit host maintenance is required, without direct-generation or wildcard fallback".into() }),
     }
 }
 
@@ -649,6 +677,7 @@ pub(super) fn ensure(
     sql: NonZeroU16,
     cache: NonZeroU16,
     compiler: NonZeroU16,
+    sync: NonZeroU16,
 ) -> Result<()> {
     let host = Host::discover().map_err(io::Error::other)?;
     let public = controller(&host)?;
@@ -702,6 +731,7 @@ pub(super) fn ensure(
                 sql,
                 cache,
                 compiler,
+                sync,
             },
             backend_open: true,
             obsolete: Vec::new(),
@@ -803,6 +833,7 @@ pub(super) fn activate_backend(
     sql: NonZeroU16,
     cache: NonZeroU16,
     compiler: NonZeroU16,
+    sync: NonZeroU16,
 ) -> Result<()> {
     let host = Host::discover().map_err(io::Error::other)?;
     let authority = authority(host.roots().state());
@@ -815,6 +846,7 @@ pub(super) fn activate_backend(
         sql,
         cache,
         compiler,
+        sync,
     };
     plan.backend_open = true;
     plan.publish(&authority)?;

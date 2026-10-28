@@ -41,6 +41,7 @@ struct Native {
     sql: NonZeroU16,
     cache: NonZeroU16,
     compiler: NonZeroU16,
+    sync: NonZeroU16,
 }
 
 impl Record {
@@ -91,28 +92,21 @@ impl Record {
     fn prepare(
         guard: &coordination::Guard,
         public_sql: NonZeroU16,
+        public_sync: NonZeroU16,
         transport: DoltTransport,
     ) -> Result<Self> {
         if let Some(record) = Self::at(guard.root())? {
             return Ok(record);
         }
         let tcp = transport == DoltTransport::Tcp;
-        let mut ports = (super::DOLT_PORT_START..super::DOLT_PORT_START + super::DOLT_PORT_WIDTH)
-            .filter(|port| *port != public_sql.get() && super::is_loopback_port_available(*port));
-        let mut next = || {
-            ports
-                .next()
-                .and_then(NonZeroU16::new)
-                .ok_or(Error::NoAvailableLoopbackPort {
-                    start: super::DOLT_PORT_START,
-                    end: super::DOLT_PORT_START + super::DOLT_PORT_WIDTH - 1,
-                })
-        };
+        if public_sql == public_sync {
+            return Err(super::owner::Error::Invalid.into());
+        }
         let record = Self {
             version: 1,
             tcp,
             sql_port: if tcp { Some(public_sql) } else { None },
-            sync_port: if tcp { Some(next()?) } else { None },
+            sync_port: if tcp { Some(public_sync) } else { None },
             native: None,
         };
         super::managed::atomic_write(
@@ -122,21 +116,29 @@ impl Record {
         Ok(record)
     }
 
-    pub fn prepare_native(guard: &coordination::Guard, public_sql: NonZeroU16) -> Result<Self> {
-        Self::prepare_native_for(guard, public_sql, DoltTransport::from_env()?)
+    pub fn prepare_native(
+        guard: &coordination::Guard,
+        public_sql: NonZeroU16,
+        public_sync: NonZeroU16,
+    ) -> Result<Self> {
+        Self::prepare_native_for(guard, public_sql, public_sync, DoltTransport::from_env()?)
     }
 
     fn prepare_native_for(
         guard: &coordination::Guard,
         public_sql: NonZeroU16,
+        public_sync: NonZeroU16,
         transport: DoltTransport,
     ) -> Result<Self> {
-        let mut record = Self::prepare(guard, public_sql, transport)?;
-        if record.sql_port.is_some_and(|port| port != public_sql) {
+        let mut record = Self::prepare(guard, public_sql, public_sync, transport)?;
+        if record.sql_port.is_some_and(|port| port != public_sql)
+            || record.sync_port.is_some_and(|port| port != public_sync)
+        {
             return Err(super::owner::Error::Conflict.into());
         }
         if record.native.is_none() {
             let listeners = [
+                std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?,
                 std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?,
                 std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?,
                 std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?,
@@ -149,6 +151,7 @@ impl Record {
                 sql: port(0)?,
                 cache: port(1)?,
                 compiler: port(2)?,
+                sync: port(3)?,
             });
             super::managed::atomic_write(
                 &guard.root().join("shared.json"),
@@ -158,11 +161,15 @@ impl Record {
         Ok(record)
     }
 
-    pub const fn native_ports(&self) -> Option<(NonZeroU16, NonZeroU16, NonZeroU16)> {
+    pub const fn native_ports(&self) -> Option<(NonZeroU16, NonZeroU16, NonZeroU16, NonZeroU16)> {
         match &self.native {
-            Some(native) => Some((native.sql, native.cache, native.compiler)),
+            Some(native) => Some((native.sql, native.cache, native.compiler, native.sync)),
             None => None,
         }
+    }
+
+    pub const fn public_sync_port(&self) -> Option<NonZeroU16> {
+        self.sync_port
     }
 
     pub const fn public_sql_port(&self) -> Option<NonZeroU16> {
@@ -197,11 +204,13 @@ impl Record {
                 format!("127.0.0.1:{}:3306", native.sql),
                 "-p".into(),
                 format!("127.0.0.1:{}:4226", native.compiler),
+                "-p".into(),
+                format!("127.0.0.1:{}:3307", native.sync),
             ]);
         } else if let Some(sql) = self.sql_port {
             args.extend(["-p".into(), format!("127.0.0.1:{sql}:3306")]);
         }
-        if let Some(sync) = self.sync_port {
+        if let Some(sync) = self.sync_port.filter(|_| self.native.is_none()) {
             args.extend(["-p".into(), format!("127.0.0.1:{sync}:3307")]);
         }
         args
@@ -256,7 +265,13 @@ fn manager<'a>(
     runtime: &Runtime,
     authorization: &'a Authorization<'a>,
 ) -> Result<Manager<'a>> {
-    Ok(Manager::in_container(
+    let native = Record::read(plan.paths())?.is_some_and(|record| record.native_ports().is_some());
+    let open = if native {
+        Manager::in_native_container
+    } else {
+        Manager::in_container
+    };
+    Ok(open(
         authorization,
         plan.beads_sync_branch.clone(),
         Path::new(&runtime.binary),

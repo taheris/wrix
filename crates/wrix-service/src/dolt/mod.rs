@@ -17,6 +17,8 @@ use wrix_core::{git::Branch, path::WorkspaceHash};
 use crate::control::{Authorization, Permission};
 
 pub mod broker;
+#[cfg(all(test, target_os = "linux"))]
+mod native_admin_test;
 pub mod server;
 mod snapshot;
 mod source;
@@ -28,6 +30,25 @@ impl From<rustix::io::Errno> for Error {
 }
 
 /// Management transport is host-selected, never a tenant-provided command or address.
+#[derive(Clone, Copy)]
+enum Administration {
+    Legacy,
+    Private,
+}
+
+impl Administration {
+    const fn script(self) -> &'static str {
+        match self {
+            Self::Legacy => {
+                "export DOLT_CLI_PASSWORD=\"$(cat -- \"$1/admin.password\")\"; shift; exec dolt --host 127.0.0.1 --port 3306 --no-tls --password \"$DOLT_CLI_PASSWORD\" --user wrixadmin \"$@\""
+            }
+            Self::Private => {
+                "export DOLT_CLI_PASSWORD=\"$(cat -- \"$1/admin.password\")\"; shift; exec dolt --host 127.0.0.1 --port 13306 --no-tls --user wrixadmin \"$@\""
+            }
+        }
+    }
+}
+
 enum Executor {
     Tcp {
         port: std::num::NonZeroU16,
@@ -37,6 +58,7 @@ enum Executor {
         runtime: PathBuf,
         container: String,
         data: PathBuf,
+        administration: Administration,
     },
 }
 
@@ -267,6 +289,37 @@ impl<'a> Manager<'a> {
         runtime: &Path,
         container: &str,
     ) -> Result<Self, Error> {
+        Self::with_container(
+            authorization,
+            branch,
+            runtime,
+            container,
+            Administration::Legacy,
+        )
+    }
+
+    pub(crate) fn in_native_container(
+        authorization: &'a Authorization<'a>,
+        branch: Branch,
+        runtime: &Path,
+        container: &str,
+    ) -> Result<Self, Error> {
+        Self::with_container(
+            authorization,
+            branch,
+            runtime,
+            container,
+            Administration::Private,
+        )
+    }
+
+    fn with_container(
+        authorization: &'a Authorization<'a>,
+        branch: Branch,
+        runtime: &Path,
+        container: &str,
+        administration: Administration,
+    ) -> Result<Self, Error> {
         let host = wrix_state::host::Host::discover().map_err(|_| Error::Unauthorized)?;
         let data = host.roots().state().join("service-data/dolt");
         Self::with_executor(
@@ -277,6 +330,7 @@ impl<'a> Manager<'a> {
                 runtime: runtime.to_owned(),
                 container: container.to_owned(),
                 data,
+                administration,
             },
         )
     }
@@ -887,6 +941,7 @@ impl Executor {
                 runtime,
                 container,
                 data,
+                administration,
             } => {
                 command.arg(runtime).args(["exec", "-i", container]);
                 if let Some(credentials) = credentials {
@@ -905,7 +960,8 @@ impl Executor {
                         credentials.user(),
                     ]);
                 } else {
-                    command.args(["sh", "-c", "export DOLT_CLI_PASSWORD=\"$(cat -- \"$1/admin.password\")\"; shift; exec dolt --host 127.0.0.1 --port 3306 --no-tls --password \"$DOLT_CLI_PASSWORD\" --user wrixadmin \"$@\"", "wrix-admin"])
+                    command
+                        .args(["sh", "-c", administration.script(), "wrix-admin"])
                         .arg(data);
                 }
             }

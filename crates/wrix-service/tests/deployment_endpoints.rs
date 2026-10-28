@@ -45,6 +45,40 @@ async fn controller_role_leases_are_bound_persisted_and_reused() -> TestResult {
 }
 
 #[tokio::test]
+async fn legacy_four_role_leases_preserve_their_ports_when_adding_the_dolt_sync_plane() -> TestResult
+{
+    let _ports = ROLE_PORTS.lock().await;
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().canonicalize()?.join("controller");
+    let controller = Controller::bind(&root)?;
+    let listeners = controller.bind_role_listeners().await?;
+    let original = addresses(&listeners)?;
+    drop(listeners);
+    drop(controller);
+    fs::remove_file(root.join("control.sock"))?;
+    fs::write(
+        root.join("role-endpoints.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "version": 1, "ports": original[..4].iter().map(std::net::SocketAddr::port).collect::<Vec<_>>()
+        }))?,
+    )?;
+    let controller = Controller::bind(&root)?;
+    let listeners = controller.bind_role_listeners().await?;
+    let current = addresses(&listeners)?;
+    assert_eq!(&current[..4], &original[..4]);
+    assert_eq!(current.len(), 5);
+    assert!(tokio::net::TcpStream::connect(current[4]).await.is_ok());
+    let snapshot: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join("role-endpoints.json"))?)?;
+    assert_eq!(snapshot["version"], 2);
+    assert_eq!(
+        snapshot["ports"].as_array().ok_or("missing ports")?.len(),
+        5
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn busy_saved_role_port_falls_back_to_a_bound_persisted_loopback_listener() -> TestResult {
     let _ports = ROLE_PORTS.lock().await;
     let directory = tempfile::tempdir()?;

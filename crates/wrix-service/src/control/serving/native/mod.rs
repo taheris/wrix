@@ -107,7 +107,7 @@ async fn reconcile(
                 routes.reuse_role(&old.routes, Role::Egress);
             }
             if old.plan.same_backend(plan) {
-                for role in [Role::Sql, Role::CacheRead, Role::Compiler] {
+                for role in [Role::Sql, Role::CacheRead, Role::Compiler, Role::Sync] {
                     routes.reuse_role(&old.routes, role);
                 }
             }

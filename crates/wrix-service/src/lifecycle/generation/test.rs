@@ -34,6 +34,7 @@ fn plan() -> Plan {
             sql: NonZeroU16::new(31002).unwrap(),
             cache: NonZeroU16::new(31003).unwrap(),
             compiler: NonZeroU16::new(31004).unwrap(),
+            sync: NonZeroU16::new(31005).unwrap(),
         },
         backend_open: true,
         obsolete: Vec::new(),

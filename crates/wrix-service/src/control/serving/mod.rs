@@ -8,6 +8,29 @@ use std::{future::Future, net::SocketAddr, num::NonZeroUsize};
 use super::{Controller, Error};
 use crate::route::{FrontDoor, Role, Selection};
 
+#[cfg(target_os = "macos")]
+fn guest(controller: &Controller, front_door: FrontDoor) -> Result<FrontDoor, Error> {
+    let root = controller.authority_root()?;
+    let control = root.parent().ok_or(Error::PrivateRoot)?;
+    let package = super::supervision::Package::load(&control.join("package.json"))
+        .map_err(std::io::Error::other)?;
+    let tools = crate::nix_store::owner::backend::tools::Tools::for_package(&package)
+        .map_err(std::io::Error::other)?;
+    let observation = apple::discover(&tools)?;
+    let ports = controller
+        .endpoints
+        .bound_ports()?
+        .ok_or(Error::InvalidEndpoints)?;
+    let listeners = observation.bind(ports)?;
+    if apple::discover(&tools)? != observation {
+        return Err(Error::InvalidEndpoints);
+    }
+    controller
+        .endpoints
+        .publish_guest(observation.address().gateway())?;
+    Ok(front_door.with_guest(listeners, observation.address()))
+}
+
 /// One controller retains all role listeners; registration cannot replace or extend them.
 /// Listening does not establish native readiness, and every route starts closed.
 pub struct Host {
@@ -19,7 +42,10 @@ impl Host {
     pub async fn bind(controller: Controller, capacity: NonZeroUsize) -> Result<Self, Error> {
         let front_door = async {
             let listeners = controller.bind_role_listeners().await?;
-            Ok::<_, Error>(FrontDoor::new(listeners, capacity)?)
+            let front_door = FrontDoor::new(listeners, capacity)?;
+            #[cfg(target_os = "macos")]
+            let front_door = guest(&controller, front_door)?;
+            Ok::<_, Error>(front_door)
         }
         .await;
         match front_door {

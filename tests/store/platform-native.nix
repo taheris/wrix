@@ -159,7 +159,7 @@ let
       export WRIX_CONTROLLER_PACKAGE_BINDING=${wrix.rustPackage.controllerBinding}
       export WRIX_TEST_POOL_CONTROLLER_BINDING=${wrix.rustPackage.controllerBinding}
       export WRIX_TEST_POOL_CONTROLLER=${wrix.rustPackage.controllerPackage}/bin/wrix-host-controller
-      export WRIX_TEST_POOL_PROFILE=${worker.profileConfig}
+      export WRIX_TEST_POOL_PROFILE=${worker.image.profileConfig}
       export WRIX_TEST_POOL_WORKER_IMAGE=${images}
       export WRIX_TEST_POOL_NATIVE_INPUTS=${nativeInputs}
       export WRIX_TEST_POOL_UNSIGNED=${unsigned}

@@ -31,7 +31,13 @@ wrix-core = { workspace = true }
 wrix-state = { workspace = true }
 wrix-sandbox = { workspace = true }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+nix = { workspace = true }
+socket2 = { workspace = true }
+
 [dev-dependencies]
+nix = { workspace = true }
+socket2 = { workspace = true }
 attic = { workspace = true }
 reqwest = { workspace = true }
 wrix-cli = { workspace = true }

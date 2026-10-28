@@ -10,14 +10,14 @@ async fn unchanged_host_endpoint_pins_blue_stream_and_routes_new_requests_to_gre
         .unwrap()
         .into_generation()
         .unwrap();
-    let [_, _, egress, _] = blue_listeners;
+    let [_, _, egress, _, _] = blue_listeners;
     let blue = Fixture::on_listener(egress.into_inner(), 32).await;
     let (green_listeners, green_route) = Listeners::bind([Port::Available; 4])
         .await
         .unwrap()
         .into_generation()
         .unwrap();
-    let [_, _, egress, _] = green_listeners;
+    let [_, _, egress, _, _] = green_listeners;
     let green = Fixture::on_listener(egress.into_inner(), 32).await;
     let front = FrontDoor::new(
         Listeners::bind([Port::Available; 4]).await.unwrap(),

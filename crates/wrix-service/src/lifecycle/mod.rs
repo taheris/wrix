@@ -1448,6 +1448,16 @@ impl Runtime {
         }
         match self.kind {
             RuntimeKind::Container => {
+                if shared::Record::read(plan.paths())?
+                    .is_some_and(|record| record.native_ports().is_some())
+                {
+                    let role = match service {
+                        SandboxService::Dolt => crate::route::Role::Sql,
+                        SandboxService::Cache => crate::route::Role::CacheRead,
+                        SandboxService::Sync => crate::route::Role::Sync,
+                    };
+                    return generation::guest_endpoint(shared::host_root(plan)?, role);
+                }
                 let snapshot = self
                     .apple_snapshot(
                         match service {

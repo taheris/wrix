@@ -1,5 +1,7 @@
 //! A foreground native sccache owner shares the backend lifetime; probes exercise actual native compilation.
 
+mod startup;
+
 use crate::dolt::Error;
 use std::{
     fs, io,
@@ -270,6 +272,7 @@ pub fn released() -> Result<bool, Error> {
 pub async fn run(data: &Path, tcp: bool) -> Result<(), Error> {
     let cache = data.parent().ok_or(Error::UnsafePath)?.join("compiler");
     crate::dolt::private_directory(&cache)?;
+    let _startup = startup::prepare(&cache, Path::new("/run/wrix"))?;
     crate::dolt::private_directory(Path::new("/run/wrix/compiler"))?;
     crate::dolt::private_directory(Path::new("/run/wrix/celler"))?;
     crate::dolt::private_directory(Path::new("/run/wrix/compiler/execution/probe/workspace"))?;

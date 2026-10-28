@@ -9,7 +9,12 @@ fn fresh_native_tcp_state_uses_the_already_bound_controller_sql_port() -> TestRe
     let guard = coordination::acquire(&root.path().join("host-lifecycle"))?;
     let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?;
     let port = NonZeroU16::new(listener.local_addr()?.port()).ok_or("zero port")?;
-    let record = Record::prepare_native_for(&guard, port, DoltTransport::Tcp)?;
+    let record = Record::prepare_native_for(
+        &guard,
+        port,
+        NonZeroU16::new(23005).ok_or("zero sync port")?,
+        DoltTransport::Tcp,
+    )?;
     assert_eq!(record.public_sql_port(), Some(port));
     assert_ne!(record.sync_port, Some(port));
     assert_eq!(
@@ -27,10 +32,25 @@ fn retained_native_tcp_endpoint_conflict_refuses_without_rewriting_state() -> Te
     let guard = coordination::acquire(&root.path().join("host-lifecycle"))?;
     let first = NonZeroU16::new(23001).ok_or("zero port")?;
     let second = NonZeroU16::new(23002).ok_or("zero port")?;
-    Record::prepare_native_for(&guard, first, DoltTransport::Tcp)?;
+    Record::prepare_native_for(
+        &guard,
+        first,
+        NonZeroU16::new(23005).ok_or("zero sync port")?,
+        DoltTransport::Tcp,
+    )?;
     let before = fs::read(guard.root().join("shared.json"))?;
-    assert!(Record::prepare_native_for(&guard, second, DoltTransport::Tcp).is_err());
-    assert_eq!(fs::read(guard.root().join("shared.json"))?, before);
+    for (sql, sync) in [(second, 23005), (first, 23006)] {
+        assert!(
+            Record::prepare_native_for(
+                &guard,
+                sql,
+                NonZeroU16::new(sync).ok_or("zero sync port")?,
+                DoltTransport::Tcp
+            )
+            .is_err()
+        );
+        assert_eq!(fs::read(guard.root().join("shared.json"))?, before);
+    }
     Ok(())
 }
 

@@ -113,7 +113,15 @@ let
   };
   initialize = writeShellScript "nix-pool-initialize" ''
     set -euo pipefail
+    set -E
     umask 077
+    bootstrap_phase=admission
+    initialization_failed() {
+      local status="$?"
+      printf 'Nix pool initialization failed in %s (status %s).\n' "$bootstrap_phase" "$status" >&2
+      exit "$status"
+    }
+    trap initialization_failed ERR
 
     export PATH=${runtime}/bin:/bin:/usr/bin
     root=/var/lib/wrix/nix-pool
@@ -143,6 +151,7 @@ let
     if [[ ( -e "$root/store.ext4" || -L "$root/store.ext4" ) && ! -f "$root/bootstrap.json" ]]; then
       refuse_retained
     fi
+    bootstrap_phase=storage-preparation
     storage_mode=$(${owner}/bin/wrix-nix-pool-owner storage)
     if [[ "$storage_mode" == resume || "$storage_mode" == upgrade ]]; then
       [[ -f "$root/owner-active/version" && ! -L "$root/owner-active/version" ]]
@@ -176,7 +185,9 @@ let
       install -d -m 0700 "$root/filesystem" "$root/leases" "$root/incoming"
       ssh-keygen -q -t ed25519 -N "" -C "" -f "$root/host-key"
     fi
+    bootstrap_phase=network-policy
     ${network.install}/bin/wrix-nix-pool-egress
+    bootstrap_phase=filesystem-mount
     device=$(losetup --find --show "$root/store.ext4")
     mount -t ext4 -o nodev,nosuid "$device" "$root/filesystem"
     storage="$root/filesystem"
@@ -185,6 +196,10 @@ let
       [[ $(stat -c '%u:%g:%a' "$storage/nix/store") == 0:30000:1775 ]]
       [[ -f "$storage/nix/var/nix/db/db.sqlite" && ! -L "$storage/nix/var/nix/db/db.sqlite" ]]
     fi
+    bootstrap_phase=supervisor-classification
+    source ${./bootstrap-process.sh}
+    nix_pool_prepare_supervisor /sys/fs/cgroup /proc "$BASHPID"
+    bootstrap_phase=runtime-seeding
     if [[ "$storage_mode" == resume ]]; then
       mapfile -t roots < ${seedClosure}/store-paths
       roots+=("$(< "$root/owner-active/software")")
@@ -226,6 +241,7 @@ let
       sync "$storage/nix/var/nix/gcroots/bootstrap" "$storage/nix/var/nix"
       ${owner}/bin/wrix-nix-pool-owner seal
     fi
+    bootstrap_phase=canonical-activation
     if [[ "$data_owner" != 0:0 ]]; then
       if [[ "$storage_mode" != resume && "$storage_mode" != upgrade ]]; then
         install -d -m 0755 "$storage/export-root" "$root/export-root"
@@ -238,6 +254,7 @@ let
     [[ -f /etc/resolv.conf && ! -L /etc/resolv.conf ]]
     mount --bind ${filesystem}/etc/resolv.conf /etc/resolv.conf
     mount -o remount,bind,ro /etc/resolv.conf
+    bootstrap_phase=readonly-export
     if [[ "$storage_mode" == resume || "$storage_mode" == upgrade ]]; then
       for directory in nix nix/store bin etc etc/wrix run run/wrix-nix-pool var var/empty dev; do
         path="$root/export-root/$directory"
@@ -273,6 +290,7 @@ let
     mount --bind /dev/null "$root/export-root/dev/null"
     mount --bind /nix/store "$root/export-root/nix/store"
     mount -o remount,bind,ro,nodev,nosuid "$root/export-root/nix/store"
+    bootstrap_phase=daemon-startup
     exec ${resources}/bin/wrix-nix-pool-daemon
   '';
   bootstrap = writeShellScriptBin "wrix-nix-pool" ''

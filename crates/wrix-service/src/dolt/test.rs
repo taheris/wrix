@@ -16,6 +16,55 @@ use wrix_core::{git::Branch, path::WorkspaceHash};
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
+#[test]
+fn native_management_bypasses_the_tenant_admission_socket_without_exposing_a_password() {
+    let executor = super::Executor::Container {
+        runtime: "/nix/store/runtime/bin/podman".into(),
+        container: "wrix-host-service".into(),
+        data: "/service-data/dolt".into(),
+        administration: super::Administration::Private,
+    };
+    let command = executor.command(None, Some("controller"));
+    let arguments = command
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    let script = arguments
+        .iter()
+        .find(|arg| arg.starts_with("export DOLT_CLI_PASSWORD="))
+        .unwrap();
+    assert!(script.contains("--port 13306 --no-tls --user wrixadmin"));
+    assert!(!script.contains("--port 3306 "));
+    assert!(!script.contains("--password"));
+    assert!(arguments.iter().any(|arg| arg == "/service-data/dolt"));
+}
+
+#[test]
+fn native_tenant_queries_still_pass_through_the_accounted_public_sql_gate() {
+    let executor = super::Executor::Container {
+        runtime: "/nix/store/runtime/bin/podman".into(),
+        container: "wrix-host-service".into(),
+        data: "/service-data/dolt".into(),
+        administration: super::Administration::Private,
+    };
+    let credentials = Credentials {
+        database: super::database_name(&WorkspaceHash::parse(&"a".repeat(64)).unwrap()),
+        user: "a".repeat(32),
+        password: "b".repeat(64),
+    };
+    let command = executor.command(Some(&credentials), Some(credentials.database()));
+    let arguments = command
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    assert!(arguments.windows(2).any(|pair| pair == ["--port", "3306"]));
+    assert!(
+        !arguments
+            .iter()
+            .any(|arg| arg == "13306" || arg == "wrixadmin")
+    );
+}
+
 struct Server(Child);
 
 impl Drop for Server {

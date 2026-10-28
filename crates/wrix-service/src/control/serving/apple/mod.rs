@@ -9,6 +9,15 @@ pub struct Address {
     mask: u32,
 }
 impl Address {
+    #[cfg(test)]
+    pub(crate) fn loopback_for_test() -> Self {
+        Self {
+            gateway: Ipv4Addr::LOCALHOST,
+            network: u32::from(Ipv4Addr::new(127, 0, 0, 0)),
+            mask: 0xffff_ff00,
+        }
+    }
+
     pub const fn gateway(self) -> Ipv4Addr {
         self.gateway
     }
@@ -56,16 +65,68 @@ fn interface_name(name: &str, prefix: &str) -> bool {
     })
 }
 
-pub fn discover(tools: &crate::nix_store::owner::backend::tools::Tools) -> io::Result<Address> {
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Interface {
+    address: Address,
+    name: String,
+}
+
+impl Interface {
+    pub const fn address(&self) -> Address {
+        self.address
+    }
+
+    #[cfg(any(target_os = "macos", test))]
+    pub(crate) fn bind(
+        &self,
+        ports: [std::num::NonZeroU16; 5],
+    ) -> io::Result<crate::route::Listeners> {
+        use socket2::{Domain, Protocol, Socket, Type};
+        use std::num::NonZeroU32;
+        let index = NonZeroU32::new(
+            nix::net::if_::if_nametoindex(self.name.as_str()).map_err(io::Error::other)?,
+        )
+        .ok_or_else(invalid)?;
+        let bind = |port: std::num::NonZeroU16| -> io::Result<tokio::net::TcpListener> {
+            let socket = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP))?;
+            socket.bind_device_by_index_v4(Some(index))?;
+            socket.set_nonblocking(true)?;
+            socket
+                .bind(&std::net::SocketAddr::from((self.address.gateway(), port.get())).into())?;
+            socket.listen(128)?;
+            tokio::net::TcpListener::from_std(socket.into())
+        };
+        let listeners = [
+            bind(ports[0])?,
+            bind(ports[1])?,
+            bind(ports[2])?,
+            bind(ports[3])?,
+            bind(ports[4])?,
+        ];
+        if nix::net::if_::if_nametoindex(self.name.as_str()).map_err(io::Error::other)?
+            != index.get()
+        {
+            return Err(invalid());
+        }
+        Ok(crate::route::Listeners::from_native(listeners))
+    }
+}
+
+pub fn discover(tools: &crate::nix_store::owner::backend::tools::Tools) -> io::Result<Interface> {
     let observed = tools.apple_network().map_err(io::Error::other)?;
-    address(&observed.network, &observed.interfaces, &observed.release)
+    observation(&observed.network, &observed.interfaces, &observed.release)
+}
+
+#[cfg(test)]
+fn address(network: &[u8], interfaces: &[u8], darwin: &[u8]) -> io::Result<Address> {
+    observation(network, interfaces, darwin).map(|interface| interface.address)
 }
 
 /// Inputs must come from the selected native `container network inspect default`,
 /// `/sbin/ifconfig -a` and `/usr/bin/uname -r`, not caller configuration.
 /// Container 1.5 uses reserved vmnet by default on Darwin25/macOS26+, and allocationOnly
 /// earlier. The latter loses its host interface with a VM and cannot be a stable front door.
-fn address(network: &[u8], interfaces: &[u8], darwin: &[u8]) -> io::Result<Address> {
+fn observation(network: &[u8], interfaces: &[u8], darwin: &[u8]) -> io::Result<Interface> {
     if network.len() > 65_536 || interfaces.len() > 1_048_576 || darwin.len() > 128 {
         return Err(invalid());
     }
@@ -114,11 +175,14 @@ fn address(network: &[u8], interfaces: &[u8], darwin: &[u8]) -> io::Result<Addre
         network: u32::from(base),
         mask,
     };
-    if address.network & mask != address.network || !address.accepts(address.gateway) {
+    if address.network & mask != address.network
+        || !Ipv4Addr::from(address.network | !mask).is_private()
+        || !address.accepts(address.gateway)
+    {
         return Err(invalid());
     }
     let text = std::str::from_utf8(interfaces).map_err(io::Error::other)?;
-    let mut found = false;
+    let mut found = None;
     for section in sections(text) {
         let header = section.first().ok_or_else(invalid)?;
         let name = header.split_once(':').ok_or_else(invalid)?.0;
@@ -138,7 +202,7 @@ fn address(network: &[u8], interfaces: &[u8], darwin: &[u8]) -> io::Result<Addre
                 .split_once('<')
                 .and_then(|(_, flags)| flags.split_once('>').map(|(flags, _)| flags))
                 .ok_or_else(invalid)?;
-            if found
+            if found.is_some()
                 || !interface_name(name, "bridge")
                 || !flags.split(',').any(|flag| flag == "UP")
                 || !flags.split(',').any(|flag| flag == "RUNNING")
@@ -159,16 +223,16 @@ fn address(network: &[u8], interfaces: &[u8], darwin: &[u8]) -> io::Result<Addre
             {
                 return Err(invalid());
             }
-            found = true;
+            found = Some(name.to_owned());
         } else if addresses.iter().any(|ip| address.accepts(*ip)) && !interface_name(name, "vmenet")
         {
             return Err(invalid());
         }
     }
-    if !found {
-        return Err(invalid());
-    }
-    Ok(address)
+    Ok(Interface {
+        address,
+        name: found.ok_or_else(invalid)?,
+    })
 }
 fn sections(text: &str) -> Vec<Vec<&str>> {
     let mut result: Vec<Vec<&str>> = Vec::new();

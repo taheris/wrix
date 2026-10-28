@@ -11,6 +11,45 @@ fn resolve(value: &serde_json::Value, interfaces: &str, os: &str) -> io::Result<
         os.as_bytes(),
     )
 }
+#[tokio::test]
+async fn interface_bound_data_listeners_include_native_dolt_sync_without_wildcard_binding()
+-> Result<(), Box<dyn std::error::Error>> {
+    use std::num::NonZeroU16;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let reserved = (0..5)
+        .map(|_| std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)))
+        .collect::<io::Result<Vec<_>>>()?;
+    let ports = reserved
+        .iter()
+        .map(|listener| NonZeroU16::new(listener.local_addr()?.port()).ok_or_else(invalid))
+        .collect::<io::Result<Vec<_>>>()?;
+    let ports: [NonZeroU16; 5] = ports.try_into().map_err(|_| invalid())?;
+    drop(reserved);
+    let interface = Interface {
+        address: Address::loopback_for_test(),
+        name: if cfg!(target_os = "macos") {
+            "lo0"
+        } else {
+            "lo"
+        }
+        .into(),
+    };
+    let bound = interface.bind(ports)?;
+    for role in crate::route::Role::ALL {
+        assert!(bound.address(role)?.ip().is_loopback());
+    }
+    let endpoint = bound.address(crate::route::Role::Sync)?;
+    assert_eq!(endpoint.port(), ports[4].get());
+    let ([_, _, _, _, sync], _) = bound.into_generation()?;
+    let mut client = tokio::net::TcpStream::connect(endpoint).await?;
+    client.write_all(b"sync").await?;
+    let (mut stream, _) = sync.accept().await?;
+    let mut payload = [0; 4];
+    stream.read_exact(&mut payload).await?;
+    assert_eq!(&payload, b"sync");
+    Ok(())
+}
+
 #[test]
 fn reserved_default_vmnet_requires_positive_isolated_host_interface_evidence() {
     let result = resolve(&network(), INTERFACES, "25.0.0\n").unwrap();
@@ -34,6 +73,7 @@ fn allocation_only_and_non_native_networks_cannot_supply_stable_listener() {
         ("/0/configuration/plugin", json!("other")),
         ("/0/id", json!("foreign")),
         ("/0/status/ipv4Subnet", json!("192.168.64.0/33")),
+        ("/0/status/ipv4Subnet", json!("192.168.0.0/13")),
         ("/0/status/ipv4Subnet", json!("192.168.64.1/24")),
     ] {
         let mut native = network();

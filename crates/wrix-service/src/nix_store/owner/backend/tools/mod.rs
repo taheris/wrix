@@ -121,7 +121,7 @@ impl Tools {
         if !cfg!(all(target_os = "macos", target_arch = "aarch64")) {
             return Err(Error::Unsupported);
         }
-        self.check(System::Aarch64Linux)?;
+        self.check_system(System::Aarch64Linux)?;
         let mut command = self.command(Program::Container);
         command.args(["network", "inspect", "default"]);
         let budget = Some(Duration::from_secs(5));

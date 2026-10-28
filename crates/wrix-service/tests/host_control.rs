@@ -112,15 +112,15 @@ const BUDGET: Duration = Duration::from_secs(10);
 
 struct Peers {
     generation: Generation,
-    addresses: [SocketAddr; 4],
+    addresses: [SocketAddr; 5],
     task: JoinHandle<TestResult>,
 }
 
 impl Peers {
     async fn start(color: u8) -> TestResult<Self> {
         let listeners = Listeners::bind([Port::Available; 4]).await?;
-        let [a, b, c, d] = Role::ALL.map(|role| listeners.address(role));
-        let addresses = [a?, b?, c?, d?];
+        let [sql, cache, egress, compiler, sync] = Role::ALL.map(|role| listeners.address(role));
+        let addresses = [sql?, cache?, egress?, compiler?, sync?];
         let (listeners, generation) = listeners.into_generation()?;
         let task = tokio::spawn(async move {
             let mut servers = JoinSet::new();
@@ -966,8 +966,8 @@ async fn controller_host_retains_live_role_routes_during_concurrent_registration
             host.selection()
                 .select(peers.generation.confirm_ready(role))?;
         }
-        let [a, b, c, d] = Role::ALL.map(|role| host.address(role));
-        let addresses = [a?, b?, c?, d?];
+        let [sql, cache, egress, compiler, sync] = Role::ALL.map(|role| host.address(role));
+        let addresses = [sql?, cache?, egress?, compiler?, sync?];
         let leases = std::fs::read(root.join("role-endpoints.json"))?;
         let (stop, shutdown) = oneshot::channel();
         let task = tokio::spawn(host.serve(async { shutdown.await.unwrap() }));
@@ -1074,8 +1074,8 @@ async fn controller_host_restart_keeps_policy_but_not_route_readiness() -> TestR
         let host =
             wrix_service::control::serving::Host::bind(controller, NonZeroUsize::MIN).await?;
         assert_eq!(host.address(Role::Sql)?, address);
-        let [a, b, c, d] = Role::ALL.map(|role| host.address(role));
-        let addresses = [a?, b?, c?, d?];
+        let [sql, cache, egress, compiler, sync] = Role::ALL.map(|role| host.address(role));
+        let addresses = [sql?, cache?, egress?, compiler?, sync?];
         let (stop, shutdown) = oneshot::channel();
         let task = tokio::spawn(host.serve(async { shutdown.await.unwrap() }));
         for address in addresses {

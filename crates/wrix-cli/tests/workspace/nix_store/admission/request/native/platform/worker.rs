@@ -98,6 +98,10 @@ pub(super) fn launch(
         "WRIX_AGENT=direct",
         "-e",
         "WRIX_NETWORK=open",
+        "-e",
+        "GIT_TRACE=1",
+        "-e",
+        "GIT_TRACE_SETUP=1",
     ]);
     prepared.delivery().configure(&mut command);
     if platform == Platform::Apple {

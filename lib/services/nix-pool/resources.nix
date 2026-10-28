@@ -6,7 +6,15 @@
 
 pkgs.writeShellScriptBin "wrix-nix-pool-daemon" ''
   set -euo pipefail
+  set -E
   umask 077
+  resource_phase=admission
+  resources_failed() {
+    local status="$?"
+    printf 'Nix pool resource admission failed in %s (status %s).\n' "$resource_phase" "$status" >&2
+    exit "$status"
+  }
+  trap resources_failed ERR
   export PATH=${pkgs.coreutils}/bin:${pkgs.util-linux}/bin:${pkgs.nix}/bin
   [[ "$#" == 0 && $(id -u) == 0 ]]
   [[ -f /etc/wrix/nix-pool-service && ! -e /etc/wrix/image-agent ]]
@@ -14,15 +22,17 @@ pkgs.writeShellScriptBin "wrix-nix-pool-daemon" ''
   if [[ $(</proc/sys/vm/panic_on_oom) != 0 ]]; then
     printf '0\n' > /proc/sys/vm/panic_on_oom
   fi
+  resource_phase=bootstrap-processes
   supervisor=/sys/fs/cgroup/wrix-nix-pool-supervisor
-  [[ ! -e "$supervisor" ]]
-  mkdir "$supervisor"
-  mapfile -t bootstrap_pids < /sys/fs/cgroup/cgroup.procs
-  for pid in "''${bootstrap_pids[@]}"; do
-    [[ "$pid" == "$BASHPID" || "$pid" == "$PPID" ]]
-    printf '%s\n' "$pid" > "$supervisor/cgroup.procs"
-  done
-  [[ -z $(</sys/fs/cgroup/cgroup.procs) ]]
+  [[ -d "$supervisor" && ! -L "$supervisor" ]]
+  source ${./bootstrap-process.sh}
+  supervised=false
+  while read -r pid; do
+    if [[ "$pid" == "$BASHPID" ]]; then supervised=true; fi
+  done < "$supervisor/cgroup.procs"
+  [[ "$supervised" == true ]]
+  nix_pool_bootstrap_root_kernel /sys/fs/cgroup /proc
+  resource_phase=aggregate-limits
   base=/sys/fs/cgroup/wrix-nix-pool
   [[ ! -e "$base" && ! -e /run/wrix-nix-pool ]]
   printf '+cpu +memory +pids\n' > /sys/fs/cgroup/cgroup.subtree_control
@@ -55,6 +65,7 @@ pkgs.writeShellScriptBin "wrix-nix-pool-daemon" ''
   printf '96\n' > "$base/control/pids.max"
   printf '536870912\n' > "$base/memory.min"
   printf '536870912\n' > "$base/work/memory.min"
+  resource_phase=private-transport
   mkdir -m 0755 /run/wrix-nix-pool
   data_owner=$(</run/wrix-nix-pool-data-owner)
   host_key=/var/lib/wrix/nix-pool/host-key
@@ -66,6 +77,7 @@ pkgs.writeShellScriptBin "wrix-nix-pool-daemon" ''
   mount --rbind /var/lib/wrix/nix-pool/export-root /run/wrix-nix-pool/export-root
   [[ $(stat -c '%u:%g:%a' /run/wrix-nix-pool/export-root) == 0:0:755 ]]
   printf '%s\n' "$BASHPID" > /run/wrix-nix-pool/supervisor.pid
+  resource_phase=native-daemon
   exec 3<> /nix/var/nix/gc.lock
   flock --shared 3
   (
@@ -92,6 +104,7 @@ pkgs.writeShellScriptBin "wrix-nix-pool-daemon" ''
     printf 'Native Nix cgroup resource admission did not complete.\n' >&2
     exit 1
   fi
+  resource_phase=native-admission
   (
     printf '%s\n' "$BASHPID" > "$base/control/cgroup.procs"
     exec ${owner}/bin/wrix-nix-pool-owner serve <&3
@@ -111,6 +124,7 @@ pkgs.writeShellScriptBin "wrix-nix-pool-daemon" ''
     sleep 0.01
   done
   [[ "$protected" == true ]]
+  resource_phase=readonly-export
   export_root=/run/wrix-nix-pool/export-root
   touch "$export_root/run/wrix-nix-pool/admission.sock"
   mount --bind /run/wrix-nix-pool/admission.sock "$export_root/run/wrix-nix-pool/admission.sock"
@@ -122,6 +136,7 @@ pkgs.writeShellScriptBin "wrix-nix-pool-daemon" ''
   sshd_pid=$!
   printf '%s\n' "$sshd_pid" > /run/wrix-nix-pool/transport.pid
   printf '1\n' > /run/wrix-nix-pool/ready
+  resource_phase=serving
   completed=
   if wait -n -p completed "$daemon_pid" "$owner_pid" "$sshd_pid"; then
     status=0

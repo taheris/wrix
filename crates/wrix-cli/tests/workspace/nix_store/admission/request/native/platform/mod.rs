@@ -5,7 +5,7 @@ mod observation;
 mod worker;
 
 use super::*;
-use std::process::Command;
+use std::{os::unix::fs::PermissionsExt, process::Command};
 use wrix_sandbox::nix_store::{Attempt, Factory};
 use wrix_service::nix_store::worker::Connected;
 
@@ -194,16 +194,16 @@ fn run_case(platform: Platform, name: &str, case: fn(Platform, &Path), retain: b
         &std::env::current_exe().unwrap(),
         &["--ignored", "--exact", name, "--nocapture"],
     );
-    command.env(CALLER, &checkout);
+    let runtime_directory = fixture.root.path().join("runtime");
+    fs::create_dir_all(&runtime_directory).unwrap();
+    fs::set_permissions(&runtime_directory, fs::Permissions::from_mode(0o700)).unwrap();
+    command
+        .env(CALLER, &checkout)
+        .env("XDG_RUNTIME_DIR", &runtime_directory);
     for variable in INPUTS {
         command.env(variable, std::env::var_os(variable).unwrap());
     }
-    for variable in [
-        "USER",
-        "LOGNAME",
-        "DBUS_SESSION_BUS_ADDRESS",
-        "XDG_RUNTIME_DIR",
-    ] {
+    for variable in ["USER", "LOGNAME", "DBUS_SESSION_BUS_ADDRESS"] {
         if let Some(value) = std::env::var_os(variable) {
             command.env(variable, value);
         }
@@ -223,17 +223,31 @@ fn run_case(platform: Platform, name: &str, case: fn(Platform, &Path), retain: b
         fixture.root.disable_cleanup(false);
     }
 }
+fn public_spawn(checkout: &Path) -> serde_json::Value {
+    serde_json::json!({"workspace": checkout, "env": [], "agent_args": [], "nix_store": {"mode": "shared"}})
+}
+
+#[test]
+fn public_dispatch_fixture_uses_a_valid_production_spawn_config() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("spawn.json");
+    fs::write(
+        &path,
+        serde_json::to_vec(&public_spawn(root.path())).unwrap(),
+    )
+    .unwrap();
+    let config = wrix_sandbox::command::config::load_spawn_config(
+        &path,
+        wrix_sandbox::command::config::Platform::CURRENT,
+    )
+    .unwrap();
+    assert_eq!(config.workspace, root.path().to_str().unwrap());
+}
+
 fn public_gate(fixture: &Fixture, checkout: &Path) {
     let profile = PathBuf::from(std::env::var_os("WRIX_TEST_POOL_PROFILE").unwrap());
     let spawn = fixture.root.path().join("public-spawn.json");
-    fs::write(
-        &spawn,
-        serde_json::to_vec(
-            &serde_json::json!({"workspace": checkout, "nix_store": {"mode": "shared"}}),
-        )
-        .unwrap(),
-    )
-    .unwrap();
+    fs::write(&spawn, serde_json::to_vec(&public_spawn(checkout)).unwrap()).unwrap();
     let before = crate::fixture::snapshot(&fixture.state());
     let profile = profile.to_str().unwrap();
     let run = fixture.application(

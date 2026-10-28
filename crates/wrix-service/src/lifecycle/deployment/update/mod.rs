@@ -326,11 +326,12 @@ pub fn run() -> Result<String> {
     }
     intent.phase = Phase::Checking;
     publish(guard.root(), FILE, &intent)?;
-    let (sql, cache, compiler) = super::super::shared::Record::at(guard.root())?
+    let (sql, cache, compiler, sync) = super::super::shared::Record::at(guard.root())?
         .and_then(|record| record.native_ports())
         .ok_or(owner::Error::Invalid)?;
-    if let Err(error) = super::super::generation::activate_backend(&active, sql, cache, compiler)
-        .and_then(|()| crate::lifecycle::generation::confirm_target(&digest))
+    if let Err(error) =
+        super::super::generation::activate_backend(&active, sql, cache, compiler, sync)
+            .and_then(|()| crate::lifecycle::generation::confirm_target(&digest))
     {
         intent.failure = Some(Failure::NativeReadiness);
         publish(guard.root(), FILE, &intent)?;
