@@ -230,6 +230,38 @@ fn ordinary_service_cache_and_init_refuse_unknown_membership_before_effects() {
 }
 
 #[test]
+fn metadata_only_beads_endpoints_follow_checked_primary_not_caller_storage() {
+    let fixture = Fixture::new();
+    fixture.initialize();
+    let checkout = fixture.repository("checkout");
+    let primary = fixture.repository("primary");
+    fs::create_dir_all(fixture.root.path().join("primary/.beads")).unwrap();
+    fs::write(
+        fixture.root.path().join("primary/.beads/metadata.json"),
+        r#"{"backend":"dolt"}"#,
+    )
+    .unwrap();
+    fixture.adapter(&checkout, &primary, "workspace-one");
+    assert!(
+        fixture
+            .admit(&checkout, "workspace-one", &["--allocate"])
+            .status
+            .success()
+    );
+    let output = fixture.application(&checkout, &["service", "endpoints", "--no-cache"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let endpoints: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(endpoints["workspace_path"], primary.to_str().unwrap());
+    assert!(!endpoints["endpoints"]["dolt"].is_null(), "{endpoints}");
+    assert!(!fixture.root.path().join("primary/.beads/dolt").exists());
+    assert!(!fixture.root.path().join("checkout/.beads").exists());
+}
+
+#[test]
 fn admitted_service_uses_primary_scope_and_retains_key_after_move() {
     let fixture = Fixture::new();
     fixture.initialize();

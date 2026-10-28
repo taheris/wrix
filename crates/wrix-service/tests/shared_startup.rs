@@ -491,6 +491,57 @@ fn sql(client: &Value, query: &str) -> TestResult<std::process::Output> {
 }
 
 #[test]
+fn metadata_only_managed_client_keeps_scoped_sync_and_rejects_missing_or_stale_sql() -> TestResult {
+    let fixture = Fixture::new()?;
+    let acknowledged = fixture.run(
+        &fixture.first,
+        &["workspace", "acknowledge-scope", "--version", "1"],
+    )?;
+    assert_eq!(acknowledged["success"], true, "{acknowledged}");
+    let first = fixture.start(&fixture.first)?;
+    let second = fixture.start(&fixture.second)?;
+    fs::remove_dir_all(fixture.first.join(".beads/dolt"))?;
+    fs::remove_dir_all(fixture.second.join(".beads/dolt"))?;
+    for (workspace, original) in [(&fixture.first, &first), (&fixture.second, &second)] {
+        let ready = fixture.run(workspace, &["service", "dolt", "wait"])?;
+        assert_eq!(ready["success"], true, "{ready}");
+        let delivered = fixture.run(workspace, &["service", "dolt", "sandbox-client"])?;
+        assert_eq!(delivered["success"], true, "{delivered}");
+        let client: Value = serde_json::from_str(delivered["stdout"].as_str().unwrap())?;
+        assert_eq!(client["credentials"], original["credentials"]);
+        let endpoint: broker::Endpoint = serde_json::from_value(client["sync"].clone())?;
+        let credentials: Credentials = serde_json::from_value(client["credentials"].clone())?;
+        assert_eq!(
+            broker::request(&endpoint, &credentials, Sync::Push)?,
+            broker::Reply::Applied
+        );
+        assert!(!workspace.join(".beads/dolt").exists());
+    }
+    let peer = second["credentials"]["database"].as_str().unwrap();
+    assert!(
+        !sql(&first, &format!("SELECT * FROM `{peer}`.marker"))?
+            .status
+            .success()
+    );
+    let socket = fixture
+        .root
+        .path()
+        .join("state/wrix/service-data/dolt/run/dolt.sock");
+    fs::remove_file(&socket)?;
+    let missing = fixture.run(&fixture.first, &["service", "dolt", "wait"])?;
+    assert_eq!(missing["success"], false, "{missing}");
+    let stale = std::os::unix::net::UnixListener::bind(&socket)?;
+    drop(stale);
+    let stale = fixture.run(&fixture.first, &["service", "dolt", "wait"])?;
+    assert_eq!(stale["success"], false, "{stale}");
+    assert!(
+        sql(&second, "SELECT 1")?.status.success(),
+        "TCP liveness must not mask broken Unix transport"
+    );
+    Ok(())
+}
+
+#[test]
 fn two_namespaces_start_register_sync_and_retire_on_one_native_shared_backend() -> TestResult {
     if std::env::var_os("WRIX_SHARED_ISOLATED_NETWORK").is_none() {
         // The production host port allocator must see a real private network,

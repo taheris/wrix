@@ -26,7 +26,7 @@ let
             export WRIX_CONTAINER_RUNTIME=podman
             _wrix_runtime=podman
           else
-            _wrix_beads_fail "beads: .beads/dolt exists but no service container runtime is available — install Apple container or podman, or set WRIX_CONTAINER_RUNTIME"
+            _wrix_beads_fail "beads: Beads is configured but no service container runtime is available — install Apple container or podman, or set WRIX_CONTAINER_RUNTIME"
             return 1 2>/dev/null || exit 1
           fi
         fi
@@ -36,7 +36,7 @@ let
       ''
         _wrix_runtime="''${WRIX_CONTAINER_RUNTIME:-podman}"
         if ! command -v "$_wrix_runtime" >/dev/null 2>&1; then
-          _wrix_beads_fail "beads: .beads/dolt exists but service runtime '$_wrix_runtime' is not on PATH — cannot start wrix service dolt"
+          _wrix_beads_fail "beads: Beads is configured but service runtime '$_wrix_runtime' is not on PATH — cannot start wrix service dolt"
           return 1 2>/dev/null || exit 1
         fi
         unset _wrix_runtime
@@ -51,7 +51,7 @@ let
   };
 
   waitAndExport = ''
-    if [[ -d "$PWD/.beads/dolt" ]]; then
+    if [[ -f "$PWD/.beads/metadata.json" || -d "$PWD/.beads/dolt" ]]; then
       ${fail}
       unset BEADS_DOLT_SERVER_SOCKET BEADS_DOLT_SERVER_HOST BEADS_DOLT_SERVER_PORT
       export BEADS_DOLT_AUTO_START=0
@@ -130,7 +130,7 @@ let
   '';
 
   shellHook = ''
-    if [[ -d "$PWD/.beads/dolt" ]]; then
+    if [[ -f "$PWD/.beads/metadata.json" || -d "$PWD/.beads/dolt" ]]; then
       ${fail}
       _wrix_service_bin="''${WRIX_BIN:-${wrixBin}}"
       ${runtimeCheck}

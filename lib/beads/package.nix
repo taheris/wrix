@@ -10,7 +10,7 @@ pkgs.writeShellScriptBin "bd" ''
     unset BEADS_DOLT_SERVER_USER BEADS_DOLT_PASSWORD BEADS_DOLT_SERVER_SOCKET
     unset BEADS_DOLT_SERVER_HOST BEADS_DOLT_SERVER_PORT
     root=$(git rev-parse --show-toplevel 2>/dev/null) || root=""
-    if [[ -n "$root" && -f "$root/.beads/dolt/WRIX-MANAGED" ]]; then
+    if [[ -n "$root" && ( -f "$root/.beads/metadata.json" || -f "$root/.beads/dolt/WRIX-MANAGED" ) ]]; then
       client_env=$("''${WRIX_BIN:-wrix}" service dolt client-env) || exit 1
       eval "$client_env"
       unset client_env

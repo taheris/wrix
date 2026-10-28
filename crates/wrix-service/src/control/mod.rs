@@ -254,12 +254,7 @@ impl<'a> Authorization<'a> {
     ) -> Result<Self, Error> {
         let host = wrix_state::host::Host::discover().map_err(io::Error::other)?;
         selection.authorize_effects().map_err(io::Error::other)?;
-        if !selection
-            .workspace()
-            .canonical_path()
-            .join(".beads/dolt")
-            .is_dir()
-        {
+        if !wrix_core::beads_config::is_configured(selection.workspace().canonical_path()) {
             return Err(Error::PermissionDenied);
         }
         let root = host.roots().state().join("control/authority");

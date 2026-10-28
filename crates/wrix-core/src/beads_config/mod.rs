@@ -26,6 +26,11 @@ struct Config {
     sync_branch: Branch,
 }
 
+/// Detect Beads client intent, not database ownership or workspace admission.
+pub fn is_configured(workspace: &Path) -> bool {
+    workspace.join(".beads/metadata.json").is_file() || workspace.join(".beads/dolt").is_dir()
+}
+
 pub fn read_sync_branch(workspace: &Path) -> Result<Branch, ReadError> {
     let path = workspace.join(".beads/config.yaml");
     let content = match fs::read_to_string(&path) {

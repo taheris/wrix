@@ -449,7 +449,7 @@ struct BeadsClient {
 }
 
 impl BeadsClient {
-    fn validate(&self) -> Result<(), LaunchError> {
+    fn validate(&self, expected: &wrix_core::path::WorkspaceHash) -> Result<(), LaunchError> {
         let database = &self.credentials.database;
         let first = *database
             .as_bytes()
@@ -471,7 +471,13 @@ impl BeadsClient {
             .map_err(|_| LaunchError::InvalidBeadsClient)?;
         wrix_core::git::Branch::parse(&branch.to_string_lossy())
             .map_err(|_| LaunchError::InvalidBeadsClient)?;
-        if self.credentials.user != namespace.as_str()[..32]
+        let transport_valid = match &self.sync {
+            BeadsSync::Unix { path } => path.is_absolute(),
+            BeadsSync::Tcp { host, .. } => !host.is_loopback() && !host.is_unspecified(),
+        };
+        if &namespace != expected
+            || !transport_valid
+            || self.credentials.user != namespace.as_str()[..32]
             || self.credentials.password.len() != 64
             || !self
                 .credentials
@@ -2119,7 +2125,7 @@ impl ServicesState {
             Kind::Spawn(spawn) => Path::new(&spawn.config.workspace),
         };
         let mut state = Self::default();
-        let dolt = service_workspace_has_dolt(workspace)?;
+        let dolt = wrix_core::beads_config::is_configured(selection.workspace().canonical_path());
         if request.profile_config.services.nix_cache.enabled {
             run_service(workspace, &["service", "start"])?;
             state.load_project_cache(workspace, issuer, selection)?;
@@ -2128,7 +2134,7 @@ impl ServicesState {
         }
         if dolt {
             run_service(workspace, &["service", "dolt", "wait"])?;
-            state.load_dolt(workspace)?;
+            state.load_dolt(workspace, selection)?;
         }
         Ok(state)
     }
@@ -2201,7 +2207,12 @@ impl ServicesState {
         Ok(())
     }
 
-    fn load_dolt(&mut self, workspace: &Path) -> Result<(), LaunchError> {
+    fn load_dolt(
+        &mut self,
+        workspace: &Path,
+        selection: &wrix_state::context::Selection,
+    ) -> Result<(), LaunchError> {
+        selection.recheck()?;
         let metadata = run_service(workspace, &["service", "endpoints", "--no-cache"])?;
         let metadata: ServiceMetadata = serde_json::from_slice(&metadata.stdout)
             .map_err(|source| LaunchError::ServiceJson { source })?;
@@ -2209,7 +2220,8 @@ impl ServicesState {
             let output = run_service(workspace, &["service", "dolt", "sandbox-client"])?;
             let mut client: BeadsClient = serde_json::from_slice(&output.stdout)
                 .map_err(|source| LaunchError::ServiceJson { source })?;
-            client.validate()?;
+            client.validate(selection.workspace().hash())?;
+            selection.recheck()?;
             if let BeadsSync::Unix { path } = &mut client.sync {
                 *path = PathBuf::from("/run/wrix/dolt/sync.sock");
             }
@@ -2459,11 +2471,6 @@ fn file_type_is_socket(path: &Path) -> Result<bool, LaunchError> {
 #[cfg(not(unix))]
 fn file_type_is_socket(_path: &Path) -> Result<bool, LaunchError> {
     Ok(false)
-}
-
-fn service_workspace_has_dolt(workspace: &Path) -> Result<bool, LaunchError> {
-    let identity = wrix_state::context::service_workspace(workspace, false)?;
-    Ok(identity.canonical_path().join(".beads/dolt").is_dir())
 }
 
 fn configure_dolt_socket(workspace: &Path, socket: &str) -> Result<BeadsSocket, LaunchError> {
@@ -3282,14 +3289,15 @@ mod test {
                 git_admin: PathBuf::new(),
                 lock: root.join("git-sync.lock"),
             };
-            client.validate().unwrap();
+            let expected = wrix_core::path::WorkspaceHash::parse(&namespace).unwrap();
+            client.validate(&expected).unwrap();
             client.credentials.user = client.credentials.database[..32].into();
             if client.credentials.user != namespace[..32] {
-                assert!(client.validate().is_err());
+                assert!(client.validate(&expected).is_err());
             }
             client.credentials.user = namespace[..32].into();
             client.git_common = client.worktree.join(".git");
-            assert!(client.validate().is_err());
+            assert!(client.validate(&expected).is_err());
         }
     }
 
@@ -3320,13 +3328,57 @@ mod test {
             let mut changed = value.clone();
             changed["credentials"][field] = invalid.into();
             let client: super::BeadsClient = serde_json::from_value(changed).unwrap();
-            assert!(client.validate().is_err(), "{field}");
+            assert!(
+                client
+                    .validate(&wrix_core::path::WorkspaceHash::parse(&namespace).unwrap())
+                    .is_err(),
+                "{field}"
+            );
         }
         for field in ["worktree", "git_common", "git_admin", "lock"] {
             let mut changed = value.clone();
             changed[field] = "/peer/path".into();
             let client: super::BeadsClient = serde_json::from_value(changed).unwrap();
-            assert!(client.validate().is_err(), "{field}");
+            assert!(
+                client
+                    .validate(&wrix_core::path::WorkspaceHash::parse(&namespace).unwrap())
+                    .is_err(),
+                "{field}"
+            );
+        }
+    }
+
+    #[test]
+    fn managed_beads_client_rejects_valid_peer_namespace_and_missing_sync_endpoint() {
+        let namespace = "a".repeat(64);
+        let expected = wrix_core::path::WorkspaceHash::parse(&namespace).unwrap();
+        let peer = wrix_core::path::WorkspaceHash::parse(&"b".repeat(64)).unwrap();
+        let root = PathBuf::from("/service/namespaces").join(&namespace);
+        let value = serde_json::json!({
+            "credentials": { "database": format!("k{}", &namespace[1..]), "user": &namespace[..32], "password": "b".repeat(64) },
+            "sync": { "transport": "unix", "path": "/service/sync.sock" },
+            "worktree": root.join("beads-sync/beads"), "git_common": root.join("guest-git"),
+            "git_admin": "", "lock": root.join("git-sync.lock")
+        });
+        let client: super::BeadsClient = serde_json::from_value(value.clone()).unwrap();
+        client.validate(&expected).unwrap();
+        assert!(client.validate(&peer).is_err());
+        let mut tcp = value.clone();
+        tcp["sync"] = serde_json::json!({"transport":"tcp", "host":"192.168.64.2", "port":3307});
+        let client: super::BeadsClient = serde_json::from_value(tcp.clone()).unwrap();
+        client.validate(&expected).unwrap();
+        tcp["sync"]["port"] = 0.into();
+        assert!(serde_json::from_value::<super::BeadsClient>(tcp).is_err());
+        for sync in [
+            serde_json::json!({"transport":"unix", "path":""}),
+            serde_json::json!({"transport":"unix", "path":"relative/sync.sock"}),
+            serde_json::json!({"transport":"tcp", "host":"127.0.0.1", "port":3307}),
+            serde_json::json!({"transport":"tcp", "host":"0.0.0.0", "port":3307}),
+        ] {
+            let mut changed = value.clone();
+            changed["sync"] = sync;
+            let client: super::BeadsClient = serde_json::from_value(changed).unwrap();
+            assert!(client.validate(&expected).is_err());
         }
     }
 

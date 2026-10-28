@@ -364,7 +364,7 @@ impl Plan {
             }
             CacheMode::Enabled | CacheMode::Disabled => None,
         };
-        let dolt = if workspace.canonical_path().join(".beads/dolt").is_dir() {
+        let dolt = if wrix_core::beads_config::is_configured(workspace.canonical_path()) {
             let transport = DoltTransport::from_env()?;
             let socket_path = DoltSocketPath::for_workspace(&workspace);
             Some(if let Some(shared) = &shared_record {
@@ -2637,6 +2637,24 @@ mod test {
                 "uncertain inspection {body:?} returned {result:?}"
             );
         }
+    }
+
+    #[test]
+    fn metadata_only_beads_plan_requires_dolt_without_creating_local_storage() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join(".beads")).unwrap();
+        std::fs::write(
+            root.path().join(".beads/metadata.json"),
+            r#"{"backend":"dolt"}"#,
+        )
+        .unwrap();
+        let workspace = Workspace::from_path(root.path()).unwrap();
+        let paths = super::Paths::new(root.path().join("state"), root.path().join("cache"));
+        let plan =
+            Plan::for_workspace_with_paths(workspace, super::CacheMode::Disabled, paths).unwrap();
+        assert!(plan.dolt().is_some());
+        assert!(!root.path().join(".beads/dolt").exists());
+        assert!(!root.path().join("state").exists());
     }
 
     #[test]
