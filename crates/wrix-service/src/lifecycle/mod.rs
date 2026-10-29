@@ -129,11 +129,10 @@ pub enum Error {
         container: String,
         reason: OwnershipFailure,
     },
-    /// selected Celler owner {container} is {status:?}; run `{command}` from any directory to recover it under host-wide coordination without deleting persistent data; this absolute executable remains usable after failed shell/direnv entry, without ambient `wrix`
+    /// selected Celler owner {container} is {status:?}; run `wrix service recover`
     CellerUnavailable {
         container: String,
         status: RuntimeStatus,
-        command: String,
     },
     /// Celler recovery requires an existing selected owner and its recorded runtime; no ownership was transferred
     RecoveryScope,
@@ -1382,25 +1381,6 @@ impl RuntimeKind {
     }
 }
 
-fn recovery_command(runtime: RuntimeKind) -> Result<String> {
-    let executable = env::var_os("WRIX_INVOKED_BIN")
-        .or_else(|| env::var_os("WRIX_BIN"))
-        .map_or_else(env::current_exe, |value| Ok(PathBuf::from(value)))?;
-    let executable = if executable.is_absolute() {
-        executable
-    } else {
-        env::current_dir()?.join(executable)
-    };
-    let runtime = match runtime {
-        RuntimeKind::Podman => "podman",
-        RuntimeKind::Container => "container",
-    };
-    let quoted = executable.to_string_lossy().replace('\'', "'\"'\"'");
-    Ok(format!(
-        "env WRIX_CONTAINER_RUNTIME={runtime} '{quoted}' service recover"
-    ))
-}
-
 impl ContainerInfo {
     fn belongs_to_workspace(&self, plan: &Plan) -> bool {
         let workspace_path = plan.workspace().canonical_path().display().to_string();
@@ -1529,7 +1509,6 @@ impl Runtime {
             return Err(Error::CellerUnavailable {
                 container: owner.container.as_str().into(),
                 status,
-                command: recovery_command(owner.runtime)?,
             });
         }
         if (owner.workspace.is_some()

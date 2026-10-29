@@ -32,10 +32,8 @@ compatible host CLI from any directory:
 "${WRIX_BIN:-wrix}" service recover
 ```
 
-Startup prints an absolute recovery command selecting the invoked package
-wrapper and recorded runtime. Prefer that command only after confirming its
-capability marker if failed direnv entry leaves an older Wrix on PATH. No change
-to the original owner's workspace is required.
+Startup prints `wrix service recover`. Ensure the compatible host CLI is on PATH
+before running it. No change to the original owner's workspace is required.
 
 If an inherited Wrix post-build hook prevents realizing the updated package,
 bypass it for that one Nix invocation:

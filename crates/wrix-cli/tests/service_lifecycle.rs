@@ -2321,7 +2321,7 @@ fn recovery_recreates_only_absent_or_stopped_selected_owner_and_preserves_data()
             "{}",
             ordinary.stderr
         );
-        assert!(ordinary.stderr.contains("' service recover"));
+        assert!(ordinary.stderr.contains("run `wrix service recover`"));
         let output = fixture.run("recover")?;
         assert!(output.status.success(), "{}", output.stderr);
         assert_eq!(fs::read_to_string(&persistent)?, "retain data");
@@ -2582,8 +2582,7 @@ fn recovery_checks_legacy_controller_before_starting_or_creating_backend() -> Te
 }
 
 #[test]
-fn recovery_guidance_executes_selected_wrapper_after_failed_entry_with_stale_global() -> TestResult
-{
+fn recovery_guidance_uses_short_command_regardless_of_selected_wrapper() -> TestResult {
     let fixture = selected_inactive_owner(false)?;
     let wrapper = fixture.root.path().join("selected Wrix's wrapper");
     fs::write(
@@ -2610,7 +2609,7 @@ fn recovery_guidance_executes_selected_wrapper_after_failed_entry_with_stale_glo
     let output = run_command(&mut entry)?;
     assert!(!output.status.success());
     assert!(
-        output.stderr.contains("from any directory"),
+        output.stderr.contains("run `wrix service recover`"),
         "{}",
         output.stderr
     );
@@ -2628,32 +2627,7 @@ fn recovery_guidance_executes_selected_wrapper_after_failed_entry_with_stale_glo
         .split('`')
         .nth(1)
         .ok_or("missing recovery command")?;
-    assert!(command.contains("selected Wrix"), "{command}");
-    assert!(!command.starts_with("wrix "));
-    fixture.api()?;
-    let environment = fixture.command()?;
-    let mut recovery = Command::new("bash");
-    recovery
-        .arg(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/host-command.sh"
-        ))
-        .arg("sh")
-        .current_dir(&fixture.workspace);
-    for (key, value) in environment.get_envs() {
-        match value {
-            Some(value) => recovery.env(key, value),
-            None => recovery.env_remove(key),
-        };
-    }
-    recovery
-        .env_remove("WRIX_SERVICE_PACKAGE_BINDING")
-        .env_remove("WRIX_INVOKED_BIN")
-        .env_remove("WRIX_BIN")
-        .args(["-c", command]);
-    let output = run_command(&mut recovery)?;
-    assert!(output.status.success(), "{}", output.stderr);
-    assert!(fixture.root.path().join("run.argv").exists());
+    assert_eq!(command, "wrix service recover");
     Ok(())
 }
 
@@ -2704,11 +2678,10 @@ fn unavailable_owner_guidance_does_not_require_a_foreign_workspace() -> TestResu
     )?;
     assert!(!output.status.success());
     assert!(
-        output.stderr.contains("from any directory"),
+        output.stderr.contains("run `wrix service recover`"),
         "{}",
         output.stderr
     );
-    assert!(output.stderr.contains("service recover"));
     assert_eq!(fs::read(&selection)?, before);
     assert!(!fixture.root.path().join("run.argv").exists());
     Ok(())
@@ -2969,7 +2942,7 @@ fn selected_celler_owner_is_not_replaced_when_its_runtime_identity_is_unconfirme
         let output = fixture.run("start")?;
         assert!(!output.status.success(), "{change}");
         assert!(
-            output.stderr.contains("' service recover")
+            output.stderr.contains("run `wrix service recover`")
                 || output.stderr.contains("explicit recovery"),
             "{}",
             output.stderr

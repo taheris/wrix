@@ -283,10 +283,9 @@ without blocking ordinary shared-backend startup.
 [test](../crates/wrix-service/src/lifecycle/owner/rename/test.rs::stopped_native_rename_preserves_container_identity_and_retries_after_runtime_commit)
 [test](../crates/wrix-service/src/lifecycle/owner/rename/test.rs::rename_never_adopts_a_different_container_or_changes_running_owners)
 
-- Missing/stopped recovery guidance pins the invoked package wrapper and
-  recorded runtime and remains executable after failed shell entry leaves an
-  older global Wrix on PATH, without requiring the original workspace.
-  [test](../crates/wrix-cli/tests/service_lifecycle.rs::recovery_guidance_executes_selected_wrapper_after_failed_entry_with_stale_global)
+- Missing/stopped recovery guidance shows only `wrix service recover`, without
+  an environment override, absolute executable path or original workspace.
+  [test](../crates/wrix-cli/tests/service_lifecycle.rs::recovery_guidance_uses_short_command_regardless_of_selected_wrapper)
 - Recovery works without the original repository or caller cache policy.
   [test](../crates/wrix-cli/tests/service_lifecycle.rs::recovery_is_host_scoped_without_the_original_repository_or_caller_cache_policy)
 - Missing/stopped recovery preserves the physical endpoint and persistent data.

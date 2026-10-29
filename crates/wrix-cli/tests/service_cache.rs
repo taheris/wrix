@@ -855,7 +855,9 @@ fn service_startup_does_not_collect_dirty_cache_contents() -> TestResult {
         let output = run_command(&mut command)?;
         assert!(!output.status.success());
         assert!(
-            output.stderr.contains("is Missing") && output.stderr.contains("' service recover"),
+            output
+                .stderr
+                .contains("is Missing; run `wrix service recover`"),
             "{}",
             output.stderr
         );

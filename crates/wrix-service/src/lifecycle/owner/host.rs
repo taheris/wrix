@@ -156,7 +156,6 @@ pub(in crate::lifecycle) fn ensure(
         return Err(Error::CellerUnavailable {
             container: selected.container.as_str().into(),
             status,
-            command: super::super::recovery_command(runtime.kind)?,
         });
     }
     super::super::shared::check_inventory(runtime, Some(&selected), None)?;
