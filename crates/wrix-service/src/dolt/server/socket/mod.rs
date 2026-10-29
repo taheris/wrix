@@ -9,15 +9,10 @@ use std::{
 };
 
 fn connect(path: &Path) -> io::Result<()> {
-    use rustix::net::{AddressFamily, SocketAddrUnix, SocketFlags, SocketType};
-    let socket = rustix::net::socket_with(
-        AddressFamily::UNIX,
-        SocketType::STREAM,
-        SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
-        None,
-    )?;
-    let address = SocketAddrUnix::new(path)?;
-    rustix::net::connect(&socket, &address)?;
+    use socket2::{Domain, SockAddr, Socket, Type};
+    let socket = Socket::new(Domain::UNIX, Type::STREAM, None)?;
+    socket.set_nonblocking(true)?;
+    socket.connect(&SockAddr::unix(path)?)?;
     Ok(())
 }
 
