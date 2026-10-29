@@ -97,6 +97,7 @@ wrix workspace integration disable
 wrix workspace admit --integration SLOT --expect-membership ID --checkout PATH (--allocate | --retain KEY)
 wrix workspace import-native --native-key KEY
 wrix workspace inspect --checkout PATH
+wrix workspace diagnose [--native-key KEY]
 ```
 
 Initialization enables admission storage but does not select an integration,
@@ -120,6 +121,21 @@ supported native namespace; it neither moves data nor claims recovered checkout
 history. Repeated admission confirms the existing association. Changed primary
 observations require explicit readmission while retaining the binding's key.
 Forward, reverse and cross-slot conflicts are errors, not merge/rebind requests.
+
+Retention checks the recorded public-key observation, not a legacy host signing
+keypair. Celler owns active signing authority; retained `keys/cache.secret`
+material is neither read nor rewritten by admission. A supported retention is
+not native Celler readiness or permission to reconcile an active-key conflict.
+[test](../crates/wrix-cli/tests/workspace_admission.rs::hardening::celler_retention::retention_preserves_stale_legacy_keys_identity_payload_and_membership_reservations)
+[test](../crates/wrix-cache/tests/celler_backend.rs::native_celler_registration_ignores_legacy_secret_and_rejects_active_key_conflicts)
+
+Read-only `workspace diagnose` reports executable availability, selected native
+roots, database identity, initialization and committed integration selection
+without starting services or issuing credentials. Optional native-key inspection
+distinguishes supported retention metadata from live signing verification.
+Failed admission preserves independently committed integration selection.
+[test](../crates/wrix-cli/tests/workspace_admission.rs::hardening::celler_retention::diagnose_is_passive_and_distinguishes_missing_expected_authority)
+[test](../crates/wrix-cli/tests/workspace_admission.rs::hardening::celler_retention::failed_retention_preserves_committed_integration_selection_and_authority)
 
 ## Resolver Protocol
 

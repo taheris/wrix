@@ -1,5 +1,7 @@
 //! Explicit host authority operations, independent of project launch configuration.
 
+mod diagnostic;
+
 use clap::{Arg, Command};
 use std::{
     io::{self, Write},
@@ -8,12 +10,17 @@ use std::{
 };
 use wrix_state::{host::Host, store::Store};
 
-pub const HELP: &str = "Manage workspace namespace admission.\n\nUsage: wrix workspace initialize\n       wrix workspace import-native --native-key <native-key>\n       wrix workspace acknowledge-scope --version 1\n       wrix workspace integration select --slot <slot> --executable <absolute-path>\n       wrix workspace integration disable\n       wrix workspace admit --integration <slot> --expect-membership <id> --checkout <absolute-directory> (--allocate | --retain <native-key>)\n       wrix workspace inspect --checkout <absolute-directory>\n";
+pub const HELP: &str = "Manage workspace namespace admission.\n\nUsage: wrix workspace initialize\n       wrix workspace import-native --native-key <native-key>\n       wrix workspace acknowledge-scope --version 1\n       wrix workspace integration select --slot <slot> --executable <absolute-path>\n       wrix workspace integration disable\n       wrix workspace admit --integration <slot> --expect-membership <id> --checkout <absolute-directory> (--allocate | --retain <native-key>)\n       wrix workspace inspect --checkout <absolute-directory>\n       wrix workspace diagnose [--native-key <native-key>]\n";
 
 fn parser() -> Command {
     Command::new("wrix workspace")
         .subcommand_required(true)
         .subcommand(Command::new("initialize").about("Initialize host admission state."))
+        .subcommand(
+            Command::new("diagnose")
+                .about("Inspect host selection and retention metadata.")
+                .arg(Arg::new("native-key").long("native-key")),
+        )
         .subcommand(
             Command::new("acknowledge-scope")
                 .about("Authorize standalone namespace allocation.")
@@ -114,6 +121,14 @@ pub fn run(
         }
         Err(error) => {
             writeln!(stderr, "wrix workspace: {error}")?;
+            writeln!(stderr, "executable: {}", diagnostic::executable())?;
+            if let Ok(host) = Host::discover() {
+                writeln!(
+                    stderr,
+                    "state_database: {}",
+                    host.roots().database().display()
+                )?;
+            }
             Ok(ExitCode::FAILURE)
         }
     }
@@ -123,6 +138,12 @@ fn apply(matches: &clap::ArgMatches) -> Result<String, wrix_state::store::Error>
     use wrix_state::store::Error;
     let host = Host::discover()?;
     match matches.subcommand() {
+        Some(("diagnose", arguments)) => diagnostic::describe(
+            &host,
+            arguments
+                .get_one::<String>("native-key")
+                .map(String::as_str),
+        ),
         Some(("initialize", _)) => {
             Store::initialize(&host)?;
             Ok("Host admission initialized.".into())
@@ -144,7 +165,11 @@ fn apply(matches: &clap::ArgMatches) -> Result<String, wrix_state::store::Error>
                     .ok_or(Error::Unsupported)?;
                 let slot = wrix_state::integration::Slot::parse(slot)?;
                 Store::select(&host, &slot, executable)?;
-                Ok(format!("Integration selected: {slot}."))
+                Ok(format!(
+                    "Integration selected: {slot}.\nstate_database: {}\nexecutable: {}",
+                    host.roots().database().display(),
+                    diagnostic::executable()
+                ))
             }
             Some(("disable", _)) => {
                 Store::disable(&host)?;

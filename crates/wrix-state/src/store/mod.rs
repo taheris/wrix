@@ -53,8 +53,14 @@ pub enum Error {
     Sql(#[from] rusqlite::Error),
     /// host state must be owned, private and free of symlink substitutions
     PrivateState,
-    /// missing or unsupported host state; initialize explicitly and do not reset existing authority
+    /// unsupported host state schema or malformed control records; preserve existing authority and inspect with the owning Wrix revision; do not reset or reinitialize
     Unsupported,
+    /// expected host state.db is missing but state.lock remains; restore the owning HOME/XDG roots or recover the existing authority; do not initialize a replacement
+    MissingDatabase,
+    /// retained namespace requires keys/cache.pub; restore the recorded Celler public-key observation without deriving it from a legacy cache.secret
+    CachePublicKeyMissing,
+    /// retained namespace keys/cache.pub is malformed; explicit public-key reconciliation is required; legacy cache.secret is not Celler signing authority
+    CachePublicKeyInvalid,
     /// host admission is not initialized; run wrix workspace initialize
     Uninitialized,
     /// native workspace paths differ from the selected host roots; restore the owning HOME/XDG environment instead of using filesystem exports
@@ -83,7 +89,7 @@ impl Store {
         let path = host.roots().database();
         if !exists(&path)? {
             if exists(&host.roots().state().join("state.lock"))? {
-                return Err(Error::Unsupported);
+                return Err(Error::MissingDatabase);
             }
             return Ok(None);
         }
@@ -111,7 +117,11 @@ impl Store {
         let path = host.roots().database();
         let lock_path = host.roots().state().join("state.lock");
         if !create && !exists(&path)? {
-            return Err(Error::Uninitialized);
+            return Err(if exists(&lock_path)? {
+                Error::MissingDatabase
+            } else {
+                Error::Uninitialized
+            });
         }
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         let root_lock = OpenOptions::new()
@@ -140,7 +150,7 @@ impl Store {
         acquire(&lock, deadline)?;
         if !exists(&path)? {
             if !create || existed {
-                return Err(Error::Unsupported);
+                return Err(Error::MissingDatabase);
             }
             publish(host)?;
         }

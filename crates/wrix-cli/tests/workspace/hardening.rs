@@ -1,3 +1,5 @@
+#[path = "celler_retention.rs"]
+mod celler_retention;
 #[path = "consolidation.rs"]
 mod consolidation;
 #[path = "retention.rs"]

@@ -3,7 +3,8 @@
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use std::{
     fs,
-    os::unix::{ffi::OsStrExt, fs::MetadataExt},
+    io::Read,
+    os::unix::{ffi::OsStrExt, fs::MetadataExt, fs::OpenOptionsExt},
     path::Path,
 };
 use wrix_core::{
@@ -23,6 +24,18 @@ pub enum Intent {
 }
 
 impl Store {
+    /// Inspect retained metadata without admitting membership or proving native service readiness.
+    pub fn check_retention(host: &Host, key: &WorkspaceHash) -> Result<(), Error> {
+        let store = Self::inspect(host)?.ok_or(Error::Uninitialized)?;
+        if !store.initialized()? {
+            return Err(Error::Uninitialized);
+        }
+        if !crate::namespace::registered(&store, key)? {
+            return Err(Error::ImportRequired(key.clone()));
+        }
+        validate_native(host, key)
+    }
+
     pub fn admit(
         host: &Host,
         slot: &crate::integration::Slot,
@@ -300,72 +313,48 @@ fn validate_native(host: &Host, key: &WorkspaceHash) -> Result<(), Error> {
         crate::namespace::Source::Observer => return Err(Error::Unsupported),
     };
     let public = root.join("keys/cache.pub");
-    match fs::symlink_metadata(&public) {
-        Ok(public_metadata) => {
+    match fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(
+            i32::try_from((rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK).bits())
+                .map_err(|_| Error::PrivateState)?,
+        )
+        .open(&public)
+    {
+        Ok(file) => {
             let directory = fs::symlink_metadata(root.join("keys"))?;
-            let secret = fs::symlink_metadata(root.join("keys/cache.secret"))?;
+            let metadata = file.metadata()?;
             if !directory.is_dir()
                 || directory.uid() != rustix::process::geteuid().as_raw()
                 || directory.mode() & 0o022 != 0
-                || !secret.is_file()
-                || !public_metadata.is_file()
-                || secret.nlink() != 1
-                || public_metadata.nlink() != 1
-                || secret.mode() & 0o077 != 0
-                || secret.uid() != rustix::process::geteuid().as_raw()
-                || public_metadata.uid() != rustix::process::geteuid().as_raw()
-                || public_metadata.mode() & 0o022 != 0
-                || secret.len() > 4096
-                || public_metadata.len() > 4096
+                || !metadata.is_file()
+                || metadata.nlink() != 1
+                || metadata.uid() != rustix::process::geteuid().as_raw()
+                || metadata.mode() & 0o022 != 0
+                || metadata.len() > 4096
             {
                 return Err(Error::PrivateState);
             }
-            let public = fs::read_to_string(public)?;
-            CachePublicKey::parse(&public).map_err(|error| Error::Invalid(error.to_string()))?;
-            let secret = fs::read_to_string(root.join("keys/cache.secret"))?;
-            validate_keypair(&secret, &public)?;
+            let mut bytes = Vec::new();
+            file.take(4097).read_to_end(&mut bytes)?;
+            let text = std::str::from_utf8(&bytes).map_err(|_| Error::CachePublicKeyInvalid)?;
+            if bytes.len() > 4096 {
+                return Err(Error::CachePublicKeyInvalid);
+            }
+            CachePublicKey::parse(text).map_err(|_| Error::CachePublicKeyInvalid)?;
             evidence = true;
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound && !requires_keys => (),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if requires_keys {
+                return Err(Error::CachePublicKeyMissing);
+            }
+        }
         Err(error) => return Err(error.into()),
     }
     if !evidence {
         return Err(Error::Invalid(
             "existing native state is incomplete or unsupported".into(),
         ));
-    }
-    Ok(())
-}
-
-fn validate_keypair(secret: &str, public: &str) -> Result<(), Error> {
-    use base64::{
-        Engine as _,
-        engine::general_purpose::{STANDARD, STANDARD_NO_PAD},
-    };
-    let (secret_name, secret) = secret
-        .trim_end()
-        .split_once(':')
-        .ok_or(Error::Unsupported)?;
-    let (public_name, public) = public
-        .trim_end()
-        .split_once(':')
-        .ok_or(Error::Unsupported)?;
-    let decode = |value: &str| {
-        if value.contains('=') {
-            STANDARD.decode(value)
-        } else {
-            STANDARD_NO_PAD.decode(value)
-        }
-        .map_err(|_| Error::Unsupported)
-    };
-    let secret = decode(secret)?;
-    let public = decode(public)?;
-    if secret_name != public_name
-        || secret.len() != 64
-        || public.len() != 32
-        || secret[32..] != public
-    {
-        return Err(Error::Unsupported);
     }
     Ok(())
 }

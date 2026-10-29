@@ -181,7 +181,7 @@ exports. The remaining per-workspace native resources include:
 <state-root>/
 ├── cache.lock              # namespace publication/rotation lock
 ├── service.lock            # service lifecycle lock
-├── keys/cache.secret       # private publication credential
+├── keys/cache.secret       # retained legacy host key; not Celler authority
 ├── keys/cache.pub          # repository-private view's public key
 ├── hook-wrapper/           # generated hook package build inputs
 └── host-nix-roots/         # actual Nix retention roots for hook/runtime packages

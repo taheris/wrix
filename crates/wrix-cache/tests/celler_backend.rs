@@ -1641,6 +1641,71 @@ async fn native_rsa_registration_repairs_local_metadata_without_changing_a_valid
 }
 
 #[tokio::test]
+async fn native_celler_registration_ignores_legacy_secret_and_rejects_active_key_conflicts() {
+    use wrix_cache::backend::publication::{Error as PublicationError, registration};
+
+    let server = native::Server::start_with_issuer();
+    let root = tempfile::tempdir().unwrap();
+    let workspace = wrix_core::path::Workspace::from_path(root.path()).unwrap();
+    let state = root.path().join("control");
+    let issuer = server.issuer_root();
+    let provision = || {
+        registration::provision_private(
+            &state,
+            workspace.hash(),
+            &server.endpoint,
+            &issuer,
+            RETENTION,
+            Duration::from_secs(1),
+        )
+    };
+    let key = provision().await.unwrap();
+    let legacy = tempfile::tempdir().unwrap();
+    let generated = std::process::Command::new("nix-store")
+        .args(["--generate-binary-cache-key", "legacy-host-signing"])
+        .arg(legacy.path().join("cache.secret"))
+        .arg(legacy.path().join("cache.pub"))
+        .output()
+        .unwrap();
+    assert!(
+        generated.status.success(),
+        "Nix fixture key generation failed"
+    );
+    assert_ne!(
+        std::fs::read_to_string(legacy.path().join("cache.pub"))
+            .unwrap()
+            .trim(),
+        key.as_str()
+    );
+    let secret = state.join("keys/cache.secret");
+    std::fs::copy(legacy.path().join("cache.secret"), &secret).unwrap();
+    let secret_before = std::fs::read(&secret).unwrap();
+    assert_eq!(provision().await.unwrap(), key);
+    assert!(std::fs::read(&secret).unwrap().eq(&secret_before));
+    let namespace = registration::private_namespace(workspace.hash()).unwrap();
+    let archive =
+        native::archive::Archive::file("retained native Celler payload", "legacy-host-key");
+    server.upload(namespace.as_str(), &archive).await;
+    let resource = format!("{}/{}.narinfo", namespace, native::hash(&archive.path));
+    let before = server.get(&resource).await.text().await.unwrap();
+    let peer = server
+        .client("peer-retained-key")
+        .register(RETENTION)
+        .await
+        .unwrap();
+    std::fs::write(state.join("keys/cache.pub"), peer.as_str()).unwrap();
+    assert!(
+        matches!(provision().await, Err(PublicationError::RegistrationCommitted { source }) if matches!(*source, PublicationError::RetainedKeyConflict))
+    );
+    assert_eq!(
+        std::fs::read_to_string(state.join("keys/cache.pub")).unwrap(),
+        peer.as_str()
+    );
+    assert_eq!(server.get(&resource).await.text().await.unwrap(), before);
+    assert!(std::fs::read(&secret).unwrap().eq(&secret_before));
+}
+
+#[tokio::test]
 async fn key_registration_and_failed_repair_preserve_valid_state() {
     let server = native::Server::start();
     let client = server.client("private");
