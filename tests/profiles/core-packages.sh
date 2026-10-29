@@ -169,7 +169,9 @@ test_core_membership() {
         openssl.dev
         pkg-config
         postgresql.lib
-        sccache
+        (import (flake.outPath + \"/crates/wrix-service/src/lifecycle/drain/native/compiler.nix\") {
+          pkgs = imagePkgs;
+        })
       ];
       imageToolchain = profile:
         builtins.unsafeDiscardStringContext (builtins.dirOf (builtins.dirOf profile.env.RUSTC));

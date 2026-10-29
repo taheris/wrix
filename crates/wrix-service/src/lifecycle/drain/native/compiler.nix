@@ -1,7 +1,10 @@
 { pkgs }:
 
-assert pkgs.sccache.version == "0.18.0";
-pkgs.sccache.overrideAttrs (old: {
+let
+  compiler = pkgs.callPackage ./sccache.nix { };
+in
+assert compiler.version == "0.18.0";
+compiler.overrideAttrs (old: {
   patches = (old.patches or [ ]) ++ [ ./compiler.patch ];
   postPatch = (old.postPatch or "") + ''
     cp ${./compiler.rs} src/work_drain.rs

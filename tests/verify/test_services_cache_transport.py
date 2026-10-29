@@ -24,11 +24,14 @@ FIXTURE = {
     OWNER: '''
 pub(in crate::lifecycle) fn ensure() {
         let layout = Layout::current()?;
-        format!("127.0.0.1:{}:8080", selected.port);
+        format!(
+            "127.0.0.1:{}:8080",
+            shared.cache_port(selected.port)
+        );
         for mount in layout.mounts() {}
         .arg("wrix-shared-service")
 }
-fn sql_ready() {}
+pub(in crate::lifecycle) fn sql_ready() {}
 ''',
     SERVER: '''
     let mut celler = tokio::process::Command::new("sh")
@@ -84,7 +87,7 @@ class CacheTransportVerifierTests(unittest.TestCase):
             (
                 OWNER,
                 "service container run path",
-                'format!("127.0.0.1:{}:8080", selected.port)',
+                '"127.0.0.1:{}:8080",\n            shared.cache_port(selected.port)',
             ),
             (OWNER, "service container run path", "let layout = Layout::current()?"),
             (OWNER, "service container run path", "for mount in layout.mounts()"),
@@ -134,7 +137,7 @@ class CacheTransportVerifierTests(unittest.TestCase):
                 OWNER,
                 "service container run path",
                 "pub(in crate::lifecycle) fn ensure(",
-                "\nfn sql_ready(",
+                "\npub(in crate::lifecycle) fn sql_ready(",
             ),
             (
                 SERVER,

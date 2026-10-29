@@ -48,7 +48,7 @@ def main():
     service_run = section(
         owner,
         "pub(in crate::lifecycle) fn ensure(",
-        "\nfn sql_ready(",
+        "\npub(in crate::lifecycle) fn sql_ready(",
         "service container run path",
     )
     container_command = section(
@@ -88,7 +88,7 @@ def main():
     require_contains(
         "service container run path",
         service_run,
-        'format!("127.0.0.1:{}:8080", selected.port)' ,
+        '"127.0.0.1:{}:8080",\n            shared.cache_port(selected.port)',
     )
     require_contains(
         "service container run path",
