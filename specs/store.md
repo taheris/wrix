@@ -300,9 +300,9 @@ safe reconciliation before readmission.
   [test](../crates/wrix-service/src/nix_store/owner/backend/test.rs::released_metadata_without_native_checkpoint_cannot_acquire_a_candidate)
 - Fresh maintenance cannot reinterpret an uncertain stop as clean release.
   [test](../crates/wrix-service/src/nix_store/lifecycle/test.rs::fresh_maintenance_cannot_capture_an_uncertain_stop_as_release)
-- Native ownership retains data and pins across safe drain, failed restart and
-  resumed serving, without concurrent owners.
-  [system](test-ci:test-shared-nix-krun)
+- Production ownership/update transitions retain data and pins across safe
+  drain, failed candidate and restart, without concurrent owners.
+  [system](test-ci:test-shared-nix-host-owner-linux)
 
 ### Platform Acceptance
 

@@ -35,27 +35,31 @@ pub(super) fn busy(host: &wrix_state::host::Host) {
 }
 #[cfg(target_os = "linux")]
 fn fenced(runtime: &tokio::runtime::Runtime, client: &Client, selection: &Selection) {
-    let id = runtime
-        .block_on(client.prepare_nix_pool(selection, system()))
+    let host = wrix_state::host::Host::discover().unwrap();
+    let marker = host.roots().state().join("nix-pool-maintenance.json");
+    let intent = fs::read(&marker).unwrap();
+    let before = runtime
+        .block_on(client.request(Operation::InspectCore {}))
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        match runtime
-            .block_on(client.request(Operation::InspectNixPoolPreparation { id: id.clone() }))
-            .unwrap()
-        {
-            Reply::PoolPreparation {
-                status: PoolPreparation::Failed,
-            } => break,
-            Reply::PoolPreparation {
-                status: PoolPreparation::Pending,
-            } => {
-                assert!(Instant::now() < deadline);
-                std::thread::sleep(Duration::from_millis(25));
-            }
-            reply => panic!("maintenance admission was not fenced: {reply:?}"),
-        }
-    }
+    assert!(matches!(
+        before,
+        Reply::CoreInterface { .. } | Reply::Incompatible
+    ));
+    // The production client probes before reserving a request. Maintenance
+    // therefore refuses that probe, not a fictitious successfully queued job.
+    assert!(matches!(
+        runtime.block_on(client.prepare_nix_pool(selection, system())),
+        Err(wrix_service::control::Error::Io(error))
+            if error.kind() == std::io::ErrorKind::UnexpectedEof
+    ));
+    assert_eq!(
+        runtime
+            .block_on(client.request(Operation::InspectCore {}))
+            .unwrap(),
+        before,
+        "a dead controller cannot count as maintenance fencing"
+    );
+    assert_eq!(fs::read(marker).unwrap(), intent);
 }
 #[cfg(target_os = "linux")]
 pub(super) fn exercise(
@@ -120,13 +124,14 @@ pub(super) fn exercise(
     ));
     assert_eq!(read()["state"]["phase"], "released");
     let repair = Repair::begin(host, &package).unwrap();
+    fenced(runtime, client, selection);
+    repair.complete().unwrap();
     assert_eq!(
         runtime
             .block_on(client.request(Operation::InspectNixPool {}))
             .unwrap(),
         Reply::PoolInterface { version: 1 }
     );
-    repair.complete().unwrap();
     assert!(
         !host
             .roots()

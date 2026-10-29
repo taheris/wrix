@@ -39,6 +39,7 @@ fn launch(
     run.args(["run", "--rm", "--cap-add=NET_ADMIN", "--memory=768m", "--pids-limit=256", "--network=pasta:--map-host-loopback,169.254.1.2,--map-guest-addr,none,-t,none,-u,none,-T,none,-U,none", "--mount", "type=tmpfs,destination=/home/wrix,U=true"])
         .arg("-v").arg(format!("{}:/workspace:rw", workspace.display()))
         .arg("-v").arg(format!("{}:/nix/store:ro", delivery.store().display()))
+        .arg("-v").arg(format!("{}:/nix/var/nix:ro", directory.join("state").display()))
         .arg("-v").arg(format!("{}:/run/wrix/nix-pool:ro", directory.display()))
         .arg("-v").arg(format!("{}:/etc/nix/nix.conf:ro", directory.join("nix.conf").display()))
         .args(["-e", "HOME=/home/wrix", "-e", "WRIX_AGENT=direct", "-e", "WRIX_NETWORK=open"])
@@ -52,6 +53,11 @@ fn launch(
         ProjectionMount {
             source: delivery.store().to_path_buf(),
             destination: PathBuf::from("/nix/store"),
+            writable: false,
+        },
+        ProjectionMount {
+            source: directory.join("state"),
+            destination: PathBuf::from("/nix/var/nix"),
             writable: false,
         },
         ProjectionMount {
