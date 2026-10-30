@@ -118,7 +118,15 @@ fn public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql() -
         serde_json::to_string(&native_package)?
     );
     let rendered = Command::new(common::command_path("nix")?)
-        .args(["eval", "--raw", "--impure", "--expr", &expression])
+        .args([
+            "eval",
+            "--store",
+            "dummy://",
+            "--raw",
+            "--impure",
+            "--expr",
+            &expression,
+        ])
         .output()?;
     assert!(
         rendered.status.success(),

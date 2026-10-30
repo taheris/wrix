@@ -105,6 +105,7 @@ fn host_hook_uses_database_only_metadata_and_queues_under_contention() {
     );
     if isolated {
         isolation::install_executable(root.path(), &executable("git"), Path::new("/bin/git"));
+        isolation::install_executable(root.path(), &executable("ln"), Path::new("/bin/ln"));
         isolation::install_executable(root.path(), &setup, Path::new("/bin/setup"));
         isolation::install_executable(root.path(), publisher, Path::new("/bin/publisher"));
     }

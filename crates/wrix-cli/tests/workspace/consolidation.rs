@@ -166,6 +166,8 @@ fn keys(native: &Path, key: &WorkspaceHash) {
     fs::create_dir_all(&keys).unwrap();
     let output = Command::new("nix-store")
         .args([
+            "--store",
+            "dummy://",
             "--generate-binary-cache-key",
             &format!("wrix-cache-{}", key.as_str()),
         ])
@@ -180,8 +182,34 @@ fn keys(native: &Path, key: &WorkspaceHash) {
     );
 }
 
+fn run_in_host_namespace() -> bool {
+    if !Path::new("/etc/wrix/image-agent").exists() {
+        return false;
+    }
+    let current = std::thread::current();
+    let output = Command::new("bash")
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/host-command.sh"
+        ))
+        .arg(std::env::current_exe().unwrap())
+        .args(["--exact", current.name().unwrap(), "--nocapture"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    true
+}
+
 #[test]
 fn host_service_and_cache_commands_create_database_records_without_metadata_exports() {
+    if run_in_host_namespace() {
+        return;
+    }
     let fixture = Fixture::new();
     fixture.initialize();
     assert!(
@@ -250,8 +278,17 @@ fn host_service_and_cache_commands_create_database_records_without_metadata_expo
 
 #[test]
 fn host_mutations_preserve_imported_files_while_retiring_database_pending_and_closures() {
+    if run_in_host_namespace() {
+        return;
+    }
     let fixture = Fixture::new();
     fixture.initialize();
+    assert!(
+        fixture
+            .run(&["acknowledge-scope", "--version", "1"])
+            .status
+            .success()
+    );
     let checkout = fixture.repository("checkout");
     prepare(&fixture, &checkout);
     let services = Services::new(&fixture).unwrap();

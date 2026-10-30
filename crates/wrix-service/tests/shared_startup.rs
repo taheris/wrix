@@ -25,6 +25,8 @@ mod celler;
 mod controller;
 #[path = "../../wrix-cli/tests/common/native_backend.rs"]
 mod native_backend;
+#[path = "../../wrix-cli/tests/common/network.rs"]
+mod network;
 #[path = "../../wrix-cli/tests/common/service_binding.rs"]
 #[expect(
     dead_code,
@@ -492,6 +494,9 @@ fn sql(client: &Value, query: &str) -> TestResult<std::process::Output> {
 
 #[test]
 fn metadata_only_managed_client_keeps_scoped_sync_and_rejects_missing_or_stale_sql() -> TestResult {
+    if network::isolate()? {
+        return Ok(());
+    }
     let fixture = Fixture::new()?;
     let acknowledged = fixture.run(
         &fixture.first,
@@ -543,34 +548,7 @@ fn metadata_only_managed_client_keeps_scoped_sync_and_rejects_missing_or_stale_s
 
 #[test]
 fn two_namespaces_start_register_sync_and_retire_on_one_native_shared_backend() -> TestResult {
-    if std::env::var_os("WRIX_SHARED_ISOLATED_NETWORK").is_none() {
-        // The production host port allocator must see a real private network,
-        // not race unrelated parallel fixture Celler listeners on this worker.
-        required(
-            Command::new("timeout")
-                .args([
-                    "--signal=KILL",
-                    "180",
-                    "unshare",
-                    "--user",
-                    "--map-root-user",
-                    "--mount",
-                    "--net",
-                    "--propagation",
-                    "private",
-                    "sh",
-                    "-c",
-                    "ip link set lo up; exec \"$@\"",
-                    "fixture",
-                ])
-                .arg(std::env::current_exe()?)
-                .args([
-                    "--exact",
-                    "two_namespaces_start_register_sync_and_retire_on_one_native_shared_backend",
-                    "--nocapture",
-                ])
-                .env("WRIX_SHARED_ISOLATED_NETWORK", "1"),
-        )?;
+    if network::isolate()? {
         return Ok(());
     }
     let fixture = Fixture::new()?;

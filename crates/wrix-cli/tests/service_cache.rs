@@ -3,6 +3,8 @@ mod celler;
 mod common;
 #[path = "common/controller.rs"]
 mod controller;
+#[path = "common/network.rs"]
+mod network;
 #[path = "common/service_binding.rs"]
 mod service_binding;
 
@@ -129,6 +131,9 @@ impl Fixture {
 
 #[test]
 fn shared_readiness_fixture_accepts_only_the_native_management_probe() -> TestResult {
+    if network::isolate()? {
+        return Ok(());
+    }
     let fixture = Fixture::new()?;
     let output = run_command(
         fixture
@@ -221,6 +226,9 @@ fn explicit_host_adapter_preserves_the_outer_worker_marker() -> TestResult {
 
 #[test]
 fn service_fixture_removes_ambient_image_metadata() -> TestResult {
+    if network::isolate()? {
+        return Ok(());
+    }
     let fixture = Fixture::new()?;
     let command = fixture.command("podman")?;
     for name in [
@@ -241,6 +249,9 @@ fn service_fixture_removes_ambient_image_metadata() -> TestResult {
 
 #[test]
 fn retired_cache_prune_fails_without_state_or_runtime_access() -> TestResult {
+    if network::isolate()? {
+        return Ok(());
+    }
     let fixture = Fixture::new()?;
     let before = fixture_snapshot(fixture.root.path())?;
     fs::write(fixture.workspace.join("wrix.toml"), "invalid policy")?;
@@ -310,6 +321,9 @@ fn fixture_snapshot(
 
 #[test]
 fn cache_start_bootstraps_host_private_issuer_without_static_fallback() -> TestResult {
+    if network::isolate()? {
+        return Ok(());
+    }
     let fixture = Fixture::new()?;
     let output = run_command(
         fixture
@@ -359,6 +373,9 @@ fn cache_start_bootstraps_host_private_issuer_without_static_fallback() -> TestR
 
 #[test]
 fn startup_authentication_failure_does_not_confuse_runtime_liveness_with_readiness() -> TestResult {
+    if network::isolate()? {
+        return Ok(());
+    }
     let fixture = Fixture::new()?;
     fs::write(fixture.root.path().join("celler-status"), "403")?;
     let output = run_command(
@@ -388,6 +405,9 @@ fn startup_authentication_failure_does_not_confuse_runtime_liveness_with_readine
 #[test]
 fn confirmed_startup_reports_failed_local_admission_without_rollback_claims() -> TestResult {
     use std::os::unix::fs::symlink;
+    if network::isolate()? {
+        return Ok(());
+    }
     let fixture = Fixture::new()?;
     let metadata = fixture.endpoints(true)?;
     let state = PathBuf::from(metadata["state_root"].as_str().unwrap());
@@ -421,6 +441,9 @@ fn confirmed_startup_reports_failed_local_admission_without_rollback_claims() ->
 
 #[test]
 fn cache_start_preserves_conflicting_verifier_without_committing_private_authority() -> TestResult {
+    if network::isolate()? {
+        return Ok(());
+    }
     let fixture = Fixture::new()?;
     let metadata = fixture.endpoints(true)?;
     let state = PathBuf::from(metadata["state_root"].as_str().unwrap());
@@ -451,6 +474,9 @@ fn cache_start_preserves_conflicting_verifier_without_committing_private_authori
 
 #[test]
 fn cache_opt_out_creates_no_workspace_publication_authority() -> TestResult {
+    if network::isolate()? {
+        return Ok(());
+    }
     let fixture = Fixture::new()?;
     let output = run_command(
         fixture
@@ -471,6 +497,9 @@ fn cache_opt_out_creates_no_workspace_publication_authority() -> TestResult {
 
 #[test]
 fn service_start_rejects_unbound_ambient_image_substitutes() -> TestResult {
+    if network::isolate()? {
+        return Ok(());
+    }
     let fixture = Fixture::new()?;
     let output = run_command(
         fixture
@@ -493,6 +522,9 @@ fn service_start_rejects_unbound_ambient_image_substitutes() -> TestResult {
 
 #[test]
 fn service_start_rejects_conflicting_ambient_image_before_runtime_access() -> TestResult {
+    if network::isolate()? {
+        return Ok(());
+    }
     let fixture = Fixture::new()?;
     let output = run_command(
         fixture
@@ -513,6 +545,9 @@ fn service_start_rejects_conflicting_ambient_image_before_runtime_access() -> Te
 
 #[test]
 fn absent_xdg_variables_select_home_based_platform_roots() -> TestResult {
+    if network::isolate()? {
+        return Ok(());
+    }
     let fixture = Fixture::new()?;
     let output = run_command(
         fixture
@@ -543,6 +578,9 @@ fn absent_xdg_variables_select_home_based_platform_roots() -> TestResult {
 
 #[test]
 fn temporary_workspace_start_prepares_shared_backend_without_namespace_endpoints() -> TestResult {
+    if network::isolate()? {
+        return Ok(());
+    }
     let fixture = Fixture::new()?;
     let output = run_command(fixture.command("podman")?.args(["service", "start"]))?;
     assert!(output.status.success(), "{}", output.stderr);
@@ -558,6 +596,9 @@ fn temporary_workspace_start_prepares_shared_backend_without_namespace_endpoints
 
 #[test]
 fn repository_cache_opt_out_suppresses_publication_and_environment_can_override_it() -> TestResult {
+    if network::isolate()? {
+        return Ok(());
+    }
     let fixture = Fixture::new()?;
     fs::write(fixture.workspace.join("wrix.toml"), "cache.enable = false")?;
     let output = run_command(
@@ -592,6 +633,9 @@ fn repository_cache_opt_out_suppresses_publication_and_environment_can_override_
 
 #[test]
 fn celler_layout_separates_managed_cache_data_from_host_authority() -> TestResult {
+    if network::isolate()? {
+        return Ok(());
+    }
     for cache in [false, true] {
         let fixture = Fixture::new()?;
         if cache {
@@ -683,6 +727,9 @@ fn celler_layout_separates_managed_cache_data_from_host_authority() -> TestResul
 #[test]
 fn service_prepares_private_shared_data_and_scopes_publication_to_cache_opt_in() -> TestResult {
     use std::os::unix::fs::PermissionsExt as _;
+    if network::isolate()? {
+        return Ok(());
+    }
 
     for cache in [false, true] {
         let fixture = Fixture::new()?;
@@ -736,6 +783,9 @@ fn service_prepares_private_shared_data_and_scopes_publication_to_cache_opt_in()
 #[test]
 fn service_reentry_tightens_legacy_control_without_losing_runtime_authority() -> TestResult {
     use std::os::unix::fs::PermissionsExt as _;
+    if network::isolate()? {
+        return Ok(());
+    }
 
     let fixture = Fixture::new()?;
     let metadata = fixture.endpoints(false)?;
@@ -790,6 +840,9 @@ fn service_reentry_tightens_legacy_control_without_losing_runtime_authority() ->
 #[test]
 fn service_rejects_symlinked_control_before_lock_or_runtime_access() -> TestResult {
     use std::os::unix::fs::{PermissionsExt as _, symlink};
+    if network::isolate()? {
+        return Ok(());
+    }
 
     let fixture = Fixture::new()?;
     let metadata = fixture.endpoints(false)?;
@@ -822,6 +875,9 @@ fn service_rejects_symlinked_control_before_lock_or_runtime_access() -> TestResu
 
 #[test]
 fn service_startup_does_not_collect_dirty_cache_contents() -> TestResult {
+    if network::isolate()? {
+        return Ok(());
+    }
     for elapsed in [3600, 172_800] {
         let fixture = Fixture::new()?;
         service_binding::provision_celler_authority(fixture.root.path())?;
@@ -873,6 +929,9 @@ fn service_startup_does_not_collect_dirty_cache_contents() -> TestResult {
 
 #[test]
 fn service_start_uses_shared_image_digest_preflight_without_pruning() -> TestResult {
+    if network::isolate()? {
+        return Ok(());
+    }
     for (runtime, kind) in [
         ("podman", "nix-descriptor"),
         ("container", "docker-archive"),
@@ -967,6 +1026,9 @@ fn service_start_uses_shared_image_digest_preflight_without_pruning() -> TestRes
 #[test]
 fn selected_owner_preserves_its_record_when_the_callers_package_changes() -> TestResult {
     use std::os::unix::fs::MetadataExt;
+    if network::isolate()? {
+        return Ok(());
+    }
     for (runtime, kind) in [
         ("podman", "nix-descriptor"),
         ("container", "docker-archive"),
@@ -1039,6 +1101,9 @@ fn selected_owner_preserves_its_record_when_the_callers_package_changes() -> Tes
 
 #[test]
 fn podman_recovers_a_missing_legacy_selected_owner_and_records_new_provenance() -> TestResult {
+    if network::isolate()? {
+        return Ok(());
+    }
     let mut fixture = Fixture::new()?;
     let output = run_command(
         fixture
@@ -1093,6 +1158,9 @@ fn podman_recovers_a_missing_legacy_selected_owner_and_records_new_provenance() 
 
 #[test]
 fn wrong_installed_podman_config_identity_is_rejected_before_starting_an_owner() -> TestResult {
+    if network::isolate()? {
+        return Ok(());
+    }
     let fixture = Fixture::new()?;
     service_binding::create(fixture.root.path(), &fixture.bin, "nix-descriptor")?;
     let output = run_command(
@@ -1125,6 +1193,9 @@ fn wrong_installed_podman_config_identity_is_rejected_before_starting_an_owner()
 
 #[test]
 fn podman_pins_the_config_identity_not_the_registry_manifest_digest() -> TestResult {
+    if network::isolate()? {
+        return Ok(());
+    }
     let fixture = Fixture::new()?;
     service_binding::create(fixture.root.path(), &fixture.bin, "nix-descriptor")?;
     let output = run_command(
@@ -1152,6 +1223,9 @@ fn podman_pins_the_config_identity_not_the_registry_manifest_digest() -> TestRes
 
 #[test]
 fn image_copy_fixture_conforms_to_raw_inspection_and_archive_output() -> TestResult {
+    if network::isolate()? {
+        return Ok(());
+    }
     let fixture = Fixture::new()?;
     let environment = fixture.command("container")?;
     let invoke = |program: &str, args: &[&str]| -> TestResult<std::process::Output> {
@@ -1229,6 +1303,9 @@ fn image_copy_fixture_conforms_to_raw_inspection_and_archive_output() -> TestRes
 
 #[test]
 fn service_runtime_fixture_conforms_to_missing_running_and_image_contracts() -> TestResult {
+    if network::isolate()? {
+        return Ok(());
+    }
     for runtime in ["podman", "container"] {
         let fixture = Fixture::new()?;
         fs::remove_file(fixture.root.path().join("image"))?;
