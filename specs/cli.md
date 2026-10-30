@@ -303,6 +303,14 @@ without blocking ordinary shared-backend startup.
 - Missing legacy Podman ownership gains provenance only after readiness.
   [test](../crates/wrix-cli/tests/service_cache.rs::podman_recovers_a_missing_legacy_selected_owner_and_records_new_provenance)
 
+`wrix service migrate-legacy [--prepare|--quiesced]` coordinates explicit
+cross-repository foreign-service cutover independently of unavailable-owner
+recovery. It preserves fail-closed ownership and leaves shutdown to the operator
+after maintenance approval.
+[Legacy Cutover](services.md#cross-repository-legacy-cutover) owns inventory,
+durable intent, quiescence and verification.
+[test](../crates/wrix-cli/tests/service_lifecycle.rs::repeated_recovery_reports_foreign_workspace_and_migration_without_mutation)
+
 See [recovery guidance](../docs/celler-recovery.md) for the operator workflow.
 
 ### Service Update Command

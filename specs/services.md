@@ -97,6 +97,41 @@ cache storage/GC. Waiting launchers retain execution observation and sandbox
 credential renewal. Host publishers retain selected-graph discovery, verified
 public/private classification and NAR streaming.
 
+### Cross-repository Legacy Cutover
+
+`wrix service migrate-legacy` inventories foreign service containers and
+possible consumers across available runtimes without stopping services.
+`--prepare` records private durable intent; `--quiesced` explicitly acknowledges
+coordinated operator downtime, checks unchanged stopped Podman identities/mounts
+and refuses running possible consumers before workspace imports. Host SQL/cache
+clients and old launchers require operator quiescence: container inventory
+cannot establish that they are idle. A running foreign legacy service remains a
+fail-closed ownership error, including after an earlier migration; diagnostics
+name its workspace, runtime and container and recommend migration rather than
+repeatedly recommending unavailable-owner recovery.
+[test](../crates/wrix-service/src/lifecycle/migration/test/mod.rs::inventory_separates_shared_owner_from_multiple_foreign_repos_and_active_consumers)
+[test](../crates/wrix-service/src/lifecycle/migration/test/mod.rs::active_consumers_block_even_with_operator_quiescence_claim)
+[test](../crates/wrix-cli/tests/service_lifecycle.rs::repeated_recovery_reports_foreign_workspace_and_migration_without_mutation)
+
+Migration never stops/removes legacy containers, deletes managed data, rotates
+keys or merges cache authorities. It retains their original cache/signing
+storage and uses the existing fenced workspace Dolt import. Every affected
+workspace is started and checked for Dolt readiness and cache status.
+Independent remaining selected legacy database history prevents successful
+verification. Sibling databases remain retained, not implicitly imported or
+merged. The fsynced journal retains per-workspace verification progress; retries
+recheck all workspaces. Recreated identities, mount drift and running recurrence
+are not authorized by old intent. Apple cutover and replacement of a selected
+legacy owner are refused by this foreign-service workflow rather than using a
+name as ownership evidence. See the
+[maintenance workflow](../docs/celler-recovery.md#foreign-legacy-services-in-other-repositories).
+[test](../crates/wrix-service/src/lifecycle/migration/test/mod.rs::cutover_requires_every_legacy_service_to_be_stopped)
+[test](../crates/wrix-service/src/lifecycle/migration/test/mod.rs::interrupted_cutover_retains_authorization_and_verified_workspace_progress)
+[test](../crates/wrix-service/src/lifecycle/migration/test/mod.rs::recreated_same_named_container_cannot_inherit_migration_authorization)
+[test](../crates/wrix-service/src/lifecycle/migration/test/mod.rs::mount_changes_invalidate_prepared_inventory_without_touching_sources)
+[test](../crates/wrix-service/src/lifecycle/migration/test/mod.rs::stale_launch_recurrence_is_not_authorized_by_retained_migration_intent)
+[test](../crates/wrix-service/src/lifecycle/migration/test/mod.rs::verification_does_not_ignore_independent_legacy_history_after_namespace_registration)
+
 ### Controller Lifecycle and Recovery
 
 Acceptance: [Host Control Acceptance](#host-control-acceptance).

@@ -100,6 +100,7 @@ pub(in crate::lifecycle) fn ensure(
     if selected.runtime != runtime.kind || Selected::read(guard.root())?.as_ref() != previous {
         return Err(super::Error::Conflict.into());
     }
+    super::super::shared::check_inventory(runtime, Some(&selected), None)?;
     let alternate = runtime.alternate();
     for (backend, local) in [(&alternate, false), (runtime, true)] {
         if let Some(containers) = backend.available_container_infos()? {
@@ -158,7 +159,6 @@ pub(in crate::lifecycle) fn ensure(
             status,
         });
     }
-    super::super::shared::check_inventory(runtime, Some(&selected), None)?;
     let layout = Layout::current()?;
     let issuer = root.join("host-control/celler-issuer");
     if previous.is_some() || candidate.is_some() {

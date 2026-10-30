@@ -1609,9 +1609,7 @@ fn a_foreign_hash_is_not_overridden_by_a_matching_workspace_path() -> TestResult
     let output = fixture.run("stop")?;
     assert!(!output.status.success());
     assert!(
-        output
-            .stderr
-            .contains("Explicitly stop ALL legacy Wrix service containers"),
+        output.stderr.contains("service migrate-legacy"),
         "{}",
         output.stderr
     );
@@ -1639,12 +1637,7 @@ fn assert_cache_start_preserves_owner(fixture: &Fixture) -> TestResult {
     assert!(
         output.stderr.contains("explicit recovery")
             || output.stderr.contains("explicit host-wide maintenance")
-            || output
-                .stderr
-                .contains("Explicitly stop ALL legacy Wrix service containers")
-            || output
-                .stderr
-                .contains("run `wrix service recover` explicitly"),
+            || output.stderr.contains("service migrate-legacy"),
         "{}",
         output.stderr
     );
@@ -1823,9 +1816,7 @@ fn podman_start_checks_apple_backend_ownership_before_selected_runtime_access() 
     )?;
     assert!(!output.status.success());
     assert!(
-        output
-            .stderr
-            .contains("Explicitly stop ALL legacy Wrix service containers"),
+        output.stderr.contains("service migrate-legacy"),
         "{}",
         output.stderr
     );
@@ -2437,6 +2428,74 @@ fn running_owner_rename_is_refused_before_any_ownership_change() -> TestResult {
 }
 
 #[test]
+fn repeated_recovery_reports_foreign_workspace_and_migration_without_mutation() -> TestResult {
+    let mut fixture = Fixture::shared_cache()?;
+    let other = fixture.root.path().join("other-repository");
+    fs::create_dir(&other)?;
+    let mut legacy = fixture.snapshot[0].clone();
+    legacy["configuration"]["id"] = json!("foreign-legacy");
+    legacy["configuration"]["labels"]["wrix.workspace"] = json!(other);
+    legacy["configuration"]["labels"]["wrix.workspace.hash"] = json!("e".repeat(64));
+    legacy["configuration"]["labels"]["wrix.service.supervision"] = json!("1");
+    legacy["configuration"]["labels"]
+        .as_object_mut()
+        .unwrap()
+        .remove("wrix.dolt.shared");
+    legacy["configuration"]["labels"]
+        .as_object_mut()
+        .unwrap()
+        .remove("wrix.cache.backend");
+    fixture.snapshot.as_array_mut().unwrap().push(legacy);
+    fixture.write_snapshot()?;
+    let before = fs::read(fixture.root.path().join("runtime.json"))?;
+    let state = fixture.state_root()?;
+    let secret = fs::read(state.join("keys/cache.secret"))?;
+    let public = fs::read(state.join("keys/cache.pub"))?;
+    for _ in 0..2 {
+        for command in ["start", "recover"] {
+            let output = fixture.run(command)?;
+            assert!(!output.status.success());
+            for expected in [
+                "foreign-legacy",
+                "other-repository",
+                "container",
+                "service migrate-legacy",
+                "stale shell/package",
+            ] {
+                assert!(output.stderr.contains(expected), "{}", output.stderr);
+            }
+            assert!(
+                !output.stderr.contains("service recover"),
+                "{}",
+                output.stderr
+            );
+        }
+    }
+    let mut command = fixture.command()?;
+    let output = run_command(command.args(["service", "migrate-legacy", "--prepare"]))?;
+    assert!(output.status.success(), "{}", output.stderr);
+    assert!(
+        output.stdout.contains("foreign-legacy") && output.stdout.contains("maintenance approval")
+    );
+    let mut command = fixture.command()?;
+    let output = run_command(command.args(["service", "migrate-legacy", "--quiesced"]))?;
+    assert!(!output.status.success());
+    assert!(
+        output.stderr.contains("must be gracefully stopped"),
+        "{}",
+        output.stderr
+    );
+    assert_eq!(fs::read(fixture.root.path().join("runtime.json"))?, before);
+    assert_eq!(fs::read(state.join("keys/cache.secret"))?, secret);
+    assert_eq!(fs::read(state.join("keys/cache.pub"))?, public);
+    let calls = fs::read_to_string(fixture.root.path().join("runtime.log"))?;
+    assert!(!calls.lines().any(|line| line.starts_with("stop ")
+        || line.starts_with("rm ")
+        || line.starts_with("run ")));
+    Ok(())
+}
+
+#[test]
 fn unrelated_stopped_legacy_service_does_not_block_shared_owner_reentry() -> TestResult {
     let fixture = Fixture::shared_cache()?;
     let mut snapshot: Vec<Value> =
@@ -2659,7 +2718,16 @@ fn recovery_rejects_competing_owners_in_either_runtime_without_mutation() -> Tes
         let inventory = fs::read(fixture.root.path().join("runtime.json"))?;
         let output = fixture.run("recover")?;
         assert!(!output.status.success());
-        assert!(output.stderr.contains("competing"), "{}", output.stderr);
+        assert!(
+            output.stderr.contains("foreign legacy service"),
+            "{}",
+            output.stderr
+        );
+        assert!(
+            output.stderr.contains("service migrate-legacy"),
+            "{}",
+            output.stderr
+        );
         assert_eq!(fs::read(&selection)?, before);
         assert_eq!(
             fs::read(fixture.root.path().join("runtime.json"))?,

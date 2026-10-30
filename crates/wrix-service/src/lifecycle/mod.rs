@@ -9,6 +9,7 @@ mod dolt;
 pub mod drain;
 pub mod generation;
 mod managed;
+pub mod migration;
 mod owner;
 pub mod shared;
 pub mod sql;
@@ -136,7 +137,7 @@ pub enum Error {
     },
     /// Celler recovery requires an existing selected owner and its recorded runtime; no ownership was transferred
     RecoveryScope,
-    /// running legacy service {container} is not a verified shared Dolt/Celler owner; retain it and its peers. Explicitly stop ALL legacy Wrix service containers in both runtimes, then run `wrix service recover` with this host package before retrying; never delete managed data or signing state
+    /// service {container} is not a verified shared Dolt/Celler owner; explicit host-wide maintenance is required. Run `wrix service migrate-legacy` to inventory affected workspaces, runtimes and consumers before obtaining shutdown approval; recovery cannot migrate a running legacy service; never delete managed data or signing state
     IncompatibleService { container: String },
     /// workspace stop cannot remove shared Celler backend {container}; namespace retirement requires host-wide lifecycle integration, not container removal
     CellerWorkspaceStop { container: String },

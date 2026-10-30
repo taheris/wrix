@@ -87,6 +87,85 @@ candidate record supports recovery after interrupted initial creation. Recovery
 is not a reset, cache prune, signing-key rotation or workspace database
 migration.
 
+## Foreign legacy services in other repositories
+
+A running foreign workspace service is not an unavailable shared owner.
+Repeating `service recover` cannot resolve it. With the updated host package:
+
+```bash
+"${WRIX_BIN:-wrix}" service migrate-legacy
+"${WRIX_BIN:-wrix}" service migrate-legacy --prepare
+```
+
+Inventory includes both available runtimes, exact workspace/runtime/container,
+Podman container identity, retained mounts and possible running consumers. A
+selected shared owner and recorded deployment generations are not legacy
+competitors. Preparation saves a private, fsynced journal under native
+`host-lifecycle/legacy-migration.json`; it does not stop anything. Keep that
+journal throughout maintenance and afterward as cutover evidence.
+
+**Obtain maintenance approval before stopping services.** Container inventory
+cannot prove host shells, Beads writers, direct SQL sessions or cache clients
+idle. Coordinate with the owners of every listed repository and session. Pause
+launch automation and old shells; finish or explicitly stop dependent workers.
+The command conservatively refuses cutover while any non-service container is
+running, including consumers with no workspace label. Mounts help operators
+identify their actual checkouts; labels alone are not a dependency census.
+
+After approval and client quiescence, gracefully stop only the inventoried
+legacy containers using their reported runtime. Do not stop the existing shared
+owner, remove containers/volumes, prune caches, delete `.beads`, unlink native
+locks or rotate keys. Retain all mounted storage, each repository's entire
+`.beads` tree (including sibling databases), Git administration, native Wrix
+state/cache roots, and signing files. Take an independent consistent backup at
+this quiescent boundary; archive any container-local writable state as well.
+Record pre-cutover Beads counts/history and cache public keys for comparison.
+
+Before cutover, update the installed host package and any explicit `WRIX_BIN`,
+PATH, direnv/project pins, post-build hooks and background automation. Clear
+shell command caches/reload old shells. An already running old same-user binary
+cannot be fenced by a new CLI; recurring running legacy services are detected
+and refused, even after an earlier migration was authorized. Diagnostics name
+the exact offender and direct the operator back to migration, not recovery.
+
+Once that maintenance and backup work is complete:
+
+```bash
+"${WRIX_BIN:-wrix}" service migrate-legacy --quiesced
+```
+
+`--quiesced` is the operator's acknowledgment that **all** legacy SQL/cache
+clients and old launchers are quiesced; it never stops them on the operator's
+behalf. It checks the complete prepared inventory, stopped status, immutable
+Podman IDs, mount bindings and canonical checkout paths before authorizing
+imports. Missing/recreated/new containers or changed mounts fail closed. Apple
+inventory is supported, but automatic cross-repository cutover currently refuses
+Apple containers without a supported immutable identity witness; it never treats
+their names as sufficient ownership evidence. A legacy selected owner itself
+requires separate selected-owner maintenance; this operation handles foreign
+services alongside an existing shared owner.
+
+Cutover recovers/checks the selected shared backend, starts each affected
+workspace with the invoked host executable, then checks Dolt readiness and cache
+status. Existing workspace admission remains required; this is not automatic
+admission or reassignment. Existing native import fencing/checkpoint logic
+preserves Dolt history, branches and working roots. Sibling databases remain
+retained, not silently merged. Legacy cache payloads and signing state stay in
+the retained original storage/container; they are not automatically merged into
+Celler or rotated. A trust-key conflict is an incomplete migration, not consent
+to the destructive rotation described below.
+
+If interrupted or verification fails, resolve the reported condition and repeat
+`--quiesced` with the same package/runtime selection. The journal records each
+verified repository, but retries recheck every repository and legacy container.
+Do not restart legacy services or delete the journal/checkpoints as rollback.
+After successful native checks, run `bd status`, inspect representative history
+and issues in **every affected checkout**, and compare the recorded counts and
+public keys. Verify required cache reads through the intended new client, and
+keep the retained legacy cache backup until its consumers and retention needs
+are explicitly reconciled. Native readiness is not a claim that all external
+clients or all unselected databases were migrated.
+
 ## Conflicting workspace cache keys
 
 Host-wide `service recover` does not reconcile workspace trust metadata. If

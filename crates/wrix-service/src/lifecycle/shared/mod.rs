@@ -897,19 +897,21 @@ pub(super) fn check_inventory(
                     .ok_or(super::owner::Error::Invalid)?;
                 match backend.status(&name)? {
                     RuntimeStatus::Running => {
-                        return Err(Error::IncompatibleService {
-                            container: container.name,
-                        });
+                        return Err(super::migration::incompatible(backend, &container)?);
                     }
                     RuntimeStatus::Stopped
                         if legacy_namespace.is_some_and(|namespace| {
                             container.workspace_hash.as_deref() == Some(namespace.as_str())
-                        }) =>
+                        }) && !super::migration::permits(
+                            &roots.state().join("host-lifecycle"),
+                            backend,
+                            &container,
+                        )? =>
                     {
                         return Err(Error::Operation {
                             message: format!(
-                                "legacy workspace service {} is stopped; run `wrix service recover` explicitly before converting this namespace. Persistent data and signing state will be retained",
-                                container.name
+                                "legacy workspace service {} is stopped: workspace={:?} runtime={}; run `wrix service migrate-legacy --prepare`, coordinate consumer downtime, then `wrix service migrate-legacy --quiesced` before converting this namespace. Persistent data and signing state will be retained",
+                                container.name, container.workspace_path, backend.binary
                             ),
                         });
                     }
