@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Verify that every Rust profile package surface has no nightly derivation after
-# updating a disposable copy of the live flake.
+# Reject nightly toolchains after updating a disposable copy of the live flake.
 #
 # Usage: tests/profiles/no-nightly-closure.sh [test_no_nightly_closure]
 
@@ -34,14 +33,26 @@ copy_tracked_flake() {
 }
 
 count_nightly_in_closures() {
-  local derivations_json="$1"
-  local derivations=()
-  mapfile -t derivations < <(jq -r '.[]' <<<"$derivations_json")
-  if [[ "${#derivations[@]}" -eq 0 ]]; then
-    echo "no Rust profile derivations were returned" >&2
+  local derivations_json="$1" scan_root="$2"
+  local derivations=() toolchains=()
+  mapfile -t derivations < <(jq -r '.surfaces[]' <<<"$derivations_json")
+  mapfile -t toolchains < <(jq -r '.toolchains[]' <<<"$derivations_json")
+  if [[ "${#derivations[@]}" -eq 0 || "${#toolchains[@]}" -eq 0 ]]; then
+    echo "no Rust profile or toolchain derivations were returned" >&2
     return 1
   fi
-  nix-store -q --requisites "${derivations[@]}" | awk 'tolower($0) ~ /nightly/ {n++} END {print n+0}'
+  nix-store -q --requisites "${derivations[@]}" >"$scan_root/closure"
+  nix-store -q --requisites "${toolchains[@]}" >"$scan_root/toolchains"
+  jq -n --argjson roots "$(jq '.surfaces' <<<"$derivations_json")" \
+    --rawfile closure "$scan_root/closure" --rawfile toolchains "$scan_root/toolchains" \
+    '{roots: $roots, closure: ($closure | split("\n") | map(select(length > 0))), toolchainClosure: ($toolchains | split("\n") | map(select(length > 0)))}' >"$scan_root/input.json"
+  WRIX_NIGHTLY_SCAN="$scan_root/input.json" WRIX_NIGHTLY_CLASSIFIER="$SCRIPT_DIR/nightly-closure.nix" \
+    nix eval --json --impure --expr '
+      (import (builtins.toPath (builtins.getEnv "WRIX_NIGHTLY_CLASSIFIER")))
+        (builtins.fromJSON (builtins.readFile (builtins.getEnv "WRIX_NIGHTLY_SCAN")))
+    ' >"$scan_root/violations.json"
+  jq -r '.[]' "$scan_root/violations.json" >&2
+  jq 'length' "$scan_root/violations.json"
 }
 
 profile_derivations() {
@@ -51,12 +62,15 @@ profile_derivations() {
     let
       flake = builtins.getFlake \"path:$flake_root\";
       lib = flake.legacyPackages.${system}.lib;
-      surfaces = profile:
-        map (package: package.drvPath) (
+      surfaces = profile: {
+        surfaces = map (package: package.drvPath) (
           profile.packages
           ++ (profile.hostPackages or [ ])
           ++ [ profile.toolchain ]
         );
+        toolchains = [ profile.toolchain.drvPath ]
+          ++ builtins.attrNames (builtins.getContext profile.env.RUSTC);
+      };
       pinned = lib.rustProfile {
         toolchain = $flake_root/tests/fixtures/rust-toolchain.toml;
         sha256 = \"$FIXTURE_SHA\";
@@ -69,11 +83,14 @@ profile_derivations() {
 }
 
 test_no_nightly_closure() {
-  local fresh_flake
+  local fresh_flake scan_root
   local system
   local derivations
   local profile
   local count
+  nix eval --json --file "$SCRIPT_DIR/nightly-closure-test.nix" >/dev/null
+  scan_root=$(mktemp -d -t wrix-nightly-scan.XXXXXX)
+  TMPDIRS+=("$scan_root")
   fresh_flake=$(copy_tracked_flake)
   TMPDIRS+=("$fresh_flake")
 
@@ -82,7 +99,7 @@ test_no_nightly_closure() {
   derivations=$(profile_derivations "$fresh_flake" "$system")
 
   for profile in default pinned; do
-    count=$(count_nightly_in_closures "$(jq -c ".$profile" <<<"$derivations")")
+    count=$(count_nightly_in_closures "$(jq -c ".$profile" <<<"$derivations")" "$scan_root")
     if [[ "$count" -ne 0 ]]; then
       echo "$profile Rust profile package closures contain $count nightly derivation(s)" >&2
       return 1

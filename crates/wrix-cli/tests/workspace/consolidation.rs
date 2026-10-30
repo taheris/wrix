@@ -98,6 +98,9 @@ fn snapshot(path: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     }
     for entry in fs::read_dir(path).unwrap() {
         let entry = entry.unwrap();
+        if transient_controller_write(&entry.path()) {
+            continue;
+        }
         let kind = entry.file_type().unwrap();
         if kind.is_dir() {
             files.extend(snapshot(&entry.path()));
@@ -117,6 +120,35 @@ fn snapshot(path: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
         }
     }
     files
+}
+
+fn transient_controller_write(path: &Path) -> bool {
+    path.parent()
+        .is_some_and(|parent| parent.ends_with("control/authority"))
+        && path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with(".tmp"))
+}
+
+#[test]
+fn snapshot_ignores_controller_atomic_staging_but_detects_durable_changes() {
+    let root = tempfile::tempdir().unwrap();
+    let authority = root.path().join("control/authority");
+    fs::create_dir_all(&authority).unwrap();
+    let registry = authority.join("registry.json");
+    fs::write(&registry, b"original").unwrap();
+    let before = snapshot(root.path());
+    fs::write(authority.join(".tmpAtomicWrite"), b"in progress").unwrap();
+    assert_eq!(snapshot(root.path()), before);
+    fs::write(&registry, b"changed").unwrap();
+    assert_ne!(snapshot(root.path()), before);
+    fs::write(
+        root.path().join(".tmpOutsideController"),
+        b"must remain visible",
+    )
+    .unwrap();
+    assert!(snapshot(root.path()).contains_key(&root.path().join(".tmpOutsideController")));
 }
 
 fn prepare(fixture: &Fixture, checkout: &Path) {

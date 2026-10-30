@@ -18,6 +18,11 @@ case "$(uname -s)" in
   *) EXPECTED_SOURCE_KIND=nix-descriptor; ALTERNATE_SOURCE_KIND=docker-archive ;;
 esac
 
+host_wrix() {
+  HOME="$TEST_TMP/home" XDG_STATE_HOME="$TEST_TMP/state" XDG_CACHE_HOME="$TEST_TMP/cache" \
+    "$WRIX_LINK/bin/wrix" "$@"
+}
+
 prepare() {
   if [[ -f "$CONFIG_LINK" && -x "$WRIX_LINK/bin/wrix" ]]; then
     return
@@ -38,6 +43,9 @@ prepare() {
   nix build --no-warn-dirty --out-link "$WRIX_LINK" "$REPO_ROOT#wrix"
   printf '{}\n' >"$TEST_TMP/auth.json"
   export WRIX_PI_AUTH_FILE="$TEST_TMP/auth.json"
+  mkdir -p "$TEST_TMP/home"
+  host_wrix workspace initialize
+  host_wrix workspace acknowledge-scope --version 1
 }
 
 test_profile_config_contains_launcher_contract_fields() {
@@ -79,7 +87,7 @@ test_image_source_kind() {
   jq 'del(.image.source_kind)' "$CONFIG_LINK" >"$missing"
   jq --arg kind "$ALTERNATE_SOURCE_KIND" '.image.source_kind = $kind' "$CONFIG_LINK" >"$incompatible"
   for config in "$missing" "$incompatible"; do
-    if "$WRIX_LINK/bin/wrix" --profile-config "$config" run --dry-run --json "$WORKSPACE" >"$TEST_TMP/kind.out" 2>"$err"; then
+    if host_wrix --profile-config "$config" run --dry-run --json "$WORKSPACE" >"$TEST_TMP/kind.out" 2>"$err"; then
       printf 'unsupported image source kind was accepted\n' >&2
       return 1
     fi
@@ -95,15 +103,15 @@ test_host_cli_uses_generated_launch_data() {
   jq -n --arg workspace "$WORKSPACE" '{workspace: $workspace, env: [], agent_args: [], mounts: []}' >"$spawn"
   for mode in run spawn; do
     if [[ "$mode" == run ]]; then
-      "$WRIX_LINK/bin/wrix" --profile-config "$config" run --dry-run --json "$WORKSPACE" >"$out"
+      host_wrix --profile-config "$config" run --dry-run --json "$WORKSPACE" >"$out"
     else
-      "$WRIX_LINK/bin/wrix" --profile-config "$config" spawn --dry-run --json --spawn-config "$spawn" --stdio >"$out"
+      host_wrix --profile-config "$config" spawn --dry-run --json --spawn-config "$spawn" --stdio >"$out"
     fi
     jq -e --arg config "$config" --arg workspace "$WORKSPACE" '.schema == 1 and .plan.profile_config == $config and .plan.workspace == $workspace and .plan.agent == "pi"' "$out" >/dev/null
   done
-  WRIX_PROJECT_PROFILE_CONFIG="$config" "$WRIX_LINK/bin/wrix" service --help >"$TEST_TMP/service.out"
+  WRIX_PROJECT_PROFILE_CONFIG="$config" host_wrix service --help >"$TEST_TMP/service.out"
   grep -qF 'Usage: wrix service <command>' "$TEST_TMP/service.out"
-  "$WRIX_LINK/bin/wrix" >"$TEST_TMP/help.out"
+  host_wrix >"$TEST_TMP/help.out"
   grep -qF 'Usage: wrix <command>' "$TEST_TMP/help.out"
 }
 
@@ -113,20 +121,31 @@ test_project_pointer_keeps_the_host_package_unconfigured() {
   config=$(readlink -f "$CONFIG_LINK")
   for command in service beads init notify help; do
     WRIX_PROJECT_PROFILE_CONFIG="$TEST_TMP/nonexistent-config" \
-      "$WRIX_LINK/bin/wrix" "$command" --help >"$TEST_TMP/help.out" 2>"$TEST_TMP/help.err"
+      host_wrix "$command" --help >"$TEST_TMP/help.out" 2>"$TEST_TMP/help.err"
     [[ -s "$TEST_TMP/help.out" && ! -s "$TEST_TMP/help.err" ]]
   done
   WRIX_PROJECT_PROFILE_CONFIG="$config" \
-    "$WRIX_LINK/bin/wrix" run --dry-run --json "$WORKSPACE" >"$TEST_TMP/plan.out"
+    host_wrix run --dry-run --json "$WORKSPACE" >"$TEST_TMP/plan.out"
   jq -e --arg config "$config" '.plan.profile_config == $config' "$TEST_TMP/plan.out" >/dev/null
   jq '.profile.name = "explicit-override"' "$CONFIG_LINK" >"$TEST_TMP/explicit-config.json"
   WRIX_PROJECT_PROFILE_CONFIG="$config" \
-    "$WRIX_LINK/bin/wrix" --profile-config "$TEST_TMP/explicit-config.json" \
+    host_wrix --profile-config "$TEST_TMP/explicit-config.json" \
       run --dry-run --json "$WORKSPACE" >"$TEST_TMP/plan.out"
   jq -e '.plan.profile == "explicit-override"' "$TEST_TMP/plan.out" >/dev/null
 }
 
+test_fixture_host_isolation() {
+  prepare
+  local unrelated="$TEST_TMP/unrelated-host"
+  mkdir -p "$unrelated/wrix"
+  printf 'unrelated admission state\n' >"$unrelated/wrix/state.db"
+  XDG_STATE_HOME="$unrelated" host_wrix workspace diagnose >"$TEST_TMP/diagnose.out"
+  grep -qF "state_root: $TEST_TMP/state/wrix" "$TEST_TMP/diagnose.out"
+  [[ "$(<"$unrelated/wrix/state.db")" == 'unrelated admission state' ]]
+}
+
 test_profile_config_wrapper_contract() {
+  test_fixture_host_isolation
   test_profile_config_contains_launcher_contract_fields
   test_host_cli_uses_generated_launch_data
   test_project_pointer_keeps_the_host_package_unconfigured

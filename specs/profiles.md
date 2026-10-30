@@ -691,11 +691,16 @@ without introducing a reciprocal flake dependency.
   (matches the image's toolchain in `profile.packages` on Linux hosts; uses the
   Darwin host counterpart on Darwin)
   [judge](../tests/judges/profiles.sh#test_rust_toolchain_field)
-- `wrix.profiles.rust` and `wrix.rustProfile { toolchain; sha256; }` closures
-  contain zero `*-nightly-*` derivations after a fresh `nix flake update`
-  (regression guard against reintroducing
-  `fenix.packages.${system}.rust-analyzer`, which drags a nightly
-  cargo/rustc/rust-std closure) [check](verify:profiles.rust-no-nightly-closure)
+- `wrix.profiles.rust` and `wrix.rustProfile { toolchain; sha256; }` selected
+  host/image toolchain closures contain zero `*-nightly-*` derivations after a
+  fresh `nix flake update`. Every profile package surface is also scanned for
+  transitive nightly toolchains, guarding against standalone Fenix
+  `rust-analyzer` dragging nightly cargo/rustc/rust-std. Nixpkgs' stable
+  `rustfmt-nightly-X.Y.Z` compatibility formatter used by upstream build tools
+  such as bindgen is allowed only outside selected toolchain closures and direct
+  profile package roots; dated nightly formatters are still rejected. The
+  classifier exercises positive/negative synthetic graphs before the live scan.
+  [check](verify:profiles.rust-no-nightly-closure)
 - `mkProfileImages { rust = …; }` produces the selected-agent data shape with
   `ref`, `source`, `source_kind` and `profile_config`, no launcher executable,
   and Nix-context-preserving image/configuration references; missing
