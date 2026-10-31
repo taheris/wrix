@@ -33,6 +33,7 @@ let
       "tests/prepare-native-fixtures.sh" = ../../tests/prepare-native-fixtures.sh;
       "tests/store/cleanup-native-fixtures.py" = ../../tests/store/cleanup-native-fixtures.py;
       "lib/util/git-ssh-setup.sh" = ../util/git-ssh-setup.sh;
+      "lib/beads/package.nix" = ../beads/package.nix;
       "lib/services/host-nix-config.sh" = ./host-nix-config.sh;
       "lib/sandbox/darwin/nix-bridge.c" = ../sandbox/darwin/nix-bridge.c;
       "lib/services/celler-work-drain-state.rs" = ./celler-work-drain-state.rs;
