@@ -1,5 +1,6 @@
 use std::{
     fs,
+    os::unix::fs::PermissionsExt,
     process::{Command, ExitCode},
 };
 use wrix_cli::command;
@@ -180,6 +181,13 @@ fn public_cli_deployment_dispatch_is_host_only_and_never_bootstraps_an_absent_de
     let root = tempfile::tempdir().unwrap();
     let home = root.path().join("home");
     fs::create_dir(&home).unwrap();
+    let runtime = root.path().join("podman");
+    fs::write(
+        &runtime,
+        include_str!("../../wrix-cli/tests/fixtures/service-runtime.sh"),
+    )
+    .unwrap();
+    fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
     let result = Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
@@ -188,6 +196,7 @@ fn public_cli_deployment_dispatch_is_host_only_and_never_bootstraps_an_absent_de
         ])
         .current_dir(root.path())
         .env(CHILD, root.path())
+        .env("WRIX_CONTAINER_RUNTIME", &runtime)
         .env("HOME", &home)
         .env("XDG_STATE_HOME", root.path().join("state"))
         .env("XDG_CACHE_HOME", root.path().join("cache"))

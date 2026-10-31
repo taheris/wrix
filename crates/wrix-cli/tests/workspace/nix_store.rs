@@ -450,7 +450,7 @@ fn approved_shared_preflight_is_passive_but_execution_still_requires_runtime_acc
         }
     );
     assert_eq!(snapshot(&fixture.state()), before);
-    let actual = fixture.application(
+    let actual = fixture.application_with_ready_runtime(
         &checkout,
         &[
             "--profile-config",

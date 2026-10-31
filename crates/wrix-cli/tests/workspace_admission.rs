@@ -214,7 +214,7 @@ fn ordinary_service_cache_and_init_refuse_unknown_membership_before_effects() {
             "example",
         ],
     ] {
-        let output = fixture.application(&checkout, &args);
+        let output = fixture.application_with_ready_runtime(&checkout, &args);
         assert!(!output.status.success());
         assert!(
             String::from_utf8_lossy(&output.stderr).contains("admission"),

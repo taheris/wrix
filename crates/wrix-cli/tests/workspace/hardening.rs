@@ -271,20 +271,6 @@ fn previously_admitted_participant_residue_blocks_primary_operations_and_readmis
 #[test]
 fn changed_attestation_is_rechecked_before_service_files_are_created() {
     let fixture = Fixture::new();
-    // Runtime readiness precedes service admission. Supply the existing external
-    // runtime fixture explicitly, rather than depending on ambient host Podman.
-    let bash = fixture.install("bash");
-    let runtime = fixture.root.path().join("podman");
-    fs::write(
-        &runtime,
-        format!(
-            "#!{}\nset -euo pipefail\nprintf '%s\\n' \"$*\" >>\"$WRIX_TEST_RUNTIME_CALLS\"\n{}",
-            bash.display(),
-            include_str!("../fixtures/service-runtime.sh")
-        ),
-    )
-    .unwrap();
-    fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700)).unwrap();
     fixture.initialize();
     let checkout = fixture.repository("checkout");
     fixture.adapter(&checkout, &checkout, "workspace-one");
@@ -300,15 +286,7 @@ fn changed_attestation_is_rechecked_before_service_files_are_created() {
     let changed = reply.to_string().replace("workspace-one", "workspace-two");
     fixture.adapter_script(&format!("IFS= read -r request || [[ -n \"$request\" ]]\nread -r count < '{}'\ncount=$((count + 1))\nprintf '%s\\n' \"$count\" > '{}'\nif [[ \"$count\" = 1 ]]; then printf '%s' '{reply}'; else printf '%s' '{changed}'; fi", count.display(), count.display()));
     let before = snapshot(&fixture.state());
-    let application = |args: &[&str]| {
-        fixture
-            .application_command(&checkout, args)
-            .env("WRIX_CONTAINER_RUNTIME", fixture.inside("podman"))
-            .env("WRIX_TEST_RUNTIME_CALLS", fixture.inside("runtime.calls"))
-            .output()
-            .unwrap()
-    };
-    let output = application(&["service", "start"]);
+    let output = fixture.application_with_ready_runtime(&checkout, &["service", "start"]);
     assert!(!output.status.success());
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("conflicting workspace"),
@@ -318,12 +296,15 @@ fn changed_attestation_is_rechecked_before_service_files_are_created() {
     assert_eq!(snapshot(&fixture.state()), before);
     fs::write(fixture.root.path().join("count"), "0\n").unwrap();
     let profile = launch_profile(&fixture);
-    let output = application(&[
-        "--profile-config",
-        profile.to_str().unwrap(),
-        "run",
-        checkout.to_str().unwrap(),
-    ]);
+    let output = fixture.application_with_ready_runtime(
+        &checkout,
+        &[
+            "--profile-config",
+            profile.to_str().unwrap(),
+            "run",
+            checkout.to_str().unwrap(),
+        ],
+    );
     assert!(!output.status.success());
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("conflicting workspace"),

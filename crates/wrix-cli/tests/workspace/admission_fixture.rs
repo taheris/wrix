@@ -52,6 +52,27 @@ impl Fixture {
         self.application_command(caller, args).output().unwrap()
     }
 
+    /// Keep admission tests independent of an ambient host container engine.
+    pub fn application_with_ready_runtime(&self, caller: &Path, args: &[&str]) -> Output {
+        let bash = self.install("bash");
+        let runtime = self.root.path().join("podman");
+        fs::write(
+            &runtime,
+            format!(
+                "#!{}\nset -euo pipefail\nprintf '%s\\n' \"$*\" >>\"$WRIX_TEST_RUNTIME_CALLS\"\n{}",
+                bash.display(),
+                include_str!("../fixtures/service-runtime.sh")
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(runtime, fs::Permissions::from_mode(0o700)).unwrap();
+        self.application_command(caller, args)
+            .env("WRIX_CONTAINER_RUNTIME", self.inside("podman"))
+            .env("WRIX_TEST_RUNTIME_CALLS", self.inside("runtime.calls"))
+            .output()
+            .unwrap()
+    }
+
     pub fn application_command(&self, caller: &Path, args: &[&str]) -> Command {
         let mut command = if self.isolated {
             install_executable(
