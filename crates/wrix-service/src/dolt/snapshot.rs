@@ -7,7 +7,7 @@ use rustix::fs::{self as at, Dir, Mode, OFlags};
 use std::{
     ffi::OsStr,
     fs::File,
-    io::{Read, Write},
+    io::{Read, Seek, Write},
     os::unix::{ffi::OsStrExt, fs::MetadataExt},
     path::{Component, Path},
 };
@@ -150,6 +150,67 @@ fn copy_raw(
     Ok(())
 }
 
+/// Match Dolt 2.4.2's NBS v4/v5 manifest grammar (`store/nbs/file_manifest.go`).
+/// This is a transport syntax gate, not authority to resolve divergent roots
+/// or a substitute for Dolt's native table/chunk integrity checks.
+fn validate_manifest(bytes: &[u8], destination: &File) -> Result<(), Error> {
+    let text = std::str::from_utf8(bytes).map_err(|_| Error::UnsafePath)?;
+    let fields: Vec<_> = text.split(':').collect();
+    let prefix = match fields.first().copied() {
+        Some("4") => 4,
+        Some("5") => 5,
+        _ => return Err(Error::UnsafePath),
+    };
+    let hash = |value: &str| {
+        value.len() == 32
+            && value
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'v'))
+    };
+    if fields.len() < prefix
+        || (fields.len() - prefix) % 2 != 0
+        || fields[1] != "__DOLT__"
+        || !fields[2..prefix].iter().all(|value| hash(value))
+    {
+        return Err(Error::UnsafePath);
+    }
+    for table in fields[prefix..].as_chunks::<2>().0 {
+        if !hash(table[0])
+            || table[1].is_empty()
+            || !table[1].bytes().all(|byte| byte.is_ascii_digit())
+            || table[1].parse::<u32>().is_err()
+        {
+            return Err(Error::UnsafePath);
+        }
+        // A native table spec may name a regular NBS table or its archive.
+        // Check only descriptor-relative private files, after data copying.
+        let mut present = false;
+        for name in [table[0].to_owned(), format!("{}.darc", table[0])] {
+            match at::openat(
+                destination,
+                name.as_str(),
+                OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+                Mode::empty(),
+            ) {
+                Ok(file) => {
+                    let metadata = File::from(file).metadata()?;
+                    if !metadata.is_file() || metadata.nlink() != 1 {
+                        return Err(Error::UnsafePath);
+                    }
+                    present = true;
+                    break;
+                }
+                Err(rustix::io::Errno::NOENT) => (),
+                Err(error) => return Err(std::io::Error::from(error).into()),
+            }
+        }
+        if !present {
+            return Err(Error::UnsafePath);
+        }
+    }
+    Ok(())
+}
+
 struct Budget {
     bytes: u64,
     entries: usize,
@@ -201,7 +262,7 @@ fn copy(source: &File, destination: &File, budget: &mut Budget, depth: usize) ->
             let mut output = File::from(at::openat(
                 destination,
                 temporary.as_str(),
-                OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                OFlags::RDWR | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
                 Mode::RUSR | Mode::WUSR,
             )?);
             // Bound actual reads too: a concurrently growing guest file cannot
@@ -212,6 +273,23 @@ fn copy(source: &File, destination: &File, budget: &mut Budget, depth: usize) ->
             }
             budget.bytes -= copied;
             output.flush()?;
+            if name == "manifest" {
+                // Validate the exact private bytes being committed, not a prior
+                // read of the guest file that can change before this copy.
+                let validation = (|| {
+                    if copied > 16 << 20 {
+                        return Err(Error::UnsafePath);
+                    }
+                    output.rewind()?;
+                    let mut bytes = Vec::new();
+                    output.read_to_end(&mut bytes)?;
+                    validate_manifest(&bytes, destination)
+                })();
+                if let Err(error) = validation {
+                    at::unlinkat(destination, temporary.as_str(), at::AtFlags::empty())?;
+                    return Err(error);
+                }
+            }
             output.sync_all()?;
             at::renameat(destination, temporary.as_str(), destination, name)?;
         } else {

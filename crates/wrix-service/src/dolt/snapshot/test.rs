@@ -3,8 +3,140 @@ use std::{fs, os::unix::fs::symlink};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
+const MANIFEST: &str = "5:__DOLT__:0123456789abcdefghijklmnopqrstuv:00000000000000000000000000000000:00000000000000000000000000000000";
+
 fn open(path: &Path) -> Result<File, Error> {
     Ok(File::from(at::open(path, DIRECTORY, Mode::empty())?))
+}
+
+#[test]
+fn invalid_manifest_cannot_replace_last_usable_private_manifest() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let private = root.path().join("native-remote");
+    let projection = root.path().join("beads-sync/beads/.beads/dolt-remote");
+    fs::create_dir_all(&private)?;
+    fs::create_dir_all(&projection)?;
+    fs::write(private.join("manifest"), MANIFEST)?;
+    let inode = fs::metadata(private.join("manifest"))?.ino();
+    let invalid = [
+        format!("<<<<<<< HEAD\n{MANIFEST}\n=======\n{MANIFEST}\n>>>>>>> incoming\n"),
+        String::new(),
+        "snapshot".into(),
+        MANIFEST.replacen("5:", "6:", 1),
+        MANIFEST.replace("__DOLT__", "unknown"),
+        format!("{MANIFEST}:{}:1", "d".repeat(32)),
+        MANIFEST.replace("0123456789abcdefghijklmnopqrstuv", "invalid-hash"),
+        format!("{MANIFEST}:0123456789abcdefghijklmnopqrstuv"),
+        format!("{MANIFEST}:0123456789abcdefghijklmnopqrstuv:4294967296"),
+        format!("{MANIFEST}:0123456789abcdefghijklmnopqrstuv:-1"),
+        format!("{MANIFEST}\n"),
+    ];
+    for bytes in invalid {
+        fs::write(projection.join("manifest"), bytes)?;
+        assert!(transfer(root.path(), &Branch::parse("beads")?, false).is_err());
+        assert_eq!(fs::read(private.join("manifest"))?, MANIFEST.as_bytes());
+        assert_eq!(fs::metadata(private.join("manifest"))?.ino(), inode);
+        assert!(!fs::read_dir(&private)?.any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".wrix-snapshot-")
+        }));
+    }
+    // Retained private state is still publishable after every rejected import.
+    transfer(root.path(), &Branch::parse("beads")?, true)?;
+    assert_eq!(fs::read(projection.join("manifest"))?, MANIFEST.as_bytes());
+    Ok(())
+}
+
+#[test]
+fn supported_manifest_versions_and_table_counts_roundtrip() -> TestResult {
+    for bytes in [
+        MANIFEST.to_owned(),
+        format!("4:__DOLT__:{}:{}", "a".repeat(32), "0".repeat(32)),
+        format!(
+            "{MANIFEST}:{}:4294967295:{}:0",
+            "b".repeat(32),
+            "c".repeat(32)
+        ),
+    ] {
+        let root = tempfile::tempdir()?;
+        let private = root.path().join("native-remote");
+        fs::create_dir(&private)?;
+        fs::write(private.join("manifest"), &bytes)?;
+        fs::write(private.join("b".repeat(32)), "table")?;
+        fs::write(private.join(format!("{}.darc", "c".repeat(32))), "archive")?;
+        transfer(root.path(), &Branch::parse("beads")?, true)?;
+        transfer(root.path(), &Branch::parse("beads")?, false)?;
+        assert_eq!(fs::read(private.join("manifest"))?, bytes.as_bytes());
+    }
+    Ok(())
+}
+
+#[test]
+fn native_producer_snapshot_survives_conflicted_import_and_subsequent_push() -> TestResult {
+    let root = tempfile::tempdir()?;
+    let database = root.path().join("database");
+    fs::create_dir(&database)?;
+    let native = |arguments: &[&str]| -> TestResult {
+        let output = std::process::Command::new("dolt")
+            .args(arguments)
+            .current_dir(&database)
+            .env("HOME", root.path())
+            .env_remove("DOLT_ROOT_HOST")
+            .env_remove("DOLT_ROOT_PASSWORD")
+            .env_remove("DOLT_CLI_PASSWORD")
+            .stdin(std::process::Stdio::null())
+            .output()?;
+        assert!(output.status.success(), "{output:?}");
+        Ok(())
+    };
+    native(&[
+        "init",
+        "--name",
+        "Fixture",
+        "--email",
+        "fixture@example.invalid",
+    ])?;
+    native(&[
+        "sql",
+        "-q",
+        "CREATE TABLE retained (id INT PRIMARY KEY); INSERT INTO retained VALUES (1)",
+    ])?;
+    native(&["add", "."])?;
+    native(&["commit", "-m", "retained data"])?;
+    let private = root.path().join("native-remote");
+    native(&[
+        "remote",
+        "add",
+        "origin",
+        &format!("file://{}", private.display()),
+    ])?;
+    native(&["push", "origin", "main"])?;
+    let branch = Branch::parse("beads")?;
+    transfer(root.path(), &branch, true)?;
+    transfer(root.path(), &branch, false)?;
+    let retained = fs::read(private.join("manifest"))?;
+    let projection = root
+        .path()
+        .join("beads-sync/beads/.beads/dolt-remote/manifest");
+    fs::write(
+        &projection,
+        format!(
+            "<<<<<<< HEAD\n{}\n=======\ninvalid\n>>>>>>> incoming",
+            String::from_utf8_lossy(&retained)
+        ),
+    )?;
+    assert!(transfer(root.path(), &branch, false).is_err());
+    assert_eq!(fs::read(private.join("manifest"))?, retained);
+    native(&["sql", "-q", "INSERT INTO retained VALUES (2)"])?;
+    native(&["add", "."])?;
+    native(&["commit", "-m", "subsequent data"])?;
+    native(&["push", "origin", "main"])?;
+    transfer(root.path(), &branch, true)?;
+    transfer(root.path(), &branch, false)?;
+    Ok(())
 }
 
 #[test]
@@ -47,7 +179,7 @@ fn native_lock_inode_is_preserved_and_writer_contention_is_bounded() -> TestResu
     let projection = root.path().join("beads-sync/beads/.beads/dolt-remote");
     fs::create_dir_all(&private)?;
     fs::create_dir_all(&projection)?;
-    fs::write(private.join("manifest"), "snapshot")?;
+    fs::write(private.join("manifest"), MANIFEST)?;
     fs::write(private.join("LOCK"), "native")?;
     fs::write(projection.join("LOCK"), "retained")?;
     let private_inode = fs::metadata(private.join("LOCK"))?.ino();
@@ -73,7 +205,7 @@ fn special_files_hardlinks_and_byte_entry_depth_budgets_fail_before_manifest() -
     for hostile in ["fifo", "hardlink", "bytes", "entries", "depth"] {
         let source = tempfile::tempdir()?;
         let destination = tempfile::tempdir()?;
-        fs::write(source.path().join("manifest"), "new")?;
+        fs::write(source.path().join("manifest"), MANIFEST)?;
         fs::write(destination.path().join("manifest"), "retained")?;
         match hostile {
             "fifo" => at::mknodat(
@@ -161,7 +293,7 @@ fn destination_symlink_is_replaced_not_followed() -> TestResult {
     let source = tempfile::tempdir()?;
     let destination = tempfile::tempdir()?;
     let peer = tempfile::NamedTempFile::new()?;
-    fs::write(source.path().join("manifest"), "new")?;
+    fs::write(source.path().join("manifest"), MANIFEST)?;
     fs::write(source.path().join("table"), "own")?;
     fs::write(peer.path(), "peer")?;
     symlink(peer.path(), destination.path().join("table"))?;
