@@ -1018,7 +1018,7 @@ pub fn sandbox_cache_endpoints(cache_mode: CacheMode) -> Result<String> {
     let Some(port) = plan.cache_port() else {
         return Ok(plan.services_json());
     };
-    let endpoint = Runtime::from_env()?.sandbox_endpoint(&plan, SandboxService::Cache, port)?;
+    let endpoint = Runtime::configured()?.sandbox_endpoint(&plan, SandboxService::Cache, port)?;
     Ok(plan.render_services_json(&json_tcp_endpoint(endpoint)))
 }
 
@@ -1027,7 +1027,7 @@ pub fn sandbox_dolt_endpoint(cache_mode: CacheMode) -> Result<String> {
     let plan = Plan::for_current_dir(cache_mode)?;
     let service = SandboxService::Dolt;
     let port = plan.dolt_port().ok_or_else(|| service.unavailable())?;
-    let endpoint = Runtime::from_env()?.sandbox_endpoint(&plan, service, port.get())?;
+    let endpoint = Runtime::configured()?.sandbox_endpoint(&plan, service, port.get())?;
     Ok(json_tcp_endpoint(endpoint))
 }
 
@@ -1408,11 +1408,17 @@ impl ContainerInfo {
 
 impl Runtime {
     fn from_env() -> Result<Self> {
-        let binary = wrix_core::container_runtime::Engine::current()
+        let mut runtime = Self::configured()?;
+        runtime.binary = wrix_core::container_runtime::Engine::current()
             .path()?
             .into_os_string()
             .into_string()
             .map_err(|_| io::Error::other("runtime path is not UTF-8"))?;
+        Ok(runtime)
+    }
+
+    fn configured() -> Result<Self> {
+        let binary = env::var("WRIX_CONTAINER_RUNTIME").unwrap_or_else(|_| default_runtime());
         let binding = env::var_os("WRIX_SERVICE_PACKAGE_BINDING")
             .map(|_| binding::Candidate::from_env())
             .transpose()?;
