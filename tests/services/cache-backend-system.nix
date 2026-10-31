@@ -5,6 +5,10 @@ pkgs.testers.runNixOSTest {
   requiredFeatures.kvm = false;
   nodes.machine = {
     imports = [ (import ../lib/userspace-vm.nix { inherit pkgs; }) ];
+    nix.settings.experimental-features = [
+      "nix-command"
+      "flakes"
+    ];
     virtualisation = {
       memorySize = 2048;
       diskSize = 4096;
