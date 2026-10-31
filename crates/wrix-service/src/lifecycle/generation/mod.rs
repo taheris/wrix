@@ -458,12 +458,20 @@ impl Status {
 }
 
 fn runtime(kind: RuntimeKind) -> Runtime {
+    // Persist the engine kind, not a host-specific executable path. Reapply the
+    // caller's matching runtime selection when observing retained generations.
+    let binary = std::env::var("WRIX_CONTAINER_RUNTIME")
+        .ok()
+        .filter(|binary| RuntimeKind::for_binary(binary) == kind)
+        .unwrap_or_else(|| {
+            match kind {
+                RuntimeKind::Podman => "podman",
+                RuntimeKind::Container => "container",
+            }
+            .into()
+        });
     Runtime {
-        binary: match kind {
-            RuntimeKind::Podman => "podman",
-            RuntimeKind::Container => "container",
-        }
-        .into(),
+        binary,
         kind,
         binding: None,
     }

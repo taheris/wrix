@@ -2118,7 +2118,12 @@ impl Runtime {
             if is_missing_container_remove_error(&message) {
                 return Ok(RuntimeStatus::Missing);
             }
-            return Err(Error::Operation { message });
+            return Err(Error::Operation {
+                message: format!(
+                    "failed to inspect container {name} in {}: {message}",
+                    self.binary
+                ),
+            });
         }
         match String::from_utf8_lossy(&output.stdout).trim() {
             "true" => Ok(RuntimeStatus::Running),
@@ -2617,6 +2622,19 @@ mod test {
                 "uncertain inspection {body:?} returned {result:?}"
             );
         }
+    }
+
+    #[test]
+    fn failed_inspection_identifies_the_runtime_and_container() {
+        let (_root, runtime) = inspection_fixture(
+            "printf 'permission denied creating /var/lib/containers/storage/libpod\\n' >&2; exit 125",
+        );
+        let error = runtime.status_identifier("owner").unwrap_err().to_string();
+        assert!(error.contains(&format!(
+            "failed to inspect container owner in {}:",
+            runtime.binary
+        )));
+        assert!(error.contains("permission denied creating /var/lib/containers/storage/libpod"));
     }
 
     #[test]

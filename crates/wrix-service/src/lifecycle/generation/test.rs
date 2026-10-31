@@ -1,4 +1,54 @@
+use std::os::unix::fs::PermissionsExt as _;
+
 use super::*;
+
+#[test]
+fn retained_generation_uses_selected_runtime_instead_of_path() {
+    const CHILD: &str = "WRIX_TEST_GENERATION_RUNTIME";
+    if std::env::var_os(CHILD).is_some() {
+        let selected = std::env::var("WRIX_CONTAINER_RUNTIME").unwrap();
+        let gateway = plan().gateway;
+        assert_eq!(gateway.runtime().binary, selected);
+        assert_eq!(
+            gateway.runtime().status_identifier("owner").unwrap(),
+            RuntimeStatus::Running
+        );
+        // A Podman override must not reinterpret a recorded Apple generation.
+        assert_eq!(runtime(RuntimeKind::Container).binary, "container");
+        return;
+    }
+
+    let root = tempfile::tempdir().unwrap();
+    let selected = root.path().join("selected-podman");
+    let ambient = root.path().join("podman");
+    for (path, body) in [
+        (&selected, "printf 'true\\n'"),
+        (
+            &ambient,
+            "printf 'wrong runtime: permission denied creating /var/lib/containers/storage/libpod\\n' >&2; exit 125",
+        ),
+    ] {
+        std::fs::write(path, format!("#!/bin/sh\nset -eu\n{body}\n")).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "lifecycle::generation::test::retained_generation_uses_selected_runtime_instead_of_path",
+            "--nocapture",
+        ])
+        .env(CHILD, "1")
+        .env("WRIX_CONTAINER_RUNTIME", selected)
+        .env("PATH", root.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
 
 fn plan() -> Plan {
     let recipe: owner::Recipe = serde_json::from_value(serde_json::json!({
