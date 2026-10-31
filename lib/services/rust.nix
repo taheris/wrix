@@ -275,6 +275,12 @@ in
     buildPhase = ''
       export CARGO_TARGET_DIR="$out/target"
       runHook preBuild
+      # Runtime fixture reads use CARGO_MANIFEST_DIR. Compile against retained
+      # immutable sources, not the disposable Nix build directory. Do not copy
+      # unpacked dependency artifacts into this source tree.
+      mkdir -p "$out/source"
+      tar --exclude='./target' -cf - . | tar -xf - -C "$out/source"
+      cd "$out/source"
       : > compiled-tests.json
       for target in celler_backend host_publication_only host_signed_exclusion; do
         cargo test --offline --locked --no-run -p wrix-cache --test "$target" \
