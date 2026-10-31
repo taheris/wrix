@@ -58,6 +58,8 @@ pub enum Error {
     Pending,
     /// host services are explicitly stopped; ordinary service start must resume the recorded deployment before installed-store admission
     Stopped,
+    /// a pending service update fences new admission; inspect `wrix service --host`, then retry `wrix service update` with its recorded exact package or use `wrix service update --cancel` only for a provably unstarted update
+    UpdatePending,
     /// installed-store maintenance belongs to a different host package or state generation
     Conflict,
     /// installed-store maintenance exceeds its bounded pool inventory

@@ -8,6 +8,9 @@ use std::{
 };
 use wrix_state::host::Host;
 
+#[cfg(test)]
+mod test;
+
 pub const MARKER: &str = "nix-pool-maintenance.json";
 pub struct Guard {
     _file: File,
@@ -58,15 +61,28 @@ pub fn check_clear(host: &Host) -> Result<(), Error> {
 pub fn shared(host: &Host) -> Result<Guard, Error> {
     let guard = lock(host, false)?;
     check_clear(host)?;
+    check_services(&host.roots().state().join("host-lifecycle"))?;
+    Ok(guard)
+}
+
+fn check_services(root: &Path) -> Result<(), Error> {
     for marker in ["shutdown.json", "update.json"] {
-        match fs::symlink_metadata(host.roots().state().join("host-lifecycle").join(marker)) {
-            Ok(_) => return Err(Error::Stopped),
+        match fs::symlink_metadata(root.join(marker)) {
+            Ok(_) => return Err(marker_error(marker)),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
             Err(error) => return Err(error.into()),
         }
     }
-    Ok(guard)
+    Ok(())
 }
+fn marker_error(marker: &str) -> Error {
+    if marker == "update.json" {
+        Error::UpdatePending
+    } else {
+        Error::Stopped
+    }
+}
+
 pub fn exclusive(host: &Host) -> Result<Guard, Error> {
     lock(host, true)
 }

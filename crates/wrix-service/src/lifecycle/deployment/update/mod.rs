@@ -12,6 +12,9 @@ use std::{
 };
 use wrix_state::host::Host;
 
+mod cancel;
+pub use cancel::run as cancel;
+
 const FILE: &str = "update.json";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -63,6 +66,7 @@ struct Ownership {
 #[serde(rename_all = "snake_case")]
 enum Phase {
     Prepared,
+    Preparing,
     Draining,
     Releasing,
     Released,
@@ -136,6 +140,27 @@ impl Pools {
 }
 
 impl Intent {
+    fn check_version(&self) -> Result<()> {
+        if !matches!(self.version, 1 | 2) {
+            return Err(owner::Error::Invalid.into());
+        }
+        Ok(())
+    }
+
+    fn check_cancellable(&self) -> Result<()> {
+        self.check_version()?;
+        let prepared = self.phase == Phase::Prepared && self.failure.is_none();
+        if self.ownership.is_some() || !(prepared || self.legacy_refusal()) {
+            return Err(Error::Operation { message: "update has progressed or has uncertain effects; cancellation refused. Retry `wrix service update` with its recorded exact host package; retained intent and ownership are unchanged".into() });
+        }
+        Ok(())
+    }
+
+    fn legacy_refusal(&self) -> bool {
+        matches!(self.phase, Phase::Prepared | Phase::Preparing)
+            && self.failure == Some(Failure::BackendDrain)
+    }
+
     fn same_target(&self, other: &Self) -> bool {
         self.version == other.version
             && self.deployment == other.deployment
@@ -149,9 +174,10 @@ pub fn run() -> Result<String> {
     let host = Host::discover().map_err(io::Error::other)?;
     let deployment = crate::control::existing_deployment(&host).map_err(io::Error::other)?
         .ok_or_else(|| Error::Operation { message: "service update requires an existing deployment; run `wrix service start` from a repository first".into() })?;
+    let _update = coordination::acquire(&host.roots().state().join("service-update"))?;
     let root = host.roots().state().join("host-lifecycle");
     let mut intent = Intent {
-        version: 1,
+        version: 2,
         deployment,
         attempt: Attempt::new()?,
         candidate: binding::Candidate::from_env()?,
@@ -165,8 +191,10 @@ pub fn run() -> Result<String> {
         let guard = coordination::acquire(&root)?;
         if let Some(bytes) = document(guard.root(), FILE)? {
             let retained: Intent = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+            retained.check_version()?;
+            intent.version = retained.version;
             if !retained.same_target(&intent) {
-                return Err(Error::Operation { message: "an interrupted whole-deployment update retains a different exact package/image intent; repeat it with that package before selecting another target".into() });
+                return Err(Error::Operation { message: "an interrupted whole-deployment update retains a different exact package/image intent; inspect `wrix service --host` and use `wrix service update --cancel` only for a provably unstarted update. Otherwise repeat its exact recorded package before selecting another target".into() });
             }
             intent = retained;
         } else {
@@ -175,6 +203,7 @@ pub fn run() -> Result<String> {
         }
     }
     let digest = intent.candidate.realize(&root.join("update-roots"))?;
+    begin_preparing(&root, &mut intent)?;
     let control = host.roots().state().join("control");
     let native = Native::for_package(
         Platform::current().map_err(io::Error::other)?,
@@ -222,7 +251,7 @@ pub fn run() -> Result<String> {
     if status == RuntimeStatus::Running && !native_core {
         intent.failure = Some(Failure::BackendDrain);
         publish(guard.root(), FILE, &intent)?;
-        return Err(Error::Operation { message: "the running legacy backend predates native whole-deployment ownership/drain interfaces; run `wrix service stop --host`, then repeat `wrix service update` with this exact package; no core owner was stopped or replaced".into() });
+        return Err(Error::Operation { message: "the running legacy backend predates native whole-deployment ownership/drain interfaces; upgrading requires explicit host-wide maintenance: `wrix service stop --host`, then repeat `wrix service update` with this exact package. To abandon this attempt without downtime, use current Wrix `service update --cancel` if its original-owner evidence checks pass. No core owner was stopped or replaced".into() });
     }
     intent.failure = None;
     publish(guard.root(), FILE, &intent)?;
@@ -357,12 +386,27 @@ pub fn run() -> Result<String> {
     ))
 }
 
+fn begin_preparing(root: &std::path::Path, intent: &mut Intent) -> Result<()> {
+    if intent.phase == Phase::Prepared {
+        let guard = coordination::acquire(root)?;
+        let bytes = document(guard.root(), FILE)?.ok_or(owner::Error::Conflict)?;
+        let current: Intent = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+        if current != *intent {
+            return Err(owner::Error::Conflict.into());
+        }
+        intent.phase = Phase::Preparing;
+        publish(guard.root(), FILE, intent)?;
+    }
+    Ok(())
+}
+
 pub(super) fn allows(state: &std::path::Path, candidate: &binding::Candidate) -> Result<bool> {
     let Some(bytes) = document(&state.join("host-lifecycle"), FILE)? else {
         return Ok(false);
     };
     let intent: Intent = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
-    Ok(intent.version == 1 && intent.candidate == *candidate)
+    intent.check_version()?;
+    Ok(intent.candidate == *candidate)
 }
 
 pub(super) fn status(root: &std::path::Path) -> Result<String> {
@@ -370,9 +414,7 @@ pub(super) fn status(root: &std::path::Path) -> Result<String> {
         return Ok("update: none recorded\n".into());
     };
     let intent: Intent = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
-    if intent.version != 1 {
-        return Err(owner::Error::Invalid.into());
-    }
+    intent.check_version()?;
     Ok(format!(
         "update: {:?}\nupdate failure: {:?}\nupdate target: {}\n",
         intent.phase,
@@ -407,6 +449,122 @@ mod test {
             "phase": "checking",
             "failure": "native_readiness"
         })).unwrap()
+    }
+
+    fn prepared() -> Intent {
+        let mut pending = intent();
+        pending.version = 2;
+        pending.phase = Phase::Prepared;
+        pending.failure = None;
+        pending
+    }
+
+    #[test]
+    fn cancel_retains_exact_intent_before_clearing_the_admission_fence() {
+        use std::os::unix::fs::MetadataExt;
+        let root = tempfile::tempdir().unwrap();
+        let pending = prepared();
+        publish(root.path(), FILE, &pending).unwrap();
+        let bytes = document(root.path(), FILE).unwrap().unwrap();
+        let retained = cancel::archive(root.path(), &bytes, &pending).unwrap();
+        assert_eq!(fs::read(&retained).unwrap(), bytes);
+        assert_eq!(fs::metadata(&retained).unwrap().mode() & 0o777, 0o600);
+        assert!(document(root.path(), FILE).unwrap().is_none());
+        assert_eq!(status(root.path()).unwrap(), "update: none recorded\n");
+    }
+
+    #[test]
+    fn cancel_retry_accepts_durable_evidence_from_before_fence_removal() {
+        let root = tempfile::tempdir().unwrap();
+        let pending = prepared();
+        publish(root.path(), FILE, &pending).unwrap();
+        let bytes = document(root.path(), FILE).unwrap().unwrap();
+        let archive = format!("cancelled-update-{}.json", pending.attempt.as_str());
+        publish(root.path(), &archive, &pending).unwrap();
+        cancel::archive(root.path(), &bytes, &pending).unwrap();
+        assert_eq!(document(root.path(), &archive).unwrap().unwrap(), bytes);
+    }
+
+    #[test]
+    fn conflicting_cancellation_evidence_preserves_both_documents() {
+        let root = tempfile::tempdir().unwrap();
+        let pending = prepared();
+        publish(root.path(), FILE, &pending).unwrap();
+        let bytes = document(root.path(), FILE).unwrap().unwrap();
+        let archive = format!("cancelled-update-{}.json", pending.attempt.as_str());
+        publish(
+            root.path(),
+            &archive,
+            &serde_json::json!({"unrelated": true}),
+        )
+        .unwrap();
+        let evidence = document(root.path(), &archive).unwrap().unwrap();
+        assert!(cancel::archive(root.path(), &bytes, &pending).is_err());
+        assert_eq!(document(root.path(), FILE).unwrap().unwrap(), bytes);
+        assert_eq!(document(root.path(), &archive).unwrap().unwrap(), evidence);
+    }
+
+    #[test]
+    fn cancellation_refuses_every_progressed_phase_and_retains_intent() {
+        for phase in [
+            Phase::Preparing,
+            Phase::Draining,
+            Phase::Releasing,
+            Phase::Released,
+            Phase::Starting,
+            Phase::Checking,
+            Phase::Activated,
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let mut pending = prepared();
+            pending.phase = phase;
+            publish(root.path(), FILE, &pending).unwrap();
+            let bytes = document(root.path(), FILE).unwrap().unwrap();
+            assert!(cancel::archive(root.path(), &bytes, &pending).is_err());
+            assert_eq!(document(root.path(), FILE).unwrap().unwrap(), bytes);
+        }
+    }
+
+    #[test]
+    fn cancellation_refuses_unknown_version_readiness_failure_or_ownership_even_when_prepared() {
+        let mut unknown = prepared();
+        unknown.version = 3;
+        let mut failed = prepared();
+        failed.failure = Some(Failure::NativeReadiness);
+        let mut pool_failed = prepared();
+        pool_failed.failure = Some(Failure::PoolReadiness);
+        let mut released = prepared();
+        released.ownership = Some(Ownership {
+            locks: Vec::new(),
+            origin: None,
+        });
+        for pending in [unknown, failed, pool_failed, released] {
+            assert!(pending.check_cancellable().is_err());
+        }
+    }
+
+    #[test]
+    fn native_preparation_is_durably_non_cancellable_before_starting() {
+        let root = tempfile::tempdir().unwrap();
+        let mut pending = prepared();
+        publish(root.path(), FILE, &pending).unwrap();
+        begin_preparing(root.path(), &mut pending).unwrap();
+        let retained: Intent =
+            serde_json::from_slice(&document(root.path(), FILE).unwrap().unwrap()).unwrap();
+        assert_eq!(retained.phase, Phase::Preparing);
+        assert!(retained.check_cancellable().is_err());
+        assert!(retained.same_target(&pending));
+    }
+
+    #[test]
+    fn native_preparation_cannot_resurrect_cancelled_intent() {
+        let root = tempfile::tempdir().unwrap();
+        let mut pending = prepared();
+        publish(root.path(), FILE, &pending).unwrap();
+        let bytes = document(root.path(), FILE).unwrap().unwrap();
+        cancel::archive(root.path(), &bytes, &pending).unwrap();
+        assert!(begin_preparing(root.path(), &mut pending).is_err());
+        assert!(document(root.path(), FILE).unwrap().is_none());
     }
 
     #[test]

@@ -319,6 +319,7 @@ Acceptance: [Service Update Acceptance](#service-update-acceptance).
 
 ```text
 wrix service update
+wrix service update --cancel
 ```
 
 This explicit action selects this host user's whole managed service deployment,
@@ -368,6 +369,35 @@ guidance: `wrix service stop --host`, then `wrix service update`. The latter
 updates the existing stopped deployment's controller and all backend roles from
 the invoked package; no new public daemon/update flag is required. Controller
 replacement can interrupt connections and is not transparent blue/green routing.
+
+`--cancel` is a separate host-only action, with no selectors or extra arguments.
+It cancels only a provably unstarted pending update, preserving the exact intent
+in a private, durable `host-lifecycle/cancelled-update-<attempt>.json` before
+clearing its admission fence. It does not activate software, stop services,
+remove retention roots, modify data/signing state or roll back a progressed
+handoff. No pending intent is an idempotent success on an existing deployment.
+Unknown versions, ownership/checkpoint evidence, shutdown, pool maintenance or
+uncertain current ownership refuse cancellation. Failed/progressed attempts are
+refused except for the proven pre-transition legacy refusal described below.
+[test](../crates/wrix-cli/tests/service_lifecycle.rs::cancel_unstarted_update_preserves_running_peers_and_allows_selected_service_reentry)
+[test](../crates/wrix-service/src/lifecycle/deployment/update/mod.rs::test::cancellation_refuses_every_progressed_phase_and_retains_intent)
+[test](../crates/wrix-service/tests/deployment_lifecycle.rs::public_cli_update_cancellation_rejects_extra_arguments_before_dispatch)
+
+Version-2 update intents durably leave `Prepared` before native preparation;
+update and cancellation serialize across candidate realization. Version-1
+`Prepared` alone is insufficient proof. Likewise, a `BackendDrain` failure in
+`Prepared` or `Preparing` can be only the legacy pre-transition refusal, not
+proof of quiescence. These cases additionally require no provisioned native core
+generations or pools, no recovery candidate, the verified original backend still
+running with a different binding from the candidate, and the owned, ready
+controller's retained package differing from the target. Any uncertainty refuses
+cancellation. Later drain, release, start, readiness or activation phases remain
+exact-intent fenced; retry the recorded exact-package update under its required
+maintenance rather than deleting its journal. Ordinary startup never cancels,
+supersedes or performs host-wide shutdown automatically.
+[test](../crates/wrix-service/src/lifecycle/deployment/update/mod.rs::test::native_preparation_is_durably_non_cancellable_before_starting)
+[test](../crates/wrix-cli/tests/service_lifecycle.rs::legacy_update_cancellation_requires_original_backend_and_controller_evidence)
+[test](../crates/wrix-cli/tests/service_lifecycle.rs::legacy_prepared_update_with_native_generations_remains_fenced)
 
 Ordinary start and actual/cached direnv activation reuse/resume the selected
 controller/backend versions and can report update needs; they do not invoke this

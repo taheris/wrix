@@ -207,6 +207,51 @@ retry rotation only if startup reports a pending rotation. Once rotation
 succeeds, a later invocation starts a new rotation and invalidates the view
 again.
 
+## Pending deployment updates
+
+A pending update and an explicit shutdown are different admission fences.
+`wrix service --host` reports their recorded state; a running backend with
+`shutdown: None` and `update: Prepared` is not an explicitly stopped host.
+Ordinary startup never clears either fence or upgrades a running deployment.
+
+With current Wrix, an operator can abandon a **provably unstarted** update:
+
+```bash
+"${WRIX_BIN:-wrix}" service --host
+"${WRIX_BIN:-wrix}" service update --cancel
+"${WRIX_BIN:-wrix}" service start
+```
+
+Cancellation does not execute the older target package or select the current
+package's service image. It retains the exact intent in a private, fsynced
+`host-lifecycle/cancelled-update-<attempt>.json` before clearing the active
+fence; retry is safe if interrupted after that archival step. All software
+roots, native data, signing material, running services and workers stay
+retained.
+
+`Prepared` from an older package is **not** proof that no side effects occurred.
+For legacy records, including the early `BackendDrain` refusal because a running
+backend lacks native handoff support, cancellation additionally checks no native
+core generations or installed-store pools, no pending pool maintenance or owner
+candidate, a verified still-running original backend different from the target,
+and an owned, ready original controller different from the target. Unknown
+state, progressed ownership, or later phases refuse cancellation and leave the
+fence intact. New update records durably enter `Preparing` before native work;
+only the specifically proven legacy refusal can be cancelled from that phase.
+
+Do not have an older `service update` process running concurrently. Current
+update and cancellation commands serialize, but an arbitrary older same-user
+writer cannot be fenced retroactively. An active current update finishes its
+serialized operation before cancellation inspects the resulting state.
+
+If refused, preserve the journals and obtain maintenance appropriate to the
+recorded phase; do not delete or hand-edit them. In particular, upgrading a
+backend that lacks native handoff still requires separately authorized host-wide
+shutdown. Cancellation restores access to the existing selection; it does not
+make that upgrade interruption-free. See
+[Service Update Command](../specs/cli.md#service-update-command) for
+eligibility.
+
 ## Controller policy upgrade
 
 The shared SQL lifecycle uses controller policy epoch 2. An older running

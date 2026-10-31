@@ -30,6 +30,26 @@ fn public_cli_update_rejects_selectors_before_workspace_or_runtime_dispatch() {
 }
 
 #[test]
+fn public_cli_update_cancellation_rejects_extra_arguments_before_dispatch() {
+    for extra in ["--cancel", "--host", "--force", "image", "--no-cache"] {
+        let mut stdout = Vec::new();
+        let error = command::run(
+            &[
+                "service".into(),
+                "update".into(),
+                "--cancel".into(),
+                extra.into(),
+            ],
+            &mut stdout,
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(stdout, [] as [u8; 0]);
+    }
+}
+
+#[test]
 fn public_cli_host_shutdown_rejects_workspace_options_before_dispatch() {
     for extra in ["--host", "--no-cache", "--sandbox-cache", "workspace"] {
         let mut stdout = Vec::new();
@@ -72,6 +92,21 @@ fn public_cli_deployment_dispatch_is_host_only_and_never_bootstraps_an_absent_de
                 "existing deployment"
             }),
             "{update}"
+        );
+        assert_eq!(stdout, [] as [u8; 0]);
+        let cancel = command::run(
+            &["service".into(), "update".into(), "--cancel".into()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+        assert!(
+            cancel.to_string().contains(if worker {
+                "host-only"
+            } else {
+                "existing deployment"
+            }),
+            "{cancel}"
         );
         assert_eq!(stdout, [] as [u8; 0]);
         let stop = command::run(

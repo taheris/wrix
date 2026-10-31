@@ -4,7 +4,7 @@ mod backend;
 mod checkpoint;
 mod ownership;
 mod update;
-pub use update::run as update;
+pub use update::{cancel as cancel_update, run as update};
 
 use super::{Error, Result, Runtime, RuntimeKind, RuntimeStatus, coordination, owner};
 use crate::control::supervision::{Lifecycle, Native, Package, Platform};

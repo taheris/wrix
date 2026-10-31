@@ -392,6 +392,16 @@ service as a blocker without repair; a stopped service remains a preparation
 need. Compatibility is rechecked by actual startup, not authorized by a prior
 preview.
 
+A pending explicit update fences new admission separately from an explicit host
+shutdown. Startup diagnostics distinguish the two; ordinary startup neither
+retargets the update nor invokes disruptive maintenance. Current Wrix provides
+explicit, evidence-preserving cancellation only under the eligibility rules in
+[Service Update Command](cli.md#service-update-command); uncertain or progressed
+native ownership remains fenced.
+[test](../crates/wrix-service/src/nix_store/lifecycle/gate/test.rs::pending_update_refuses_admission_without_claiming_host_shutdown)
+[test](../crates/wrix-service/src/nix_store/lifecycle/gate/test.rs::host_shutdown_remains_an_independent_admission_fence)
+[test](../crates/wrix-cli/tests/service_lifecycle.rs::cancel_unstarted_update_preserves_running_peers_and_allows_selected_service_reentry)
+
 ### Generation Handoff
 
 Acceptance: [Generation Acceptance](#generation-acceptance).

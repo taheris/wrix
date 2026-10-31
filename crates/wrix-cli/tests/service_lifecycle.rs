@@ -193,6 +193,237 @@ fn public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql() -
 }
 
 #[test]
+#[cfg(target_os = "linux")]
+fn cancel_unstarted_update_preserves_running_peers_and_allows_selected_service_reentry()
+-> TestResult {
+    let mut fixture = Fixture::shared_cache()?;
+    let host = run_command(fixture.command()?.args(["service", "--host"]))?;
+    assert!(host.status.success(), "{}", host.stderr);
+    let deployment = host
+        .stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("deployment: "))
+        .ok_or("missing deployment")?;
+    let lifecycle = fixture.root.path().join("state/wrix/host-lifecycle");
+    let pending = json!({
+        "version": 2,
+        "deployment": deployment,
+        "attempt": "c".repeat(32),
+        "candidate": serde_json::from_slice::<Value>(&fs::read(fixture.root.path().join("binding.json"))?)?,
+        "controller": serde_json::from_slice::<Value>(&fs::read(fixture.root.path().join("state/wrix/control/package.json"))?)?,
+        "pools": {"state": "unprovisioned"},
+        "phase": "prepared"
+    });
+    let bytes = serde_json::to_vec(&pending)?;
+    fs::write(lifecycle.join("update.json"), &bytes)?;
+    set_mode(&lifecycle.join("update.json"), 0o600)?;
+    fixture
+        .snapshot
+        .as_array_mut()
+        .ok_or("missing inventory")?
+        .push(json!({
+            "configuration": {"id": "unrelated-worker", "labels": {"wrix.kind": "sandbox"}},
+            "status": {"state": "running"}
+        }));
+    fixture.write_snapshot()?;
+    let inventory = fs::read(fixture.root.path().join("runtime.json"))?;
+    let payload = fixture
+        .root
+        .path()
+        .join("state/wrix/service-data/retained-payload");
+    fs::write(&payload, b"native data must survive cancellation")?;
+    let signing_path = fixture.state_root()?.join("keys/cache.secret");
+    let signing = fs::read(&signing_path)?;
+    let owner = fs::read(lifecycle.join("celler-owner.json"))?;
+    let blocked = fixture.run("start")?;
+    assert!(!blocked.status.success());
+    assert!(
+        blocked.stderr.contains("pending service update"),
+        "{}",
+        blocked.stderr
+    );
+    let checkpoint = format!("host-lifecycle/checkpoints/{}", "c".repeat(32));
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .create(lifecycle.join("checkpoints"))?;
+    for marker in [
+        "nix-pool-maintenance.json",
+        "host-lifecycle/shutdown.json",
+        &checkpoint,
+    ] {
+        let marker = fixture.root.path().join("state/wrix").join(marker);
+        fs::write(&marker, b"uncertain maintenance")?;
+        set_mode(&marker, 0o600)?;
+        let refused = run_command(fixture.command()?.args(["service", "update", "--cancel"]))?;
+        assert!(!refused.status.success());
+        assert_eq!(fs::read(lifecycle.join("update.json"))?, bytes);
+        assert_eq!(
+            fs::read(fixture.root.path().join("runtime.json"))?,
+            inventory
+        );
+        fs::remove_file(marker)?;
+    }
+    let unit = fixture
+        .root
+        .path()
+        .join("state/wrix/control/wrix-host-controller.service");
+    let original_unit = fs::read(&unit)?;
+    fs::write(&unit, "foreign controller unit")?;
+    let refused = run_command(fixture.command()?.args(["service", "update", "--cancel"]))?;
+    assert!(!refused.status.success());
+    assert_eq!(fs::read(lifecycle.join("update.json"))?, bytes);
+    fs::write(unit, original_unit)?;
+    fixture.snapshot[0]["status"]["state"] = json!("stopped");
+    fixture.write_snapshot()?;
+    let refused = run_command(fixture.command()?.args(["service", "update", "--cancel"]))?;
+    assert!(!refused.status.success());
+    assert_eq!(fs::read(lifecycle.join("update.json"))?, bytes);
+    fixture.snapshot[0]["status"]["state"] = json!("running");
+    fixture.write_snapshot()?;
+    let cancel = run_command(fixture.command()?.args(["service", "update", "--cancel"]))?;
+    assert!(cancel.status.success(), "{}", cancel.stderr);
+    assert!(cancel.stdout.contains("Cancelled unstarted service update"));
+    assert_eq!(
+        fs::read(&payload)?,
+        b"native data must survive cancellation"
+    );
+    assert_eq!(fs::read(signing_path)?, signing);
+    assert_eq!(fs::read(lifecycle.join("celler-owner.json"))?, owner);
+    assert!(!lifecycle.join("update.json").exists());
+    assert_eq!(
+        fs::read(lifecycle.join(format!("cancelled-update-{}.json", "c".repeat(32))))?,
+        bytes
+    );
+    assert_eq!(
+        fs::read(fixture.root.path().join("runtime.json"))?,
+        inventory
+    );
+    let retry = run_command(fixture.command()?.args(["service", "update", "--cancel"]))?;
+    assert!(retry.status.success(), "{}", retry.stderr);
+    let start = fixture.run("start")?;
+    assert!(start.status.success(), "{}", start.stderr);
+    assert_eq!(
+        fs::read(fixture.root.path().join("runtime.json"))?,
+        inventory
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn legacy_update_cancellation_requires_original_backend_and_controller_evidence() -> TestResult {
+    let fixture = Fixture::legacy_shared_cache()?;
+    let host = run_command(fixture.command()?.args(["service", "--host"]))?;
+    assert!(host.status.success(), "{}", host.stderr);
+    let deployment = host
+        .stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("deployment: "))
+        .ok_or("missing deployment")?;
+    let lifecycle = fixture.root.path().join("state/wrix/host-lifecycle");
+    let pending = json!({
+        "version": 1,
+        "deployment": deployment,
+        "attempt": "d".repeat(32),
+        "candidate": serde_json::from_slice::<Value>(&fs::read(fixture.root.path().join("binding.json"))?)?,
+        "controller": serde_json::from_slice::<Value>(&fs::read(fixture.root.path().join("state/wrix/control/package.json"))?)?,
+        "pools": {"state": "unprovisioned"},
+        "phase": "prepared"
+    });
+    let inventory = fs::read(fixture.root.path().join("runtime.json"))?;
+    for (attempt, (version, phase, failure)) in [
+        (1, "prepared", None),
+        (1, "prepared", Some("backend_drain")),
+        (2, "preparing", Some("backend_drain")),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        for (backend_original, controller_original) in
+            [(false, false), (true, false), (false, true), (true, true)]
+        {
+            let mut pending = pending.clone();
+            pending["version"] = json!(version);
+            pending["phase"] = json!(phase);
+            pending["failure"] = json!(failure);
+            pending["attempt"] = json!(format!("{attempt:032x}"));
+            if backend_original {
+                pending["candidate"]["image"] = json!("localhost/other:bound");
+            }
+            if controller_original {
+                pending["controller"]["controller"] =
+                    json!("/nix/store/11111111111111111111111111111111-controller");
+            }
+            let cancellable = backend_original && controller_original;
+            let bytes = serde_json::to_vec(&pending)?;
+            fs::write(lifecycle.join("update.json"), &bytes)?;
+            set_mode(&lifecycle.join("update.json"), 0o600)?;
+            let cancel = run_command(fixture.command()?.args(["service", "update", "--cancel"]))?;
+            assert_eq!(cancel.status.success(), cancellable, "{}", cancel.stderr);
+            if cancellable {
+                assert_eq!(
+                    fs::read(lifecycle.join(format!("cancelled-update-{attempt:032x}.json")))?,
+                    bytes
+                );
+                let resumed = fixture.run("start")?;
+                assert!(resumed.status.success(), "{}", resumed.stderr);
+            } else {
+                assert!(cancel.stderr.contains("lacks proof"), "{}", cancel.stderr);
+                assert_eq!(fs::read(lifecycle.join("update.json"))?, bytes);
+            }
+            assert_eq!(
+                fs::read(fixture.root.path().join("runtime.json"))?,
+                inventory
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn legacy_prepared_update_with_native_generations_remains_fenced() -> TestResult {
+    let fixture = Fixture::shared_cache()?;
+    let host = run_command(fixture.command()?.args(["service", "--host"]))?;
+    let deployment = host
+        .stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("deployment: "))
+        .ok_or("missing deployment")?;
+    let lifecycle = fixture.root.path().join("state/wrix/host-lifecycle");
+    let mut candidate: Value =
+        serde_json::from_slice(&fs::read(fixture.root.path().join("binding.json"))?)?;
+    candidate["image"] = json!("localhost/other:bound");
+    let mut controller: Value = serde_json::from_slice(&fs::read(
+        fixture.root.path().join("state/wrix/control/package.json"),
+    )?)?;
+    controller["controller"] = json!("/nix/store/11111111111111111111111111111111-controller");
+    let pending = serde_json::to_vec(&json!({
+        "version": 1, "deployment": deployment, "attempt": "e".repeat(32),
+        "candidate": candidate, "controller": controller,
+        "pools": {"state": "unprovisioned"}, "phase": "prepared"
+    }))?;
+    fs::write(lifecycle.join("update.json"), &pending)?;
+    set_mode(&lifecycle.join("update.json"), 0o600)?;
+    let plan = fixture
+        .root
+        .path()
+        .join("state/wrix/control/authority/native-plan.json");
+    let native = fs::read(&plan)?;
+    let inventory = fs::read(fixture.root.path().join("runtime.json"))?;
+    let refused = run_command(fixture.command()?.args(["service", "update", "--cancel"]))?;
+    assert!(!refused.status.success());
+    assert!(refused.stderr.contains("lacks proof"), "{}", refused.stderr);
+    assert_eq!(fs::read(lifecycle.join("update.json"))?, pending);
+    assert_eq!(fs::read(plan)?, native);
+    assert_eq!(
+        fs::read(fixture.root.path().join("runtime.json"))?,
+        inventory
+    );
+    Ok(())
+}
+
+#[test]
 fn shared_service_capabilities_are_passive_without_workspace_or_runtime() -> TestResult {
     let root = tempfile::tempdir()?;
     let output = Command::new(env!("CARGO_BIN_EXE_wrix"))
@@ -394,6 +625,70 @@ impl Fixture {
         // clearing the old line-oriented creation sentinel for reentry tests.
         fs::remove_file(fixture.root.path().join("run.argv"))?;
         fs::remove_file(fixture.root.path().join("runtime.log"))?;
+        Ok(fixture)
+    }
+
+    /// Retained pre-generation shared-backend metadata, admitted by current startup.
+    #[cfg(target_os = "linux")]
+    fn legacy_shared_cache() -> TestResult<Self> {
+        let mut fixture = Self::new()?;
+        fixture.disable_dolt()?;
+        let digest = format!("sha256:{}", "a".repeat(64));
+        fixture.snapshot[0]["configuration"]["image"] = json!({"descriptor": {"digest": digest}});
+        fixture.snapshot[0]["configuration"]["labels"]["wrix.service.supervision"] = json!("2");
+        fixture.snapshot[0]["configuration"]["labels"]["wrix.dolt.shared"] = json!("native-v1");
+        fixture.write_snapshot()?;
+        let root = fixture.root.path().join("state/wrix/host-lifecycle");
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&root)?;
+        let binding: Value =
+            serde_json::from_slice(&fs::read(fixture.root.path().join("binding.json"))?)?;
+        for (name, document) in [
+            (
+                "celler-owner.json",
+                json!({
+                    "schema_version": 2, "backend_version": "celler-v2", "runtime": "container",
+                    "workspace_hash": fixture.metadata["workspace_hash"],
+                    "container_name": fixture.metadata["container_name"],
+                    "cache_http_port": fixture.port("cache_http")?,
+                    "recipe": {"binding": binding, "image_id": digest, "config_digest": digest}
+                }),
+            ),
+            (
+                "shared.json",
+                json!({"version":1, "tcp":true, "sql_port": fixture.port("dolt_tcp")?, "sync_port": 3307}),
+            ),
+        ] {
+            fs::write(root.join(name), serde_json::to_vec(&document)?)?;
+            set_mode(&root.join(name), 0o600)?;
+        }
+        let data = fixture.root.path().join("state/wrix/service-data/dolt");
+        fs::create_dir_all(&data)?;
+        let retained_launch = [
+            "--name".to_owned(),
+            fixture.metadata["container_name"]
+                .as_str()
+                .ok_or("missing container")?
+                .to_owned(),
+            "--label".into(),
+            "wrix.dolt.shared=native-v1".into(),
+            "-v".into(),
+            format!("{}:{}:rw", data.display(), data.display()),
+        ];
+        let mut launch = retained_launch.join("\0").into_bytes();
+        launch.push(0);
+        fs::write(fixture.root.path().join("run.argv.nul"), launch)?;
+        let started = fixture.run("start")?;
+        assert!(started.status.success(), "{}", started.stderr);
+        assert!(
+            !fixture
+                .root
+                .path()
+                .join("state/wrix/control/authority/native-plan.json")
+                .exists()
+        );
         Ok(fixture)
     }
 
