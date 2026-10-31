@@ -496,22 +496,24 @@ impl Fixture {
     /// A cache-only namespace on a fresh, verified singleton deployment. SQL
     /// namespaces instead use the native public-CLI conformance fixture above.
     fn shared_cache() -> TestResult<Self> {
-        let mut fixture = Self::new()?;
-        fixture.disable_dolt()?;
-        fixture.snapshot = json!([]);
-        fixture.write_snapshot()?;
-        let output = fixture.run("start")?;
+        Self::new()?.into_shared_cache()
+    }
+
+    fn into_shared_cache(mut self) -> TestResult<Self> {
+        self.disable_dolt()?;
+        self.snapshot = json!([]);
+        self.write_snapshot()?;
+        let output = self.run("start")?;
         assert!(output.status.success(), "{}", output.stderr);
-        fixture.snapshot =
-            serde_json::from_slice(&fs::read(fixture.root.path().join("runtime.json"))?)?;
-        let output = fixture.run("endpoints")?;
+        self.snapshot = serde_json::from_slice(&fs::read(self.root.path().join("runtime.json"))?)?;
+        let output = self.run("endpoints")?;
         assert!(output.status.success(), "{}", output.stderr);
-        fixture.metadata = serde_json::from_str(&output.stdout)?;
+        self.metadata = serde_json::from_str(&output.stdout)?;
         // Preserve the NUL runtime contract record for readiness checks, while
         // clearing the old line-oriented creation sentinel for reentry tests.
-        fs::remove_file(fixture.root.path().join("run.argv"))?;
-        fs::remove_file(fixture.root.path().join("runtime.log"))?;
-        Ok(fixture)
+        fs::remove_file(self.root.path().join("run.argv"))?;
+        fs::remove_file(self.root.path().join("runtime.log"))?;
+        Ok(self)
     }
 
     /// Retained pre-generation shared-backend metadata, admitted by current startup.
@@ -1390,13 +1392,14 @@ fn workspace_stop_retires_current_native_read_issuance_without_stopping_controll
 }
 
 #[test]
-#[ignore = "requires host capability; run in the disposable native-system guest"]
+#[cfg(target_os = "macos")]
+#[ignore = "requires a native Apple controller guest route on an authorized Darwin host"]
 fn cache_guest_endpoint_and_key_reach_both_launch_commands() -> TestResult {
     for mode in [LaunchCommand::Run, LaunchCommand::Spawn] {
         for layout in ["", ".loom/beads/cache-route", ".loom/integration"] {
-            let mut fixture =
-                Fixture::from_root_at(tempfile::tempdir_in(fs::canonicalize("/tmp")?)?, layout)?;
-            fixture.disable_dolt()?;
+            let fixture =
+                Fixture::from_root_at(tempfile::tempdir_in(fs::canonicalize("/tmp")?)?, layout)?
+                    .into_shared_cache()?;
             let workspace = fixture.workspace.clone();
             let output = run_command(&mut fixture.launch_command(mode, &workspace)?)?;
             assert!(
@@ -1497,7 +1500,8 @@ fn cache_guest_endpoint_and_key_reach_both_launch_commands() -> TestResult {
 }
 
 #[test]
-#[ignore = "requires host capability; run in the disposable native-system guest"]
+#[cfg(target_os = "macos")]
+#[ignore = "requires a native Apple controller guest route on an authorized Darwin host"]
 fn cache_endpoint_generates_only_an_exact_tcp_network_exception() -> TestResult {
     let bootstrap = include_str!("../../../lib/sandbox/network-bootstrap.sh");
     let policy = bootstrap
@@ -1508,8 +1512,7 @@ fn cache_endpoint_generates_only_an_exact_tcp_network_exception() -> TestResult 
         .ok_or("network policy end missing")?
         .0;
     for mode in [LaunchCommand::Run, LaunchCommand::Spawn] {
-        let mut fixture = Fixture::new()?;
-        fixture.disable_dolt()?;
+        let fixture = Fixture::shared_cache()?;
         let output = run_command(&mut fixture.launch_command(mode, &fixture.workspace)?)?;
         assert!(output.status.success(), "{}", output.stderr);
         let bytes = fs::read(fixture.root.path().join("argv"))?;
@@ -2154,17 +2157,18 @@ fn apple_cache_service_preserves_loopback_publication_and_narrow_managed_mounts(
 }
 
 #[test]
-#[ignore = "requires host capability; run in the disposable native-system guest"]
+#[cfg(target_os = "linux")]
 fn launcher_fails_before_agent_start_without_a_guest_cache_address() -> TestResult {
+    // A Linux controller cannot publish an Apple guest interface. Verify this
+    // boundary after real shared-owner admission, not against legacy metadata.
     for mode in [LaunchCommand::Run, LaunchCommand::Spawn] {
-        let mut fixture = Fixture::new()?;
-        fixture.disable_dolt()?;
-        fixture.snapshot[0]["status"]["networks"] = json!([]);
-        fixture.write_snapshot()?;
+        let fixture = Fixture::shared_cache()?;
         let output = run_command(&mut fixture.launch_command(mode, &fixture.workspace)?)?;
         assert!(!output.status.success());
         assert!(
-            output.stderr.contains("no sandbox-reachable project cache"),
+            output
+                .stderr
+                .contains("no verified stable Apple guest data route"),
             "{}",
             output.stderr
         );
