@@ -129,6 +129,14 @@ pub fn run_child(
             )?;
             fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
         }
+        command.env(
+            "WRIX_CONTAINER_RUNTIME",
+            bin.join(if cfg!(target_os = "macos") {
+                "container"
+            } else {
+                "podman"
+            }),
+        );
         let path = env::join_paths(std::iter::once(bin).chain(env::split_paths(
             &env::var_os("PATH").ok_or("PATH missing")?,
         )))?;

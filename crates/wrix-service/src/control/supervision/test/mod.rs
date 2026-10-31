@@ -21,6 +21,38 @@ fn package(name: &str) -> Package {
 }
 
 #[test]
+fn retained_unit_accepts_only_canonical_host_runtime_environment() {
+    let root = Path::new("/private/controller");
+    let package = package("blue");
+    let base = unit_contents(root, &package);
+    assert!(unit_matches(root, &package, &base));
+    let environment = format!(
+        "Environment={}\n",
+        systemd_path(Path::new("WRIX_CONTAINER_RUNTIME=/host/podman%wrapper"))
+    );
+    assert!(unit_matches(
+        root,
+        &package,
+        &format!("{base}{environment}")
+    ));
+    for extra in [
+        format!("{environment}{environment}"),
+        "ExecStart=/foreign/program\n".into(),
+        "Environment=WRIX_CONTAINER_RUNTIME=/foreign/program\n".into(),
+        format!(
+            "Environment={}\n",
+            systemd_path(Path::new("LD_PRELOAD=/foreign/library"))
+        ),
+        format!("{environment}Environment=\"\\x57\"\n"),
+    ] {
+        assert!(!unit_matches(root, &package, &format!("{base}{extra}")));
+    }
+    let mut foreign = package;
+    foreign.controller = "/nix/store/green-controller".into();
+    assert!(!unit_matches(root, &foreign, &base));
+}
+
+#[test]
 fn darwin_bootstrap_and_loaded_kickstart_do_not_replace_running_jobs() {
     let directory = tempfile::tempdir().unwrap();
     let log = directory.path().join("log");

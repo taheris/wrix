@@ -847,6 +847,7 @@ pub fn rename(name: &ContainerName) -> Result<String> {
 }
 
 pub fn start(cache_mode: CacheMode) -> Result<Status> {
+    wrix_core::container_runtime::preflight()?;
     let host = wrix_state::host::Host::discover().map_err(io::Error::other)?;
     let (mut plan, _lock) = locked_plan(cache_mode)?;
     plan.authorize()?;
@@ -1407,7 +1408,11 @@ impl ContainerInfo {
 
 impl Runtime {
     fn from_env() -> Result<Self> {
-        let binary = env::var("WRIX_CONTAINER_RUNTIME").unwrap_or_else(|_| default_runtime());
+        let binary = wrix_core::container_runtime::Engine::current()
+            .path()?
+            .into_os_string()
+            .into_string()
+            .map_err(|_| io::Error::other("runtime path is not UTF-8"))?;
         let binding = env::var_os("WRIX_SERVICE_PACKAGE_BINDING")
             .map(|_| binding::Candidate::from_env())
             .transpose()?;

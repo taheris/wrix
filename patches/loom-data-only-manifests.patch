@@ -902,12 +902,12 @@ diff --git a/crates/loom-driver/src/wrix.rs b/crates/loom-driver/src/wrix.rs
 index a2174c3..d3a7ad6 100644
 --- a/crates/loom-driver/src/wrix.rs
 +++ b/crates/loom-driver/src/wrix.rs
-@@ -7,13 +7,14 @@ use std::process::Command;
+@@ -7,13 +7,15 @@ use std::process::Command;
  /// Explicit raw-launcher override; never a configured profile wrapper.
  pub const LAUNCHER_OVERRIDE: &str = "LOOM_WRIX_SPAWN_BIN";
 
 -/// Resolve an explicit raw launcher, then the environment override, then the manifest launcher.
-+/// Resolve an explicit host launcher, then an environment override, then host PATH.
++/// Resolve explicit Loom overrides, then the consumer-pinned client, then host PATH.
  /// Overrides change only the executable, not the selected profile configuration.
 -pub fn resolve_launcher(manifest_launcher: &Path, explicit: Option<&Path>) -> PathBuf {
 +pub fn resolve_launcher(explicit: Option<&Path>) -> PathBuf {
@@ -916,12 +916,43 @@ index a2174c3..d3a7ad6 100644
              std::env::var_os(LAUNCHER_OVERRIDE)
 -                .map_or_else(|| manifest_launcher.to_path_buf(), PathBuf::from)
 +                .or_else(|| std::env::var_os("LOOM_WRIX_BIN"))
++                .or_else(|| std::env::var_os("WRIX_BIN"))
 +                .map_or_else(|| PathBuf::from("wrix"), PathBuf::from)
          },
          Path::to_path_buf,
      )
-@@ -51,10 +52,7 @@ mod tests {
+@@ -51,10 +53,37 @@ mod tests {
 
++    #[test]
++    fn consumer_pin_is_resolved_in_a_child_process() {
++        const EXPECTED: &str = "LOOM_TEST_EXPECTED_WRIX";
++        if let Some(expected) = std::env::var_os(EXPECTED) {
++            assert_eq!(resolve_launcher(None), PathBuf::from(expected));
++            return;
++        }
++        for (override_bin, pin, expected) in [
++            (None, Some("/consumer/wrix"), "/consumer/wrix"),
++            (Some("/override/wrix"), Some("/consumer/wrix"), "/override/wrix"),
++            (None, None, "wrix"),
++        ] {
++            let mut child = Command::new(std::env::current_exe().unwrap());
++            child.args(["--exact", "wrix::tests::consumer_pin_is_resolved_in_a_child_process"]);
++            child.env(EXPECTED, expected);
++            child.env_remove(LAUNCHER_OVERRIDE);
++            child.env_remove("LOOM_WRIX_BIN");
++            child.env_remove("WRIX_BIN");
++            if let Some(value) = override_bin {
++                child.env(LAUNCHER_OVERRIDE, value);
++            }
++            if let Some(value) = pin {
++                child.env("WRIX_BIN", value);
++            }
++            let output = child.output().unwrap();
++            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
++            assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
++        }
++    }
++
      #[test]
      fn explicit_raw_launcher_override_wins_without_changing_profile_config() {
 -        let launcher = resolve_launcher(
@@ -1081,7 +1112,7 @@ index bb65a7b..e411c4e 100644
          profile_config: Some(entry.profile_config.clone()),
          workspace,
          env,
-@@ -147,11 +147,40 @@ mod tests {
+@@ -147,10 +147,39 @@ mod tests {
              r#ref: "localhost/wrix-rust-pi:test".into(),
              source: PathBuf::from("/nix/store/image-rust-pi"),
              source_kind: ImageSourceKind::NixDescriptor,

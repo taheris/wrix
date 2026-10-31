@@ -109,7 +109,7 @@ impl Factory for Connected {
             .block_on(self.client.request(Operation::InspectNixAppleWorker {}))
             .map_err(io::Error::other)?
         {
-            Reply::PoolInterface { version: 1 } => Ok(()),
+            Reply::PoolInterface { version: 2 } => Ok(()),
             _ => Err(Error::Unavailable),
         }
     }

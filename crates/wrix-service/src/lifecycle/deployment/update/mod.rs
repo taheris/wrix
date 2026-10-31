@@ -178,6 +178,7 @@ enum Target {
 }
 
 pub fn run() -> Result<String> {
+    wrix_core::container_runtime::preflight()?;
     run_target(Target::Invoked)
 }
 

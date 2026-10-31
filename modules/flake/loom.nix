@@ -49,7 +49,7 @@
       };
       packages.loom = loomCli;
       checks = {
-        loom-spawn-contract = loomContract "-p loom-driver -E 'test(wrix_launch_) | test(wrix_runner_) | test(profile_manifest) | test(resolve_launcher)'";
+        loom-spawn-contract = loomContract "-p loom-driver -E 'test(wrix_launch_) | test(wrix_runner_) | test(profile_manifest) | test(resolve_launcher) | test(consumer_pin_)'";
         loom-runner-inputs = loomContract "-p loom-gate -E 'test(inputs::tests)'";
       };
     };

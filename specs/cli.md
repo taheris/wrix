@@ -49,44 +49,51 @@ standalone entry points such as `wrix-svc`, `beads-dolt`, `beads-push`, and
 
 Acceptance: [Host Configuration Acceptance](#host-configuration-acceptance).
 
-Host consumers provide one Nix-managed `wrix` on PATH, normally through Home
-Manager, nix-darwin or an explicit user-profile installation:
+A consumer's Wrix flake input selects both the unconfigured client package and
+its generated launch configuration. `sandbox.devShell { }` and profile-only
+devshells put that pinned client on PATH and export its absolute `WRIX_BIN`;
+ambient installations and a previous shell's selection cannot replace it.
+Constructor attempts to override `WRIX_BIN` are evaluation errors. There is no
+profile-specific launcher or latest-version lookup.
+
+Outside a consumer shell, Home Manager, nix-darwin or explicit Nix provision
+remain supported, without a fixed installation directory:
 
 ```sh
 nix profile add 'github:taheris/wrix#wrix'
+nix shell 'github:taheris/wrix#wrix'
 ```
 
-Explicit temporary provision of the host package through Nix is also supported;
-no particular profile directory or installation-path heuristic is required.
-Installing/updating that package does not activate a service update or replace
-the running host controller. Required private control-interface compatibility is
-admitted before effects; controller lifetime/maintenance follows
-[Host Control](services.md#controller-lifecycle-and-recovery). The invoked host
-package supplies the service-image binding owned by
+Selecting/installing a client does not replace the running shared controller or
+authorize a service update. Required private control-interface compatibility is
+admitted before effects; incompatible controllers fail with an explicit
+maintenance action. Controller lifetime/maintenance follows
+[Host Control](services.md#controller-lifecycle-and-recovery). Explicit
+`wrix service update` uses the invoked package's service-image binding under
 [Generation Handoff](services.md#generation-handoff).
 
 `wrix service capabilities` is a passive compatibility query. It prints
 `shared-services-v1` without workspace discovery, runtime inspection or state
-creation. Devshell admission requires this marker, independently of generated
-project launch data; a legacy two-container CLI fails before activation.
-Generated projects additionally require project-launch support.
+creation. This broad feature marker is not versioned client/controller admission
+and cannot establish compatibility for a consumer lockfile. Devshells provision
+their pinned client; private controller admission remains required before
+effects.
 [test](../crates/wrix-cli/tests/service_lifecycle.rs::shared_service_capabilities_are_passive_without_workspace_or_runtime)
 [check](verify:devshell.cli-selection)
 
-Projects supply launch data, not another Wrix executable. The recommended
-`sandbox.devShell { }` constructor automatically delivers its generated,
-immutable launch configuration through a constructor-owned environment pointer
-under [Project Launch Handoff](profiles.md#project-launch-handoff). Consumers do
-not manually pair image metadata, export configuration paths or add a configured
+Projects supply generated launch data alongside their pinned, unconfigured Wrix
+client. The recommended `sandbox.devShell { }` constructor automatically
+delivers its generated, immutable launch configuration through a
+constructor-owned environment pointer under
+[Project Launch Handoff](profiles.md#project-launch-handoff). Consumers do not
+manually pair image metadata, export configuration paths or add a configured
 launcher to PATH. Project configuration cannot select the host service-image
 binding.
 
-For example, entering the Wrix and Loom checkouts keeps the same host
-`which wrix` result while selecting each project's launch configuration.
-`wrix run` uses the selected project image; explicit `wrix service update` uses
-the host package's service image for the shared deployment used by both
-repositories. Entering a directory or reloading direnv never activates that
-update.
+Different consumer lockfiles may select different `which wrix` results and
+project images. Their clients must pass the same shared-controller interface
+admission; different pins do not authorize independent controller replacement.
+Entering a directory or reloading direnv never activates a service update.
 
 Run/spawn use explicit `--profile-config` before the generated project default.
 Missing/invalid launch data fails actionably; there is no implicit
@@ -103,6 +110,27 @@ Per-project configured `wrix`/`wrix-run` executables and runnable `sandbox-*`
 flake targets are not compatibility APIs. Their retirement does not remove
 image/configuration outputs, programmatic `spawn`, or explicit invocation of the
 host Wrix package through Nix.
+
+### Host Runtime Admission
+
+On Linux, Podman is host configuration, not a consumer package dependency. An
+explicit `WRIX_CONTAINER_RUNTIME` wins; otherwise Wrix resolves the platform
+system engine before the preserved host PATH. Selection freezes an absolute
+executable once per engine/process, preserves its wrapper, and is propagated to
+Wrix children. Image commands, sandbox execution, retained-generation
+observation and newly provisioned private workers use that selection. Explicit
+selection failure never falls back to another engine or bundled Podman.
+
+Before launch/service preparation, bounded Podman readiness checks report the
+selected executable and version, validate supported Podman major 5/6, rootless
+operation and absolute non-system graph/run storage paths. A failed probe
+refuses Wrix image, grant and service changes with the runtime's diagnostic.
+Podman may initialize its normal local metadata during `info`; this is not a
+side-effect-free runtime call. Wrix does not patch Podman, rewrite storage
+configuration, reset storage or change system storage permissions. Private
+controller interface admission remains independent of this runtime readiness.
+Existing legacy worker recipes retain their recorded tooling until explicit
+maintenance; new recipes record the selected engine.
 
 ### Workspace Admission
 
@@ -950,10 +978,15 @@ authorization. Verification diagnoses stale/missing helpers and hooks with
 - Non-launch commands ignore the project launch pointer, while explicit
   launcher-only flags remain invalid on those commands.
   [test](../crates/wrix-cli/tests/host_configuration.rs::project_launch_defaults_do_not_configure_service_or_helper_commands)
-- Host setup/help distinguishes global CLI ownership from project launch data,
-  explains the supported installation/recovery choices and does not advertise
-  retired configured-launcher or sandbox runnable APIs.
+- Host setup/help distinguishes consumer-pinned clients from project launch
+  data, explains the supported installation/recovery choices and does not
+  advertise retired configured-launcher or sandbox runnable APIs.
   [test](../crates/wrix-cli/tests/host_configuration.rs::help_explains_host_cli_project_data_and_explicit_installation)
+  [test](../crates/wrix-cli/tests/host_configuration.rs::packaged_consumer_shell_replaces_stale_client_before_launch_dispatch)
+
+- Runtime readiness failure names the selected engine/version and refuses
+  run/spawn before image, grant or execution-record effects, without fallback.
+  [test](../crates/wrix-cli/tests/host_configuration.rs::runtime_readiness_failure_precedes_launch_effects_without_fallback)
 
 ### CLI Shape Acceptance
 
@@ -1392,9 +1425,9 @@ authorization. Verification diagnoses stale/missing helpers and hooks with
 
 ## Out of Scope
 
-- Per-project Wrix executables, `wrix-run` compatibility commands or runnable
-  `sandbox-*` flake aliases; project consumers use generated launch data and the
-  host CLI.
+- Profile-configured Wrix executables, `wrix-run` compatibility commands or
+  runnable `sandbox-*` flake aliases; consumers use generated launch data and
+  their pinned, unconfigured client.
 - Automatic profile installation, implicit latest-package fetching or silently
   disabling Wrix integration when the required host CLI is unavailable.
 

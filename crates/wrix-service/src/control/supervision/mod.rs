@@ -4,6 +4,7 @@ use displaydoc::Display;
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use std::{
+    fmt::Write as _,
     fs::{self, File, OpenOptions},
     io::{self, Write},
     os::unix::fs::{DirBuilderExt, OpenOptionsExt},
@@ -256,7 +257,17 @@ impl Native {
         match self.platform {
             Platform::Linux => {
                 let unit = root.join("wrix-host-controller.service");
-                let contents = unit_contents(root, package);
+                let mut contents = unit_contents(root, package);
+                for (name, value) in host_runtime_environment()? {
+                    let mut assignment = std::ffi::OsString::from(format!("{name}="));
+                    assignment.push(value);
+                    writeln!(
+                        contents,
+                        "Environment={}",
+                        systemd_path(Path::new(&assignment))
+                    )
+                    .map_err(io::Error::other)?;
+                }
                 fs::write(&unit, contents)?;
                 self.link_unit(&unit)?;
                 self.command(&["--user".as_ref(), "daemon-reload".as_ref()])?;
@@ -268,8 +279,17 @@ impl Native {
             }
             Platform::Darwin => {
                 let plist = root.join("org.wrix.host-controller.plist");
+                let mut environment = String::new();
+                for (name, value) in host_runtime_environment()? {
+                    write!(
+                        environment,
+                        "<key>{name}</key><string>{}</string>",
+                        xml(Path::new(&value))?
+                    )
+                    .map_err(io::Error::other)?;
+                }
                 let contents = format!(
-                    "<?xml version=\"1.0\"?><!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\"><plist version=\"1.0\"><dict><key>Label</key><string>org.wrix.host-controller</string><key>ProgramArguments</key><array><string>{}</string><string>{}</string></array><key>RunAtLoad</key><true/><key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict></dict></plist>",
+                    "<?xml version=\"1.0\"?><!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\"><plist version=\"1.0\"><dict><key>Label</key><string>org.wrix.host-controller</string><key>ProgramArguments</key><array><string>{}</string><string>{}</string></array><key>EnvironmentVariables</key><dict>{environment}</dict><key>RunAtLoad</key><true/><key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict></dict></plist>",
                     xml(&executable)?,
                     xml(root)?
                 );
@@ -326,7 +346,7 @@ impl Native {
                 if !state.lines().any(|line| line == "LoadState=loaded")
                     || !owned_fragment
                     || !fs::symlink_metadata(&unit)?.is_file()
-                    || fs::read_to_string(&unit)? != unit_contents(root, package)
+                    || !unit_matches(root, package, &fs::read_to_string(&unit)?)
                 {
                     return Err(Error::UnitConflict(state));
                 }
@@ -374,6 +394,71 @@ impl Native {
             ]),
         }
     }
+}
+
+// Supervisors do not inherit the invoking shell's runtime/storage configuration.
+fn host_runtime_environment() -> Result<Vec<(&'static str, std::ffi::OsString)>, Error> {
+    let mut environment = Vec::new();
+    if std::env::var_os("WRIX_CONTAINER_RUNTIME").is_some() {
+        environment.push((
+            "WRIX_CONTAINER_RUNTIME",
+            wrix_core::container_runtime::Engine::current()
+                .path()?
+                .into_os_string(),
+        ));
+    }
+    for &name in RUNTIME_ENVIRONMENT.iter().skip(1) {
+        if let Some(value) = std::env::var_os(name) {
+            environment.push((name, value));
+        }
+    }
+    Ok(environment)
+}
+
+const RUNTIME_ENVIRONMENT: &[&str] = &[
+    "WRIX_CONTAINER_RUNTIME",
+    "WRIX_HOST_RUNTIME_PATH",
+    "CONTAINERS_CONF",
+    "CONTAINERS_CONF_OVERRIDE",
+    "CONTAINERS_STORAGE_CONF",
+    "CONTAINER_HOST",
+    "CONTAINER_CONNECTION",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_RUNTIME_DIR",
+];
+
+fn unit_matches(root: &Path, package: &Package, contents: &str) -> bool {
+    let Some(environment) = contents.strip_prefix(&unit_contents(root, package)) else {
+        return false;
+    };
+    let mut seen = std::collections::BTreeSet::new();
+    environment.lines().all(|line| {
+        RUNTIME_ENVIRONMENT.iter().any(|&name| {
+            let assignment = systemd_path(Path::new(&format!("{name}=")));
+            let prefix = format!("Environment={}", assignment.trim_end_matches('"'));
+            let Some(value) = line
+                .strip_prefix(&prefix)
+                .and_then(|value| value.strip_suffix('"'))
+            else {
+                return false;
+            };
+            let mut remaining = value.as_bytes();
+            while !remaining.is_empty() {
+                if let Some(tail) = remaining.strip_prefix(b"%%") {
+                    remaining = tail;
+                } else if remaining.len() >= 4
+                    && remaining.starts_with(b"\\x")
+                    && remaining[2..4].iter().all(u8::is_ascii_hexdigit)
+                {
+                    remaining = &remaining[4..];
+                } else {
+                    return false;
+                }
+            }
+            seen.insert(name)
+        })
+    })
 }
 
 fn unit_contents(root: &Path, package: &Package) -> String {

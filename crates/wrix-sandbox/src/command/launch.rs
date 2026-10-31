@@ -286,6 +286,7 @@ pub fn execute(
             .write(stdout, preview.json)
             .map_err(LaunchError::from);
     }
+    wrix_core::container_runtime::preflight()?;
     if request.profile_config.services.nix_cache.enabled {
         issuer.admit()?;
     }
@@ -1205,7 +1206,7 @@ impl<'a> Plan<'a> {
             };
             let mut command = match &shared {
                 Some(shared) => shared.command()?,
-                None => ProcessCommand::new("podman"),
+                None => wrix_core::container_runtime::Engine::Podman.command()?,
             };
             command.arg("run").arg("--rm");
             if self.spawn() {
@@ -1387,7 +1388,7 @@ impl<'a> Plan<'a> {
             }
             let mut command = match &shared {
                 Some(shared) => shared.command()?,
-                None => ProcessCommand::new("container"),
+                None => wrix_core::container_runtime::Engine::Container.command()?,
             };
             command
                 .arg("run")
@@ -2522,6 +2523,7 @@ fn run_service(workspace: &Path, args: &[&str]) -> Result<Output, LaunchError> {
 fn run_service_output(workspace: &Path, args: &[&str]) -> Result<Output, LaunchError> {
     let current = service_command()?;
     let mut command = ProcessCommand::new(current);
+    wrix_core::container_runtime::inherit(&mut command)?;
     command
         .args(args)
         .current_dir(workspace)
@@ -2547,7 +2549,7 @@ fn run_required_output(program: &str, args: &[&str]) -> Result<Output, LaunchErr
 }
 
 fn run_output(program: &str, args: &[&str]) -> Result<Output, LaunchError> {
-    ProcessCommand::new(program)
+    wrix_core::container_runtime::command(program)?
         .args(args)
         .stdin(Stdio::null())
         .output()

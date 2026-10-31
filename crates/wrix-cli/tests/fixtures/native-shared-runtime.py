@@ -10,6 +10,13 @@ import sys
 
 root = Path(os.environ['WRIX_SHARED_FIXTURE'])
 args = sys.argv[1:]
+if args == ['--version']:
+    print('podman version 6.1.4')
+    sys.exit(0)
+if args == ['info', '--format', 'json']:
+    print(json.dumps({'version': {'Version': '6.1.4'}, 'host': {'security': {'rootless': True}},
+                     'store': {'graphRoot': '/home/test/containers/storage', 'runRoot': '/run/user/1000/containers'}}))
+    sys.exit(0)
 with (root / 'runtime.log').open('a') as log:
     log.write(json.dumps(args) + '\n')
 if Path(sys.argv[0]).name == 'container':

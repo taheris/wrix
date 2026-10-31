@@ -13,12 +13,16 @@ wrixLib = import "${inputs.wrix}/lib" {
 ```
 
 Use `wrixLib.mkSandbox`, `sandbox.devShell`, `wrixLib.mkProfileImages` and
-`wrixLib.serviceImage` for project launch data. Host Wrix remains separately
-installed, as described in [the consumer workflow](README.md#consumer-workflow).
-The source library owns Celler's upstream pin, build recipe and runtime
-modifications. Consumers do not intercept its package-manager functions, import
-patched derivations, enumerate patches or append individual patches to Crane.
-There is no supported consumer replacement of only part of the Celler runtime.
+`wrixLib.serviceImage` for project launch data. Devshells provide the client
+selected by that Wrix input alongside generated configuration. Loom dispatch
+honors this constructor-owned `WRIX_BIN` after explicit Loom overrides, without
+selecting a manifest executable. The host engine and shared controller remain
+host-owned; interface failures require explicit maintenance, not a shell-entry
+upgrade. See [the consumer workflow](README.md#consumer-workflow). The source
+library owns Celler's upstream pin, build recipe and runtime modifications.
+Consumers do not intercept its package-manager functions, import patched
+derivations, enumerate patches or append individual patches to Crane. There is
+no supported consumer replacement of only part of the Celler runtime.
 
 Celler's upstream Nix recipe, Cargo manifests and lockfile are evaluator inputs
 from one hash-pinned source tree. Runtime patches and additional Rust modules

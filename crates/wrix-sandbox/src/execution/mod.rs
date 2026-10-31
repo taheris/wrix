@@ -177,7 +177,11 @@ pub fn projection(workspace: &Path, ticket: &Ticket) -> Result<Projection, Error
     let Some(Phase::Bound(id)) = execution::observe(&host, &context, ticket)? else {
         return Err(Error::Unknown);
     };
-    let projection = projection_for(&Command::new("podman"), Environment::Inherited, &id)?;
+    let projection = projection_for(
+        &wrix_core::container_runtime::Engine::Podman.command()?,
+        Environment::Inherited,
+        &id,
+    )?;
     context.recheck(&host)?;
     Ok(projection)
 }
@@ -223,10 +227,15 @@ pub fn reconcile(workspace: &Path, ticket: &Ticket) -> Result<Observation, Error
         | Phase::AppleRetired(_) => return Ok(Observation::Protected),
         Phase::Bound(id) => id,
     };
-    let observation = remove(&Command::new("podman"), Environment::Inherited, &id, || {
-        context.recheck(&host)?;
-        Ok(())
-    })?;
+    let observation = remove(
+        &wrix_core::container_runtime::Engine::Podman.command()?,
+        Environment::Inherited,
+        &id,
+        || {
+            context.recheck(&host)?;
+            Ok(())
+        },
+    )?;
     if observation == Observation::Retired {
         execution::retire(&host, &context, ticket, &id)?;
     }

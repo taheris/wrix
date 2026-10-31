@@ -119,11 +119,11 @@ impl Gateway {
             value.lines().next().and_then(|line| line.split_whitespace().nth(1)).ok_or(owner::Error::Invalid)?.parse().map_err(|_| owner::Error::Invalid.into())
         }).await.map_err(io::Error::other)?
     }
-    fn runtime(&self) -> Runtime {
+    fn runtime(&self) -> Result<Runtime> {
         runtime(self.runtime)
     }
     pub(crate) fn verify(&self, deployment: &Id) -> Result<()> {
-        let runtime = self.runtime();
+        let runtime = self.runtime()?;
         verify(&runtime, &self.name.0, &self.recipe)?;
         let ports = runtime.published_ports(self.name.0.as_str())?;
         if runtime
@@ -172,7 +172,7 @@ impl Gateway {
     }
     pub(crate) fn record_removed(&self, authority: &Path) -> Result<()> {
         if self.retirement(authority)?.is_none()
-            || self.runtime().status(&self.name.0)? != RuntimeStatus::Missing
+            || self.runtime()?.status(&self.name.0)? != RuntimeStatus::Missing
         {
             return Err(owner::Error::Conflict.into());
         }
@@ -189,11 +189,11 @@ impl Gateway {
     }
     pub(crate) fn eligible_stopped(&self, authority: &Path) -> Result<bool> {
         Ok(self.retirement(authority)?.is_some()
-            && self.runtime().status(&self.name.0)? != RuntimeStatus::Running)
+            && self.runtime()?.status(&self.name.0)? != RuntimeStatus::Running)
     }
     pub(crate) fn removed(&self, authority: &Path) -> Result<bool> {
         if self.retirement(authority)?.is_some()
-            && self.runtime().status(&self.name.0)? == RuntimeStatus::Missing
+            && self.runtime()?.status(&self.name.0)? == RuntimeStatus::Missing
         {
             self.record_removed(authority)?;
             return Ok(true);
@@ -201,7 +201,7 @@ impl Gateway {
         Ok(false)
     }
     pub(crate) fn retire(&self, deployment: &Id) -> Result<()> {
-        let runtime = self.runtime();
+        let runtime = self.runtime()?;
         let status = runtime.status(&self.name.0)?;
         if status == RuntimeStatus::Missing {
             return Ok(());
@@ -342,7 +342,7 @@ impl Plan {
         if !self.backend_open {
             return Ok(());
         }
-        let runtime = runtime(self.backend.runtime);
+        let runtime = runtime(self.backend.runtime)?;
         verify(&runtime, &self.backend.name.0, &self.backend.recipe)?;
         let ports = runtime.published_ports(self.backend.name.0.as_str())?;
         if ![
@@ -457,24 +457,21 @@ impl Status {
     }
 }
 
-fn runtime(kind: RuntimeKind) -> Runtime {
-    // Persist the engine kind, not a host-specific executable path. Reapply the
-    // caller's matching runtime selection when observing retained generations.
-    let binary = std::env::var("WRIX_CONTAINER_RUNTIME")
-        .ok()
-        .filter(|binary| RuntimeKind::for_binary(binary) == kind)
-        .unwrap_or_else(|| {
-            match kind {
-                RuntimeKind::Podman => "podman",
-                RuntimeKind::Container => "container",
-            }
-            .into()
-        });
-    Runtime {
+fn runtime(kind: RuntimeKind) -> Result<Runtime> {
+    let engine = match kind {
+        RuntimeKind::Podman => wrix_core::container_runtime::Engine::Podman,
+        RuntimeKind::Container => wrix_core::container_runtime::Engine::Container,
+    };
+    let binary = engine
+        .path()?
+        .into_os_string()
+        .into_string()
+        .map_err(|_| io::Error::other("runtime path is not UTF-8"))?;
+    Ok(Runtime {
         binary,
         kind,
         binding: None,
-    }
+    })
 }
 fn verify(runtime: &Runtime, name: &ContainerName, recipe: &owner::Recipe) -> Result<()> {
     if runtime.status(name)? != RuntimeStatus::Running
@@ -608,7 +605,7 @@ pub(super) fn guest_endpoint(state: &Path, role: crate::route::Role) -> Result<S
 }
 
 fn start_gateway(gateway: &Gateway, deployment: &Id) -> Result<()> {
-    let runtime = gateway.runtime();
+    let runtime = gateway.runtime()?;
     match runtime.status(&gateway.name.0)? {
         RuntimeStatus::Running => return gateway.verify(deployment),
         RuntimeStatus::Stopped => {
@@ -788,7 +785,7 @@ pub(super) fn prepare_gateway(candidate: &super::binding::Candidate) -> Result<(
     let authority = authority(host.roots().state());
     let mut plan = Plan::load(&authority)?.ok_or(owner::Error::Invalid)?;
     if plan.gateway.recipe.binding == *candidate {
-        if runtime(plan.backend.runtime).status(&plan.backend.name.0)? != RuntimeStatus::Running {
+        if runtime(plan.backend.runtime)?.status(&plan.backend.name.0)? != RuntimeStatus::Running {
             plan.backend_open = false;
             plan.publish(&authority)?;
         }
@@ -801,12 +798,12 @@ pub(super) fn prepare_gateway(candidate: &super::binding::Candidate) -> Result<(
                 .into(),
         });
     }
-    let mut candidate_runtime = runtime(plan.gateway.runtime);
+    let mut candidate_runtime = runtime(plan.gateway.runtime)?;
     candidate_runtime.binding = Some(candidate.clone());
     let prepared = candidate_runtime.ensure_image_at(host.roots().state())?;
     let recipe = prepared.clone_recipe();
     if recipe.config_digest == plan.gateway.recipe.config_digest {
-        if runtime(plan.backend.runtime).status(&plan.backend.name.0)? != RuntimeStatus::Running {
+        if runtime(plan.backend.runtime)?.status(&plan.backend.name.0)? != RuntimeStatus::Running {
             plan.backend_open = false;
             plan.publish(&authority)?;
         }
@@ -834,9 +831,9 @@ pub(super) fn prepare_gateway(candidate: &super::binding::Candidate) -> Result<(
         gateway
     };
     start_gateway(&gateway, &plan.deployment)?;
-    if runtime(plan.backend.runtime).status(&plan.backend.name.0)? != RuntimeStatus::Running {
+    if runtime(plan.backend.runtime)?.status(&plan.backend.name.0)? != RuntimeStatus::Running {
         plan.backend_open = false;
-        if plan.gateway.runtime().status(&plan.gateway.name.0)? == RuntimeStatus::Stopped {
+        if plan.gateway.runtime()?.status(&plan.gateway.name.0)? == RuntimeStatus::Stopped {
             plan.gateway.record_eligible(&authority)?;
         }
     }
@@ -953,7 +950,7 @@ pub(super) fn stop(host: &Host) -> Result<()> {
         .chain(&plan.obsolete)
         .chain(plan.preparing.as_ref())
     {
-        let runtime = gateway.runtime();
+        let runtime = gateway.runtime()?;
         if runtime.status(&gateway.name.0)? == RuntimeStatus::Running {
             gateway.verify(&plan.deployment)?;
             let output = Command::new(&runtime.binary)

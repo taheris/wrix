@@ -5,13 +5,14 @@ Wrix provides sandboxed containers for AI-driven development. See
 
 ## Consumer Workflow
 
-Provide one host `wrix` through Home Manager, nix-darwin, explicit
-`nix profile add` or a temporary Nix environment; see
-[Host CLI Setup](../specs/cli.md#host-cli-and-project-configuration). Projects
-use `sandbox.devShell { }` for the
-[automatic data handoff](../specs/profiles.md#project-launch-handoff), not a
-second executable. Pure images/configuration remain available for programmatic
-host `spawn`; configured sandbox runners are not compatibility entry points.
+Use `sandbox.devShell { }` for the consumer-pinned Wrix client and its
+[automatic configuration handoff](../specs/profiles.md#project-launch-handoff).
+The host supplies its container engine; shared-controller compatibility is
+checked, and upgrades remain explicit. Outside consumer shells, Home Manager,
+nix-darwin, `nix profile add` and temporary Nix provision remain supported; see
+[CLI Setup](../specs/cli.md#host-cli-and-project-configuration). Pure
+images/configuration remain available for programmatic `spawn`; configured
+sandbox runners are not compatibility entry points.
 
 [Claude stdio clients](claude-stdio.md) describes the explicit
 permission-protocol opt-in through `SpawnConfig.agent_args` and its

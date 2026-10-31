@@ -25,11 +25,6 @@ let
     toShellVars
     ;
 
-  selectCli = pkgs.writeText "wrix-select-cli.sh" (readFile ./select-cli.sh);
-  selectedCli = pkgs.writeShellScriptBin "wrix" ''
-    set -euo pipefail
-    exec "$WRIX_BIN" "$@"
-  '';
   hostNixConfig = pkgs.writeText "wrix-host-nix-config.sh" (readFile ../services/host-nix-config.sh);
   startIndependent = import ../services/start.nix { inherit (pkgs.stdenv.hostPlatform) isDarwin; };
   prekHooksBundle = import ../prek/bundle.nix { inherit pkgs; };
@@ -89,7 +84,9 @@ in
             WRIX_PROJECT_PROFILE_CONFIG = toString sandbox.image.profileConfig;
           };
       checkedEnv =
-        if sandbox != null && env ? WRIX_PROJECT_PROFILE_CONFIG then
+        if env ? WRIX_BIN then
+          throw "WRIX_BIN is constructor-owned; the consumer pin selects the Wrix client"
+        else if sandbox != null && env ? WRIX_PROJECT_PROFILE_CONFIG then
           throw "WRIX_PROJECT_PROFILE_CONFIG is constructor-owned"
         else
           env;
@@ -202,19 +199,14 @@ in
         (resolvedProfile.hostPackages or resolvedProfile.packages)
         ++ packages
         ++ [
+          rustCli.wrix
           prekWrappers.prePushChecks
           prekWrappers.skipIfMissing
         ];
       env = (resolvedProfile.hostEnv or resolvedProfile.env) // cacheEnv // checkedEnv // projectEnv;
       shellHook = ''
-        _wrix_explicit_cli="''${WRIX_BIN:-}"
-        WRIX_BIN=$(WRIX_BIN="''${WRIX_BIN:-}" WRIX_PROJECT_PROFILE_CONFIG="''${WRIX_PROJECT_PROFILE_CONFIG:-}" \
-          ${pkgs.bash}/bin/bash ${selectCli}) || { return 1 2>/dev/null || exit 1; }
-        export WRIX_BIN
-        if [[ -n "$_wrix_explicit_cli" ]]; then
-          export PATH="${selectedCli}/bin:$PATH"
-        fi
-        unset _wrix_explicit_cli
+        export WRIX_BIN="${rustCli.wrix}/bin/wrix"
+        export PATH="${rustCli.wrix}/bin:$PATH"
 
         ${durationHook}
         ${serviceHook}

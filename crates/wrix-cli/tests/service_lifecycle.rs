@@ -1981,12 +1981,19 @@ fn inaccessible_other_runtime_does_not_authorize_cache_start() -> TestResult {
 }
 
 #[test]
-fn podman_start_checks_apple_backend_ownership_before_selected_runtime_access() -> TestResult {
+fn podman_start_checks_apple_backend_ownership_before_selected_runtime_inventory() -> TestResult {
     let fixture = Fixture::new()?;
     let selected = fixture.root.path().join("bin/podman");
     fs::write(
         &selected,
-        "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'selected runtime was accessed\\n' >&2\nexit 64\n",
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  --version) printf '%s\n' 'podman version 6.1.4';;
+  'info --format json') printf '%s\n' '{"version":{"Version":"6.1.4"},"host":{"security":{"rootless":true}},"store":{"graphRoot":"/home/test/storage","runRoot":"/run/user/1000/containers"}}';;
+  *) printf 'selected runtime was accessed\n' >&2; exit 64;;
+esac
+"#,
     )?;
     set_mode(&selected, 0o755)?;
     let output = run_command(

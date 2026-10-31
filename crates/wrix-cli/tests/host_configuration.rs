@@ -1,3 +1,5 @@
+mod common;
+
 use std::{fs, path::PathBuf, process::Command};
 
 use serde_json::{Value, json};
@@ -75,6 +77,14 @@ impl Fixture {
             fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
         }
         command.env(
+            "WRIX_CONTAINER_RUNTIME",
+            bin.join(if cfg!(target_os = "macos") {
+                "container"
+            } else {
+                "podman"
+            }),
+        );
+        command.env(
             "PATH",
             std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
                 &std::env::var_os("PATH").unwrap_or_default(),
@@ -92,6 +102,54 @@ impl Fixture {
         command.env("WRIX_WORKER_SECCOMP", seccomp);
         Ok(())
     }
+}
+
+#[test]
+fn packaged_consumer_shell_replaces_stale_client_before_launch_dispatch() -> TestResult {
+    let packaged = common::prek::packaged_wrix()?;
+    let hook = common::prek::devshell_hook()?;
+    for project in ["first-consumer", "second-consumer"] {
+        let fixture = Fixture::new()?;
+        let mut profile: Value = serde_json::from_slice(&fs::read(&fixture.profile)?)?;
+        profile["profile"]["name"] = json!(project);
+        fs::write(&fixture.profile, serde_json::to_vec(&profile)?)?;
+        let hook_path = fixture.root.path().join("shell-hook");
+        fs::write(&hook_path, &hook)?;
+        let mut command = Command::new("bash");
+        command
+            .current_dir(&fixture.workspace)
+            .env("HOME", fixture.root.path().join("home"))
+            .env("WRIX_BIN", "/missing/stale-wrix")
+            .env("EXPECTED_WRIX", &packaged)
+            .env(PROJECT_PROFILE_CONFIG, &fixture.profile)
+            .args([
+                "-euc",
+                r#"
+                source "$1"
+                source "$1"
+                [[ "$WRIX_BIN" == "$EXPECTED_WRIX" ]]
+                [[ "$(type -P wrix)" == "$EXPECTED_WRIX" ]]
+                wrix run --dry-run --json "$2" > "$3"
+            "#,
+                "consumer-shell",
+            ])
+            .arg(&hook_path)
+            .arg(&fixture.workspace)
+            .arg(fixture.root.path().join("report.json"));
+        fixture.runtime(&mut command)?;
+        let output = command.output()?;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: Value =
+            serde_json::from_slice(&fs::read(fixture.root.path().join("report.json"))?)?;
+        assert_eq!(report["plan"]["profile"], project);
+        assert!(!fixture.workspace.join(".wrix/log").exists());
+        assert!(!fixture.root.path().join("argv").exists());
+    }
+    Ok(())
 }
 
 #[test]
@@ -226,6 +284,36 @@ fn missing_or_invalid_launch_configuration_has_no_fallback() -> TestResult {
             assert!(!fixture.root.path().join("home").exists());
             assert!(!fixture.root.path().join("runtime").exists());
         }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn runtime_readiness_failure_precedes_launch_effects_without_fallback() -> TestResult {
+    for mode in ["run", "spawn"] {
+        let fixture = Fixture::new()?;
+        let mut command = fixture.command();
+        fixture.runtime(&mut command)?;
+        command.env(PROJECT_PROFILE_CONFIG, &fixture.profile).env(
+            "WRIX_TEST_RUNTIME_PREFLIGHT_ERROR",
+            "rootless storage unavailable",
+        );
+        fixture.launch(&mut command, mode);
+        let output = command.output()?;
+        assert!(!output.status.success());
+        let stderr = String::from_utf8(output.stderr)?;
+        for expected in [
+            "host runtime preflight failed",
+            "6.1.4",
+            "rootless storage unavailable",
+            "will not try another runtime",
+        ] {
+            assert!(stderr.contains(expected), "{stderr}");
+        }
+        assert!(!fixture.root.path().join("runtime").exists());
+        assert!(!fixture.root.path().join("home").exists());
+        assert!(!fixture.workspace.join(".wrix/log").exists());
     }
     Ok(())
 }

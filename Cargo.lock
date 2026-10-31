@@ -3490,6 +3490,7 @@ dependencies = [
  "thiserror",
  "toml",
  "tracing",
+ "wait-timeout",
 ]
 
 [[package]]

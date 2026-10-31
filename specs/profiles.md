@@ -469,26 +469,21 @@ wiring through constructor environment overrides are evaluation errors. Explicit
 per-invocation configuration remains available through the CLI, not a second
 constructor-owned executable.
 
-Neither devshell form adds a project Wrix CLI/`wrix-run` to host PATH, exports
-project service-image overrides, or selects a project executable as a fallback.
-Host CLI provision and explicit configuration selection follow
-[Host CLI and Project Configuration](cli.md#host-cli-and-project-configuration).
-Profile-only shells retain host tooling/lifecycle but do not supply an implicit
-sandbox definition. An explicit consumer `WRIX_BIN` override selects the host
-launcher instead of ambient PATH resolution. Shell entry resolves and retains
-that executable without dereferencing its package wrapper, and exposes the same
-selection as bare `wrix` after successful entry. This explicit override is not a
-project-binary fallback or an implicit host package update.
-[check](verify:devshell.cli-selection)
+Both devshell forms provide the unconfigured client selected by the consumer's
+Wrix input. They export constructor-owned `WRIX_BIN` and expose that same
+absolute package as bare `wrix`, including repeated/cached shell entry. An
+ambient or stale shell selection cannot replace it; constructor `WRIX_BIN`
+overrides are evaluation errors. Profile-only shells supply no implicit sandbox
+definition. Neither form exports project service-image overrides or creates a
+configured `wrix-run`. [check](verify:devshell.cli-selection)
 
-Actual activation, including first and cached/unchanged direnv activation,
-requires a compatible host `wrix` on PATH before Wrix service, credential,
-publication or hook-setup effects. Missing or unsupported host/config
-combinations fail actionably; they do not provision a CLI, use another project
-binary, fetch latest, or silently disable enabled integration. Nix realization
-surrounding shell entry is distinct from these activation effects. Independent
-host/project pins are not assumed compatible, and merely installing a newer host
-package does not authorize a service update.
+Client/configuration provisioning follows
+[Host CLI and Project Configuration](cli.md#host-cli-and-project-configuration).
+Activation admits the pinned client against host runtime and shared-controller
+interfaces before corresponding Wrix effects. Failure is actionable, without
+another executable, latest lookup, implicit controller/service upgrade or silent
+integration opt-out. Ordinary compatible service start may still occur on entry
+when enabled; maintenance/upgrades remain explicit.
 
 Recovery guidance offers Home Manager, nix-darwin, explicit
 `nix profile add 'github:taheris/wrix#wrix'`, and explicit temporary provision
@@ -751,26 +746,25 @@ without introducing a reciprocal flake dependency.
 ### Project Handoff Acceptance
 
 - The bound constructor automatically supplies its own generated launch
-  configuration without a project CLI on host PATH or project service-image
-  override; profile-only construction does not invent a sandbox definition.
-  [check?](verify:devshell.host-cli-data-handoff)
+  configuration alongside the pinned, unconfigured client, without project
+  service-image overrides; profile-only construction invents no sandbox
+  definition. [check?](verify:devshell.host-cli-data-handoff)
 - Constructor environment overrides cannot replace its generated launch wiring
   with independently paired configuration/image data.
   [check?](verify:devshell.generated-handoff-reserved)
-- First and actual cached/unchanged activation use the provided host CLI and
+- First and repeated/cached activation use the consumer-pinned client and
   selected project's generated configuration without a profile-specific
   executable or manual configuration wiring.
   [system?](test-ci:test-devshell-host-cli-handoff)
-- Missing/incompatible host CLI or unsupported project launch data blocks
-  activation before Wrix service, credential, publication or hook-setup effects;
-  no automatic install, second-binary fallback or silent integration opt-out.
-  [system?](test-ci:test-devshell-host-cli-handoff)
+- Incompatible runtime/controller or unsupported project launch data blocks
+  corresponding Wrix effects; no second-binary fallback, implicit upgrade or
+  silent integration opt-out. [system?](test-ci:test-devshell-host-cli-handoff)
 - Explicitly providing the host package via a temporary Nix environment works
   without a persistent profile installation or fixed installation directory.
   [system?](test-ci:test-devshell-host-cli-handoff)
 - Consumer setup guidance explains automatic constructor wiring and actionable
   Home Manager, nix-darwin, `nix profile add` and temporary-package recovery,
-  without claiming independent pins are always compatible.
+  while explaining pinned clients and explicit shared-controller compatibility.
   [judge?](../tests/judges/global-wrix-consumer-api.md)
 
 ### Manifest and Output Acceptance
@@ -924,8 +918,8 @@ without introducing a reciprocal flake dependency.
 9. **Devshell Construction** — `sandbox.devShell { ... }` is the preferred host
    devshell entry point when a concrete sandbox exists, and top-level
    `mkDevShell { profile; ... }` remains available for profile-only shells; both
-   consume `profile.hostPackages` without supplying another Wrix CLI. Bound
-   construction automatically delivers project configuration under
+   consume `profile.hostPackages` alongside the pinned, unconfigured client.
+   Bound construction automatically delivers project configuration under
    [Project Launch Handoff](#project-launch-handoff); consumers do not splice
    `profile.shellHook` or manually wire configuration paths
 10. **Prek Hook Management** — `mkDevShell` configures `core.hooksPath` from the
@@ -937,17 +931,16 @@ without introducing a reciprocal flake dependency.
 
 1. **Curated Toolkit** — Base profile is a ready-to-work agent toolkit, not a
    minimal OS layer.
-2. **Reproducible** — Same profile produces the same tool/image configuration
-   via Nix; compatibility with an independently managed host CLI is checked, not
-   inferred from matching executable names.
+2. **Reproducible** — The consumer lockfile selects coherent client and
+   tool/image configuration via Nix; shared-controller compatibility is checked,
+   not inferred from matching executable names.
 
 ## Out of Scope
 
-- Per-project Wrix executables, configured launcher derivations/runnable sandbox
-  aliases, and manifest-selected Rust binaries; image/configuration data is the
-  project interface.
-- Automatic installation/update of the host CLI or silent fallback when host
-  setup is missing or incompatible.
+- Profile-configured launcher derivations/runnable sandbox aliases and
+  manifest-selected Rust binaries; clients remain unconfigured packages.
+- Automatic user-profile mutation, implicit shared-service upgrades or silent
+  fallback when host setup is missing or incompatible.
 
 - Language-specific project scaffolding
 - IDE configuration beyond Claude Code

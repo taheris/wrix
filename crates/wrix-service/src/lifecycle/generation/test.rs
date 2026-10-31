@@ -8,13 +8,17 @@ fn retained_generation_uses_selected_runtime_instead_of_path() {
     if std::env::var_os(CHILD).is_some() {
         let selected = std::env::var("WRIX_CONTAINER_RUNTIME").unwrap();
         let gateway = plan().gateway;
-        assert_eq!(gateway.runtime().binary, selected);
+        assert_eq!(gateway.runtime().unwrap().binary, selected);
         assert_eq!(
-            gateway.runtime().status_identifier("owner").unwrap(),
+            gateway
+                .runtime()
+                .unwrap()
+                .status_identifier("owner")
+                .unwrap(),
             RuntimeStatus::Running
         );
         // A Podman override must not reinterpret a recorded Apple generation.
-        assert_eq!(runtime(RuntimeKind::Container).binary, "container");
+        assert!(runtime(RuntimeKind::Container).is_err());
         return;
     }
 

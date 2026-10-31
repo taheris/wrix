@@ -93,12 +93,18 @@ impl Fixture {
             fs::write(&path, include_str!("fixtures/launch-runtime.sh"))?;
             fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
         }
+        let runtime = bin.join(if cfg!(target_os = "macos") {
+            "container"
+        } else {
+            "podman"
+        });
         let path = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
             &std::env::var_os("PATH").unwrap_or_default(),
         )))?;
         let mut command = self.run_command();
         command
             .current_dir(&self.workspace)
+            .env("WRIX_CONTAINER_RUNTIME", runtime)
             .env("PATH", path)
             .env("XDG_RUNTIME_DIR", self.root.path().join("runtime"))
             .env("XDG_CACHE_HOME", self.root.path().join("cache"))
@@ -859,10 +865,12 @@ esac
                 "env": [], "agent_args": [], "mounts": []
             }))?,
         )?;
+        let runtime = bin.join("podman");
         let path = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
             &std::env::var_os("PATH").unwrap_or_default(),
         )))?;
         let mut command = Command::new(env!("CARGO_BIN_EXE_wrix"));
+        command.env("WRIX_CONTAINER_RUNTIME", runtime);
         command
             .arg("--profile-config")
             .arg(&self.profile)

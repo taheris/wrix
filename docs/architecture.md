@@ -121,20 +121,20 @@ container state and network readiness remain runtime checks.
 
 ## Sandbox Launcher
 
-Host consumers provide one Nix-managed `wrix`, normally through Home Manager,
-nix-darwin or `nix profile add 'github:taheris/wrix#wrix'`; explicit temporary
-Nix provision is also supported. No particular installation directory is
-required. Installing/updating the host package does not implicitly update
-services. [CLI Host Setup](../specs/cli.md#host-cli-and-project-configuration)
-owns this workflow.
+Consumers construct one `mkSandbox` object and use `sandbox.devShell { }`. The
+consumer's Wrix input supplies an unconfigured client and its immutable
+launch-config pointer together. `WRIX_BIN` and bare `wrix` select that client,
+not a stale ambient installation; different consumers may select different
+clients. Home Manager, nix-darwin and explicit Nix provision remain supported
+outside these shells.
+[CLI Setup](../specs/cli.md#host-cli-and-project-configuration) owns this
+workflow.
 
-Projects construct one `mkSandbox` object and use `sandbox.devShell { }`. The
-constructor supplies an immutable launch-config pointer rather than adding
-another Wrix executable to PATH or overriding the host service-image binding.
-The Wrix and Loom checkouts can therefore select different project images while
-`which wrix` stays the same. Missing/incompatible host setup blocks Wrix
-activation effects with installation guidance, not an implicit install or
-second-binary fallback.
+The engine remains host-owned: Wrix freezes and propagates one absolute runtime
+selection, never silently substitutes bundled Podman, and checks readiness
+before image/grant/service changes. Shared-controller interface admission is
+separate. A pinned client is not authority to replace shared infrastructure;
+controller/service upgrades remain explicit.
 
 Pure `image-<profile>[-<agent>]` outputs and the data-only
 `packages.profile-images` manifest remain. `packages.wrix` and

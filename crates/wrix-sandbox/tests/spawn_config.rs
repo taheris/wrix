@@ -302,6 +302,19 @@ fn consumer_extensions_are_mounted_for_entrypoint() -> TestResult {
             env: vec![
                 (String::from("PATH"), runtime.path),
                 (
+                    String::from("WRIX_CONTAINER_RUNTIME"),
+                    fixture
+                        .root
+                        .path()
+                        .join("runtime-bin")
+                        .join(if cfg!(target_os = "macos") {
+                            "container"
+                        } else {
+                            "podman"
+                        })
+                        .into_os_string(),
+                ),
+                (
                     String::from("WRIX_TEST_RUNTIME_STATE"),
                     runtime.state.into_os_string(),
                 ),

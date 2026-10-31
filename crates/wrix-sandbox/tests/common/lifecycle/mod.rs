@@ -100,6 +100,10 @@ impl Fixture {
         command
             .env_clear()
             .env(
+                "WRIX_CONTAINER_RUNTIME",
+                self.root().join("bin").join(runtime_name(native_runtime())),
+            )
+            .env(
                 "WRIX_WORKER_SECCOMP",
                 self.root().join("worker-seccomp.json"),
             )

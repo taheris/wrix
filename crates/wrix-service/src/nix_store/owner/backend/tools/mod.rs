@@ -1,4 +1,4 @@
-//! Fixed package-selected host programs; project and worker runtime selectors are not inputs.
+//! Package-selected tools and a frozen host Podman selection; never worker-supplied commands.
 
 use super::{Error, transport};
 use crate::nix_store::native::image::StorePath;
@@ -15,6 +15,7 @@ use wrix_core::nix_store::pool::System;
 pub struct Tools {
     root: StorePath,
     system: Host,
+    podman: Option<Box<Path>>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -23,6 +24,8 @@ struct Wire {
     version: u16,
     root: StorePath,
     system: Host,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    podman: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -46,12 +49,24 @@ impl Host {
 impl TryFrom<Wire> for Tools {
     type Error = Error;
     fn try_from(wire: Wire) -> Result<Self, Error> {
-        if wire.version != 1 {
+        if !matches!(
+            (wire.version, wire.podman.is_some()),
+            (1, false) | (2, true)
+        ) || wire.podman.as_ref().is_some_and(|path| {
+            !path.is_absolute()
+                || path.components().any(|part| {
+                    matches!(
+                        part,
+                        std::path::Component::ParentDir | std::path::Component::CurDir
+                    )
+                })
+        }) {
             return Err(Error::Invalid);
         }
         Ok(Self {
             root: wire.root,
             system: wire.system,
+            podman: wire.podman.map(PathBuf::into_boxed_path),
         })
     }
 }
@@ -59,9 +74,10 @@ impl TryFrom<Wire> for Tools {
 impl From<Tools> for Wire {
     fn from(tools: Tools) -> Self {
         Self {
-            version: 1,
+            version: if tools.podman.is_some() { 2 } else { 1 },
             root: tools.root,
             system: tools.system,
+            podman: tools.podman.map(Path::into_path_buf),
         }
     }
 }
@@ -150,12 +166,33 @@ impl Tools {
             .ok_or(Error::Invalid)?
             .to_owned()
             .try_into()?;
-        Ok(Self { root, system })
+        let podman = if system == Host::ArmDarwin {
+            None
+        } else {
+            Some(
+                wrix_core::container_runtime::Engine::Podman
+                    .path()?
+                    .into_boxed_path(),
+            )
+        };
+        Ok(Self {
+            root,
+            system,
+            podman,
+        })
     }
 
     pub fn from_env() -> Result<Self, Error> {
         let path = std::env::var_os("WRIX_NIX_POOL_HOST_TOOLS").ok_or(Error::Unsupported)?;
-        Self::load(Path::new(&path))
+        let mut tools = Self::load(Path::new(&path))?;
+        if tools.system != Host::ArmDarwin {
+            tools.podman = Some(
+                wrix_core::container_runtime::Engine::Podman
+                    .path()?
+                    .into_boxed_path(),
+            );
+        }
+        Ok(tools)
     }
 
     pub fn load(path: &Path) -> Result<Self, Error> {
@@ -293,6 +330,11 @@ impl Tools {
 
     pub(crate) fn belongs_to(&self, package: &crate::control::supervision::Package) -> bool {
         Path::new(self.root.as_str()) == package.runtime()
+            && self.podman.as_deref().is_none_or(|recorded| {
+                wrix_core::container_runtime::Engine::Podman
+                    .path()
+                    .is_ok_and(|selected| selected == recorded)
+            })
     }
 
     pub(super) const fn platform(&self) -> Platform {
@@ -322,11 +364,17 @@ impl Tools {
     }
 
     pub(super) fn command(&self, program: Program) -> Command {
-        self.configure(Command::new(
+        let path = if matches!(program, Program::Podman) {
+            self.podman.as_ref().map_or_else(
+                || Path::new(self.root.as_str()).join("bin/podman"),
+                |path| path.to_path_buf(),
+            )
+        } else {
             Path::new(self.root.as_str())
                 .join("bin")
-                .join(program.name()),
-        ))
+                .join(program.name())
+        };
+        self.configure(Command::new(path))
     }
 
     pub(super) fn view_command(
@@ -421,6 +469,10 @@ impl Tools {
             "XDG_DATA_HOME",
             "XDG_STATE_HOME",
             "DBUS_SESSION_BUS_ADDRESS",
+            "CONTAINERS_CONF",
+            "CONTAINERS_CONF_OVERRIDE",
+            "CONTAINERS_STORAGE_CONF",
+            "CONTAINERS_STORAGE_CONF_OVERRIDE",
         ] {
             if let Some(value) = std::env::var_os(name) {
                 command.env(name, value);
@@ -435,7 +487,9 @@ impl Tools {
         input: Option<Vec<u8>>,
         budget: Option<Duration>,
     ) -> Result<Output, Error> {
-        if !Path::new(command.get_program()).starts_with(self.root.as_str()) {
+        if !Path::new(command.get_program()).starts_with(self.root.as_str())
+            && self.podman.as_deref() != Some(Path::new(command.get_program()))
+        {
             return Err(Error::Invalid);
         }
         Ok(transport::capture(command, input, budget)?)
@@ -472,6 +526,36 @@ impl Tools {
 #[cfg(test)]
 mod test {
     use super::*;
+    #[test]
+    fn frozen_host_engine_roundtrips_without_rebinding_legacy_recipes() {
+        let legacy: Tools = serde_json::from_value(serde_json::json!({
+            "version": 1, "root": "/nix/store/00000000000000000000000000000000-runtime",
+            "system": "x86_64-linux"
+        }))
+        .unwrap();
+        let mut selected = legacy.clone();
+        selected.podman = Some(PathBuf::from("/host/bin/podman").into_boxed_path());
+        let value = serde_json::to_value(&selected).unwrap();
+        assert_eq!(value["version"], 2);
+        assert_eq!(value["podman"], "/host/bin/podman");
+        let restored: Tools = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(
+            restored.command(Program::Podman).get_program(),
+            "/host/bin/podman"
+        );
+        for (version, path) in [(1, "/host/bin/podman"), (2, "podman")] {
+            let mut invalid = value.clone();
+            invalid["version"] = serde_json::json!(version);
+            invalid["podman"] = serde_json::json!(path);
+            assert!(serde_json::from_value::<Tools>(invalid).is_err());
+        }
+        assert_eq!(serde_json::to_value(&legacy).unwrap()["version"], 1);
+        assert_eq!(
+            legacy.command(Program::Podman).get_program(),
+            Path::new(legacy.root.as_str()).join("bin/podman")
+        );
+    }
+
     #[test]
     fn architecture_admission_rejects_foreign_tools_without_executing_or_allocating() {
         for system in [System::X86_64Linux, System::Aarch64Linux] {

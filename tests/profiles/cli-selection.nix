@@ -1,55 +1,63 @@
 { pkgs }:
 
 let
-  selected = pkgs.writeShellScriptBin "consumer-launcher" ''
-    set -euo pipefail
-    case "$*" in
-      'run --help') printf '%s\n' 'Use generated project launch data';;
-      'service capabilities') printf '%s\n' 'shared-services-v1';;
-      'run') printf '%s\n' "selected:$WRIX_PROJECT_PROFILE_CONFIG";;
-      'service start')
-        printf '%s\n' start >> "$CALLS"
-        [[ "''${FAIL_ENTRY:-0}" == 0 ]]
-        ;;
-      *) exit 2;;
-    esac
-  '';
+  client =
+    revision:
+    pkgs.writeShellScriptBin "wrix" ''
+      set -euo pipefail
+      case "$*" in
+        'service capabilities') printf '%s\n' shared-services-v1;;
+        'run') printf '%s\n' '${revision}:'"$WRIX_PROJECT_PROFILE_CONFIG";;
+        'service start') printf '%s\n' '${revision}' >> "$CALLS";;
+        *) exit 64;;
+      esac
+    '';
+  first = client "first-pin";
+  second = client "second-pin";
   stale = pkgs.writeShellScriptBin "wrix" ''
     set -euo pipefail
-    printf '%s\n' 'wrix requires --profile-config <Nix store ProfileConfig JSON>' >&2
-    exit 2
+    printf '%s\n' ambient >> "$CALLS"
+    exit 125
   '';
-  legacy = pkgs.writeShellScriptBin "legacy-wrix" ''
-    set -euo pipefail
-    case "$*" in
-      'run --help') printf '%s\n' 'Use generated project launch data';;
-      'service start') printf '%s\n' legacy-start >> "$CALLS";;
-      *) exit 2;;
-    esac
-  '';
-  devshell = import ../../lib/devshell {
-    inherit pkgs;
-    rustCli = { };
-    beads = import ../../lib/beads { inherit pkgs; };
-  };
   config = pkgs.writeText "fixture-profile.json" "{}";
-  shell = devshell.mkDevShell {
-    sandbox = {
-      profile = {
-        hostPackages = [ ];
-        hostEnv = { };
-      };
-      image.profileConfig = config;
+  library =
+    pinned:
+    import ../../lib/devshell {
+      inherit pkgs;
+      rustCli.wrix = pinned;
+      beads = import ../../lib/beads { inherit pkgs; };
     };
-    env.WRIX_BIN = "${selected}/bin/consumer-launcher";
-    nixCache = false;
-    prekHooks = false;
-    shellHook = ''
-      wrix service start || { return 1 2>/dev/null || exit 1; }
-    '';
-  };
-  hook = pkgs.writeText "fixture-shell-hook.sh" shell.shellHook;
+  shell =
+    pinned:
+    (library pinned).mkDevShell {
+      sandbox = {
+        profile = {
+          hostPackages = [ ];
+          hostEnv = { };
+        };
+        image.profileConfig = config;
+      };
+      nixCache = false;
+      prekHooks = false;
+      shellHook = ''
+        [[ "$WRIX_BIN" == ${pinned}/bin/wrix ]]
+      '';
+    };
+  firstHook = pkgs.writeText "first-hook" (shell first).shellHook;
+  secondHook = pkgs.writeText "second-hook" (shell second).shellHook;
+  conflicting =
+    builtins.tryEval
+      ((library first).mkDevShell {
+        profile = {
+          hostPackages = [ ];
+          hostEnv = { };
+        };
+        nixCache = false;
+        prekHooks = false;
+        env.WRIX_BIN = "${stale}/bin/wrix";
+      }).drvPath;
 in
+assert !conflicting.success;
 pkgs.runCommand "wrix-devshell-cli-selection" { nativeBuildInputs = [ pkgs.bash ]; } ''
   set -euo pipefail
   export HOME="$TMPDIR/home"
@@ -58,60 +66,23 @@ pkgs.runCommand "wrix-devshell-cli-selection" { nativeBuildInputs = [ pkgs.bash 
   export CALLS="$TMPDIR/calls"
   export WRIX_PROJECT_PROFILE_CONFIG=${config}
   export PATH="${stale}/bin:$PATH"
+  export WRIX_BIN=${stale}/bin/wrix
 
-  # Failed entry leaves the caller's stale environment unchanged.
-  if (
-    export WRIX_BIN=${selected}/bin/consumer-launcher
-    export FAIL_ENTRY=1
-    source ${hook}
-  ); then
-    echo 'failed entry unexpectedly succeeded' >&2
-    exit 1
-  fi
-  [[ "$(type -P wrix)" == ${stale}/bin/wrix ]]
-  [[ "$(<"$CALLS")" == start ]]
-
-  # Successful entry dispatches bare wrix through the explicit consumer wrapper.
-  (
-    export WRIX_BIN=${selected}/bin/consumer-launcher
-    source ${hook}
-    [[ "$WRIX_BIN" == ${selected}/bin/consumer-launcher ]]
-    [[ "$(wrix run)" == selected:${config} ]]
-  )
-
-  # Stale host admission fails before the consumer's service-start effect.
-  : > "$CALLS"
-  if (
-    unset WRIX_BIN
-    source ${hook}
-  ) 2> "$TMPDIR/stale.err"; then
-    echo 'stale host was admitted' >&2
-    exit 1
-  fi
-  [[ ! -s "$CALLS" ]]
-  ${pkgs.gnugrep}/bin/grep -F 'nix profile add' "$TMPDIR/stale.err"
-  ${pkgs.gnugrep}/bin/grep -F 'Home Manager, nix-darwin' "$TMPDIR/stale.err"
-  # Service compatibility is required even without project launch data.
-  (
-    unset WRIX_PROJECT_PROFILE_CONFIG
-    export WRIX_BIN=${selected}/bin/consumer-launcher
-    source ${hook}
-  )
-
-  # Generated-project support alone must not admit the old two-container CLI.
-  for launch_data in generated absent; do
-    : > "$CALLS"
-    if (
-      [[ "$launch_data" != absent ]] || unset WRIX_PROJECT_PROFILE_CONFIG
-      export WRIX_BIN=${legacy}/bin/legacy-wrix
-      source ${hook}
-    ) 2> "$TMPDIR/legacy.err"; then
-      echo "legacy service CLI was admitted: $launch_data" >&2
-      exit 1
-    fi
-    [[ ! -s "$CALLS" ]]
-    ${pkgs.gnugrep}/bin/grep -F 'lacks the shared-service protocol' "$TMPDIR/legacy.err"
-    ${pkgs.gnugrep}/bin/grep -F '${legacy}/bin/legacy-wrix' "$TMPDIR/legacy.err"
+  # Both first and repeated activation select the locked client, never ambient Wrix.
+  for activation in first cached; do
+    source ${firstHook}
+    [[ "$(type -P wrix)" == ${first}/bin/wrix ]]
+    [[ "$(wrix run)" == first-pin:${config} ]]
   done
+  # A different consumer pin switches both dispatch surfaces coherently.
+  source ${secondHook}
+  [[ "$WRIX_BIN" == ${second}/bin/wrix ]]
+  [[ "$(type -P wrix)" == ${second}/bin/wrix ]]
+  [[ "$(wrix run)" == second-pin:${config} ]]
+
+  # Shell entry selects software; it neither starts nor updates services here.
+  [[ ! -e "$CALLS" ]]
+  wrix service start
+  [[ "$(<"$CALLS")" == second-pin ]]
   touch "$out"
 ''

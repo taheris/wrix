@@ -1,6 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "$*" == --version ]]; then
+  printf '%s\n' 'podman version 6.1.4'
+  exit 0
+fi
+if [[ "$*" == 'info --format json' ]]; then
+  if [[ -n "${WRIX_TEST_RUNTIME_PREFLIGHT_ERROR:-}" ]]; then
+    printf '%s\n' "$WRIX_TEST_RUNTIME_PREFLIGHT_ERROR" >&2
+    exit 125
+  fi
+  printf '%s\n' '{"version":{"Version":"6.1.4"},"host":{"security":{"rootless":true}},"store":{"graphRoot":"/home/test/containers/storage","runRoot":"/run/user/1000/containers"}}'
+  exit 0
+fi
+
 runtime="$(basename "$0")"
 if [[ "$runtime" == "route" ]]; then
   [[ "$*" == '-n get default' ]] || exit 91

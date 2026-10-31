@@ -85,7 +85,7 @@ pub enum Error {
     PermissionDenied,
     /// host cache credential issuance is unavailable; inspect host authorization and retained issuer state
     CacheUnavailable,
-    /// installed-store controller preparation interface is unavailable; start a compatible host controller
+    /// installed-store controller requires host-runtime-aware pool interface v2; run `wrix service stop --host`, then `wrix service update` explicitly; no request was admitted
     PoolInterface,
     /// installed-store controller preparation request was rejected; inspect current approval and retained ownership
     PoolRequest,
@@ -778,7 +778,7 @@ impl Controller {
                 crate::nix_store::lifecycle::gate::check_clear(&host)?;
                 crate::nix_store::owner::backend::tools::Tools::from_env()?
                     .view_check(wrix_state::nix_store::admission::request::Plane::Apple)?;
-                return Ok(Reply::PoolInterface { version: 1 });
+                return Ok(Reply::PoolInterface { version: 2 });
             }
             Operation::InspectNixPool {}
             | Operation::InspectNixExecution {}
@@ -787,7 +787,7 @@ impl Controller {
             | Operation::InspectNixKrunWorker {} => {
                 let host = wrix_state::host::Host::discover().map_err(io::Error::other)?;
                 crate::nix_store::lifecycle::gate::check_clear(&host)?;
-                return Ok(Reply::PoolInterface { version: 1 });
+                return Ok(Reply::PoolInterface { version: 2 });
             }
             Operation::PrepareNixPool { id } => {
                 return self.pool_jobs.prepare(self, id, pool::Action::Pool);
@@ -967,7 +967,7 @@ impl Client {
             return Err(Error::PrivateRoot);
         }
         if self.request(Operation::InspectNixPool {}).await?
-            != (Reply::PoolInterface { version: 1 })
+            != (Reply::PoolInterface { version: 2 })
         {
             return Err(Error::PoolInterface);
         }
@@ -1000,7 +1000,7 @@ impl Client {
             return Err(Error::PrivateRoot);
         }
         if self.request(Operation::InspectNixExecution {}).await?
-            != (Reply::PoolInterface { version: 1 })
+            != (Reply::PoolInterface { version: 2 })
         {
             return Err(Error::PoolInterface);
         }
@@ -1114,7 +1114,7 @@ impl Client {
             Plane::Krun => Operation::InspectNixKrunWorker {},
             Plane::Apple => Operation::InspectNixAppleWorker {},
         };
-        if self.request(probe).await? != (Reply::PoolInterface { version: 1 }) {
+        if self.request(probe).await? != (Reply::PoolInterface { version: 2 }) {
             return Err(Error::PoolInterface);
         }
         let selection = selection.clone();

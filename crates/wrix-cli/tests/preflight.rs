@@ -98,6 +98,14 @@ impl Fixture {
         }
         command
             .env(
+                "WRIX_CONTAINER_RUNTIME",
+                bin.join(if cfg!(target_os = "macos") {
+                    "container"
+                } else {
+                    "podman"
+                }),
+            )
+            .env(
                 "PATH",
                 std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
                     &std::env::var_os("PATH").unwrap_or_default(),

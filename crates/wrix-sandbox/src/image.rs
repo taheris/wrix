@@ -1181,7 +1181,7 @@ fn run_required_output(program: &str, args: &[&str]) -> Result<Output, Error> {
 
 fn run_output(program: &str, args: &[&str]) -> Result<Output, Error> {
     command::selected(program)
-        .unwrap_or_else(|| ProcessCommand::new(program))
+        .map_or_else(|| wrix_core::container_runtime::command(program), Ok)?
         .args(args)
         .stdin(Stdio::null())
         .output()

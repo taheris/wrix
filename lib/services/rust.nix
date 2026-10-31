@@ -83,7 +83,6 @@ let
     ]
     ++ optionals pkgs.stdenv.hostPlatform.isLinux [
       pkgs.systemd
-      pkgs.podman
       pkgs.sshfs
       pkgs.coreutils
       pkgs.fuse3
@@ -112,6 +111,7 @@ let
 
         mkdir -p "$out/bin"
         makeWrapper "${workspace.bin}/bin/wrix-host-controller" "$out/bin/wrix-host-controller" \
+          --run 'export WRIX_HOST_RUNTIME_PATH="''${WRIX_HOST_RUNTIME_PATH:-$PATH}"' \
           --prefix PATH : "${controllerRuntime}/bin" ${
             if nixPoolImage == null then
               ""
@@ -175,10 +175,9 @@ let
           pkgs.skopeo
         ]
         ++ optionals pkgs.stdenv.hostPlatform.isLinux [
-          pkgs.podman
           (import ../sandbox/linux/krun-runtime.nix { linuxPkgs = pkgs; })
         ]
-        ++ optionals pkgs.stdenv.hostPlatform.isDarwin [ pkgs.container ]
+
       )}"
     ]
   );
@@ -229,6 +228,7 @@ let
       ''
         mkdir -p "$out/bin"
         makeWrapper "${workspace.bin}/bin/${name}" "$out/bin/${name}" \
+          --run 'export WRIX_HOST_RUNTIME_PATH="''${WRIX_HOST_RUNTIME_PATH:-$PATH}"' \
           --set WRIX_INVOKED_BIN "$out/bin/${name}" ${concatStringsSep " " wrapperArgs}
         ln -s "${workspace.bin}/bin/wrix-git-sign" "$out/bin/wrix-git-sign"
         ln -s "${prekRunner}/bin/wrix-prek" "$out/bin/wrix-prek"

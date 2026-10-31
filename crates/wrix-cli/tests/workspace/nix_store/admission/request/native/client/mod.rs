@@ -252,7 +252,7 @@ fn lost_launcher_restart(
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         let reply = runtime.block_on(client.request(Operation::InspectNixPool {}));
-        if matches!(reply, Ok(Reply::PoolInterface { version: 1 })) {
+        if matches!(reply, Ok(Reply::PoolInterface { version: 2 })) {
             break;
         }
         assert!(controller.0.try_wait().unwrap().is_none());
@@ -420,7 +420,7 @@ fn interrupted_removal_restart(
         runtime
             .block_on(client.request(Operation::InspectNixPool {}))
             .unwrap(),
-        Reply::PoolInterface { version: 1 }
+        Reply::PoolInterface { version: 2 }
     );
 }
 

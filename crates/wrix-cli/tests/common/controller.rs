@@ -41,9 +41,9 @@ impl Server {
                 .ok_or("missing bound controller runtime")?,
         )
         .join("bin");
-        let path = std::env::join_paths(std::iter::once(runtime).chain(std::env::split_paths(
-            &std::env::var_os("PATH").ok_or("missing fixture PATH")?,
-        )))?;
+        let path = std::env::join_paths(std::iter::once(runtime.clone()).chain(
+            std::env::split_paths(&std::env::var_os("PATH").ok_or("missing fixture PATH")?),
+        ))?;
         let backend_environment = root.join("controller-backend-environment.json");
         let control = state.join("control");
         wrix_core::private_directory::prepare_with_parents(state)?;
@@ -53,6 +53,15 @@ impl Server {
         let error = fs::File::create(root.join("controller.stderr"))?;
         let child = Command::new(package.executable())
             .arg(&control)
+            .env(
+                "WRIX_CONTAINER_RUNTIME",
+                runtime.join(if cfg!(target_os = "macos") {
+                    "container"
+                } else {
+                    "podman"
+                }),
+            )
+            .env("WRIX_HOST_RUNTIME_PATH", &path)
             .env("PATH", path)
             .env("WRIX_TEST_BACKEND_ENV", &backend_environment)
             .stdin(Stdio::null())

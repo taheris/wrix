@@ -18,7 +18,7 @@ use launch::{Kind, Request, Run, Spawn};
 /// Constructor-owned immutable project launch data; explicit CLI input wins.
 pub const PROJECT_PROFILE_CONFIG: &str = "WRIX_PROJECT_PROFILE_CONFIG";
 
-pub const HOST_SETUP: &str = "Provide one host wrix on PATH using Home Manager, nix-darwin, nix profile add 'github:taheris/wrix#wrix', or a temporary environment: nix shell 'github:taheris/wrix#wrix'. No fixed installation directory is required. Projects supply launch data, not another executable. Enter sandbox.devShell for its generated immutable project configuration, or pass --profile-config <file> explicitly. Explicit input overrides the project default for run/spawn only. For incompatible data, update the host package or regenerate supported project data; Wrix does not install or select another CLI automatically.";
+pub const HOST_SETUP: &str = "Enter sandbox.devShell for the consumer-pinned Wrix client and its generated immutable project configuration. WRIX_BIN and bare wrix select that same client. Outside consumer shells, use Home Manager, nix-darwin, nix profile add 'github:taheris/wrix#wrix', or temporary provision: nix shell 'github:taheris/wrix#wrix'. No fixed installation directory is required. Explicit --profile-config overrides the project default for run/spawn only. Host runtime and shared-controller compatibility are checked before effects; shared upgrades require explicit maintenance. Wrix does not silently select another CLI or rewrite container storage configuration.";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Command {

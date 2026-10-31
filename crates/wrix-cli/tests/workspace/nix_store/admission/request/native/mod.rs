@@ -83,7 +83,7 @@ fn supervised_controller_prepares_after_requester_exit_and_preserves_native_owne
             runtime
                 .block_on(client.request(Operation::InspectNixPool {}))
                 .unwrap(),
-            Reply::PoolInterface { version: 1 }
+            Reply::PoolInterface { version: 2 }
         );
         assert_eq!(
             runtime
@@ -135,7 +135,7 @@ fn supervised_controller_prepares_after_requester_exit_and_preserves_native_owne
             runtime
                 .block_on(client.request(Operation::InspectNixPool {}))
                 .unwrap(),
-            Reply::PoolInterface { version: 1 }
+            Reply::PoolInterface { version: 2 }
         );
         assert!(!host.roots().state().join("control/nix").exists());
         assert_eq!(

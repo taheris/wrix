@@ -1391,6 +1391,18 @@ impl GrantFixture {
         let mut env = vec![
             (String::from("PATH"), path),
             (
+                String::from("WRIX_CONTAINER_RUNTIME"),
+                self.root
+                    .path()
+                    .join("bin")
+                    .join(if cfg!(target_os = "macos") {
+                        "container"
+                    } else {
+                        "podman"
+                    })
+                    .into_os_string(),
+            ),
+            (
                 String::from("WRIX_IMAGE_KEEP_FILE"),
                 self.root.path().join("mru.json").into_os_string(),
             ),

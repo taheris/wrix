@@ -415,7 +415,7 @@ pub(super) fn exercise(
         runtime
             .block_on(client.request(Operation::InspectNixPool {}))
             .unwrap(),
-        Reply::PoolInterface { version: 1 }
+        Reply::PoolInterface { version: 2 }
     );
     assert_eq!(
         pool_record(host, selection)["state"]["connection"]["target"]["id"],

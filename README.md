@@ -15,17 +15,15 @@ LAN/private/host-local/VPN/special ranges remain blocked. See the
 ## Quick Start
 
 ```bash
-nix run github:taheris/wrix                      # rust profile, pi agent
-nix run github:taheris/wrix#sandbox-rust         # rust profile, pi agent
-nix run github:taheris/wrix#sandbox-rust-pi      # rust profile, pi agent overlay
-nix run github:taheris/wrix#sandbox-rust-claude  # rust profile, claude overlay
+nix develop github:taheris/wrix  # pinned client and Rust/Pi configuration
+wrix run                        # launch in the current workspace
 ```
 
 ## Agent Runtimes
 
 The agent binary baked into the image is selected **at build time** by
-`mkSandbox { agent = …; }`, surfaced as the `sandbox-<profile>[-<agent>]` flake
-output. Wrix automatically adds only the selected agent runtime.
+`mkSandbox { agent = …; }`. Wrix automatically adds only the selected agent
+runtime.
 
 | Agent            | Runtime                                                 | How it talks to the host                                 |
 | ---------------- | ------------------------------------------------------- | -------------------------------------------------------- |
@@ -33,10 +31,10 @@ output. Wrix automatically adds only the selected agent runtime.
 | `claude`         | [Claude Code](https://claude.ai/code)                   | Interactive TTY, or stream-json via `WRIX_STDIO=1`       |
 | `pi` _(default)_ | [Pi coding agent](https://github.com/earendil-works/pi) | Interactive TTY, or JSONL RPC on stdio (`pi --mode rpc`) |
 
-`packages.image-<profile>` ships Pi, matching the unsuffixed sandbox outputs.
-Explicit variants are `packages.image-<profile>-claude` and
-`packages.image-<profile>-pi`. `packages.profile-images` is the built-in Pi
-manifest; consumers create custom manifests with `mkProfileImages`.
+`packages.image-<profile>` ships Pi. Explicit variants are
+`packages.image-<profile>-claude` and `packages.image-<profile>-pi`.
+`packages.profile-images` is the built-in Pi manifest; consumers create custom
+manifests with `mkProfileImages`.
 
 Pi images seed OpenAI Codex subscription defaults, medium reasoning, trusted
 project fallback, regular terminal mode for tmux scrollback, and all-at-once
@@ -75,11 +73,15 @@ channel-matched host and Linux-image derivations:
 }
 ```
 
-`sandbox.devShell { }` is the safest host-devshell entry point: the same sandbox
-object supplies the profile, image config, and configured `wrix` wrapper used by
-`nix run`. `wrix.mkDevShell { profile = ...; }` remains available for
-profile-only shells. See [specs/profiles.md](specs/profiles.md) for the
-`rustProfile` constructor signature and devshell composition rules.
+The consumer lockfile selects both the unconfigured Wrix client and launch
+configuration. Host runtime/controller compatibility is checked; shell entry
+does not upgrade shared services.
+
+`sandbox.devShell { }` supplies the pinned client, profile and generated image
+configuration together; no configured launcher wrapper is required.
+`wrix.mkDevShell { profile = ...; }` remains available for profile-only shells.
+See [specs/profiles.md](specs/profiles.md) for the `rustProfile` constructor
+signature and devshell composition rules.
 
 ### mkSandbox Options
 
@@ -201,9 +203,8 @@ passthrough, and deploy key):
 ## MCP Servers
 
 ```bash
-nix run github:taheris/wrix#sandbox-pi-mcp         # base + all MCP servers
-nix run github:taheris/wrix#sandbox-rust-pi-mcp    # rust + all MCP servers
-WRIX_MCP=playwright nix run .#sandbox-pi-mcp       # select specific servers
+# In a consumer shell built with mcpRuntime = true:
+WRIX_MCP=playwright wrix run  # select specific servers
 ```
 
 Available: [playwright](specs/playwright-mcp.md) (browser automation). In

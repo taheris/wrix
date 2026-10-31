@@ -12,6 +12,11 @@ wait_for_release() {
 }
 
 case "${1:-} ${2:-}" in
+  '--version ') printf '%s\n' 'podman version 6.1.4' ;;
+  'info --format')
+    [[ "${3:-}" == json ]] || exit 91
+    printf '%s\n' '{"version":{"Version":"6.1.4"},"host":{"security":{"rootless":true}},"store":{"graphRoot":"/home/test/containers/storage","runRoot":"/run/user/1000/containers"}}'
+    ;;
   'image inspect')
     if [[ "$(basename "$0")" == "container" ]]; then
       jq -cn --arg digest "${WRIX_TEST_DIGEST:?}" '[{id: $digest, digest: $digest, labels: {"wrix.nix.private":"1"}}]'
