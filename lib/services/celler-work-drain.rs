@@ -630,8 +630,11 @@ mod test {
     #[ignore = "requires WRIX_TEST_CELLERD naming the built patched native daemon"]
     async fn native_daemon_exit_and_authenticated_next_owner_preserve_signing_state() {
         let binary = std::env::var_os("WRIX_TEST_CELLERD").expect("patched native daemon required");
-        let directory =
-            std::env::temp_dir().join(format!("celler-native-owner-{}", uuid::Uuid::new_v4()));
+        // Nix build TMPDIR can exceed the native Unix socket path budget.
+        // Keep a fresh private root short, including on Darwin's /private/tmp.
+        let directory = std::fs::canonicalize("/tmp")
+            .unwrap()
+            .join(format!("celler-owner-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&directory).unwrap();
         std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
         let secret = b"native-owner-fixture-not-a-live-key";
