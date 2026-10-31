@@ -14,6 +14,7 @@ pkgs.testers.runNixOSTest {
       pkgs.binutils
       pkgs.beads
       pkgs.coreutils
+      pkgs.dolt
       pkgs.git
       pkgs.jq
       pkgs.procps
@@ -36,6 +37,9 @@ pkgs.testers.runNixOSTest {
     environment = (
         "WRIX_TEST_CELLERD=${wrix.rustPackage.celler}/bin/cellerd "
         "WRIX_TEST_CONTROLLER_BINDING=${wrix.rustPackage.testFixtures}/controller-binding "
+        "WRIX_TEST_SCCACHE=${wrix.rustPackage.testFixtures}/compiler "
+        "WRIX_TEST_SQL_CLIENT=${wrix.rustPackage.testFixtures}/sql-client "
+        "WRIX_REAL_BD_BIN=${pkgs.beads}/bin/bd "
         "WRIX_TEST_ISOLATED_STORE_SCRIPT=${../cache/isolated-store.sh} "
         "WRIX_TEST_RUNTIME_LAYOUT_SCRIPT=${../cache/runtime-layout.sh} "
         "WRIX_TEST_HOST_BOOTSTRAP_SCRIPT=${../../lib/services/host-nix-config.sh} "
