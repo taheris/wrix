@@ -327,7 +327,7 @@ not by this spec.
 - Service startup persists a local server-only policy with automatic startup,
   JSONL import, and JSONL export disabled. Host checkout hooks honor that policy
   outside a development shell while still running unrelated chained hooks
-  [test](../crates/wrix-cli/tests/service_lifecycle.rs::managed_checkout_outside_devshell_skips_import_and_preserves_chained_hooks)
+  [test](../crates/wrix-cli/tests/service_lifecycle.rs::public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql)
 
 - Managed-policy installation preserves unrelated local configuration, database
   identity, `sync.mode`, and `sync-branch`

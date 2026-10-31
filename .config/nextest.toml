@@ -3,9 +3,21 @@ experimental = ["setup-scripts"]
 [test-groups.deployment-role-ports]
 max-threads = 1
 
+# Only fixtures that bind/release the host's role-port ranges need exclusion.
+# In particular, ephemeral-port I/O/backpressure tests must not hold this group.
 [[profile.default.overrides]]
-filter = "package(wrix-service) | (package(wrix-cli) & (binary(service_cache) | binary(service_lifecycle) | (binary(workspace_admission) & test(hardening::consolidation))))"
+filter = "(package(wrix-service) & ((binary(wrix_service) & test(control::)) | binary(deployment_endpoints) | binary(host_service))) | (package(wrix-cli) & (binary(service_cache) | (binary(service_lifecycle) & !test(public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql)) | (binary(workspace_admission) & test(hardening::consolidation))))"
 test-group = "deployment-role-ports"
+
+# These native fixtures own private networks but share a historical process lock.
+# Serialize them separately, not against unrelated host-role-port fixtures.
+[test-groups.native-shared-fixtures]
+max-threads = 1
+
+[[profile.default.overrides]]
+filter = "(package(wrix-service) & binary(shared_startup)) | (package(wrix-cli) & binary(service_lifecycle) & test(public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql))"
+test-group = "native-shared-fixtures"
+
 [scripts.setup.isolated-host-roots]
 command = ["bash", "tests/prepare-isolated-host-roots.sh"]
 

@@ -5,7 +5,7 @@ use crate::lifecycle::{Error, Result, binding, owner};
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File},
-    io,
+    os::unix::fs::{MetadataExt, PermissionsExt},
     path::Path,
 };
 use wrix_sandbox::image::Digest;
@@ -29,12 +29,21 @@ pub(super) fn create(
 ) -> Result<()> {
     let key = attempt.as_str();
     let root = state.join("host-lifecycle/checkpoints");
-    wrix_core::private_directory::prepare_with_parents(&root)?;
     let complete = root.join(key);
-    if complete.try_exists()? {
-        return verify(state, attempt, target, digest, source);
+    match fs::symlink_metadata(&complete) {
+        Ok(_) => return verify(state, attempt, target, digest, source),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+        Err(error) => {
+            return Err(invalid(
+                &complete,
+                &format!("cannot inspect directory: {error}"),
+            ));
+        }
     }
-    let building = tempfile::tempdir_in(&root)?;
+    wrix_core::private_directory::prepare_with_parents(&root)?;
+    let building = tempfile::Builder::new()
+        .permissions(fs::Permissions::from_mode(0o700))
+        .tempdir_in(&root)?;
     let databases = state.join("service-data/dolt/databases");
     if databases.try_exists()? {
         copy(&databases, &building.path().join("dolt"))?;
@@ -70,28 +79,73 @@ pub(super) fn verify(
     digest: &Digest,
     source: Option<&Digest>,
 ) -> Result<()> {
-    use std::os::unix::fs::MetadataExt;
-    let root = state
-        .join("host-lifecycle/checkpoints")
-        .join(attempt.as_str());
-    let metadata = fs::symlink_metadata(&root)?;
-    if !metadata.is_dir()
-        || metadata.mode() & 0o077 != 0
-        || metadata.uid() != fs::metadata(state)?.uid()
-        || root.canonicalize()? != root
-    {
-        return Err(owner::Error::Permissions.into());
+    let uid = fs::metadata(state)?.uid();
+    let lifecycle = state.join("host-lifecycle");
+    let checkpoints = lifecycle.join("checkpoints");
+    // Historical tempfile producers used umask-derived modes (usually 0755).
+    // Accept non-writable read/traverse bits only behind the producer's private
+    // ancestry, never by relaxing selected-owner or receipt file permissions.
+    for parent in [&lifecycle, &checkpoints] {
+        directory(parent, uid, true)?;
     }
-    let bytes = document(&root, "checkpoint.json")?.ok_or(owner::Error::Invalid)?;
-    let receipt: Receipt = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+    let root = checkpoints.join(attempt.as_str());
+    directory(&root, uid, false)?;
+    let receipt_path = root.join("checkpoint.json");
+    let bytes = document(&root, "checkpoint.json")
+        .map_err(|_| {
+            invalid(
+                &receipt_path,
+                "cannot read an owned, private, single-link regular receipt",
+            )
+        })?
+        .ok_or_else(|| invalid(&receipt_path, "required receipt is missing"))?;
+    let receipt: Receipt = serde_json::from_slice(&bytes)
+        .map_err(|_| invalid(&receipt_path, "receipt is malformed"))?;
     if receipt.version != 1
         || receipt.target != *target
         || receipt.digest != *digest
         || receipt.source.as_ref() != source
     {
-        return Err(owner::Error::Conflict.into());
+        return Err(invalid(
+            &receipt_path,
+            "receipt does not match the recorded version, target, digest and origin",
+        ));
     }
     Ok(())
+}
+
+fn directory(path: &Path, uid: u32, private: bool) -> Result<()> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| invalid(path, &format!("cannot inspect directory: {error}")))?;
+    let mask = if private { 0o077 } else { 0o022 };
+    if !metadata.is_dir()
+        || metadata.uid() != uid
+        || metadata.mode() & mask != 0
+        || metadata.mode() & 0o700 != 0o700
+        || path
+            .canonicalize()
+            .map_err(|error| invalid(path, &format!("cannot resolve directory: {error}")))?
+            != path
+    {
+        return Err(invalid(
+            path,
+            if private {
+                "checkpoint ancestry must be owned, canonical, non-symlink and owner-only"
+            } else {
+                "checkpoint directory must be owned, canonical, non-symlink, owner-accessible and not group/other writable"
+            },
+        ));
+    }
+    Ok(())
+}
+
+fn invalid(path: &Path, reason: &str) -> Error {
+    Error::Operation {
+        message: format!(
+            "native checkpoint {}: {reason}; update intent and native data retained",
+            path.display()
+        ),
+    }
 }
 
 fn copy(source: &Path, target: &Path) -> Result<()> {

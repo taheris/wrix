@@ -289,6 +289,17 @@ ownership transfer. Interrupted archival/rebinding is retryable without losing
 the original evidence. A busy retained port is reported with its role and port
 rather than silently substituted.
 
+Older checkpoint producers used umask-derived directory modes, commonly `0755`.
+An older verifier can misreport this as a selected-Celler-ownership permission
+error even when `celler-owner.json` is correctly private. Current Wrix creates
+new checkpoints as `0700` and reads historical directories without group/other
+write bits only beneath owned, canonical, private lifecycle/checkpoint parents.
+Receipts remain private, single-link regular files bound to the exact target and
+origin; active owner-file checks are unchanged. Recovery does not chmod existing
+checkpoints. Keep the evidence intact and use the fixed CLI rather than manually
+changing permissions or rebuilding receipts. Checkpoint refusals now identify
+the path and failed check.
+
 Missing or conflicting evidence leaves the update fenced; do not bypass the
 refusal. Keep the same journals/checkpoint and coordinate the reported ownership
 or port conflict. Ordinary startup and passive information never perform this

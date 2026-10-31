@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ -n "${WRIX_TEST_UMASK:-}" ]]; then
+  umask "$WRIX_TEST_UMASK"
+fi
 # Only explicit host fixtures use this adapter. Never change the outer worker
 # marker, or turn normal worker-denial commands into host commands.
 if [[ "${1:-}" == --private-host ]]; then

@@ -349,7 +349,7 @@ caller package bindings do not supersede them. Unknown intent versions, changed
 ownership, missing required checkpoints or mismatched recovery evidence fail
 closed. Without an active intent it fails without selecting a new target.
 Selectors and combined resume/cancel actions are rejected before dispatch.
-[test](../crates/wrix-cli/tests/service/update_resume.rs::current_cli_resumes_checkpointed_legacy_target_and_repairs_retained_endpoints)
+[test](../crates/wrix-cli/tests/service/update_resume.rs::interrupted_update_resumes_the_checkpoint_produced_by_the_cli)
 [test](../crates/wrix-service/tests/deployment_lifecycle.rs::public_cli_update_resume_rejects_selectors_and_combined_actions)
 
 For a legacy first-role-binding mismatch, explicit update/resume may reconcile
@@ -364,8 +364,7 @@ during lease publication. Prior lease bytes are archived durably before rewrite.
 Uncertainty refuses repair without opening backend data or retargeting software.
 Ordinary start, inspection and cancellation do not perform this repair or
 implicitly authorize host-wide downtime.
-[test](../crates/wrix-cli/tests/service/update_resume.rs::current_cli_resumes_checkpointed_legacy_target_and_repairs_retained_endpoints)
-[test](../crates/wrix-cli/tests/service/update_resume.rs::current_cli_preserves_legacy_endpoints_before_first_release)
+[test](../crates/wrix-cli/tests/service/update_resume.rs::interrupted_update_resumes_the_checkpoint_produced_by_the_cli)
 [test](../crates/wrix-service/src/control/endpoint/test.rs::active_native_controller_ownership_refuses_repair_without_rewriting)
 [test](../crates/wrix-service/src/control/endpoint/test.rs::interrupted_archival_retries_without_discarding_original_evidence)
 
@@ -407,7 +406,7 @@ handoff. No pending intent is an idempotent success on an existing deployment.
 Unknown versions, ownership/checkpoint evidence, shutdown, pool maintenance or
 uncertain current ownership refuse cancellation. Failed/progressed attempts are
 refused except for the proven pre-transition legacy refusal described below.
-[test](../crates/wrix-cli/tests/service_lifecycle.rs::cancel_unstarted_update_preserves_running_peers_and_allows_selected_service_reentry)
+[test](../crates/wrix-cli/tests/service/update_resume.rs::cancellation_archives_the_real_intent_from_failed_image_realisation)
 [test](../crates/wrix-service/src/lifecycle/deployment/update/mod.rs::test::cancellation_refuses_every_progressed_phase_and_retains_intent)
 [test](../crates/wrix-service/tests/deployment_lifecycle.rs::public_cli_update_cancellation_rejects_extra_arguments_before_dispatch)
 

@@ -400,7 +400,7 @@ explicit, evidence-preserving cancellation only under the eligibility rules in
 native ownership remains fenced.
 [test](../crates/wrix-service/src/nix_store/lifecycle/gate/test.rs::pending_update_refuses_admission_without_claiming_host_shutdown)
 [test](../crates/wrix-service/src/nix_store/lifecycle/gate/test.rs::host_shutdown_remains_an_independent_admission_fence)
-[test](../crates/wrix-cli/tests/service_lifecycle.rs::cancel_unstarted_update_preserves_running_peers_and_allows_selected_service_reentry)
+[test](../crates/wrix-cli/tests/service/update_resume.rs::cancellation_archives_the_real_intent_from_failed_image_realisation)
 
 ### Generation Handoff
 

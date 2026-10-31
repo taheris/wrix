@@ -197,123 +197,6 @@ fn public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql() -
 
 #[test]
 #[cfg(target_os = "linux")]
-fn cancel_unstarted_update_preserves_running_peers_and_allows_selected_service_reentry()
--> TestResult {
-    let mut fixture = Fixture::shared_cache()?;
-    let host = run_command(fixture.command()?.args(["service", "--host"]))?;
-    assert!(host.status.success(), "{}", host.stderr);
-    let deployment = host
-        .stdout
-        .lines()
-        .find_map(|line| line.strip_prefix("deployment: "))
-        .ok_or("missing deployment")?;
-    let lifecycle = fixture.root.path().join("state/wrix/host-lifecycle");
-    let pending = json!({
-        "version": 2,
-        "deployment": deployment,
-        "attempt": "c".repeat(32),
-        "candidate": serde_json::from_slice::<Value>(&fs::read(fixture.root.path().join("binding.json"))?)?,
-        "controller": serde_json::from_slice::<Value>(&fs::read(fixture.root.path().join("state/wrix/control/package.json"))?)?,
-        "pools": {"state": "unprovisioned"},
-        "phase": "prepared"
-    });
-    let bytes = serde_json::to_vec(&pending)?;
-    fs::write(lifecycle.join("update.json"), &bytes)?;
-    set_mode(&lifecycle.join("update.json"), 0o600)?;
-    fixture
-        .snapshot
-        .as_array_mut()
-        .ok_or("missing inventory")?
-        .push(json!({
-            "configuration": {"id": "unrelated-worker", "labels": {"wrix.kind": "sandbox"}},
-            "status": {"state": "running"}
-        }));
-    fixture.write_snapshot()?;
-    let inventory = fs::read(fixture.root.path().join("runtime.json"))?;
-    let payload = fixture
-        .root
-        .path()
-        .join("state/wrix/service-data/retained-payload");
-    fs::write(&payload, b"native data must survive cancellation")?;
-    let signing_path = fixture.state_root()?.join("keys/cache.secret");
-    let signing = fs::read(&signing_path)?;
-    let owner = fs::read(lifecycle.join("celler-owner.json"))?;
-    let blocked = fixture.run("start")?;
-    assert!(!blocked.status.success());
-    assert!(
-        blocked.stderr.contains("pending service update"),
-        "{}",
-        blocked.stderr
-    );
-    let checkpoint = format!("host-lifecycle/checkpoints/{}", "c".repeat(32));
-    fs::DirBuilder::new()
-        .mode(0o700)
-        .create(lifecycle.join("checkpoints"))?;
-    for marker in [
-        "nix-pool-maintenance.json",
-        "host-lifecycle/shutdown.json",
-        &checkpoint,
-    ] {
-        let marker = fixture.root.path().join("state/wrix").join(marker);
-        fs::write(&marker, b"uncertain maintenance")?;
-        set_mode(&marker, 0o600)?;
-        let refused = run_command(fixture.command()?.args(["service", "update", "--cancel"]))?;
-        assert!(!refused.status.success());
-        assert_eq!(fs::read(lifecycle.join("update.json"))?, bytes);
-        assert_eq!(
-            fs::read(fixture.root.path().join("runtime.json"))?,
-            inventory
-        );
-        fs::remove_file(marker)?;
-    }
-    let unit = fixture
-        .root
-        .path()
-        .join("state/wrix/control/wrix-host-controller.service");
-    let original_unit = fs::read(&unit)?;
-    fs::write(&unit, "foreign controller unit")?;
-    let refused = run_command(fixture.command()?.args(["service", "update", "--cancel"]))?;
-    assert!(!refused.status.success());
-    assert_eq!(fs::read(lifecycle.join("update.json"))?, bytes);
-    fs::write(unit, original_unit)?;
-    fixture.snapshot[0]["status"]["state"] = json!("stopped");
-    fixture.write_snapshot()?;
-    let refused = run_command(fixture.command()?.args(["service", "update", "--cancel"]))?;
-    assert!(!refused.status.success());
-    assert_eq!(fs::read(lifecycle.join("update.json"))?, bytes);
-    fixture.snapshot[0]["status"]["state"] = json!("running");
-    fixture.write_snapshot()?;
-    let cancel = run_command(fixture.command()?.args(["service", "update", "--cancel"]))?;
-    assert!(cancel.status.success(), "{}", cancel.stderr);
-    assert!(cancel.stdout.contains("Cancelled unstarted service update"));
-    assert_eq!(
-        fs::read(&payload)?,
-        b"native data must survive cancellation"
-    );
-    assert_eq!(fs::read(signing_path)?, signing);
-    assert_eq!(fs::read(lifecycle.join("celler-owner.json"))?, owner);
-    assert!(!lifecycle.join("update.json").exists());
-    assert_eq!(
-        fs::read(lifecycle.join(format!("cancelled-update-{}.json", "c".repeat(32))))?,
-        bytes
-    );
-    assert_eq!(
-        fs::read(fixture.root.path().join("runtime.json"))?,
-        inventory
-    );
-    let retry = run_command(fixture.command()?.args(["service", "update", "--cancel"]))?;
-    assert!(retry.status.success(), "{}", retry.stderr);
-    let start = fixture.run("start")?;
-    assert!(start.status.success(), "{}", start.stderr);
-    assert_eq!(
-        fs::read(fixture.root.path().join("runtime.json"))?,
-        inventory
-    );
-    Ok(())
-}
-
-#[test]
-#[cfg(target_os = "linux")]
 fn legacy_update_cancellation_requires_original_backend_and_controller_evidence() -> TestResult {
     let fixture = Fixture::legacy_shared_cache()?;
     let host = run_command(fixture.command()?.args(["service", "--host"]))?;
@@ -3541,14 +3424,6 @@ fn service_fixture_removes_ambient_image_metadata() -> TestResult {
         );
     }
     Ok(())
-}
-
-#[test]
-fn managed_checkout_outside_devshell_skips_import_and_preserves_chained_hooks() -> TestResult {
-    // The native fixture now performs this check on a genuinely seeded and
-    // adopted shared namespace. Empty .beads/dolt directories cannot stand in
-    // for a native database, nor can a fabricated version witness admit one.
-    public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql()
 }
 
 #[test]
