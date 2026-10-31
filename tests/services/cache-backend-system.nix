@@ -34,6 +34,7 @@ pkgs.testers.runNixOSTest {
   };
   testScript = ''
     from datetime import timedelta
+    from shlex import quote
 
     machine.start()
     machine.wait_for_unit("multi-user.target")
@@ -63,11 +64,23 @@ pkgs.testers.runNixOSTest {
         "--test-threads=1 --nocapture",
         timeout=timedelta(minutes=5),
     ))
-    print(machine.succeed(
-        environment + "${wrix.rustPackage.cacheBackendTests}/bin/service-lifecycle-tests "
-        "--include-ignored --test-threads=1 --nocapture",
-        timeout=timedelta(minutes=15),
-    ))
+    service_tests = "${wrix.rustPackage.cacheBackendTests}/bin/service-lifecycle-tests"
+    cases = [
+        line.removesuffix(": test")
+        for line in machine.succeed(service_tests + " --list").splitlines()
+        if line.endswith(": test")
+    ]
+    assert cases and len(cases) == len(set(cases))
+    assert "public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql" in cases
+    assert "launcher_fails_before_agent_start_without_a_guest_cache_address" in cases
+    # Match Nextest's process isolation and retain every applicable case,
+    # including ignored native cases. Emit each result before the next starts.
+    print(f"Running all {len(cases)} native Linux service cases", flush=True)
+    for test in cases:
+        print(machine.succeed(
+            environment + service_tests + " --include-ignored --exact " + quote(test) + " --nocapture",
+            timeout=timedelta(minutes=5),
+        ), flush=True)
     for test in [
         "execution_restart_retains_unbound_launch_and_ignores_workspace_completion",
         "execution_unavailable_ambiguous_and_failed_removal_observations_retain_binding",
