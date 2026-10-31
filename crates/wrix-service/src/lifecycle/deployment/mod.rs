@@ -4,7 +4,7 @@ mod backend;
 mod checkpoint;
 mod ownership;
 mod update;
-pub use update::{cancel as cancel_update, run as update};
+pub use update::{cancel as cancel_update, resume as resume_update, run as update};
 
 use super::{Error, Result, Runtime, RuntimeKind, RuntimeStatus, coordination, owner};
 use crate::control::supervision::{Lifecycle, Native, Package, Platform};
@@ -89,7 +89,7 @@ impl Shutdown {
     }
 }
 
-pub(super) fn document(root: &Path, name: &str) -> Result<Option<Vec<u8>>> {
+pub(crate) fn document(root: &Path, name: &str) -> Result<Option<Vec<u8>>> {
     let file = match File::options()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)

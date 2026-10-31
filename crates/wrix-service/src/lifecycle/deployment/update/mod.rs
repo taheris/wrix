@@ -13,6 +13,7 @@ use std::{
 use wrix_state::host::Host;
 
 mod cancel;
+mod recovery;
 pub use cancel::run as cancel;
 
 const FILE: &str = "update.json";
@@ -151,7 +152,7 @@ impl Intent {
         self.check_version()?;
         let prepared = self.phase == Phase::Prepared && self.failure.is_none();
         if self.ownership.is_some() || !(prepared || self.legacy_refusal()) {
-            return Err(Error::Operation { message: "update has progressed or has uncertain effects; cancellation refused. Retry `wrix service update` with its recorded exact host package; retained intent and ownership are unchanged".into() });
+            return Err(Error::Operation { message: "update has progressed or has uncertain effects; cancellation refused. Use current Wrix `service update --resume` to continue its exact recorded target under the required maintenance; retained intent and ownership are unchanged".into() });
         }
         Ok(())
     }
@@ -170,22 +171,49 @@ impl Intent {
     }
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Target {
+    Invoked,
+    Retained,
+}
+
 pub fn run() -> Result<String> {
+    run_target(Target::Invoked)
+}
+
+pub fn resume() -> Result<String> {
+    run_target(Target::Retained)
+}
+
+fn run_target(target: Target) -> Result<String> {
     let host = Host::discover().map_err(io::Error::other)?;
     let deployment = crate::control::existing_deployment(&host).map_err(io::Error::other)?
         .ok_or_else(|| Error::Operation { message: "service update requires an existing deployment; run `wrix service start` from a repository first".into() })?;
     let _update = coordination::acquire(&host.roots().state().join("service-update"))?;
     let root = host.roots().state().join("host-lifecycle");
-    let mut intent = Intent {
-        version: 2,
-        deployment,
-        attempt: Attempt::new()?,
-        candidate: binding::Candidate::from_env()?,
-        controller: Package::from_env().map_err(io::Error::other)?,
-        pools: Pools::from_env(&host)?,
-        phase: Phase::Prepared,
-        ownership: None,
-        failure: None,
+    let mut intent = if target == Target::Retained {
+        let guard = coordination::acquire(&root)?;
+        let bytes = document(guard.root(), FILE)?.ok_or_else(|| Error::Operation {
+            message: "no interrupted service update to resume; use `wrix service update` to select the current package explicitly".into(),
+        })?;
+        let retained: Intent = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+        retained.check_version()?;
+        if retained.deployment != deployment {
+            return Err(owner::Error::Conflict.into());
+        }
+        retained
+    } else {
+        Intent {
+            version: 2,
+            deployment,
+            attempt: Attempt::new()?,
+            candidate: binding::Candidate::from_env()?,
+            controller: Package::from_env().map_err(io::Error::other)?,
+            pools: Pools::from_env(&host)?,
+            phase: Phase::Prepared,
+            ownership: None,
+            failure: None,
+        }
     };
     {
         let guard = coordination::acquire(&root)?;
@@ -193,11 +221,15 @@ pub fn run() -> Result<String> {
             let retained: Intent = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
             retained.check_version()?;
             intent.version = retained.version;
-            if !retained.same_target(&intent) {
-                return Err(Error::Operation { message: "an interrupted whole-deployment update retains a different exact package/image intent; inspect `wrix service --host` and use `wrix service update --cancel` only for a provably unstarted update. Otherwise repeat its exact recorded package before selecting another target".into() });
+            if !retained.same_target(&intent) || (target == Target::Retained && retained != intent)
+            {
+                return Err(Error::Operation { message: "an interrupted whole-deployment update retains a different exact package/image intent; inspect `wrix service --host` and use `wrix service update --cancel` only for a provably unstarted update. To continue the exact recorded software target with current Wrix, use `wrix service update --resume` before selecting another target".into() });
             }
             intent = retained;
         } else {
+            if target == Target::Retained {
+                return Err(owner::Error::Conflict.into());
+            }
             owner::Selected::read(guard.root())?.ok_or(owner::Error::Invalid)?;
             publish(guard.root(), FILE, &intent)?;
         }
@@ -253,6 +285,7 @@ pub fn run() -> Result<String> {
         publish(guard.root(), FILE, &intent)?;
         return Err(Error::Operation { message: "the running legacy backend predates native whole-deployment ownership/drain interfaces; upgrading requires explicit host-wide maintenance: `wrix service stop --host`, then repeat `wrix service update` with this exact package. To abandon this attempt without downtime, use current Wrix `service update --cancel` if its original-owner evidence checks pass. No core owner was stopped or replaced".into() });
     }
+    recovery::repair_endpoints(&host, &intent, &selected, &runtime, status, &digest)?;
     intent.failure = None;
     publish(guard.root(), FILE, &intent)?;
     let stopped = control.join("stopped").try_exists()?;

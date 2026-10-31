@@ -4,6 +4,9 @@ mod assignment;
 pub mod cache;
 mod deployment;
 mod endpoint;
+pub(crate) use endpoint::{
+    needs_repair as endpoints_need_repair, repair as repair_retained_endpoints,
+};
 pub mod gateway;
 mod pool;
 pub use pool::Status as PoolPreparation;
@@ -54,12 +57,20 @@ pub enum Error {
     Route(#[from] crate::route::Error),
     /// persisted deployment role endpoints are invalid
     InvalidEndpoints,
+    /// controller lease for {role:?} is {recorded}, but the retained service endpoint is {retained}; explicit released-update recovery is required, not port relocation
+    RetainedEndpoints {
+        role: crate::route::Role,
+        retained: std::num::NonZeroU16,
+        recorded: std::num::NonZeroU16,
+    },
     /// persisted host deployment identity has an unsupported version
     InvalidDeployment,
     /// persisted generation assignments are inconsistent with this deployment
     InvalidSelection,
     /// this controller has already issued its deployment role listeners
     EndpointsAlreadyBound,
+    /// original controller ownership is still held; retained endpoint leases were not changed
+    EndpointOwnershipBusy,
     /// private control registry lock is poisoned
     LockPoisoned,
     /// persisted namespace registration has an unsupported version, duplicate identity or excess entries

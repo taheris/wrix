@@ -32,16 +32,7 @@ pub(super) fn create(
     wrix_core::private_directory::prepare_with_parents(&root)?;
     let complete = root.join(key);
     if complete.try_exists()? {
-        let bytes = document(&complete, "checkpoint.json")?.ok_or(owner::Error::Invalid)?;
-        let receipt: Receipt = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
-        if receipt.version != 1
-            || receipt.target != *target
-            || receipt.digest != *digest
-            || receipt.source.as_ref() != source
-        {
-            return Err(owner::Error::Conflict.into());
-        }
-        return Ok(());
+        return verify(state, attempt, target, digest, source);
     }
     let building = tempfile::tempdir_in(&root)?;
     let databases = state.join("service-data/dolt/databases");
@@ -69,6 +60,37 @@ pub(super) fn create(
     )?;
     fs::rename(building.path(), &complete)?;
     File::open(&root)?.sync_all()?;
+    Ok(())
+}
+
+pub(super) fn verify(
+    state: &Path,
+    attempt: &super::update::Attempt,
+    target: &binding::Candidate,
+    digest: &Digest,
+    source: Option<&Digest>,
+) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let root = state
+        .join("host-lifecycle/checkpoints")
+        .join(attempt.as_str());
+    let metadata = fs::symlink_metadata(&root)?;
+    if !metadata.is_dir()
+        || metadata.mode() & 0o077 != 0
+        || metadata.uid() != fs::metadata(state)?.uid()
+        || root.canonicalize()? != root
+    {
+        return Err(owner::Error::Permissions.into());
+    }
+    let bytes = document(&root, "checkpoint.json")?.ok_or(owner::Error::Invalid)?;
+    let receipt: Receipt = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+    if receipt.version != 1
+        || receipt.target != *target
+        || receipt.digest != *digest
+        || receipt.source.as_ref() != source
+    {
+        return Err(owner::Error::Conflict.into());
+    }
     Ok(())
 }
 

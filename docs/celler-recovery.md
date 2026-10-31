@@ -222,8 +222,8 @@ With current Wrix, an operator can abandon a **provably unstarted** update:
 "${WRIX_BIN:-wrix}" service start
 ```
 
-Cancellation does not execute the older target package or select the current
-package's service image. It retains the exact intent in a private, fsynced
+Cancellation does not execute the older Wrix CLI or select the current package's
+service image. It retains the exact intent in a private, fsynced
 `host-lifecycle/cancelled-update-<attempt>.json` before clearing the active
 fence; retry is safe if interrupted after that archival step. All software
 roots, native data, signing material, running services and workers stay
@@ -251,6 +251,51 @@ shutdown. Cancellation restores access to the existing selection; it does not
 make that upgrade interruption-free. See
 [Service Update Command](../specs/cli.md#service-update-command) for
 eligibility.
+
+## Continuing a progressed update with current Wrix
+
+Use a host Wrix containing the recovery fix, not an older PATH/profile binary:
+
+```bash
+"${WRIX_BIN:-wrix}" service --host
+"${WRIX_BIN:-wrix}" service update --resume
+"${WRIX_BIN:-wrix}" service start
+```
+
+`--resume` reads the active private intent and continues its **exact recorded**
+service image, controller and pool targets with the current CLI. It does not
+select this CLI's newer image, cancel the attempt, restore an old backend, or
+require running the older Wrix CLI. No active intent is an error, not permission
+to start another upgrade. After completion, a separate ordinary `service update`
+can explicitly select newer software.
+
+A failed first native-role upgrade can leave `shutdown: Stopped`, update phase
+`Starting`, a checkpoint, no backend container, and a controller lease such as
+cache `21000` where the retained owner requires `21232`. That is a
+lease-selection bug, not evidence that another process owns the required port.
+Do not delete the journals, edit `role-endpoints.json`, rotate keys, cancel a
+progressed update, or free unrelated ports.
+
+Under the already-recorded explicit host shutdown, current update/resume can
+repair this mismatch after validating deployment/target identity, the original
+Dolt/Celler ownership inodes and exclusive release, the matching checkpoint and
+origin, absence of a backend/recovery candidate/native generations, and native
+controller ownership. It stops only that verified controller, archives prior
+lease bytes under
+`control/authority/role-endpoints-before-<attempt>-<hash>.json`, binds the
+retained addresses, and resumes the recorded target. It also handles the
+corresponding pre-release case with a verified stopped original backend and no
+ownership transfer. Interrupted archival/rebinding is retryable without losing
+the original evidence. A busy retained port is reported with its role and port
+rather than silently substituted.
+
+Missing or conflicting evidence leaves the update fenced; do not bypass the
+refusal. Keep the same journals/checkpoint and coordinate the reported ownership
+or port conflict. Ordinary startup and passive information never perform this
+repair or authorize downtime. The host-shutdown grant revocation still applies:
+existing worker processes are not stopped by this repair, but revoked traffic
+permissions are not automatically restored. Do not run an older update process
+concurrently with current recovery.
 
 ## Controller policy upgrade
 

@@ -530,13 +530,12 @@ pub(super) fn preflight_controller(host: &Host) -> Result<()> {
 
 pub(super) fn controller(host: &Host) -> Result<[NonZeroU16; 5]> {
     let root = host.roots().state().join("control");
-    let package = Package::from_env().map_err(io::Error::other)?;
     let selected = match Package::load(&root.join("package.json")) {
         Ok(package) => package,
         Err(crate::control::supervision::Error::Io(error))
             if error.kind() == io::ErrorKind::NotFound =>
         {
-            package
+            Package::from_env().map_err(io::Error::other)?
         }
         Err(error) => return Err(io::Error::other(error).into()),
     };
@@ -563,9 +562,21 @@ pub(super) fn controller(host: &Host) -> Result<[NonZeroU16; 5]> {
     }
 }
 
-pub(crate) fn retained_sync_port(state: &Path) -> Result<Option<NonZeroU16>> {
-    Ok(super::shared::Record::at(&state.join("host-lifecycle"))?
-        .and_then(|record| record.public_sync_port()))
+pub(crate) fn retained_role_ports(state: &Path) -> Result<[Option<NonZeroU16>; 5]> {
+    let root = state.join("host-lifecycle");
+    let selected = owner::Selected::read(&root)?;
+    let shared = super::shared::Record::at(&root)?;
+    Ok([
+        shared
+            .as_ref()
+            .and_then(super::shared::Record::public_sql_port),
+        selected.map(|owner| owner.port),
+        None,
+        None,
+        shared
+            .as_ref()
+            .and_then(super::shared::Record::public_sync_port),
+    ])
 }
 
 pub(super) fn guest_endpoint(state: &Path, role: crate::route::Role) -> Result<SocketAddrV4> {

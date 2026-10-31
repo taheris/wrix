@@ -879,9 +879,20 @@ publishers use separately authorized routes, not host Nix substitution, under
 
 Preferred ports belong to deployment roles within cache HTTP `21000–22999` and
 fallback Dolt TCP `23000–24999`, not to workspace hashes. Busy-port fallback is
-actually bound, persisted and reused while available; metadata alone is not
-publication. Exhaustion or inability to bind loopback-only fails. Launchers
-inject proven sandbox-visible routes without container DNS. Namespace
+actually bound, persisted and reused while available for provisional leases;
+metadata alone is not publication. Already-selected cache and retained Dolt
+SQL/sync endpoints are fixed: controller initialization adopts those addresses
+before allocating new roles, and an occupied retained endpoint fails with its
+role/port rather than silently relocating. A conflicting provisional snapshot
+requires the explicit, evidence-checked stopped-update recovery in
+[Service Update Command](cli.md#service-update-command), not advice to free
+unrelated ports or manual lease edits. Exhaustion or inability to bind
+loopback-only fails.
+[test](../crates/wrix-service/src/control/endpoint/test.rs::first_bind_adopts_retained_cache_sql_and_sync_endpoints)
+[test](../crates/wrix-service/src/control/endpoint/test.rs::occupied_retained_port_is_not_relocated_or_published)
+[test](../crates/wrix-service/src/control/endpoint/test.rs::conflicting_snapshot_is_rejected_during_ordinary_open_without_rewriting)
+
+Launchers inject proven sandbox-visible routes without container DNS. Namespace
 registration reserves no additional TCP port.
 
 Unexpected exit of an active proxy, Dolt, Celler or shared sccache daemon fails
@@ -1063,9 +1074,10 @@ tenant or component compromise/fault isolation.
   service work or revive grants across generations.
   [test?](../crates/wrix-service/tests/generation_handoff.rs::supervision_distinguishes_planned_transitions_from_container_failure)
 
-- Cache HTTP and fallback Dolt TCP use deployment-role ranges; busy fallback is
-  bound, persisted and reachable without workspace TCP leases, and inability to
-  bind loopback-only fails.
+- Cache HTTP and fallback Dolt TCP use deployment-role ranges; provisional busy
+  fallback is bound, persisted and reachable without workspace TCP leases,
+  retained service endpoints are not relocated, and inability to bind
+  loopback-only fails.
   [test?](../crates/wrix-service/tests/host_service.rs::role_port_leases_are_shared_reachable_and_loopback_only)
 
 - Two independent workspaces share one host-user deployment without replacing

@@ -53,6 +53,26 @@ pub(super) struct Record {
     inode: Option<Inode>,
 }
 
+pub(super) const fn recorded_native_owners(records: &[Record]) -> bool {
+    matches!(
+        records,
+        [
+            Record {
+                role: Role::Dolt,
+                inode: Some(_)
+            },
+            Record {
+                role: Role::Celler,
+                inode: Some(_)
+            },
+            Record {
+                role: Role::Compiler,
+                ..
+            }
+        ]
+    )
+}
+
 pub(super) fn extends(previous: &[Record], current: &[Record]) -> bool {
     previous.len() == current.len()
         && previous.iter().zip(current).all(|(previous, current)| {
@@ -153,6 +173,26 @@ mod test {
         let path = root.join("service-data/dolt/owner.lock");
         fs::write(&path, "retained native owner inode").unwrap();
         (celler, path)
+    }
+
+    #[test]
+    fn legacy_repair_requires_both_original_database_and_cache_ownership_records() {
+        let root = tempfile::tempdir().unwrap();
+        let (celler, _) = layout(root.path());
+        let records = Pin::capture(root.path(), &celler)
+            .unwrap()
+            .iter()
+            .map(Pin::record)
+            .collect::<Vec<_>>();
+        assert!(!recorded_native_owners(&records));
+        fs::write(celler.join("backend.lock"), "original cache owner").unwrap();
+        let records = Pin::capture(root.path(), &celler)
+            .unwrap()
+            .iter()
+            .map(Pin::record)
+            .collect::<Vec<_>>();
+        assert!(recorded_native_owners(&records));
+        assert!(!recorded_native_owners(&records[..2]));
     }
 
     #[test]

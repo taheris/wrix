@@ -32,6 +32,14 @@ pub enum Error {
     Io(#[from] io::Error),
     /// no loopback port is available for deployment role {role:?}
     NoAvailablePort { role: Role },
+    /// cannot bind retained endpoint 127.0.0.1:{port} for {role:?}; the endpoint will not be relocated: {source}
+    RetainedPort {
+        role: Role,
+        port: NonZeroU16,
+        source: io::Error,
+    },
+    /// fixed-role listener construction is incomplete
+    IncompleteListeners,
     /// fixed-role selection lock is poisoned
     LockPoisoned,
     /// connection capacity exceeds the fixed-role service limit
@@ -107,13 +115,30 @@ impl Listeners {
         ]))
     }
 
-    pub(crate) async fn bind_deployment(prior: [Option<NonZeroU16>; 5]) -> Result<Self, Error> {
+    pub(crate) async fn bind_deployment(
+        prior: [Option<NonZeroU16>; 5],
+        retained: [bool; 5],
+    ) -> Result<Self, Error> {
+        let mut listeners: [Option<TcpListener>; 5] = std::array::from_fn(|_| None);
+        for role in Role::ALL {
+            if retained[role.index()]
+                && let Some(port) = prior[role.index()]
+            {
+                listeners[role.index()] = Some(bind_retained(role, port).await?);
+            }
+        }
+        for role in Role::ALL {
+            if listeners[role.index()].is_none() {
+                listeners[role.index()] = Some(bind_role(role, prior[role.index()]).await?);
+            }
+        }
+        let [sql, cache, egress, compiler, sync] = listeners;
         Ok(Self([
-            bind_role(Role::Sql, prior[0]).await?,
-            bind_role(Role::CacheRead, prior[1]).await?,
-            bind_role(Role::Egress, prior[2]).await?,
-            bind_role(Role::Compiler, prior[3]).await?,
-            bind_role(Role::Sync, prior[4]).await?,
+            sql.ok_or(Error::IncompleteListeners)?,
+            cache.ok_or(Error::IncompleteListeners)?,
+            egress.ok_or(Error::IncompleteListeners)?,
+            compiler.ok_or(Error::IncompleteListeners)?,
+            sync.ok_or(Error::IncompleteListeners)?,
         ]))
     }
 
@@ -150,6 +175,13 @@ async fn bind(port: Port) -> Result<TcpListener, Error> {
         listener,
         Executor::default(),
     ))
+}
+
+async fn bind_retained(role: Role, port: NonZeroU16) -> Result<TcpListener, Error> {
+    bind(Port::Fixed(port)).await.map_err(|error| match error {
+        Error::Io(source) => Error::RetainedPort { role, port, source },
+        other => other,
+    })
 }
 
 async fn bind_role(role: Role, prior: Option<NonZeroU16>) -> Result<TcpListener, Error> {

@@ -201,21 +201,33 @@ pub(in crate::lifecycle) fn ensure(
         }
         return Ok(selected);
     }
-    if status == RuntimeStatus::Stopped {
-        runtime.remove(&selected.container)?;
-    }
     let host = wrix_state::host::Host::discover().map_err(std::io::Error::other)?;
     let public = super::super::generation::controller(&host)?;
-    let shared = super::super::shared::Record::prepare_native(guard, public[0], public[4])?;
+    let retained = super::super::shared::Record::at(guard.root())?;
     if previous.is_none() && candidate.is_none() {
         selected.port = public[1];
     }
     if selected.port != public[1]
-        || shared
-            .public_sql_port()
+        || retained
+            .as_ref()
+            .and_then(super::super::shared::Record::public_sql_port)
             .is_some_and(|port| port != public[0])
     {
-        return Err(Error::Operation { message: "stable retained role endpoints were not bound; free them and repeat explicit host maintenance before opening backend data".into() });
+        return Err(Error::Operation {
+            message: format!(
+                "retained service/controller endpoint mismatch: cache retained={} controller={}, SQL retained={:?} controller={}; no backend data was opened. Do not free unrelated ports or edit leases; use current Wrix `service update --resume` for verified explicit shutdown recovery",
+                selected.port,
+                public[1],
+                retained
+                    .as_ref()
+                    .and_then(super::super::shared::Record::public_sql_port),
+                public[0]
+            ),
+        });
+    }
+    let shared = super::super::shared::Record::prepare_native(guard, public[0], public[4])?;
+    if status == RuntimeStatus::Stopped {
+        runtime.remove(&selected.container)?;
     }
     let data = root.join("service-data/dolt");
     crate::dolt::private_directory(&data)?;

@@ -17,6 +17,9 @@ mod native_celler;
 mod peer_runtime;
 #[path = "common/service_binding.rs"]
 mod service_binding;
+#[cfg(target_os = "linux")]
+#[path = "service/update_resume.rs"]
+mod update_resume;
 
 use std::{
     fs,
@@ -658,7 +661,7 @@ impl Fixture {
             ),
             (
                 "shared.json",
-                json!({"version":1, "tcp":true, "sql_port": fixture.port("dolt_tcp")?, "sync_port": 3307}),
+                json!({"version":1, "tcp":true, "sql_port": fixture.port("dolt_tcp")?, "sync_port": 23_000 + (fixture.port("dolt_tcp")? - 23_000 + 1) % 2_000}),
             ),
         ] {
             fs::write(root.join(name), serde_json::to_vec(&document)?)?;

@@ -319,6 +319,7 @@ Acceptance: [Service Update Acceptance](#service-update-acceptance).
 
 ```text
 wrix service update
+wrix service update --resume
 wrix service update --cancel
 ```
 
@@ -340,6 +341,33 @@ argument or an update of the host CLI itself. Missing/invalid managed input
 fails before live selection changes. Unsupported options, children and extra
 arguments fail before image preparation, grant transfer or service mutation; no
 force, GC-wait, workspace or host-scope alias is implied.
+
+`--resume` continues the complete private, recorded update intent using the
+current Wrix CLI rather than requiring the older CLI executable. It preserves
+the attempt, deployment, service image, controller and pool software targets;
+caller package bindings do not supersede them. Unknown intent versions, changed
+ownership, missing required checkpoints or mismatched recovery evidence fail
+closed. Without an active intent it fails without selecting a new target.
+Selectors and combined resume/cancel actions are rejected before dispatch.
+[test](../crates/wrix-cli/tests/service/update_resume.rs::current_cli_resumes_checkpointed_legacy_target_and_repairs_retained_endpoints)
+[test](../crates/wrix-service/tests/deployment_lifecycle.rs::public_cli_update_resume_rejects_selectors_and_combined_actions)
+
+For a legacy first-role-binding mismatch, explicit update/resume may reconcile
+controller leases only under a matching completed host-shutdown record, verified
+native Dolt/Celler ownership inodes and exclusive release, and no native core
+generations or recovery candidate. Before release, the original backend is
+verified stopped with no update ownership transfer; after release, `Starting`
+requires a missing backend and the exact attempt's matching checkpoint/origin.
+Only the owned original/recorded-target controller may be stopped to rebind the
+retained ports; its original ownership inode positively excludes a live owner
+during lease publication. Prior lease bytes are archived durably before rewrite.
+Uncertainty refuses repair without opening backend data or retargeting software.
+Ordinary start, inspection and cancellation do not perform this repair or
+implicitly authorize host-wide downtime.
+[test](../crates/wrix-cli/tests/service/update_resume.rs::current_cli_resumes_checkpointed_legacy_target_and_repairs_retained_endpoints)
+[test](../crates/wrix-cli/tests/service/update_resume.rs::current_cli_preserves_legacy_endpoints_before_first_release)
+[test](../crates/wrix-service/src/control/endpoint/test.rs::active_native_controller_ownership_refuses_repair_without_rewriting)
+[test](../crates/wrix-service/src/control/endpoint/test.rs::interrupted_archival_retries_without_discarding_original_evidence)
 
 Update requires an existing managed deployment. If absent, fail before creation
 and direct the user to `wrix service start` from a repository. For an existing
@@ -392,9 +420,9 @@ generations or pools, no recovery candidate, the verified original backend still
 running with a different binding from the candidate, and the owned, ready
 controller's retained package differing from the target. Any uncertainty refuses
 cancellation. Later drain, release, start, readiness or activation phases remain
-exact-intent fenced; retry the recorded exact-package update under its required
-maintenance rather than deleting its journal. Ordinary startup never cancels,
-supersedes or performs host-wide shutdown automatically.
+exact-intent fenced; continue with current Wrix `service update --resume` under
+its required maintenance rather than deleting its journal. Ordinary startup
+never cancels, supersedes or performs host-wide shutdown automatically.
 [test](../crates/wrix-service/src/lifecycle/deployment/update/mod.rs::test::native_preparation_is_durably_non_cancellable_before_starting)
 [test](../crates/wrix-cli/tests/service_lifecycle.rs::legacy_update_cancellation_requires_original_backend_and_controller_evidence)
 [test](../crates/wrix-cli/tests/service_lifecycle.rs::legacy_prepared_update_with_native_generations_remains_fenced)

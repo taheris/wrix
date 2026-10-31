@@ -16,13 +16,13 @@ use std::{
 use wrix_service::control::{Client, Operation, Reply, supervision::Package};
 
 pub struct Server {
-    child: Child,
-    socket: PathBuf,
+    pub(super) child: Child,
+    pub(super) socket: PathBuf,
     calls: PathBuf,
-    manager: Option<PathBuf>,
+    pub(super) manager: Option<PathBuf>,
     sql: native_sql::Server,
     roles: native_roles::Server,
-    backend_environment: PathBuf,
+    pub(super) backend_environment: PathBuf,
 }
 
 impl Server {
@@ -228,7 +228,7 @@ impl Drop for Server {
     }
 }
 
-fn shell_single_quote(value: &str) -> String {
+pub fn shell_single_quote(value: &str) -> String {
     let mut quoted = String::from("'");
     for character in value.chars() {
         if character == '\'' {

@@ -31,13 +31,47 @@ fn public_cli_update_rejects_selectors_before_workspace_or_runtime_dispatch() {
 
 #[test]
 fn public_cli_update_cancellation_rejects_extra_arguments_before_dispatch() {
-    for extra in ["--cancel", "--host", "--force", "image", "--no-cache"] {
+    for extra in [
+        "--cancel",
+        "--resume",
+        "--host",
+        "--force",
+        "image",
+        "--no-cache",
+    ] {
         let mut stdout = Vec::new();
         let error = command::run(
             &[
                 "service".into(),
                 "update".into(),
                 "--cancel".into(),
+                extra.into(),
+            ],
+            &mut stdout,
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(stdout, [] as [u8; 0]);
+    }
+}
+
+#[test]
+fn public_cli_update_resume_rejects_selectors_and_combined_actions() {
+    for extra in [
+        "--cancel",
+        "--resume",
+        "--host",
+        "--force",
+        "image",
+        "--no-cache",
+    ] {
+        let mut stdout = Vec::new();
+        let error = command::run(
+            &[
+                "service".into(),
+                "update".into(),
+                "--resume".into(),
                 extra.into(),
             ],
             &mut stdout,
@@ -107,6 +141,21 @@ fn public_cli_deployment_dispatch_is_host_only_and_never_bootstraps_an_absent_de
                 "existing deployment"
             }),
             "{cancel}"
+        );
+        assert_eq!(stdout, [] as [u8; 0]);
+        let resume = command::run(
+            &["service".into(), "update".into(), "--resume".into()],
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap_err();
+        assert!(
+            resume.to_string().contains(if worker {
+                "host-only"
+            } else {
+                "existing deployment"
+            }),
+            "{resume}"
         );
         assert_eq!(stdout, [] as [u8; 0]);
         let stop = command::run(
