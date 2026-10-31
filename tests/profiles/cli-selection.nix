@@ -43,6 +43,17 @@ let
         [[ "$WRIX_BIN" == ${pinned}/bin/wrix ]]
       '';
     };
+  matching = (library first).mkDevShell {
+    profile = {
+      hostPackages = [ ];
+      hostEnv = { };
+    };
+    nixCache = false;
+    prekHooks = false;
+    env.WRIX_BIN = "${first}/bin/wrix";
+  };
+  matchingAccepted = builtins.tryEval matching.drvPath;
+  matchingHook = pkgs.writeText "matching-hook" matching.shellHook;
   firstHook = pkgs.writeText "first-hook" (shell first).shellHook;
   secondHook = pkgs.writeText "second-hook" (shell second).shellHook;
   conflicting =
@@ -57,6 +68,7 @@ let
         env.WRIX_BIN = "${stale}/bin/wrix";
       }).drvPath;
 in
+assert matchingAccepted.success;
 assert !conflicting.success;
 pkgs.runCommand "wrix-devshell-cli-selection" { nativeBuildInputs = [ pkgs.bash ]; } ''
   set -euo pipefail
@@ -71,6 +83,14 @@ pkgs.runCommand "wrix-devshell-cli-selection" { nativeBuildInputs = [ pkgs.bash 
   # Both first and repeated activation select the locked client, never ambient Wrix.
   for activation in first cached; do
     source ${firstHook}
+    [[ "$(type -P wrix)" == ${first}/bin/wrix ]]
+    [[ "$(wrix run)" == first-pin:${config} ]]
+  done
+  # A legacy consumer's identical pointer is redundant, never an override.
+  for activation in first cached; do
+    export WRIX_BIN=${stale}/bin/wrix
+    source ${matchingHook}
+    [[ "$WRIX_BIN" == ${first}/bin/wrix ]]
     [[ "$(type -P wrix)" == ${first}/bin/wrix ]]
     [[ "$(wrix run)" == first-pin:${config} ]]
   done

@@ -53,8 +53,10 @@ A consumer's Wrix flake input selects both the unconfigured client package and
 its generated launch configuration. `sandbox.devShell { }` and profile-only
 devshells put that pinned client on PATH and export its absolute `WRIX_BIN`;
 ambient installations and a previous shell's selection cannot replace it.
-Constructor attempts to override `WRIX_BIN` are evaluation errors. There is no
-profile-specific launcher or latest-version lookup.
+Constructor attempts to select a different `WRIX_BIN` are evaluation errors. A
+redundant pointer to the exact same pinned client is accepted and discarded; it
+cannot replace constructor-owned selection. There is no profile-specific
+launcher or latest-version lookup.
 
 Outside a consumer shell, Home Manager, nix-darwin or explicit Nix provision
 remain supported, without a fixed installation directory:

@@ -84,12 +84,12 @@ in
             WRIX_PROJECT_PROFILE_CONFIG = toString sandbox.image.profileConfig;
           };
       checkedEnv =
-        if env ? WRIX_BIN then
+        if env ? WRIX_BIN && env.WRIX_BIN != "${rustCli.wrix}/bin/wrix" then
           throw "WRIX_BIN is constructor-owned; the consumer pin selects the Wrix client"
         else if sandbox != null && env ? WRIX_PROJECT_PROFILE_CONFIG then
           throw "WRIX_PROJECT_PROFILE_CONFIG is constructor-owned"
         else
-          env;
+          builtins.removeAttrs env [ "WRIX_BIN" ];
       hooksTarget =
         if prekHooks == false then
           null

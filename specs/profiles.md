@@ -473,9 +473,11 @@ Both devshell forms provide the unconfigured client selected by the consumer's
 Wrix input. They export constructor-owned `WRIX_BIN` and expose that same
 absolute package as bare `wrix`, including repeated/cached shell entry. An
 ambient or stale shell selection cannot replace it; constructor `WRIX_BIN`
-overrides are evaluation errors. Profile-only shells supply no implicit sandbox
-definition. Neither form exports project service-image overrides or creates a
-configured `wrix-run`. [check](verify:devshell.cli-selection)
+values selecting another executable are evaluation errors. A redundant exact
+pointer to the pinned executable is accepted and discarded, including through
+consumer wrappers. Profile-only shells supply no implicit sandbox definition.
+Neither form exports project service-image overrides or creates a configured
+`wrix-run`. [check](verify:devshell.cli-selection)
 
 Client/configuration provisioning follows
 [Host CLI and Project Configuration](cli.md#host-cli-and-project-configuration).
