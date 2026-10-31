@@ -57,6 +57,9 @@ keep it current when specs land or retire.
 [Celler ownership recovery](celler-recovery.md) describes explicit recovery of
 an absent or stopped selected cache owner without resetting persistent data.
 
+[Loom source/runtime integration](loom-compatibility.md) documents the supported
+Celler packaging boundary, consumer handoff patch and independent host blockers.
+
 [Loom workspace safety troubleshooting](loom-troubleshooting.md) covers missing
 host associations and retained-history paths without resetting safety evidence.
 

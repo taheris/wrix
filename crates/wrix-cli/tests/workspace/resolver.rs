@@ -67,6 +67,27 @@ fn resolver_request_preserves_subdirectory_and_finishes_with_eof() {
 }
 
 #[test]
+fn resolver_failure_exposes_status_and_stderr_without_admitting_workspace() {
+    let fixture = Fixture::new();
+    fixture.initialize();
+    let checkout = fixture.repository("checkout");
+    fixture.adapter_script(
+        "IFS= read -r request || [[ -n \"$request\" ]]\nprintf 'not a reply'\nprintf 'workspace is not registered\\n' >&2\nexit 7",
+    );
+    let before = snapshot(&fixture.state());
+    let output = fixture.admit(&checkout, "workspace-one", &["--allocate"]);
+    assert!(!output.status.success());
+    let diagnostic = String::from_utf8_lossy(&output.stderr);
+    assert!(diagnostic.contains("exit status 7"), "{diagnostic}");
+    assert!(
+        diagnostic.contains("workspace is not registered\\n"),
+        "{diagnostic}"
+    );
+    assert!(!diagnostic.contains("not a reply"), "{diagnostic}");
+    assert_eq!(snapshot(&fixture.state()), before);
+}
+
+#[test]
 fn stdout_and_stderr_overflow_refuse_without_state_changes() {
     let fixture = Fixture::new();
     fixture.initialize();

@@ -432,6 +432,11 @@ async fn run(mut command: Command, input: &[u8], deadline: Instant) -> Result<Ve
     let mut interrupt = signal(SignalKind::interrupt())?;
     let mut terminate = signal(SignalKind::terminate())?;
     let mut hangup = signal(SignalKind::hangup())?;
+    let executable = command
+        .as_std()
+        .get_program()
+        .to_string_lossy()
+        .into_owned();
     let mut child = command.spawn()?;
     let child_id = child.id().ok_or(Error::Unsupported)?;
     let raw_id = i32::try_from(child_id).map_err(|_| Error::Unsupported)?;
@@ -447,7 +452,7 @@ async fn run(mut command: Command, input: &[u8], deadline: Instant) -> Result<Ve
                 drop(stdin);
                 Ok::<(), Error>(())
             };
-            let ((), stdout, _stderr) = tokio::try_join!(write, bounded(stdout), bounded(stderr))?;
+            let ((), stdout, stderr) = tokio::try_join!(write, bounded(stdout), bounded(stderr))?;
             loop {
                 let status = rustix::process::waitid(
                     rustix::process::WaitId::Pid(pid),
@@ -458,7 +463,16 @@ async fn run(mut command: Command, input: &[u8], deadline: Instant) -> Result<Ve
                 .map_err(std::io::Error::from)?;
                 if let Some(status) = status {
                     if status.exit_status() != Some(0) {
-                        return Err(Error::Invalid("resolver process failed".into()));
+                        let reason = status.exit_status().map_or_else(
+                            || "terminated by signal".into(),
+                            |code| format!("exit status {code}"),
+                        );
+                        let diagnostic = String::from_utf8_lossy(&stderr);
+                        return Err(Error::Invalid(format!(
+                            "resolver process failed: {}: {reason}; stderr: {}",
+                            executable.escape_debug(),
+                            diagnostic.escape_debug(),
+                        )));
                     }
                     break;
                 }

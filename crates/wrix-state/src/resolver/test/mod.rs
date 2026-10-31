@@ -19,7 +19,33 @@ fn exited_child_cleanup_preserves_successful_output() {
 #[test]
 fn exited_child_cleanup_preserves_process_failure() {
     let error = execute_shell("exit 7", Duration::from_secs(5)).unwrap_err();
-    assert!(matches!(error, Error::Invalid(message) if message == "resolver process failed"));
+    assert!(
+        matches!(error, Error::Invalid(message) if message == "resolver process failed: /bin/sh: exit status 7; stderr: ")
+    );
+}
+
+#[test]
+fn process_failure_exposes_stderr_without_terminal_controls() {
+    let error = execute_shell(
+        "printf '\\033[31mNix evaluation failed\\n' >&2; exit 1",
+        Duration::from_secs(5),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(error, Error::Invalid(message) if message == "resolver process failed: /bin/sh: exit status 1; stderr: \\u{1b}[31mNix evaluation failed\\n")
+    );
+}
+
+#[test]
+fn signalled_process_exposes_stderr() {
+    let error = execute_shell(
+        "printf diagnostic >&2; kill -TERM $$",
+        Duration::from_secs(5),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(error, Error::Invalid(message) if message == "resolver process failed: /bin/sh: terminated by signal; stderr: diagnostic")
+    );
 }
 
 #[test]

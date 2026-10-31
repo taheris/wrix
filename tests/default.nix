@@ -303,6 +303,7 @@ let
           '';
     }
     // {
+      celler-consumer-runtime = import ./services/celler-runtime.nix { inherit pkgs wrix; };
       devshell-cli-selection = devshellCliSelection;
       builder-vmnet-route = builderRouteTest;
       rust-source-fixtures = import ./services/rust-source.nix {
