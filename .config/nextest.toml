@@ -4,9 +4,11 @@ experimental = ["setup-scripts"]
 max-threads = 1
 
 # Only fixtures that bind/release the host's role-port ranges need exclusion.
+# Include host_control's real host/controller process fixtures: snapshot-only
+# ports are advisory, so a parallel allocator can take them during restart.
 # In particular, ephemeral-port I/O/backpressure tests must not hold this group.
 [[profile.default.overrides]]
-filter = "(package(wrix-service) & ((binary(wrix_service) & test(control::)) | binary(deployment_endpoints) | binary(host_service))) | (package(wrix-cli) & (binary(service_cache) | (binary(service_lifecycle) & !test(public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql)) | (binary(workspace_admission) & test(hardening::consolidation))))"
+filter = "(package(wrix-service) & ((binary(wrix_service) & test(control::)) | binary(deployment_endpoints) | binary(host_service) | (binary(host_control) & (test(private_controller_process_is_singleton_and_resumes_after_clean_stop) | test(controller_host_))))) | (package(wrix-cli) & (binary(service_cache) | (binary(service_lifecycle) & !test(public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql)) | (binary(workspace_admission) & test(hardening::consolidation))))"
 test-group = "deployment-role-ports"
 
 # These native fixtures own private networks but share a historical process lock.
