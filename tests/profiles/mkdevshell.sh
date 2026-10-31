@@ -165,7 +165,7 @@ source_hook_env() {
     apply_env_json "$devshell_env"
     unset NIX_CONFIG
     # shellcheck source=/dev/null
-    source "$hook_file" >/dev/null
+    source "$hook_file" >/dev/null || exit 1
     printf 'RUSTC=%s\n' "${RUSTC-}"
     printf 'RUSTC_WRAPPER=%s\n' "${RUSTC_WRAPPER-}"
     printf 'CARGO_BUILD_RUSTC_WRAPPER=%s\n' "${CARGO_BUILD_RUSTC_WRAPPER-}"
@@ -221,7 +221,7 @@ test_profile_required() {
 test_profile_shellhook_spliced() {
   local devshell_env hook env_output rustc expected_rustc rustc_wrapper cargo_wrapper sccache_dir sccache_size cargo_incremental
   if ! devshell_env=$(eval_expr_json '
-    let shell = lib.mkDevShell { profile = lib.profiles.rust; };
+    let shell = lib.mkDevShell { profile = lib.profiles.rust; nixCache = false; };
     in {
       CARGO_BUILD_RUSTC_WRAPPER = shell.CARGO_BUILD_RUSTC_WRAPPER or null;
       CARGO_INCREMENTAL = shell.CARGO_INCREMENTAL or null;
@@ -234,7 +234,7 @@ test_profile_shellhook_spliced() {
     echo "FAIL: mkDevShell { profile = profiles.rust; } env evaluation failed" >&2
     return 1
   fi
-  if ! hook=$(eval_expr_raw "(lib.mkDevShell { profile = lib.profiles.rust; }).shellHook"); then
+  if ! hook=$(eval_expr_raw "(lib.mkDevShell { profile = lib.profiles.rust; nixCache = false; }).shellHook"); then
     echo "FAIL: mkDevShell { profile = profiles.rust; } shellHook evaluation failed" >&2
     return 1
   fi
@@ -444,6 +444,7 @@ test_env_right_merge() {
   if ! devshell_env=$(eval_expr_json '
     let shell = lib.mkDevShell {
       profile = lib.profiles.rust;
+      nixCache = false;
       env = {
         MKDEVSHELL_TEST_KEY = "mkdevshell_test_value";
         RUSTC = "/consumer/rustc";
@@ -463,6 +464,7 @@ test_env_right_merge() {
   fi
   if ! hook=$(eval_expr_raw '(lib.mkDevShell {
     profile = lib.profiles.rust;
+    nixCache = false;
     env = {
       MKDEVSHELL_TEST_KEY = "mkdevshell_test_value";
       RUSTC = "/consumer/rustc";
@@ -513,6 +515,7 @@ test_shellhook_order() {
       };
     in (lib.mkDevShell {
       inherit profile;
+      nixCache = false;
       shellHook = "export WRIX_TEST_HOOK_ORDER=consumer";
     }).shellHook
   '); then

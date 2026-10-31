@@ -153,7 +153,7 @@ SCRIPT
 
 mkdevshell_hook() {
   local prek_expr="$1"
-  eval_expr_raw "(lib.mkDevShell { profile = lib.profiles.base; prekHooks = ${prek_expr}; }).shellHook"
+  eval_expr_raw "(lib.mkDevShell { profile = lib.profiles.base; nixCache = false; prekHooks = ${prek_expr}; }).shellHook"
 }
 
 mkdevshell_hook_with_custom_deriv_json() {
@@ -166,7 +166,7 @@ mkdevshell_hook_with_custom_deriv_json() {
         chmod +x $out/pre-commit
       '"''"';
     in {
-      shellHook    = (lib.mkDevShell { profile = lib.profiles.base; prekHooks = customHooks; }).shellHook;
+      shellHook    = (lib.mkDevShell { profile = lib.profiles.base; nixCache = false; prekHooks = customHooks; }).shellHook;
       expectedPath = builtins.toString customHooks;
     }
   '

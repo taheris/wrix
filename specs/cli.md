@@ -982,6 +982,8 @@ authorization. Verification diagnoses stale/missing helpers and hooks with
   data, explains the supported installation/recovery choices and does not
   advertise retired configured-launcher or sandbox runnable APIs.
   [test](../crates/wrix-cli/tests/host_configuration.rs::help_explains_host_cli_project_data_and_explicit_installation)
+- Packaged consumer shells replace stale client selection on first and repeated
+  activation before dispatching each consumer's selected launch configuration.
   [test](../crates/wrix-cli/tests/host_configuration.rs::packaged_consumer_shell_replaces_stale_client_before_launch_dispatch)
 
 - Runtime readiness failure names the selected engine/version and refuses
