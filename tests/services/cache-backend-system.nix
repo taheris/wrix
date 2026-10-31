@@ -15,6 +15,7 @@ pkgs.testers.runNixOSTest {
       pkgs.beads
       pkgs.coreutils
       pkgs.dolt
+      pkgs.gcc
       pkgs.git
       pkgs.jq
       pkgs.procps
@@ -22,6 +23,7 @@ pkgs.testers.runNixOSTest {
       pkgs.nix
       pkgs.openssl
       pkgs.python3
+      pkgs.rustc
       pkgs.util-linux
       wrix.rustPackage.celler
     ];
