@@ -38,9 +38,11 @@ pkgs.testers.runNixOSTest {
     assert "production_runtime_excludes_competing_owners_until_process_exit: test" in listing
     environment = (
         "WRIX_TEST_CELLERD=${wrix.rustPackage.celler}/bin/cellerd "
-        "WRIX_TEST_CONTROLLER_BINDING=${wrix.rustPackage.testFixtures}/controller-binding "
-        "WRIX_TEST_SCCACHE=${wrix.rustPackage.testFixtures}/compiler "
-        "WRIX_TEST_SQL_CLIENT=${wrix.rustPackage.testFixtures}/sql-client "
+        # Resolve entries exactly as prepare-native-fixtures.sh does. The bundle
+        # alias is not the native compiler identity accepted by readiness.
+        'WRIX_TEST_CONTROLLER_BINDING="$(${pkgs.coreutils}/bin/readlink "${wrix.rustPackage.testFixtures}/controller-binding")" '
+        'WRIX_TEST_SCCACHE="$(${pkgs.coreutils}/bin/readlink "${wrix.rustPackage.testFixtures}/compiler")" '
+        'WRIX_TEST_SQL_CLIENT="$(${pkgs.coreutils}/bin/readlink "${wrix.rustPackage.testFixtures}/sql-client")" '
         "WRIX_REAL_BD_BIN=${pkgs.beads}/bin/bd "
         "WRIX_TEST_ISOLATED_STORE_SCRIPT=${../cache/isolated-store.sh} "
         "WRIX_TEST_RUNTIME_LAYOUT_SCRIPT=${../cache/runtime-layout.sh} "
