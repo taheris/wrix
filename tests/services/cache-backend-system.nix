@@ -1,5 +1,25 @@
 { pkgs, wrix }:
 
+let
+  nativePackages = [
+    pkgs.bash
+    pkgs.binutils
+    pkgs.beads
+    pkgs.coreutils
+    pkgs.dolt
+    pkgs.gcc
+    pkgs.git
+    pkgs.jq
+    pkgs.procps
+    pkgs.iproute2
+    pkgs.nix
+    pkgs.openssl
+    pkgs.python3
+    pkgs.rustc
+    pkgs.util-linux
+    wrix.rustPackage.celler
+  ];
+in
 pkgs.testers.runNixOSTest {
   name = "cache-celler-native-system";
   requiredFeatures.kvm = false;
@@ -13,24 +33,7 @@ pkgs.testers.runNixOSTest {
       memorySize = 2048;
       diskSize = 4096;
     };
-    environment.systemPackages = [
-      pkgs.bash
-      pkgs.binutils
-      pkgs.beads
-      pkgs.coreutils
-      pkgs.dolt
-      pkgs.gcc
-      pkgs.git
-      pkgs.jq
-      pkgs.procps
-      pkgs.iproute2
-      pkgs.nix
-      pkgs.openssl
-      pkgs.python3
-      pkgs.rustc
-      pkgs.util-linux
-      wrix.rustPackage.celler
-    ];
+    environment.systemPackages = nativePackages;
   };
   testScript = ''
     from datetime import timedelta
@@ -42,6 +45,9 @@ pkgs.testers.runNixOSTest {
     assert "publisher_reuses_rust_store_client: test" in listing
     assert "production_runtime_excludes_competing_owners_until_process_exit: test" in listing
     environment = (
+        # Private backend mount namespaces replace /run, including the system
+        # profile alias. Resolve every runtime tool through immutable paths.
+        "PATH=${pkgs.lib.makeBinPath nativePackages} "
         "WRIX_TEST_CELLERD=${wrix.rustPackage.celler}/bin/cellerd "
         # Resolve entries exactly as prepare-native-fixtures.sh does. The bundle
         # alias is not the native compiler identity accepted by readiness.
@@ -71,8 +77,10 @@ pkgs.testers.runNixOSTest {
         if line.endswith(": test")
     ]
     assert cases and len(cases) == len(set(cases))
-    assert "public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql" in cases
+    native_shared = "public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql"
+    assert native_shared in cases
     assert "launcher_fails_before_agent_start_without_a_guest_cache_address" in cases
+    cases.sort(key=lambda test: test != native_shared)
     # Match Nextest's process isolation and retain every applicable case,
     # including ignored native cases. Emit each result before the next starts.
     print(f"Running all {len(cases)} native Linux service cases", flush=True)
@@ -86,12 +94,12 @@ pkgs.testers.runNixOSTest {
         "execution_unavailable_ambiguous_and_failed_removal_observations_retain_binding",
     ]:
         print(machine.succeed(
-            "${wrix.rustPackage.cacheBackendTests}/bin/execution-lifetime-tests "
+            environment + "${wrix.rustPackage.cacheBackendTests}/bin/execution-lifetime-tests "
             + "--include-ignored --exact " + test + " --nocapture",
             timeout=timedelta(minutes=2),
         ))
     print(machine.succeed(
-        "${wrix.rustPackage.cacheBackendTests}/bin/workspace-admission-tests "
+        environment + "${wrix.rustPackage.cacheBackendTests}/bin/workspace-admission-tests "
         "nix_store::admission:: --test-threads=1 --nocapture",
         timeout=timedelta(minutes=3),
     ))
@@ -103,7 +111,7 @@ pkgs.testers.runNixOSTest {
         ))
     machine.succeed("mkdir -p /etc/wrix; printf 'direct\\n' > /etc/wrix/image-agent")
     print(machine.succeed(
-        "${wrix.rustPackage.cacheBackendTests}/bin/workspace-admission-tests "
+        environment + "${wrix.rustPackage.cacheBackendTests}/bin/workspace-admission-tests "
         "--include-ignored --exact nix_store::admission::"
         "worker_pool_issuance_denies_library_access_despite_forged_home_and_existing_approval --nocapture",
         timeout=timedelta(minutes=3),
