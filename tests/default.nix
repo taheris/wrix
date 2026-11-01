@@ -886,10 +886,14 @@ let
     script = "tests/profiles/profile-images-manifest.sh";
     args = [ "test_manifest_shape" ];
   };
+  profileConfigHostEnvironment = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
+    export PATH="${pkgs.util-linux}/bin:$PATH"
+  '';
   testProfileConfigImageSourceKind = mkRepoScriptCiApp {
     name = "test-profile-config-image-source-kind";
     script = "tests/sandbox/profile-config-wrapper.sh";
     args = [ "test_image_source_kind" ];
+    environment = profileConfigHostEnvironment;
   };
   testProfileConfigParserAgreement = pkgs.writeShellApplication {
     name = "test-profile-config-parser-agreement";
@@ -901,6 +905,7 @@ let
     name = "test-profile-config-wrapper";
     script = "tests/sandbox/profile-config-wrapper.sh";
     args = [ "test_profile_config_wrapper_contract" ];
+    environment = profileConfigHostEnvironment;
   };
 
   profileContainerHookPath = makeBinPath (

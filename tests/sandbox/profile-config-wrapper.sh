@@ -19,8 +19,10 @@ case "$(uname -s)" in
 esac
 
 host_wrix() {
+  # This adapter changes only a private fixture mount namespace, never the
+  # outer worker marker or an ordinary worker command's host authority.
   HOME="$TEST_TMP/home" XDG_STATE_HOME="$TEST_TMP/state" XDG_CACHE_HOME="$TEST_TMP/cache" \
-    "$WRIX_LINK/bin/wrix" "$@"
+    bash "$REPO_ROOT/crates/wrix-cli/tests/fixtures/host-command.sh" "$WRIX_LINK/bin/wrix" "$@"
 }
 
 prepare() {
@@ -135,8 +137,20 @@ test_project_pointer_keeps_the_host_package_unconfigured() {
 }
 
 test_fixture_host_isolation() {
+  local worker_marker="" unrelated="$TEST_TMP/unrelated-host"
+  if [[ -f /etc/wrix/image-agent ]]; then
+    worker_marker=$(sha256sum /etc/wrix/image-agent)
+  fi
   prepare
-  local unrelated="$TEST_TMP/unrelated-host"
+  if [[ -n "$worker_marker" ]]; then
+    [[ "$(sha256sum /etc/wrix/image-agent)" == "$worker_marker" ]]
+    if HOME="$TEST_TMP/home" XDG_STATE_HOME="$TEST_TMP/state" XDG_CACHE_HOME="$TEST_TMP/cache" \
+      "$WRIX_LINK/bin/wrix" workspace initialize >"$TEST_TMP/worker.out" 2>"$TEST_TMP/worker.err"; then
+      printf 'ordinary worker acquired host workspace authority\n' >&2
+      return 1
+    fi
+    grep -qF 'host-only' "$TEST_TMP/worker.err"
+  fi
   mkdir -p "$unrelated/wrix"
   printf 'unrelated admission state\n' >"$unrelated/wrix/state.db"
   XDG_STATE_HOME="$unrelated" host_wrix workspace diagnose >"$TEST_TMP/diagnose.out"
