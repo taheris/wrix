@@ -1347,14 +1347,9 @@ fn cache_launch_admits_the_provided_host_package_before_service_effects() -> Tes
 }
 
 #[test]
-#[ignore = "requires host capability; run in the disposable native-system guest"]
 fn workspace_stop_retires_current_native_read_issuance_without_stopping_controller() -> TestResult {
-    use wrix_service::control::{Client, Namespace, Operation, Reply};
-    let mut fixture = Fixture::new()?;
-    fixture.disable_dolt()?;
-    let output =
-        run_command(&mut fixture.launch_command(LaunchCommand::Spawn, &fixture.workspace)?)?;
-    assert!(output.status.success(), "{}", output.stderr);
+    use wrix_service::control::{Access, Client, Namespace, Operation, Policy, Reply};
+    let fixture = Fixture::shared_cache()?;
     let state = fixture.state_root()?;
     let client = Client::open(
         &state
@@ -1369,12 +1364,29 @@ fn workspace_stop_retires_current_native_read_issuance_without_stopping_controll
         .build()?;
     let namespace =
         Namespace::from(wrix_core::path::Workspace::from_service_path(&fixture.workspace)?.hash());
+    let policy = Policy {
+        dolt: Access::Denied,
+        private_cache_read: Access::Allowed,
+        common_cache_read: Access::Allowed,
+        egress: Access::Denied,
+        compiler: Access::Denied,
+    };
+    assert_eq!(
+        runtime.block_on(client.request(Operation::Register {
+            namespace: namespace.clone(),
+            policy,
+        }))?,
+        Reply::Applied
+    );
     let Reply::Snapshot { namespaces, .. } =
         runtime.block_on(client.request(Operation::Inspect {}))?
     else {
         return Err("missing control snapshot".into());
     };
     assert!(namespaces.contains_key(&namespace));
+    // Exercise real current issuance, without requiring an unrelated Apple
+    // sandbox route to establish the workspace registration precondition.
+    runtime.block_on(client.cache_credential(namespace.clone()))?;
     let stopped = fixture.run("stop")?;
     assert!(stopped.status.success(), "{}", stopped.stderr);
     let Reply::Snapshot { namespaces, .. } =
@@ -1382,7 +1394,14 @@ fn workspace_stop_retires_current_native_read_issuance_without_stopping_controll
     else {
         return Err("controller stopped with workspace".into());
     };
-    assert!(!namespaces.contains_key(&namespace));
+    assert_eq!(
+        namespaces.get(&namespace),
+        Some(&Policy {
+            private_cache_read: Access::Denied,
+            common_cache_read: Access::Denied,
+            ..policy
+        })
+    );
     assert!(
         runtime
             .block_on(client.cache_credential(namespace))
