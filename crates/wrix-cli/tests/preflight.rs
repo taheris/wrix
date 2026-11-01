@@ -316,7 +316,7 @@ fn dry_run_reports_launch_policy_and_provenance() -> TestResult {
     }
     let arguments: Vec<_> = argv.split('\0').collect();
     let resources = if cfg!(target_os = "macos") {
-        &["-c2", "-m1234M"][..]
+        &["-c", "2", "-m", "1234M"][..]
     } else {
         &["--cpus=2", "--memory=1234m", "--pids-limit=99"][..]
     };

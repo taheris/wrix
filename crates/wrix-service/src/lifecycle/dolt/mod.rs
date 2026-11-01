@@ -34,10 +34,9 @@ pub(super) fn server_command(
     };
     let configuration = shell_quote(&server_configuration(data_dir, socket_dir, host, port));
     format!(
-        "mkdir -p {directory} && {bootstrap}configuration=$(mktemp /tmp/wrix-dolt.XXXXXXXXXX) && \
+        "mkdir -p {directory} && {bootstrap}configuration=$(mktemp {directory}/config.XXXXXXXXXX) && \
          printf '%s' {configuration} >\"$configuration\" && \
-         exec 3<\"$configuration\" && rm -- \"$configuration\" && \
-         exec dolt sql-server --config /dev/fd/3"
+         exec dolt sql-server --config \"$configuration\""
     )
 }
 

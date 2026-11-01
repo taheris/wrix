@@ -112,6 +112,7 @@ fn recorded_port(path: &Path) -> io::Result<Option<u16>> {
 }
 
 fn serve(root: &Path, mut stream: TcpStream) -> io::Result<()> {
+    stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(Duration::from_secs(2)))?;
     stream.set_write_timeout(Some(Duration::from_secs(2)))?;
     let mut bytes = Vec::new();

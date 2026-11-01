@@ -49,16 +49,13 @@ impl Fixture {
         let server = celler::Server::watch(root.path(), None);
         common::initialize_host_scope(root.path())?;
         // The external SQL fixture models TCP management and a live Unix client endpoint.
-        let data = root.path().join("state/wrix/service-data/dolt");
+        let data = common::host_state_root(root.path()).join("service-data/dolt");
         fs::create_dir_all(data.join("run"))?;
         set_mode(&data, 0o700)?;
         set_mode(&data.join("run"), 0o700)?;
         let sql = std::os::unix::net::UnixListener::bind(data.join("run/dolt.sock"))?;
         sql.set_nonblocking(true)?;
-        #[cfg(target_os = "linux")]
         let controller = controller::Server::start_supervised(root.path())?;
-        #[cfg(not(target_os = "linux"))]
-        let controller = controller::Server::start(root.path())?;
         Ok(Self {
             controller,
             server,
@@ -483,7 +480,12 @@ fn cache_opt_out_creates_no_workspace_publication_authority() -> TestResult {
             .command("podman")?
             .args(["service", "start", "--no-cache"]),
     )?;
-    assert!(output.status.success(), "{}", output.stderr);
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        output.stderr,
+        fs::read_to_string(fixture.root.path().join("controller.stderr"))?
+    );
     let metadata = fixture.endpoints(false)?;
     let state = PathBuf::from(metadata["state_root"].as_str().unwrap());
     let host = state.parent().unwrap().parent().unwrap();

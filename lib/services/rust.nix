@@ -92,6 +92,9 @@ let
     ++ optionals pkgs.stdenv.hostPlatform.isDarwin [
       pkgs.coreutils
       pkgs.sshfs-fuse
+      (pkgs.writeShellScriptBin "launchctl" ''
+        exec /bin/launchctl "$@"
+      '')
       (import ./nix-pool/apple-host.nix { inherit pkgs; })
     ];
   };
@@ -188,11 +191,24 @@ let
     inherit (rustProfile) craneLib;
   };
 
+  fixtureController = workspace.bin.overrideAttrs (old: {
+    pname = "wrix-host-controller-fixture";
+    buildPhase =
+      builtins.replaceStrings
+        [ "cargoWithProfile build" ]
+        [ "cargoWithProfile build -p wrix-service --example host-controller-fixture" ]
+        old.buildPhase;
+    installPhase = ''
+      mkdir -p "$out/bin"
+      cp "target/''${CARGO_BUILD_TARGET:+$CARGO_BUILD_TARGET/}release/examples/host-controller-fixture" "$out/bin/wrix-host-controller"
+    '';
+  });
+
   fixtures = import ../../tests/prek/native-fixtures.nix {
     inherit pkgs;
     celler = cellerPackage;
     packagedWrix = wrixPackage;
-    controller = workspace.bin;
+    controller = fixtureController;
     inherit serviceImage;
     devshellHook = prekDevShellHook;
   };

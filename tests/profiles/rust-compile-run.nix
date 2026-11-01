@@ -1,13 +1,10 @@
 { pkgs, profile }:
 
 assert builtins.elem profile.toolchain profile.hostPackages;
-assert builtins.elem pkgs.gcc profile.hostPackages;
+assert builtins.elem pkgs.stdenv.cc profile.hostPackages;
 pkgs.runCommand "verify-rust-profile-compile-run"
   {
-    nativeBuildInputs = [
-      profile.toolchain
-      pkgs.gcc
-    ];
+    nativeBuildInputs = profile.hostPackages;
   }
   ''
     set -euo pipefail
@@ -23,6 +20,7 @@ pkgs.runCommand "verify-rust-profile-compile-run"
     TOML
     cat > "$project/src/main.rs" <<'RUST'
     fn main() {
+        assert!(std::panic::catch_unwind(|| panic!("expected probe panic")).is_err());
         println!("wrix-profile-rust-ok");
     }
     RUST

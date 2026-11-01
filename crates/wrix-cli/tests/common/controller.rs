@@ -27,7 +27,7 @@ pub struct Server {
 
 impl Server {
     pub fn start(root: &Path) -> TestResult<Self> {
-        Self::start_at(root, &root.join("state/wrix"))
+        Self::start_at(root, &crate::common::host_state_root(root))
     }
 
     pub fn start_at(root: &Path, state: &Path) -> TestResult<Self> {
@@ -122,12 +122,14 @@ impl Server {
         Ok(server)
     }
 
-    #[cfg(target_os = "linux")]
     pub fn start_supervised(root: &Path) -> TestResult<Self> {
-        Self::supervise(Self::start(root)?, root, &root.join("state/wrix"))
+        Self::supervise(
+            Self::start(root)?,
+            root,
+            &crate::common::host_state_root(root),
+        )
     }
 
-    #[cfg(target_os = "linux")]
     pub fn supervise(mut server: Self, root: &Path, state: &Path) -> TestResult<Self> {
         use wrix_service::control::supervision::{Lifecycle, Native, Platform};
         let control = state.join("control");
@@ -158,7 +160,11 @@ impl Server {
         let package = Package::load(Path::new(&binding))?;
         Lifecycle::lock(&control)?.start(
             &Native::new(
-                Platform::Linux,
+                if cfg!(target_os = "macos") {
+                    Platform::Darwin
+                } else {
+                    Platform::Linux
+                },
                 rustix::process::geteuid().as_raw(),
                 manager.clone(),
                 pin,
@@ -237,7 +243,6 @@ impl Drop for Server {
     }
 }
 
-#[cfg(target_os = "linux")]
 pub fn shell_single_quote(value: &str) -> String {
     let mut quoted = String::from("'");
     for character in value.chars() {

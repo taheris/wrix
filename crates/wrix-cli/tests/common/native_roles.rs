@@ -34,6 +34,7 @@ struct Compiler {
     child: Child,
     root: PathBuf,
     binary: PathBuf,
+    _owner: fs::File,
 }
 impl Compiler {
     fn start(root: &Path, cache: &Path) -> io::Result<Self> {
@@ -44,16 +45,14 @@ impl Compiler {
         wrix_core::private_directory::prepare_with_parents(&root.join("execution/probe/workspace"))
             .map_err(io::Error::other)?;
         wrix_core::private_directory::prepare_with_parents(cache).map_err(io::Error::other)?;
-        fs::File::options()
+        let owner = fs::File::options()
             .write(true)
             .create(true)
             .truncate(false)
             .mode(0o600)
             .open(cache.join("owner.lock"))?;
-        let child = Command::new("flock")
-            .args(["--exclusive", "--nonblock", "--no-fork"])
-            .arg(cache.join("owner.lock"))
-            .arg(&binary)
+        fs2::FileExt::try_lock_exclusive(&owner)?;
+        let child = Command::new(&binary)
             .env("SCCACHE_SERVER_UDS", root.join("sccache.sock"))
             .env("SCCACHE_START_SERVER", "1")
             .env("SCCACHE_NO_DAEMON", "1")
@@ -72,11 +71,15 @@ impl Compiler {
             child,
             root,
             binary,
+            _owner: owner,
         };
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while !compiler.root.join("sccache.sock").exists() {
             if compiler.child.try_wait()?.is_some() || std::time::Instant::now() >= deadline {
-                return Err(io::Error::other("native compiler did not start"));
+                return Err(io::Error::other(format!(
+                    "native compiler did not start: {}",
+                    fs::read_to_string(compiler.root.join("stderr"))?
+                )));
             }
             thread::sleep(std::time::Duration::from_millis(10));
         }

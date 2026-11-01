@@ -7,4 +7,7 @@ set -euo pipefail
 # for cache overrides, so give external tools a nextest-owned scratch cache.
 cache_root="${NEXTEST_ENV}.cache"
 mkdir -m 700 "$cache_root"
-printf '%s\n' 'XDG_STATE_HOME=' "XDG_CACHE_HOME=$cache_root" >>"$NEXTEST_ENV"
+cache_root="$(cd "$cache_root" && pwd -P)"
+# Darwin socket fixtures need a short root, not the nested nix-shell TMPDIR.
+temporary_root="$(cd /tmp && pwd -P)"
+printf '%s\n' 'XDG_STATE_HOME=' "XDG_CACHE_HOME=$cache_root" "TMPDIR=$temporary_root" >>"$NEXTEST_ENV"

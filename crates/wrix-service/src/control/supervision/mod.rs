@@ -151,7 +151,7 @@ impl Native {
             uid,
             match platform {
                 Platform::Linux => package.runtime.join("bin/systemctl"),
-                Platform::Darwin => "/bin/launchctl".into(),
+                Platform::Darwin => package.runtime.join("bin/launchctl"),
             },
             package.runtime.join("bin/nix-store"),
         )
@@ -370,11 +370,13 @@ impl Native {
                     root.join("org.wrix.host-controller.plist").display()
                 );
                 let program = format!("program = {}", package.executable().display());
-                if ![path, program]
+                if ![&path, &program]
                     .iter()
-                    .all(|expected| state.lines().any(|line| line.trim() == expected))
+                    .all(|expected| state.lines().any(|line| line.trim() == *expected))
                 {
-                    return Err(Error::UnitConflict(state.into_owned()));
+                    return Err(Error::UnitConflict(format!(
+                        "{state}; expected {path}; {program}"
+                    )));
                 }
             }
         }

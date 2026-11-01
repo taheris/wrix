@@ -52,9 +52,13 @@ async fn private_controller_process_is_singleton_and_resumes_after_clean_stop() 
     }
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
+    let binding = std::env::var_os("WRIX_TEST_CONTROLLER_BINDING")
+        .expect("native controller fixture binding");
+    let package =
+        wrix_service::control::supervision::Package::load(std::path::Path::new(&binding)).unwrap();
     let start = || {
         Process(
-            std::process::Command::new(env!("CARGO_BIN_EXE_wrix-host-controller"))
+            std::process::Command::new(package.executable())
                 .arg(&root)
                 .spawn()
                 .unwrap(),
@@ -958,9 +962,11 @@ async fn controller_host_retains_live_role_routes_during_concurrent_registration
         let directory = tempfile::tempdir()?;
         let root = directory.path().canonicalize()?.join("controller");
         let controller = Controller::bind(&root)?;
-        let host =
-            wrix_service::control::serving::Host::bind(controller, NonZeroUsize::new(8).unwrap())
-                .await?;
+        let host = wrix_service::control::serving::Host::bind_loopback(
+            controller,
+            NonZeroUsize::new(8).unwrap(),
+        )
+        .await?;
         let peers = Peers::start(b'P').await?;
         for role in Role::ALL {
             host.selection()
@@ -1039,7 +1045,8 @@ async fn controller_host_restart_keeps_policy_but_not_route_readiness() -> TestR
             wrix_sandbox::image::Digest::parse(&format!("sha256:{}", "a".repeat(64)))?,
         )?;
         let host =
-            wrix_service::control::serving::Host::bind(controller, NonZeroUsize::MIN).await?;
+            wrix_service::control::serving::Host::bind_loopback(controller, NonZeroUsize::MIN)
+                .await?;
         let peers = Peers::start(b'P').await?;
         host.selection()
             .select(peers.generation.confirm_ready(Role::Sql))?;
@@ -1072,7 +1079,8 @@ async fn controller_host_restart_keeps_policy_but_not_route_readiness() -> TestR
             selected
         );
         let host =
-            wrix_service::control::serving::Host::bind(controller, NonZeroUsize::MIN).await?;
+            wrix_service::control::serving::Host::bind_loopback(controller, NonZeroUsize::MIN)
+                .await?;
         assert_eq!(host.address(Role::Sql)?, address);
         let [sql, cache, egress, compiler, sync] = Role::ALL.map(|role| host.address(role));
         let addresses = [sql?, cache?, egress?, compiler?, sync?];
@@ -1095,21 +1103,41 @@ async fn controller_host_restart_keeps_policy_but_not_route_readiness() -> TestR
     .await?
 }
 
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn native_controller_refuses_missing_apple_deployment_before_serving() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let root = directory.path().canonicalize()?.join("authority");
+    let controller = Controller::bind(&root)?;
+    assert!(
+        wrix_service::control::serving::Host::bind(controller, NonZeroUsize::MIN)
+            .await
+            .is_err()
+    );
+    assert!(!root.join("control.sock").exists());
+    Controller::bind(&root)?.close()?;
+    Ok(())
+}
+
 #[tokio::test]
 async fn controller_host_initialization_failure_releases_unstarted_control() -> TestResult {
     let directory = tempfile::tempdir()?;
     let root = directory.path().canonicalize()?.join("controller");
     let controller = Controller::bind(&root)?;
     assert!(matches!(
-        wrix_service::control::serving::Host::bind(controller, NonZeroUsize::new(1025).unwrap())
-            .await,
+        wrix_service::control::serving::Host::bind_loopback(
+            controller,
+            NonZeroUsize::new(1025).unwrap()
+        )
+        .await,
         Err(wrix_service::control::Error::Route(
             wrix_service::route::Error::CapacityExceeded
         ))
     ));
     assert!(!root.join("control.sock").exists());
     let controller = Controller::bind(&root)?;
-    let host = wrix_service::control::serving::Host::bind(controller, NonZeroUsize::MIN).await?;
+    let host =
+        wrix_service::control::serving::Host::bind_loopback(controller, NonZeroUsize::MIN).await?;
     host.serve(std::future::ready(())).await?;
     assert!(!root.join("control.sock").exists());
     Ok(())

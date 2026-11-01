@@ -52,11 +52,12 @@ async fn guest_listener_refuses_an_outside_subnet_peer_before_dispatch_to_a_live
     let public = Listeners::bind([Port::Available; 4]).await?;
     let guest = Listeners::bind([Port::Available; 4]).await?;
     let address = guest.address(Role::CacheRead)?;
+    let host_address = public.address(Role::CacheRead)?;
     let native = Listeners::bind([Port::Available; 4]).await?;
     let ([_, cache, _, _, _], generation) = native.into_generation()?;
     let front = FrontDoor::new(public, NonZeroUsize::MIN.saturating_add(3))?.with_guest(
         guest,
-        crate::control::serving::apple::Address::loopback_for_test(),
+        crate::control::serving::apple::Address::private_for_test(),
     );
     front
         .selection()
@@ -65,9 +66,7 @@ async fn guest_listener_refuses_an_outside_subnet_peer_before_dispatch_to_a_live
     let serving = tokio::spawn(front.serve(async {
         stopped.await.expect("shutdown sender");
     }));
-    let socket = tokio::net::TcpSocket::new_v4()?;
-    socket.bind(SocketAddr::from((Ipv4Addr::new(127, 0, 1, 1), 0)))?;
-    let mut denied = socket.connect(address).await?;
+    let mut denied = TcpStream::connect(address).await?;
     let mut byte = [0];
     assert_eq!(
         tokio::time::timeout(Duration::from_secs(1), denied.read(&mut byte)).await??,
@@ -79,7 +78,7 @@ async fn guest_listener_refuses_an_outside_subnet_peer_before_dispatch_to_a_live
             .is_err()
     );
     assert_eq!(generation.connections(Role::CacheRead), 0);
-    let mut live = TcpStream::connect(address).await?;
+    let mut live = TcpStream::connect(host_address).await?;
     live.write_all(b"x").await?;
     let (mut backend, _) = tokio::time::timeout(Duration::from_secs(1), cache.accept()).await??;
     backend.read_exact(&mut byte).await?;

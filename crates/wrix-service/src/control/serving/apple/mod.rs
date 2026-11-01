@@ -18,6 +18,15 @@ impl Address {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn private_for_test() -> Self {
+        Self {
+            gateway: Ipv4Addr::new(192, 168, 64, 1),
+            network: u32::from(Ipv4Addr::new(192, 168, 64, 0)),
+            mask: 0xffff_ff00,
+        }
+    }
+
     pub const fn gateway(self) -> Ipv4Addr {
         self.gateway
     }

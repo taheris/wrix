@@ -350,7 +350,7 @@ let
       hostPackages = [
         hostToolchain
         hostPkgs.cargo-nextest
-        hostPkgs.gcc
+        hostPkgs.stdenv.cc
         hostPkgs.openssl
         hostPkgs.openssl.dev
         hostPkgs.pkg-config

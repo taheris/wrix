@@ -487,8 +487,10 @@ async fn run(mut command: Command, input: &[u8], deadline: Instant) -> Result<Ve
             _ = hangup.recv() => Err(Error::Invalid("resolver disconnected".into())),
         }
     };
-    match rustix::process::kill_process_group(pid, rustix::process::Signal::KILL) {
-        Ok(()) | Err(rustix::io::Errno::SRCH) => (),
+    let cleanup_deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match rustix::process::kill_process_group(pid, rustix::process::Signal::KILL) {
+        Ok(()) | Err(rustix::io::Errno::SRCH) => break,
         Err(rustix::io::Errno::PERM) if cfg!(target_os = "macos") => {
             // Darwin denies signaling a zombie-only group; retain the child until this check.
             let status = rustix::process::waitid(
@@ -498,11 +500,16 @@ async fn run(mut command: Command, input: &[u8], deadline: Instant) -> Result<Ve
                     | rustix::process::WaitIdOptions::NOWAIT,
             )
             .map_err(std::io::Error::from)?;
-            if status.is_none() {
+            if status.is_some() {
+                break;
+            }
+            if Instant::now() >= cleanup_deadline {
                 return Err(Error::Io(rustix::io::Errno::PERM.into()));
             }
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
         Err(error) => return Err(Error::Io(error.into())),
+        }
     }
     tokio::time::timeout(Duration::from_secs(5), child.wait())
         .await

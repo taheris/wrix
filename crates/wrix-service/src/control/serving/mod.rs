@@ -40,12 +40,31 @@ pub struct Host {
 
 impl Host {
     pub async fn bind(controller: Controller, capacity: NonZeroUsize) -> Result<Self, Error> {
+        let host = Self::bind_loopback(controller, capacity).await?;
+        #[cfg(target_os = "macos")]
+        let host = match guest(&host.controller, host.front_door) {
+            Ok(front_door) => Self {
+                controller: host.controller,
+                front_door,
+            },
+            Err(error) => {
+                if let Err(cleanup) = host.controller.close() {
+                    tracing::error!(%cleanup, %error, "failed to release unstarted controller endpoint");
+                }
+                return Err(error);
+            }
+        };
+        Ok(host)
+    }
+
+    /// Bind host-local routes without discovering or publishing a guest network.
+    pub async fn bind_loopback(
+        controller: Controller,
+        capacity: NonZeroUsize,
+    ) -> Result<Self, Error> {
         let front_door = async {
             let listeners = controller.bind_role_listeners().await?;
-            let front_door = FrontDoor::new(listeners, capacity)?;
-            #[cfg(target_os = "macos")]
-            let front_door = guest(&controller, front_door)?;
-            Ok::<_, Error>(front_door)
+            Ok::<_, Error>(FrontDoor::new(listeners, capacity)?)
         }
         .await;
         match front_door {

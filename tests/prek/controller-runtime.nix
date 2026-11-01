@@ -22,6 +22,10 @@ let
     esac
     printf '%s\n' "$*" >>"''${WRIX_TEST_CONTROLLER_CALLS:?}"
   '';
+  darwinManager = pkgs.writeShellScriptBin "launchctl" ''
+    set -euo pipefail
+    exec "''${WRIX_TEST_CONTROLLER_MANAGER:?fixture must own its supervisor}" "$@"
+  '';
   retention = pkgs.writeShellScriptBin "nix-store" ''
     set -euo pipefail
     [[ "$#" -eq 5 && "$1" == --realise && "$3" == --add-root && "$5" == --indirect ]]
@@ -35,6 +39,7 @@ pkgs.symlinkJoin {
   name = "wrix-test-controller-runtime";
   paths = [
     manager
+    darwinManager
     retention
     (backend "container")
     (backend "podman")

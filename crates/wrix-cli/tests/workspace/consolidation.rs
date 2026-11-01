@@ -42,7 +42,6 @@ impl Services {
         wrix_core::private_directory::prepare_with_parents(&data.join("run"))?;
         let sql = std::os::unix::net::UnixListener::bind(data.join("run/dolt.sock"))?;
         let controller = controller::Server::start_at(root, &fixture.state())?;
-        #[cfg(target_os = "linux")]
         let controller = controller::Server::supervise(controller, root, &fixture.state())?;
         Ok(Self {
             controller,

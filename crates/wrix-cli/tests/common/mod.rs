@@ -606,6 +606,14 @@ pub fn set_mode(path: &Path, mode: u32) -> TestResult {
     Ok(())
 }
 
+pub fn host_state_root(root: &Path) -> PathBuf {
+    if cfg!(target_os = "macos") {
+        root.join("home/Library/Application Support/wrix")
+    } else {
+        root.join("state/wrix")
+    }
+}
+
 pub fn initialize_host_scope(root: &Path) -> TestResult {
     for args in [
         vec!["initialize"],

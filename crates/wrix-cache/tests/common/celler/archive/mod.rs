@@ -16,7 +16,7 @@ impl Archive {
         fs::write(&source, contents).unwrap();
         let output = Command::new("nix-store")
             .args(["--dump"])
-            .arg(source)
+            .arg(source.canonicalize().unwrap())
             .env("NIX_REMOTE", "unix:///no-test-store-daemon")
             .output()
             .unwrap();

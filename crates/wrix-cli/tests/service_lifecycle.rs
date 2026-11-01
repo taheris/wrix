@@ -43,15 +43,14 @@ const APPLE_RUNTIME: &str = concat!(
 
 #[test]
 fn public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql() -> TestResult {
-    // TCG changes aggregate execution time, not any production readiness or
-    // per-command deadline. Keep the ordinary native-host watchdog unchanged.
+    // Emulation changes the fixture watchdog, not production readiness deadlines.
     let (fixture_deadline, script_deadline) =
         if std::env::var("WRIX_TEST_EMULATED_NATIVE_SYSTEM").is_ok_and(|value| value == "1") {
             ("960", "900")
         } else {
             ("240", "240")
         };
-    if std::env::var_os("WRIX_TEST_NATIVE_NETWORK").is_none() {
+    if cfg!(target_os = "linux") && std::env::var_os("WRIX_TEST_NATIVE_NETWORK").is_none() {
         let output = Command::new("timeout")
             .args([
                 "--signal=TERM",
@@ -156,10 +155,7 @@ fn public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql() -
         shared.is_file(),
         "build the native wrix-shared-service fixture before running CLI conformance"
     );
-    #[cfg(target_os = "linux")]
     let controller = controller::Server::start_supervised(root.path())?;
-    #[cfg(not(target_os = "linux"))]
-    let controller = controller::Server::start(root.path())?;
     let mut command = Command::new("timeout");
     command
         .args(["--signal=TERM", "--kill-after=5", script_deadline, "bash"])
@@ -470,7 +466,6 @@ struct Fixture {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
 fn supervised_controller_fixture_obeys_native_ownership_and_rejects_unknown_manager_commands()
 -> TestResult {
     use wrix_service::control::supervision::{Lifecycle, Native, Package, Platform};
@@ -479,10 +474,14 @@ fn supervised_controller_fixture_obeys_native_ownership_and_rejects_unknown_mana
         &std::env::var_os("WRIX_TEST_CONTROLLER_BINDING")
             .ok_or("missing controller fixture binding")?,
     ))?;
-    let control = fixture.root.path().join("state/wrix/control");
+    let control = common::host_state_root(fixture.root.path()).join("control");
     let manager = fixture.root.path().join("controller-supervisor");
     let native = Native::new(
-        Platform::Linux,
+        if cfg!(target_os = "macos") {
+            Platform::Darwin
+        } else {
+            Platform::Linux
+        },
         rustix::process::geteuid().as_raw(),
         manager.clone(),
         fixture.root.path().join("controller-pin"),
@@ -695,11 +694,8 @@ impl Fixture {
                 .as_str()
                 .ok_or("missing workspace hash")?,
         )?;
-        #[cfg(target_os = "linux")]
-        {
-            *fixture.controller.borrow_mut() =
-                Some(controller::Server::start_supervised(fixture.root.path())?);
-        }
+        *fixture.controller.borrow_mut() =
+            Some(controller::Server::start_supervised(fixture.root.path())?);
         Ok(fixture)
     }
 
@@ -853,7 +849,8 @@ impl Fixture {
     fn launch_command(&self, mode: LaunchCommand, workspace: &Path) -> TestResult<Command> {
         self.api()?;
         if self.controller.borrow().is_none() {
-            *self.controller.borrow_mut() = Some(controller::Server::start(self.root.path())?);
+            *self.controller.borrow_mut() =
+                Some(controller::Server::start_supervised(self.root.path())?);
         }
         let bin = self.root.path().join("bin");
         fs::create_dir_all(&bin)?;
@@ -1608,10 +1605,7 @@ fn explicit_cache_rotation_restores_missing_publication_binding_after_key_confli
     let root = fixture.state_root()?;
     drop(fixture.server.borrow_mut().take());
     let native: Value = serde_json::from_slice(&fs::read(
-        fixture
-            .root
-            .path()
-            .join("state/wrix/control/authority/native-plan.json"),
+        common::host_state_root(fixture.root.path()).join("control/authority/native-plan.json"),
     )?)?;
     let _native = native_celler::Server::start(
         fixture.root.path(),
@@ -2140,10 +2134,7 @@ fn apple_cache_service_preserves_loopback_publication_and_narrow_managed_mounts(
         .map(|pair| pair[1])
         .collect();
     let native: Value = serde_json::from_slice(&fs::read(
-        fixture
-            .root
-            .path()
-            .join("state/wrix/control/authority/native-plan.json"),
+        common::host_state_root(fixture.root.path()).join("control/authority/native-plan.json"),
     )?)?;
     assert_eq!(
         publications,
@@ -2173,7 +2164,7 @@ fn apple_cache_service_preserves_loopback_publication_and_narrow_managed_mounts(
     assert!(!args.contains(":/cache:ro"));
     assert!(args.lines().any(|arg| arg == "wrix-shared-service"));
     assert!(args.lines().any(|arg| arg == "wrix.dolt.shared=native-v1"));
-    let data = fixture.root.path().join("state/wrix/service-data/dolt");
+    let data = common::host_state_root(fixture.root.path()).join("service-data/dolt");
     assert!(
         args.lines()
             .any(|arg| arg == format!("{}:{}:rw", data.display(), data.display()))
