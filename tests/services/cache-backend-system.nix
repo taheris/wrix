@@ -71,25 +71,6 @@ pkgs.testers.runNixOSTest {
         "--test-threads=1 --nocapture",
         timeout=timedelta(minutes=5),
     ))
-    service_tests = "${wrix.rustPackage.cacheBackendTests}/bin/service-lifecycle-tests"
-    cases = [
-        line.removesuffix(": test")
-        for line in machine.succeed(service_tests + " --list").splitlines()
-        if line.endswith(": test")
-    ]
-    assert cases and len(cases) == len(set(cases))
-    native_shared = "public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql"
-    assert native_shared in cases
-    assert "launcher_fails_before_agent_start_without_a_guest_cache_address" in cases
-    cases.sort(key=lambda test: test != native_shared)
-    # Match Nextest's process isolation and retain every applicable case,
-    # including ignored native cases. Emit each result before the next starts.
-    print(f"Running all {len(cases)} native Linux service cases", flush=True)
-    for test in cases:
-        print(machine.succeed(
-            environment + service_tests + " --include-ignored --exact " + quote(test) + " --nocapture",
-            timeout=timedelta(minutes=17 if test == native_shared else 5),
-        ), flush=True)
     for test in [
         "execution_restart_retains_unbound_launch_and_ignores_workspace_completion",
         "execution_unavailable_ambiguous_and_failed_removal_observations_retain_binding",
@@ -110,6 +91,29 @@ pkgs.testers.runNixOSTest {
             + " --test-threads=1 --nocapture",
             timeout=timedelta(minutes=5),
         ))
+    service_tests = "${wrix.rustPackage.cacheBackendTests}/bin/service-lifecycle-tests"
+    cases = [
+        line.removesuffix(": test")
+        for line in machine.succeed(service_tests + " --list").splitlines()
+        if line.endswith(": test")
+    ]
+    assert cases and len(cases) == len(set(cases))
+    native_shared = "public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql"
+    early = [
+        "workspace_stop_retires_current_native_read_issuance_without_stopping_controller",
+        native_shared,
+    ]
+    assert all(test in cases for test in early)
+    assert "launcher_fails_before_agent_start_without_a_guest_cache_address" in cases
+    cases = early + [test for test in cases if test not in early]
+    # Match Nextest's process isolation and retain every applicable case,
+    # including ignored native cases. Emit each result before the next starts.
+    print(f"Running all {len(cases)} native Linux service cases", flush=True)
+    for test in cases:
+        print(machine.succeed(
+            environment + service_tests + " --include-ignored --exact " + quote(test) + " --nocapture",
+            timeout=timedelta(minutes=17 if test == native_shared else 5),
+        ), flush=True)
     machine.succeed("mkdir -p /etc/wrix; printf 'direct\\n' > /etc/wrix/image-agent")
     print(machine.succeed(
         environment + "${wrix.rustPackage.cacheBackendTests}/bin/workspace-admission-tests "
