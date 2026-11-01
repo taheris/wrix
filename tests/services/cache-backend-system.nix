@@ -48,6 +48,7 @@ pkgs.testers.runNixOSTest {
         # Private backend mount namespaces replace /run, including the system
         # profile alias. Resolve every runtime tool through immutable paths.
         "PATH=${pkgs.lib.makeBinPath nativePackages} "
+        "WRIX_TEST_EMULATED_NATIVE_SYSTEM=1 "
         "WRIX_TEST_CELLERD=${wrix.rustPackage.celler}/bin/cellerd "
         # Resolve entries exactly as prepare-native-fixtures.sh does. The bundle
         # alias is not the native compiler identity accepted by readiness.
@@ -87,7 +88,7 @@ pkgs.testers.runNixOSTest {
     for test in cases:
         print(machine.succeed(
             environment + service_tests + " --include-ignored --exact " + quote(test) + " --nocapture",
-            timeout=timedelta(minutes=5),
+            timeout=timedelta(minutes=17 if test == native_shared else 5),
         ), flush=True)
     for test in [
         "execution_restart_retains_unbound_launch_and_ignores_workspace_completion",

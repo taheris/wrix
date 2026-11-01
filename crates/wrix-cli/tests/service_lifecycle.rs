@@ -43,12 +43,20 @@ const APPLE_RUNTIME: &str = concat!(
 
 #[test]
 fn public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql() -> TestResult {
+    // TCG changes aggregate execution time, not any production readiness or
+    // per-command deadline. Keep the ordinary native-host watchdog unchanged.
+    let (fixture_deadline, script_deadline) =
+        if std::env::var("WRIX_TEST_EMULATED_NATIVE_SYSTEM").is_ok_and(|value| value == "1") {
+            ("960", "900")
+        } else {
+            ("240", "240")
+        };
     if std::env::var_os("WRIX_TEST_NATIVE_NETWORK").is_none() {
         let output = Command::new("timeout")
             .args([
                 "--signal=TERM",
                 "--kill-after=5",
-                "240",
+                fixture_deadline,
                 "unshare",
                 "--user",
                 "--map-root-user",
@@ -154,7 +162,7 @@ fn public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql() -
     let controller = controller::Server::start(root.path())?;
     let mut command = Command::new("timeout");
     command
-        .args(["--signal=TERM", "--kill-after=5", "240", "bash"])
+        .args(["--signal=TERM", "--kill-after=5", script_deadline, "bash"])
         .arg(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/tests/fixtures/host-command.sh"
