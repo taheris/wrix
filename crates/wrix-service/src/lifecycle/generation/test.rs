@@ -3,6 +3,28 @@ use std::os::unix::fs::PermissionsExt as _;
 use super::*;
 
 #[test]
+fn gateway_port_pair_is_distinct() {
+    let [data, management] = available().unwrap();
+    assert_ne!(data, management);
+}
+
+#[test]
+fn gateway_port_selection_keeps_first_listener_reserved() {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    let mut first = Some(listener);
+    let mut attempts = 0;
+    let result = available_with(|| {
+        attempts += 1;
+        first.take().map_or_else(|| TcpListener::bind(address), Ok)
+    });
+    assert_eq!(attempts, 2);
+    assert!(
+        matches!(result, Err(Error::Io { source }) if source.kind() == io::ErrorKind::AddrInUse)
+    );
+}
+
+#[test]
 fn retained_generation_uses_selected_runtime_instead_of_path() {
     const CHILD: &str = "WRIX_TEST_GENERATION_RUNTIME";
     if std::env::var_os(CHILD).is_some() {

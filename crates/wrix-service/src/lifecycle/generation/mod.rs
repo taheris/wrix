@@ -489,13 +489,17 @@ fn verify(runtime: &Runtime, name: &ContainerName, recipe: &owner::Recipe) -> Re
     }
     Ok(())
 }
-fn available() -> Result<NonZeroU16> {
-    NonZeroU16::new(
-        TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?
-            .local_addr()?
-            .port(),
-    )
-    .ok_or_else(|| owner::Error::Invalid.into())
+fn available() -> Result<[NonZeroU16; 2]> {
+    available_with(|| TcpListener::bind((Ipv4Addr::LOCALHOST, 0)))
+}
+fn available_with(mut bind: impl FnMut() -> io::Result<TcpListener>) -> Result<[NonZeroU16; 2]> {
+    // Keep the first reservation until both ports have been selected: releasing
+    // each probe immediately lets the kernel propose the same port twice.
+    let listeners = [bind()?, bind()?];
+    let port = |listener: &TcpListener| -> Result<NonZeroU16> {
+        NonZeroU16::new(listener.local_addr()?.port()).ok_or_else(|| owner::Error::Invalid.into())
+    };
+    Ok([port(&listeners[0])?, port(&listeners[1])?])
 }
 fn authority(state: &Path) -> PathBuf {
     state.join("control/authority")
@@ -727,6 +731,7 @@ pub(super) fn ensure(
     } else {
         let generation = Generation::new(NonZeroU64::MIN);
         let recipe = selected.recipe.clone().ok_or(owner::Error::Invalid)?;
+        let [data, management] = available()?;
         Plan {
             version: 1,
             deployment,
@@ -735,8 +740,8 @@ pub(super) fn ensure(
                 runtime: selected.runtime,
                 name: Name::try_from("wrix-gateway-1".to_owned())?,
                 recipe: recipe.clone(),
-                data: available()?,
-                management: available()?,
+                data,
+                management,
                 key: Secret::generate().map_err(io::Error::other)?,
             },
             backend: Backend {
@@ -817,13 +822,14 @@ pub(super) fn prepare_gateway(candidate: &super::binding::Candidate) -> Result<(
         }
         gateway.clone()
     } else {
+        let [data, management] = available()?;
         let gateway = Gateway {
             generation,
             runtime: plan.gateway.runtime,
             name: Name::try_from(format!("wrix-gateway-{}", generation.number()))?,
             recipe,
-            data: available()?,
-            management: available()?,
+            data,
+            management,
             key: Secret::generate().map_err(io::Error::other)?,
         };
         plan.preparing = Some(gateway.clone());
