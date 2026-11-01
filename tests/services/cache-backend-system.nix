@@ -7,8 +7,10 @@ let
     pkgs.beads
     pkgs.coreutils
     pkgs.dolt
+    pkgs.gawk
     pkgs.gcc
     pkgs.git
+    pkgs.gnugrep
     pkgs.jq
     pkgs.procps
     pkgs.iproute2
