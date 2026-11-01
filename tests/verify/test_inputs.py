@@ -55,6 +55,24 @@ class VerifierInputs(unittest.TestCase):
         # This directory has no flake or image runtime: execution/build would fail.
         self.assertFalse((self.root / "flake.nix").exists())
 
+    def test_ci_inventory_and_discovery_include_foreign_platform_targets(self):
+        targets = ["test-shared-nix-" + runtime for runtime in
+                   ["apple", "krun", "podman", "public-podman", "public-krun",
+                    "host-owner-linux", "interruption-linux", "pool-export-linux"]]
+        inventory = self.run_command(CI, "--list")
+        self.assertEqual(inventory.returncode, 0, inventory.stderr)
+        for target in targets:
+            self.assertIn("app " + target, inventory.stdout.splitlines())
+        self.assertEqual(self.query(CI, *targets), {})
+
+    def test_ci_foreign_platform_target_skips_before_runner_realization(self):
+        target = "test-shared-nix-apple" if SYSTEM.endswith("-linux") else "test-shared-nix-public-podman"
+        result = self.run_command(CI, "--json", target)
+        self.assertEqual(result.returncode, 77, result.stderr)
+        verdict = json.loads(result.stdout)
+        self.assertEqual(verdict["outcome"], "skipped")
+        self.assertFalse((self.root / "flake.nix").exists())
+
     def test_single_opaque_target_stays_unknown_instead_of_empty_known(self):
         for program, target in [(VERIFY, OPAQUE), (CI, CI_OPAQUE)]:
             self.assertEqual(self.query(program, target), {})

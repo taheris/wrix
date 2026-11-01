@@ -549,7 +549,7 @@ let
         // nixosVm
       )
     ]
-    ++ optionals pkgs.stdenv.hostPlatform.isLinux [
+    ++ [
       (
         (mkCiApp (import ./store/pool-host-linux.nix {
           inherit pkgs wrix;
@@ -583,20 +583,29 @@ let
         }
       )
     ]
-    ++ map (
-      runtime:
-      (mkCiApp sharedNixNativePlatforms.${runtime} "test-shared-nix-${runtime}")
-      // {
-        platforms =
-          if runtime == "public-podman" || runtime == "public-krun" then
-            [ "x86_64-linux" ]
-          else if pkgs.stdenv.hostPlatform.isDarwin then
-            [ "aarch64-darwin" ]
-          else
-            linux;
-        capabilities = [ "container-runtime" ] ++ optionals pkgs.stdenv.hostPlatform.isLinux [ "kvm" ];
-      }
-    ) (builtins.attrNames sharedNixNativePlatforms);
+    ++
+      map
+        (
+          runtime:
+          (mkCiApp sharedNixNativePlatforms.${runtime} "test-shared-nix-${runtime}")
+          // {
+            platforms =
+              if runtime == "public-podman" || runtime == "public-krun" then
+                [ "x86_64-linux" ]
+              else if runtime == "apple" then
+                [ "aarch64-darwin" ]
+              else
+                linux;
+            capabilities = [ "container-runtime" ] ++ optionals (runtime != "apple") [ "kvm" ];
+          }
+        )
+        [
+          "apple"
+          "krun"
+          "podman"
+          "public-podman"
+          "public-krun"
+        ];
 
   ciAppNameLines = concatStringsSep "\n" (map (app: "      ${app.name}") ciApps);
   ciAppDerivations = builtins.listToAttrs (
