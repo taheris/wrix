@@ -6,6 +6,7 @@ use super::TestResult;
 const CHILD: &str = "WRIX_TEST_PRIVATE_NETWORK";
 
 /// Re-execute only the current test in its own network; the caller's worker boundary is retained.
+#[cfg_attr(not(target_os = "linux"), allow(clippy::unnecessary_wraps))]
 pub fn isolate() -> TestResult<bool> {
     #[cfg(target_os = "linux")]
     {

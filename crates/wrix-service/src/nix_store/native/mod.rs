@@ -577,7 +577,7 @@ fn signal_shutdown() -> Result<(), Error> {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn signal_shutdown() -> Result<(), Error> {
+const fn signal_shutdown() -> Result<(), Error> {
     Err(Error::Role)
 }
 

@@ -391,6 +391,22 @@ async fn maintenance(state: State, mut shutdown: watch::Receiver<bool>, gc: bool
 #[cfg(test)]
 mod test {
     use super::*;
+
+    fn test_directory() -> std::path::PathBuf {
+        use std::os::unix::fs::DirBuilderExt;
+
+        // Darwin's long TMPDIR plus a UUID can exceed sockaddr_un.sun_path.
+        // Keep sockets under a short, private directory instead.
+        let directory = std::fs::canonicalize("/tmp")
+            .unwrap()
+            .join(format!("celler-{}", uuid::Uuid::new_v4()));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&directory)
+            .unwrap();
+        directory
+    }
+
     async fn command(path: &Path, command: &str) -> serde_json::Value {
         let command = serde_json::from_value(serde_json::json!(command)).unwrap();
         let response = invoke_at(path, command).await.unwrap();
@@ -430,9 +446,7 @@ mod test {
     #[tokio::test]
     async fn native_release_ack_waits_for_clean_storage_completion() {
         MANAGED.store(true, std::sync::atomic::Ordering::Release);
-        let directory =
-            std::env::temp_dir().join(format!("celler-drain-storage-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir(&directory).unwrap();
+        let directory = test_directory();
         let mut config: Config = serde_json::from_value(serde_json::json!({
             "database": {"url": format!("sqlite://{}?mode=rwc", directory.join("metadata.db").display()), "heartbeat": false},
             "storage": {"type": "local", "path": directory.join("archive")},
@@ -554,8 +568,7 @@ mod test {
             assert!(completed.elapsed() < Duration::from_secs(5));
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
-        let path =
-            std::env::temp_dir().join(format!("celler-native-drain-{}.sock", uuid::Uuid::new_v4()));
+        let path = directory.join("drain.sock");
         let listener = UnixListener::bind(&path).unwrap();
         let (finished, completion) = tokio::sync::oneshot::channel();
         let manager = tokio::spawn(control(listener, stop, completion));
@@ -630,13 +643,7 @@ mod test {
     #[ignore = "requires WRIX_TEST_CELLERD naming the built patched native daemon"]
     async fn native_daemon_exit_and_authenticated_next_owner_preserve_signing_state() {
         let binary = std::env::var_os("WRIX_TEST_CELLERD").expect("patched native daemon required");
-        // Nix build TMPDIR can exceed the native Unix socket path budget.
-        // Keep a fresh private root short, including on Darwin's /private/tmp.
-        let directory = std::fs::canonicalize("/tmp")
-            .unwrap()
-            .join(format!("celler-owner-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir(&directory).unwrap();
-        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let directory = test_directory();
         let secret = b"native-owner-fixture-not-a-live-key";
         std::fs::write(directory.join("jwt.key"), secret).unwrap();
         let socket = directory.join("drain.sock");

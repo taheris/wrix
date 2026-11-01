@@ -208,12 +208,9 @@ fn special_files_hardlinks_and_byte_entry_depth_budgets_fail_before_manifest() -
         fs::write(source.path().join("manifest"), MANIFEST)?;
         fs::write(destination.path().join("manifest"), "retained")?;
         match hostile {
-            "fifo" => at::mknodat(
-                open(source.path())?,
-                "hostile",
-                at::FileType::Fifo,
-                Mode::RUSR,
-                0,
+            "fifo" => nix::unistd::mkfifo(
+                &source.path().join("hostile"),
+                nix::sys::stat::Mode::S_IRUSR,
             )?,
             "hardlink" => fs::hard_link(
                 source.path().join("manifest"),

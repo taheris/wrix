@@ -368,6 +368,7 @@ fn native_vm_boundary_rejects_reused_kernels_and_missing_prior_negative_lookup()
 }
 
 /// Measurements from actual public CLI workers; no factory grant is issued here.
+#[cfg(target_os = "linux")]
 pub(super) fn public_report(platform: Platform, control: &Path, workers: &[Value]) -> Value {
     let mut observations = Vec::new();
     let mut builds = 0;

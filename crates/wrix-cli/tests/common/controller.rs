@@ -237,6 +237,7 @@ impl Drop for Server {
     }
 }
 
+#[cfg(target_os = "linux")]
 pub fn shell_single_quote(value: &str) -> String {
     let mut quoted = String::from("'");
     for character in value.chars() {

@@ -9,9 +9,9 @@ mod seed;
 mod worker;
 
 use super::*;
-use wrix_service::control::{
-    Access, Client, Controller, Namespace, Operation, Policy, PoolPreparation, Reply,
-};
+#[cfg(target_os = "linux")]
+use wrix_service::control::PoolPreparation;
+use wrix_service::control::{Access, Client, Controller, Namespace, Operation, Policy, Reply};
 #[cfg(target_os = "linux")]
 const REQUESTER: &str = "WRIX_TEST_POOL_REQUESTER";
 #[cfg(target_os = "linux")]

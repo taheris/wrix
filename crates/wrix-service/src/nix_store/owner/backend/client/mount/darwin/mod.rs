@@ -41,7 +41,7 @@ fn directory(path: &Path) -> Result<std::os::fd::OwnedFd, Error> {
         match part {
             std::path::Component::RootDir => (),
             std::path::Component::Normal(name) => {
-                fd = openat(&fd, name, flags, Mode::empty()).map_err(std::io::Error::from)?
+                fd = openat(&fd, name, flags, Mode::empty()).map_err(std::io::Error::from)?;
             }
             _ => return Err(Error::Invalid),
         }
