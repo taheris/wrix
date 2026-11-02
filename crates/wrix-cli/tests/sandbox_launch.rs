@@ -308,6 +308,8 @@ fn run_launch_options_stop_before_agent_arguments() -> TestResult {
         vec!["--no-git-deploy", "--no-git-sign"],
         vec!["--git-sign", "--git-sign"],
     ] {
+        let fixture = Fixture::new(None)?;
+        let prepared = fixture.capture_runtime()?;
         for (explicit_workspace, separator, agent_args) in [
             (false, false, &[][..]),
             (false, true, &[][..]),
@@ -322,8 +324,22 @@ fn run_launch_options_stop_before_agent_arguments() -> TestResult {
             (true, true, &["--help"][..]),
             (true, true, &["--"][..]),
         ] {
-            let fixture = Fixture::new(None)?;
-            let mut command = fixture.capture_runtime()?;
+            let argv_path = fixture.root.path().join("argv");
+            if argv_path.try_exists()? {
+                fs::remove_file(&argv_path)?;
+            }
+            let mut command = Command::new(prepared.get_program());
+            command.args(prepared.get_args());
+            if let Some(directory) = prepared.get_current_dir() {
+                command.current_dir(directory);
+            }
+            for (name, value) in prepared.get_envs() {
+                if let Some(value) = value {
+                    command.env(name, value);
+                } else {
+                    command.env_remove(name);
+                }
+            }
             command.args(&prefix);
             let workspace = if explicit_workspace {
                 let selected = fixture.root.path().join("selected-workspace");

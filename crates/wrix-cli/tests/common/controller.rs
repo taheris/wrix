@@ -6,6 +6,9 @@ mod native_roles;
 #[path = "native_sql.rs"]
 mod native_sql;
 
+#[path = "role_ports.rs"]
+mod role_ports;
+
 use super::TestResult;
 use std::{
     fs, io,
@@ -48,6 +51,7 @@ impl Server {
         let control = state.join("control");
         wrix_core::private_directory::prepare_with_parents(state)?;
         wrix_core::private_directory::prepare_with_parents(&control)?;
+        role_ports::prepare(&control.join("authority"))?;
         let sql = native_sql::Server::start_at(root, &state.join("service-data/dolt"))?;
         let roles = native_roles::Server::start(root, &state.join("service-data/compiler"))?;
         let error = fs::File::create(root.join("controller.stderr"))?;
