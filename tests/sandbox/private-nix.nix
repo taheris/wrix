@@ -13,7 +13,9 @@ let
     in
     {
       inherit name;
-      layout = toString selected.image.ociLayout;
+      layout =
+        if selected.image.source_kind == "docker-archive" then null else toString selected.image.ociLayout;
+      sourceKind = selected.image.source_kind;
       config = toString selected.image.profileConfig;
       source = toString selected.image.source;
       digestFile = toString selected.image.digest;
@@ -142,7 +144,9 @@ in
         import subprocess
         import sys
         for image in json.loads(pathlib.Path(sys.argv[1]).read_text()):
-            subprocess.run([sys.executable, sys.argv[2], image["layout"]], check=True)
+            source = (["--archive", image["source"]] if image["sourceKind"] == "docker-archive"
+                      else [image["layout"]])
+            subprocess.run([sys.executable, sys.argv[2], *source], check=True)
             config = json.loads(pathlib.Path(image["config"]).read_text())
             digest = pathlib.Path(image["digestFile"]).read_text().strip()
             assert config["image"]["digest"] == digest

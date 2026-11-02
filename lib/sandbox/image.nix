@@ -56,7 +56,7 @@ let
     buildPhase = "$CC -static -std=c11 -Wall -Wextra -Werror -O2 -o wrix-apple-nix-bridge $src";
     installPhase = "mkdir -p $out/bin; cp wrix-apple-nix-bridge $out/bin/";
   };
-  sharedNixClient = pkgs.replaceVars ./shared-nix-client.sh {
+  sharedNixTools = {
     STAT = "${pkgs.coreutils}/bin/stat";
     FINDMNT = "${pkgs.util-linux}/bin/findmnt";
     MOUNT = "${pkgs.util-linux}/bin/mount";
@@ -71,6 +71,7 @@ let
     JQ = "${pkgs.jq}/bin/jq";
     SLEEP = "${pkgs.coreutils}/bin/sleep";
   };
+  sharedNixClient = pkgs.replaceVars ./shared-nix-client.sh sharedNixTools;
   sshConfig = import ../util/ssh.nix;
   knownHosts = import ./known-hosts.nix { inherit pkgs; };
 
@@ -227,11 +228,12 @@ let
       }
   );
 
-  # The generated JSON is copied into /etc, not installed as a store package.
-  # Only its context-bearing runtime references belong in the installed closure;
-  # including the JSON itself would invalidate store layers for plaintext edits.
+  # Copied configuration and scripts retain runtime tool roots, not their generated source packages.
   configurationRoots = import ./configuration-roots.nix { inherit (pkgs) lib; } (
-    [ mcpAvailable ]
+    [
+      mcpAvailable
+      sharedNixTools
+    ]
     ++ optionals (agent == "claude") [
       claudeConfig
       claudeSettings

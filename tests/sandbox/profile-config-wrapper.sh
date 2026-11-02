@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 TEST_TMP=$(mktemp -d -t wrix-profile-config.XXXXXX)
+TEST_TMP="$(cd "$TEST_TMP" && pwd -P)"
 trap 'rm -rf "$TEST_TMP"' EXIT
 
 CONFIG_LINK="$TEST_TMP/profile-config"
@@ -137,7 +138,10 @@ test_project_pointer_keeps_the_host_package_unconfigured() {
 }
 
 test_fixture_host_isolation() {
-  local worker_marker="" unrelated="$TEST_TMP/unrelated-host"
+  local worker_marker="" unrelated="$TEST_TMP/unrelated-host" state_root="$TEST_TMP/state/wrix"
+  if [[ "$(uname -s)" == Darwin ]]; then
+    state_root="$TEST_TMP/home/Library/Application Support/wrix"
+  fi
   if [[ -f /etc/wrix/image-agent ]]; then
     worker_marker=$(sha256sum /etc/wrix/image-agent)
   fi
@@ -154,7 +158,7 @@ test_fixture_host_isolation() {
   mkdir -p "$unrelated/wrix"
   printf 'unrelated admission state\n' >"$unrelated/wrix/state.db"
   XDG_STATE_HOME="$unrelated" host_wrix workspace diagnose >"$TEST_TMP/diagnose.out"
-  grep -qF "state_root: $TEST_TMP/state/wrix" "$TEST_TMP/diagnose.out"
+  grep -qF "state_root: $state_root" "$TEST_TMP/diagnose.out"
   [[ "$(<"$unrelated/wrix/state.db")" == 'unrelated admission state' ]]
 }
 
