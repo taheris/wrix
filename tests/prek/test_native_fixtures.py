@@ -19,6 +19,7 @@ MEMBERS = {
     "WRIX_TEST_CONTROLLER_BINDING": "controller-binding",
     "WRIX_TEST_SCCACHE": "compiler",
     "WRIX_TEST_SQL_CLIENT": "sql-client",
+    "WRIX_TEST_BD": "beads",
 }
 
 
@@ -38,7 +39,7 @@ class Preparation(unittest.TestCase):
                 path.mkdir()
             else:
                 path.write_text("fixture\n")
-                if "RUNNER" in name or name in {"WRIX_TEST_PACKAGED_WRIX", "WRIX_TEST_CELLERD"}:
+                if "RUNNER" in name or name in {"WRIX_TEST_PACKAGED_WRIX", "WRIX_TEST_CELLERD", "WRIX_TEST_BD"}:
                     path.chmod(0o755)
         self.env_file = self.root / "environment"
         self.env_file.write_text("")
@@ -116,6 +117,13 @@ printf '%s\\n' "$WRIX_FIXTURE_BUNDLE"
         result = self.run_script()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("WRIX_TEST_CELLERD", result.stderr)
+        self.assertEqual(self.env_file.read_text(), "")
+
+    def test_non_executable_beads_is_rejected_before_export(self):
+        (self.bundle / "beads").chmod(0o644)
+        result = self.run_script()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("WRIX_TEST_BD", result.stderr)
         self.assertEqual(self.env_file.read_text(), "")
 
     def test_newline_in_an_override_cannot_inject_an_environment_variable(self):

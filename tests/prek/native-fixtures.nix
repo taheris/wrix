@@ -16,6 +16,7 @@ let
     WRIX_TEST_PREK_BUILD_SPEC = import ./bundle-build-spec.nix { inherit pkgs; };
     WRIX_TEST_PACKAGED_WRIX = "${packagedWrix}/bin/wrix";
     WRIX_TEST_CELLERD = "${celler}/bin/cellerd";
+    WRIX_TEST_BD = "${pkgs.beads}/bin/bd";
     WRIX_TEST_SCCACHE = "${
       import ../../crates/wrix-service/src/lifecycle/drain/native/compiler.nix { inherit pkgs; }
     }/bin/sccache";
@@ -62,6 +63,10 @@ in
       {
         name = "cellerd";
         path = environment.WRIX_TEST_CELLERD;
+      }
+      {
+        name = "beads";
+        path = environment.WRIX_TEST_BD;
       }
       {
         name = "compiler";

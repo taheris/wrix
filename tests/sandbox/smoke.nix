@@ -488,7 +488,7 @@ in
       profile = sandboxLib.profiles.rust;
       probeFor = profile: import ../profiles/rust-compile-run.nix { inherit pkgs profile; };
       probe = probeFor profile;
-      missingToolchain = builtins.tryEval (probeFor (profile // { hostPackages = [ pkgs.gcc ]; }));
+      missingToolchain = builtins.tryEval (probeFor (profile // { hostPackages = [ pkgs.stdenv.cc ]; }));
       missingCompiler = builtins.tryEval (
         probeFor (profile // { hostPackages = [ profile.toolchain ]; })
       );
@@ -496,7 +496,7 @@ in
     assert
       probe.nativeBuildInputs == [
         profile.toolchain
-        pkgs.gcc
+        pkgs.stdenv.cc
       ];
     assert !missingToolchain.success;
     assert !missingCompiler.success;

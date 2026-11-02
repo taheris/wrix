@@ -14,8 +14,9 @@ main() {
     WRIX_TEST_CONTROLLER_BINDING
     WRIX_TEST_SCCACHE
     WRIX_TEST_SQL_CLIENT
+    WRIX_TEST_BD
   )
-  local members=(hooks runner broken-runner builder-spec packaged-wrix devshell-hook cellerd controller-binding compiler sql-client)
+  local members=(hooks runner broken-runner builder-spec packaged-wrix devshell-hook cellerd controller-binding compiler sql-client beads)
   local name index root fixtures="" missing=0 value
   local values=()
 
@@ -51,7 +52,7 @@ main() {
     fi
     case "$name" in
       WRIX_TEST_PREK_HOOKS) [[ -d "$value" ]] ;;
-      WRIX_TEST_PREK_RUNNER|WRIX_TEST_BROKEN_PREK_RUNNER|WRIX_TEST_PACKAGED_WRIX|WRIX_TEST_CELLERD) [[ -f "$value" && -x "$value" ]] ;;
+      WRIX_TEST_PREK_RUNNER|WRIX_TEST_BROKEN_PREK_RUNNER|WRIX_TEST_PACKAGED_WRIX|WRIX_TEST_CELLERD|WRIX_TEST_BD) [[ -f "$value" && -x "$value" ]] ;;
       *) [[ -f "$value" ]] ;;
     esac || {
       printf 'Wrong file type or permissions for packaging fixture %s: %s\n' "$name" "$value" >&2

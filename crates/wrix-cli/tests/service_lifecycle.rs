@@ -42,6 +42,10 @@ const APPLE_RUNTIME: &str = concat!(
 );
 
 #[test]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "requires Linux user, mount and network namespaces"
+)]
 fn public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql() -> TestResult {
     // Emulation changes the fixture watchdog, not production readiness deadlines.
     let (fixture_deadline, script_deadline) =
@@ -118,7 +122,8 @@ fn public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql() -
     }
     native_backend::install(root.path())?;
     let native_bd = std::env::var_os("WRIX_REAL_BD_BIN")
-        .unwrap_or_else(|| "/nix/store/7aalmix7lxvs73apxl1pwkrvqw52snhm-beads-1.3.1/bin/bd".into());
+        .or_else(|| std::env::var_os("WRIX_TEST_BD"))
+        .ok_or("missing native Beads fixture")?;
     let native_package = root.path().join("native-package");
     fs::create_dir_all(native_package.join("bin"))?;
     std::os::unix::fs::symlink(&native_bd, native_package.join("bin/bd"))?;
@@ -946,11 +951,11 @@ fn initialize_repository(path: &Path) -> TestResult {
 #[test]
 fn enclosing_repository_does_not_change_service_fixture_identity() -> TestResult {
     let outer = tempfile::Builder::new()
-        .prefix("outer-")
+        .prefix("o-")
         .tempdir_in(fs::canonicalize("/tmp")?)?;
     initialize_repository(outer.path())?;
     let root = tempfile::Builder::new()
-        .prefix("apple-service")
+        .prefix("s-")
         .tempdir_in(outer.path())?;
     let fixture = Fixture::from_root(root)?;
     assert_eq!(

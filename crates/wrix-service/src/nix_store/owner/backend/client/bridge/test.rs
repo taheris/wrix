@@ -108,11 +108,23 @@ async fn paused_ssh_receiver_keeps_bounded_flow_control_and_reverse_traffic_with
         }
     }
     server.write_all(b"reverse-traffic").await.unwrap();
-    let reverse = tokio::time::timeout(std::time::Duration::from_secs(5), frames.recv())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(reverse.kind, Kind::Data);
+    let mut credited = false;
+    let reverse = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let frame = frames.recv().await.unwrap();
+            if frame.kind == Kind::Data {
+                break frame;
+            }
+            assert_eq!(frame.kind, Kind::Credit);
+            assert!(
+                !credited,
+                "only the last outstanding chunk can return credit"
+            );
+            credited = true;
+        }
+    })
+    .await
+    .unwrap();
     assert_eq!(reverse.data, b"reverse-traffic");
     tokio::time::sleep(std::time::Duration::from_secs(31)).await;
     assert!(!task.is_finished());
@@ -135,7 +147,9 @@ async fn paused_ssh_receiver_keeps_bounded_flow_control_and_reverse_traffic_with
         received += count;
     }
     assert!(bytes.iter().all(|byte| *byte == 7));
-    assert_eq!(frames.recv().await.unwrap().kind, Kind::Credit);
+    if !credited {
+        assert_eq!(frames.recv().await.unwrap().kind, Kind::Credit);
+    }
     tx.send(Frame::empty(Kind::Close, 3)).await.unwrap();
     assert!(task.await.unwrap().is_ok());
 }

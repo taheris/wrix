@@ -16,7 +16,8 @@ def terminate(signum, frame):
 signal.signal(signal.SIGTERM, terminate)
 root = Path(sys.argv[1])
 wrix = sys.argv[2]
-root.joinpath('home').mkdir()
+root.joinpath('home').mkdir(exist_ok=True)
+state_root = root / ('home/Library/Application Support/wrix' if sys.platform == 'darwin' else 'state/wrix')
 root.joinpath('empty-git-template').mkdir()
 bin_dir = root / 'bin'
 env = os.environ.copy()
@@ -46,7 +47,7 @@ def cli(workspace, *args, success=True):
 
 def sql(client, query, success=True):
     creds = client['credentials']
-    endpoints = json.loads((root / 'state/wrix/control/authority/role-endpoints.json').read_text())
+    endpoints = json.loads((state_root / 'control/authority/role-endpoints.json').read_text())
     return run(['dolt', '--host', '127.0.0.1', '--port', str(endpoints['ports'][0]), '--no-tls', '--password', creds['password'],
                 '--user', creds['user'], '--use-db', creds['database'], 'sql', '-r', 'json', '-q', query],
                root, {'DOLT_CLI_PASSWORD': creds['password']}, success)
@@ -94,11 +95,11 @@ try:
         run(['git', 'diff', '--exit-code', '--', '.beads'], workspace)
         assert run(['git', 'status', '--porcelain', '--', '.beads'], workspace).stdout == '', run(['git', 'status', '--porcelain', '--', '.beads'], workspace).stdout
     # TCP remains alive after Unix endpoint damage: reentry must not call this healthy.
-    endpoint = root / 'state/wrix/service-data/dolt/run/dolt.sock'
+    endpoint = state_root / 'service-data/dolt/run/dolt.sock'
     endpoint.unlink()
     with socket.socket(socket.AF_UNIX) as stale:
         stale.bind(str(endpoint))
-    before_registration = sorted((root / 'state/wrix/host-control/dolt').glob('*/registration.json'))
+    before_registration = sorted((state_root / 'host-control/dolt').glob('*/registration.json'))
     retained = {path: path.read_bytes() for path in before_registration}
     failed = cli(workspaces[0], 'service', 'start', success=False)
     assert failed.returncode != 0 and 'Unix endpoint is not accepting connections' in failed.stderr, failed.stderr
@@ -136,7 +137,7 @@ try:
         assert json.loads(sql(client, "SELECT name FROM dolt_branches WHERE name = 'retained'").stdout)['rows'] == [{'name': 'retained'}]
         assert json.loads(sql(client, "SELECT tag_name FROM dolt_tags WHERE tag_name = 'retainedtag'").stdout)['rows'] == [{'tag_name': 'retainedtag'}]
         assert len(json.loads(sql(client, 'SELECT staged FROM dolt_status').stdout)['rows']) == 2
-        assert Path(client['git_common']).is_relative_to(root / 'state/wrix/host-control/beads-git')
+        assert Path(client['git_common']).is_relative_to(state_root / 'host-control/beads-git')
         sql(client, 'INSERT INTO marker VALUES(4)')
     # Native Beads reads AND writes use the scoped environment, not the tracked default.
     user_status = {workspace: run(['git', 'status', '--porcelain', '--', '.beads'], workspace).stdout for workspace in workspaces}
@@ -169,8 +170,8 @@ try:
     assert 'wrix.dolt.shared=native-v1' in runs[0]
     for workspace, client in zip(workspaces, clients):
         guest = json.loads(cli(workspace, 'service', 'dolt', 'sandbox-client').stdout)
-        assert Path(guest['git_common']).is_relative_to(root / 'state/wrix/service-data/dolt/namespaces')
-        assert not Path(client['git_common']).is_relative_to(root / 'state/wrix/service-data')
+        assert Path(guest['git_common']).is_relative_to(state_root / 'service-data/dolt/namespaces')
+        assert not Path(client['git_common']).is_relative_to(state_root / 'service-data')
         assert guest['git_common'] != client['git_common']
     assert not any('host-control' in arg or '/first/.git' in arg or '/second/.git' in arg for arg in runs[0])
     print('public CLI: one native shared backend; retained rows/branches, scoped writes, peer/admin denial, retire/reactivate preserved peer')

@@ -4,7 +4,10 @@ assert builtins.elem profile.toolchain profile.hostPackages;
 assert builtins.elem pkgs.stdenv.cc profile.hostPackages;
 pkgs.runCommand "verify-rust-profile-compile-run"
   {
-    nativeBuildInputs = profile.hostPackages;
+    nativeBuildInputs = [
+      profile.toolchain
+      pkgs.stdenv.cc
+    ];
   }
   ''
     set -euo pipefail
