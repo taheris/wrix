@@ -17,9 +17,9 @@ pub mod supervision;
 
 use std::{
     collections::BTreeMap,
-    fs::{self, DirBuilder, File, OpenOptions},
+    fs::{self, DirBuilder, File},
     io::{self, Read, Write},
-    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
+    os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -150,22 +150,23 @@ impl std::fmt::Debug for Credential {
 
 impl Credential {
     fn load(root: &Path) -> Result<Self, Error> {
-        let path = root.join("management.key");
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&path)
-        {
-            Ok(mut file) => {
-                let mut bytes = [0; 32];
-                File::open("/dev/urandom")?.read_exact(&mut bytes)?;
-                file.write_all(&bytes)?;
-                file.sync_all()?;
+        match Self::read(root) {
+            Ok(credential) => return Ok(credential),
+            Err(Error::Io(error)) if error.kind() == io::ErrorKind::NotFound => (),
+            Err(error) => return Err(error),
+        }
+        let mut bytes = [0; 32];
+        File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+        let mut temporary = tempfile::NamedTempFile::new_in(root)?;
+        temporary.write_all(&bytes)?;
+        temporary.as_file().sync_all()?;
+        match temporary.persist_noclobber(root.join("management.key")) {
+            Ok(_) => {
+                File::open(root)?.sync_all()?;
                 Ok(Self(bytes))
             }
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Self::read(root),
-            Err(error) => Err(error.into()),
+            Err(error) if error.error.kind() == io::ErrorKind::AlreadyExists => Self::read(root),
+            Err(error) => Err(error.error.into()),
         }
     }
 
@@ -1170,6 +1171,75 @@ impl Client {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn credential_publication_never_exposes_a_partial_key_to_discovering_clients() {
+        use std::sync::{
+            Barrier,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        };
+        let root = tempfile::tempdir().unwrap();
+        let current = AtomicUsize::new(0);
+        let finished = AtomicBool::new(false);
+        let barrier = Barrier::new(2);
+        std::thread::scope(|scope| {
+            let reader = scope.spawn(|| {
+                barrier.wait();
+                let deadline = std::time::Instant::now() + Duration::from_secs(10);
+                let mut invalid = Vec::new();
+                while !finished.load(Ordering::SeqCst) && std::time::Instant::now() < deadline {
+                    let path = root.path().join(current.load(Ordering::SeqCst).to_string());
+                    match Credential::read(&path) {
+                        Ok(_) => (),
+                        Err(Error::Io(error)) if error.kind() == io::ErrorKind::NotFound => (),
+                        Err(error) => invalid.push(error.to_string()),
+                    }
+                }
+                invalid
+            });
+            barrier.wait();
+            for index in 0..128 {
+                let path = root.path().join(index.to_string());
+                DirBuilder::new().mode(0o700).create(&path).unwrap();
+                current.store(index, Ordering::SeqCst);
+                Credential::load(&path).unwrap();
+            }
+            finished.store(true, Ordering::SeqCst);
+            assert!(
+                reader.join().unwrap().is_empty(),
+                "a client observed a partially published credential"
+            );
+        });
+    }
+
+    #[test]
+    fn credential_restart_preserves_the_existing_key_and_inode() {
+        let root = tempfile::tempdir().unwrap();
+        let first = Credential::load(root.path()).unwrap();
+        let before = fs::metadata(root.path().join("management.key")).unwrap();
+        let second = Credential::load(root.path()).unwrap();
+        assert_eq!(first.0, second.0);
+        assert_eq!(
+            before.ino(),
+            fs::metadata(root.path().join("management.key"))
+                .unwrap()
+                .ino()
+        );
+        assert_eq!(before.mode() & 0o777, 0o600);
+    }
+
+    #[test]
+    fn malformed_existing_credentials_are_never_replaced() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("management.key");
+        fs::write(&path, b"partial").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(matches!(
+            Credential::load(root.path()),
+            Err(Error::PrivateRoot)
+        ));
+        assert_eq!(fs::read(path).unwrap(), b"partial");
+    }
 
     #[tokio::test]
     async fn controller_uses_current_durable_sql_policy_and_cache_admission_preserves_it() {
