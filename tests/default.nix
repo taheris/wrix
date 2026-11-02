@@ -611,7 +611,15 @@ let
   ciAppDerivations = builtins.listToAttrs (
     map (app: {
       inherit (app) name;
-      value = app.package;
+      value =
+        if (app.platforms or [ ]) == [ ] || builtins.elem system app.platforms then
+          app.package
+        else
+          writeShellScriptBin app.name ''
+            set -euo pipefail
+            printf '%s\n' 'SKIP: ${app.name} is not applicable on ${system}' >&2
+            exit 77
+          '';
     }) ciApps
   );
   testAppDerivations = ciAppDerivations // {

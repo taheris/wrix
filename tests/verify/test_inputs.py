@@ -73,6 +73,18 @@ class VerifierInputs(unittest.TestCase):
         self.assertEqual(verdict["outcome"], "skipped")
         self.assertFalse((self.root / "flake.nix").exists())
 
+    def test_foreign_ci_packages_can_be_evaluated_without_native_platform_resources(self):
+        targets = (["test-shared-nix-apple"] if SYSTEM.endswith("-linux") else
+                   ["test-shared-nix-host-owner-linux", "test-shared-nix-interruption-linux",
+                    "test-shared-nix-pool-export-linux", "test-shared-nix-public-podman",
+                    "test-shared-nix-public-krun"])
+        for target in targets:
+            result = self.run_command("nix", "eval", "--no-warn-dirty", "--raw",
+                                      f"{SOURCE}#legacyPackages.{SYSTEM}.ciApps.{target}.drvPath")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(result.stdout.startswith("/nix/store/"), result.stdout)
+            self.assertTrue(result.stdout.endswith(".drv"), result.stdout)
+
     def test_single_opaque_target_stays_unknown_instead_of_empty_known(self):
         for program, target in [(VERIFY, OPAQUE), (CI, CI_OPAQUE)]:
             self.assertEqual(self.query(program, target), {})
