@@ -27,9 +27,21 @@ let
   entrypoint = sandboxScript "entrypoint-contract";
   network = sandboxScript "network-baseline";
   platform = sandboxScript "platform-dispatch";
+  nativeCheck = name: {
+    inputs = (import ../lib/image-resources.nix { }).imageInputs;
+    script = ''
+      nix build --no-link ".#checks.${system}.${name}"
+    '';
+  };
 
 in
 {
+  "sandbox.oci-layout-builder" = nativeCheck "oci-layout-builder";
+  "sandbox.private-nix-api" = nativeCheck "private-nix-api";
+  "sandbox.private-nix-state-preservation" = nativeCheck "private-nix-state-preservation";
+  "sandbox.known-hosts-runtime-store-purity" = nativeCheck "known-hosts-runtime-store-purity";
+  "sandbox.known-hosts-runtime-file-symlink" = nativeCheck "known-hosts-runtime-file-symlink";
+
   "sandbox.agent-binary-guard".script = ''
     nix build --no-link ".#checks.${system}.entrypoint-declared-runner"
   '';

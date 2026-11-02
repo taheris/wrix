@@ -56,6 +56,17 @@ changes also leave browser and profile-image boundaries cold in both lanes. This
 is a system-boundary scoping test, not evidence of successful live browser
 execution.
 
+## Architecture selection
+
+Architecture-neutral OCI, private-Nix and known-host checks use the executing
+host's `checks.<system>` through `verify:sandbox.*`. Private-Nix artifact
+inspection uses `test-ci:test-private-nix-artifacts`, whose images retain the
+constructor's matching Linux guest architecture. On Apple Silicon these use
+Darwin tools and the configured `aarch64-linux` builder, not an unrelated
+`x86_64-linux` host. Explicit x86_64 native runtime qualification remains a
+separate platform-specific requirement. `checks.native-verifier-systems`
+executes the generated dispatch for both Linux architectures and Darwin.
+
 ## Admission and archive inspection
 
 `test-ci` preflights declared platform/capability requirements before

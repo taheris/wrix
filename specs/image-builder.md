@@ -191,8 +191,8 @@ Parent layers and package blobs are referenced through immutable Nix-store
 symlinks; composing a child reads parent manifests/configs, not parent layer
 bytes. Package tars are hashed while written, without a second hash/copy pass.
 Darwin retains its archive fallback. The builder rejects an archive parent
-rather than silently reintroducing whole-image work. [check](nix build
-.#checks.x86_64-linux.oci-layout-builder)
+rather than silently reintroducing whole-image work.
+[check](verify:sandbox.oci-layout-builder)
 
 ## Image Ownership Labels
 
@@ -265,12 +265,12 @@ caller-chosen UID or separate native constructor. Discovery is
 `wrixLib.capabilities.privateNix == 1`; it describes the constructor invariant,
 not a permission preset. Conflicting caller mounts, writable directories,
 environment, runtime secrets and agent settings are rejected during
-construction. [check](nix build .#checks.x86_64-linux.private-nix-api)
+construction. [check](verify:sandbox.private-nix-api)
 
 Provisioning runs only on the fresh staged customization tree under dockerTools
 fakeroot. Existing store paths, database/WAL bytes, GC roots and logs are
 preserved; runtime repair and database replacement are not supported.
-[check](nix build .#checks.x86_64-linux.private-nix-state-preservation)
+[check](verify:sandbox.private-nix-state-preservation)
 
 The ancestors `/nix`, `/nix/var`, and `/nix/var/nix` are root-owned `0755`. The
 store, secure builds directory and `wrix` per-user profile/root directories are
@@ -285,7 +285,7 @@ The private-Nix version marker and label participate in both archive and
 nix-descriptor source/config-digest identities and generated ProfileConfigs.
 Lower package/toolchain/agent tiers retain their independent layering; the
 private store state is supplied by the customization layer for every image.
-[check](nix build .#legacyPackages.x86_64-linux.ciChecks.private-nix-artifacts)
+[check](test-ci:test-private-nix-artifacts)
 
 The launcher validates image contract support before container startup. Runtime
 identity preserves numeric root ownership on Linux, krun and Darwin, without UID

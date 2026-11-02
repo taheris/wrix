@@ -891,9 +891,8 @@ does not add write-back or synchronization to ordinary caller-declared mounts.
 Known-host installation detaches a store-backed `/etc/ssh` directory and
 replaces any known-host file symlink before writing. Runtime SSH setup preserves
 baked Nix-store contents rather than modifying the OpenSSH package through a
-rootfs symlink. [check](nix build
-.#checks.x86_64-linux.known-hosts-runtime-store-purity) [check](nix build
-.#checks.x86_64-linux.known-hosts-runtime-file-symlink)
+rootfs symlink. [check](verify:sandbox.known-hosts-runtime-store-purity)
+[check](verify:sandbox.known-hosts-runtime-file-symlink)
 
 ### Darwin Shared Network
 
@@ -956,8 +955,7 @@ separate from network metadata and remains required.
   completion (exit 0) with no `Operation not permitted` failure on a
   `/nix/store` path [system](verify:sandbox.nix-in-container)
 - Every image sets `IS_SANDBOX=1` so Claude permits root execution without UID
-  spoofing. [check](nix build
-  .#legacyPackages.x86_64-linux.ciChecks.private-nix-artifacts)
+  spoofing. [check](test-ci:test-private-nix-artifacts)
 - The default Linux launch command preserves real identity without injecting a
   UID-spoofing preload.
   [test](../crates/wrix-sandbox/tests/launch.rs::linux_default_boundary_preserves_real_identity)

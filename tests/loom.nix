@@ -158,6 +158,11 @@ let
     '';
   };
 
+  privateNixTests = import ./sandbox/private-nix.nix {
+    inherit pkgs linuxPkgs wrix;
+    profileSandboxes = profileManifest.sandboxes;
+  };
+
   ciApp = name: check: {
     inherit name inputs;
     executable = name;
@@ -175,15 +180,9 @@ in
     loom-native-profiles = nativeProfiles;
   }
   // sharedNixTests.checks
-  // import ./sandbox/private-nix.nix {
-    inherit
-      pkgs
-      linuxPkgs
-      wrix
-      ;
-    profileSandboxes = profileManifest.sandboxes;
-  };
+  // privateNixTests;
   ciApps = sharedNixTests.ciApps ++ [
+    (ciApp "test-private-nix-artifacts" privateNixTests.private-nix-artifacts)
     (ciApp "test-loom-devshell" devshellCli)
     (ciApp "test-loom-agent-images" agentImages)
     {

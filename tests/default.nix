@@ -352,6 +352,7 @@ let
       pi-auth-storage = import ./security/pi-auth.nix { inherit pkgs; };
       profile-images-data = import ./profiles/manifest.nix { inherit pkgs wrix; };
       verifier-inputs = import ./lib/inputs-test.nix { inherit pkgs; };
+      native-verifier-systems = import ./lib/native-verifier-systems.nix { inherit pkgs; };
     }
     // removeAttrs loomTests.checks [ "private-nix-artifacts" ]
     // optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
