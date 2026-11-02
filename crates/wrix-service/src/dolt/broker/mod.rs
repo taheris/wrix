@@ -108,7 +108,7 @@ pub(crate) async fn serve(
     tcp: bool,
     gate: crate::lifecycle::sql::Gate,
 ) -> Result<(), Error> {
-    let socket = data.join("run/sync.sock");
+    let socket = super::server::socket::Export::Sync.path(data, tcp);
     if socket.exists() {
         fs::remove_file(&socket)?;
     }

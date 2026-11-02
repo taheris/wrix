@@ -13,6 +13,21 @@ fn fixture() -> TestResult<tempfile::TempDir> {
 }
 
 #[test]
+fn tcp_exports_keep_guest_unix_sockets_off_host_data_mounts() {
+    let data = Path::new("/host/persistent/service-data/dolt");
+    assert_eq!(
+        Export::Sql.path(data, true),
+        Path::new("/run/wrix/dolt/dolt.sock")
+    );
+    assert_eq!(
+        Export::Sync.path(data, true),
+        Path::new("/run/wrix/dolt/sync.sock")
+    );
+    assert_eq!(Export::Sql.path(data, false), data.join("run/dolt.sock"));
+    assert_eq!(Export::Sync.path(data, false), data.join("run/sync.sock"));
+}
+
+#[test]
 fn dead_socket_is_retired_without_replacing_ownership_or_data() -> TestResult {
     let root = fixture()?;
     let owner = fs::metadata(root.path().join("owner.lock"))?;

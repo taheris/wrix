@@ -11,6 +11,7 @@ pub mod generation;
 mod managed;
 pub mod migration;
 mod owner;
+mod podman;
 pub mod shared;
 pub mod sql;
 pub mod supervisor;
@@ -67,6 +68,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub enum Error {
     /// {0}
     SharedDolt(#[from] crate::dolt::Error),
+    /// no managed Dolt deployment is registered; run `wrix service start`; existing native data has not been reset
+    DoltNotRegistered,
     /// workspace admission failed: {0}
     Admission(#[from] wrix_state::store::Error),
     /// host package service-image binding failed: {0}
@@ -268,11 +271,11 @@ pub enum RuntimeStatus {
     Missing,
 }
 
-struct PreparedImage(Box<owner::Recipe>);
+struct PreparedImage(Box<owner::Recipe>, RuntimeKind);
 
 impl PreparedImage {
     fn as_str(&self) -> &str {
-        self.0.image_id.as_str()
+        self.0.launch_selector(self.1)
     }
 
     fn clone_recipe(&self) -> owner::Recipe {
@@ -1827,11 +1830,17 @@ impl Runtime {
         let Some(binary) = self.inventory_binary()? else {
             return Ok(None);
         };
-        let output = Command::new(binary)
+        let output = Command::new(&binary)
             .args(args)
             .stdin(Stdio::null())
             .output()?;
         if !output.status.success() {
+            if cfg!(target_os = "macos")
+                && self.kind == RuntimeKind::Podman
+                && podman::stopped_local_machine(&binary)?
+            {
+                return Ok(Some(Vec::new()));
+            }
             return Err(Error::Operation {
                 message: format!(
                     "failed to list containers in {}: {}{}",
@@ -2019,11 +2028,14 @@ impl Runtime {
                         .into(),
                 });
             }
-            Ok(PreparedImage(Box::new(owner::Recipe {
-                binding: candidate.clone(),
-                image_id,
-                config_digest: digest,
-            })))
+            Ok(PreparedImage(
+                Box::new(owner::Recipe {
+                    binding: candidate.clone(),
+                    image_id,
+                    config_digest: digest,
+                }),
+                self.kind,
+            ))
         } else {
             Err(Error::InstalledImageUnavailable {
                 path: candidate.source().path().display().to_string(),
@@ -2558,6 +2570,27 @@ mod test {
         is_missing_container_remove_error, parse_published_ports,
     };
     use wrix_core::path::Workspace;
+
+    #[test]
+    fn prepared_apple_image_uses_its_checked_reference_without_losing_native_identity() {
+        let binding = serde_json::from_value(serde_json::json!({
+            "schema": 1, "image": "wrix-service:fixture", "source_kind": "docker-archive",
+            "source": {"path":"/nix/store/source", "derivation":"/nix/store/source.drv"},
+            "digest": {"path":"/nix/store/digest", "derivation":"/nix/store/digest.drv"}
+        }))
+        .unwrap();
+        let image_id = super::Digest::parse(&format!("sha256:{}", "a".repeat(64))).unwrap();
+        let recipe = super::owner::Recipe {
+            binding,
+            image_id: image_id.clone(),
+            config_digest: image_id.clone(),
+        };
+        let apple = super::PreparedImage(Box::new(recipe.clone()), RuntimeKind::Container);
+        assert_eq!(apple.as_str(), "wrix-service:fixture");
+        assert_eq!(apple.clone_recipe().image_id, image_id);
+        let podman = super::PreparedImage(Box::new(recipe), RuntimeKind::Podman);
+        assert_eq!(podman.as_str(), image_id.as_str());
+    }
 
     fn inspection_fixture(body: &str) -> (tempfile::TempDir, super::Runtime) {
         use std::os::unix::fs::PermissionsExt as _;

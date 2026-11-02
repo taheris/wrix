@@ -60,6 +60,15 @@ pub(super) struct Recipe {
     pub config_digest: Digest,
 }
 
+impl Recipe {
+    pub fn launch_selector(&self, runtime: RuntimeKind) -> &str {
+        match runtime {
+            RuntimeKind::Podman => self.image_id.as_str(),
+            RuntimeKind::Container => self.binding.image().as_str(),
+        }
+    }
+}
+
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Wire {

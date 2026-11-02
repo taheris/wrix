@@ -726,7 +726,7 @@ pub fn client(sandbox: bool) -> Result<Client> {
     plan.authorize()?;
     let runtime = Runtime::from_env()?;
     runtime.validate_selected_owner(&plan)?;
-    let record = Record::read(plan.paths())?.ok_or(crate::dolt::Error::Incomplete)?;
+    let record = Record::read(plan.paths())?.ok_or(Error::DoltNotRegistered)?;
     let selection = plan
         .selection
         .as_ref()

@@ -127,6 +127,40 @@ impl Fixture {
 }
 
 #[test]
+fn missing_shared_dolt_deployment_reports_initialization_without_claiming_data_corruption()
+-> TestResult {
+    let fixture = Fixture::new()?;
+    let state = common::host_state_root(fixture.root.path());
+    assert!(!state.join("host-control/dolt").exists());
+    let output = run_command(
+        fixture
+            .command("podman")?
+            .args(["service", "dolt", "client"]),
+    )?;
+    assert!(!output.status.success());
+    assert!(
+        output
+            .stderr
+            .contains("no managed Dolt deployment is registered"),
+        "{}",
+        output.stderr
+    );
+    assert!(
+        output.stderr.contains("wrix service start"),
+        "{}",
+        output.stderr
+    );
+    assert!(
+        !output.stderr.contains("registration is incomplete"),
+        "{}",
+        output.stderr
+    );
+    assert!(!state.join("host-control/dolt").exists());
+    assert!(!state.join("host-lifecycle/shared.json").exists());
+    Ok(())
+}
+
+#[test]
 fn shared_readiness_fixture_accepts_only_the_native_management_probe() -> TestResult {
     if network::isolate()? {
         return Ok(());
@@ -1007,7 +1041,11 @@ fn service_start_uses_shared_image_digest_preflight_without_pruning() -> TestRes
                 usize::from(!installed && runtime == "container")
             );
             let args = fs::read(fixture.root.path().join("run.argv"))?;
-            let target = digest.as_bytes();
+            let target = if runtime == "container" {
+                b"wrix-service:test".as_slice()
+            } else {
+                digest.as_bytes()
+            };
             assert!(args.split(|byte| *byte == 0).any(|arg| arg == target));
             if runtime == "podman" {
                 assert!(
@@ -1087,7 +1125,12 @@ fn selected_owner_preserves_its_record_when_the_callers_package_changes() -> Tes
         let args = fs::read(fixture.root.path().join("run.argv"))?;
         let mut args: Vec<_> = args.split(|byte| *byte == 0).map(<[u8]>::to_vec).collect();
         let image = args.len() - 5;
-        assert_eq!(args[image], format!("sha256:{}", "a".repeat(64)).as_bytes());
+        let expected = if runtime == "container" {
+            b"wrix-service:test".to_vec()
+        } else {
+            format!("sha256:{}", "a".repeat(64)).into_bytes()
+        };
+        assert_eq!(args[image], expected);
         args[image] = format!("sha256:{}", "b".repeat(64)).into_bytes();
         let changed = args.join(&0);
         fs::write(fixture.root.path().join("run.argv"), &changed)?;

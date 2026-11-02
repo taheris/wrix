@@ -654,7 +654,7 @@ fn start_gateway(gateway: &Gateway, deployment: &Id) -> Result<()> {
                 .arg(format!("127.0.0.1:{}:3129", gateway.management))
                 .args(["-e", "WRIX_GATEWAY_KEY"])
                 .env("WRIX_GATEWAY_KEY", gateway.key.expose())
-                .arg(gateway.recipe.image_id.as_str())
+                .arg(gateway.recipe.launch_selector(gateway.runtime))
                 .args(["wrix-shared-service", "gateway"]);
             let output = command.stdin(Stdio::null()).output()?;
             if !output.status.success() {

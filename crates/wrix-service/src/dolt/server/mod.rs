@@ -38,7 +38,7 @@ pub async fn run(data: &Path, tcp: bool) -> Result<(), Error> {
     socket::clear_path(data, Path::new("/run/wrix/dolt/native.sock"))?;
     super::private_directory(&data.join("databases"))?;
     super::private_directory(&data.join("run"))?;
-    socket::clear(data)?;
+    socket::clear_path(data, &socket::Export::Sql.path(data, tcp))?;
     initialize(data)?;
     let configuration = data.join("server.yaml");
     super::atomic_json(&configuration, &configuration_value(data, tcp))?;
@@ -63,7 +63,7 @@ pub async fn run(data: &Path, tcp: bool) -> Result<(), Error> {
     let gate = crate::lifecycle::sql::Gate::default();
     let result = {
         let broker = super::broker::serve(data, tcp, gate.clone());
-        let sql = crate::lifecycle::sql::serve(data, gate.clone());
+        let sql = crate::lifecycle::sql::serve(data, gate.clone(), tcp);
         tokio::pin!(broker, sql);
         tokio::select! {
             result = dolt.wait() => { result?; Err(Error::Incomplete) },

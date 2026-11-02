@@ -1,12 +1,32 @@
-//! Retire only a dead, privately owned Unix endpoint under service ownership exclusion.
+//! Locate exported SQL/sync sockets and retire only dead, privately owned endpoints.
 use crate::dolt::Error;
 use fs2::FileExt;
 use std::{
     fs::{self, File},
     io,
     os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt},
-    path::Path,
+    path::{Path, PathBuf},
 };
+
+pub enum Export {
+    Sql,
+    Sync,
+}
+
+impl Export {
+    pub fn path(self, data: &Path, tcp: bool) -> PathBuf {
+        let name = match self {
+            Self::Sql => "dolt.sock",
+            Self::Sync => "sync.sock",
+        };
+        if tcp {
+            // Apple VirtioFS data mounts cannot host guest Unix sockets.
+            Path::new("/run/wrix/dolt").join(name)
+        } else {
+            data.join("run").join(name)
+        }
+    }
+}
 
 fn connect(path: &Path) -> io::Result<()> {
     use socket2::{Domain, SockAddr, Socket, Type};

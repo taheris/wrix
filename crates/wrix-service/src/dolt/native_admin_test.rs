@@ -204,7 +204,7 @@ async fn serve(data: &Path) -> TestResult {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     let gate = crate::lifecycle::sql::Gate::default();
-    let serving = crate::lifecycle::sql::serve(data, gate);
+    let serving = crate::lifecycle::sql::serve(data, gate, false);
     tokio::pin!(serving);
     loop {
         tokio::select! {

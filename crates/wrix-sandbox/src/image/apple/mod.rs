@@ -3,6 +3,7 @@ use super::{
     Digest, Error, ImageId, ImageRef, Value, content_digest_id, run_required, run_required_output,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
@@ -135,7 +136,7 @@ pub(super) fn attest(reference: &ImageRef, temporary: &Path) -> Result<(), Error
             reference.as_str(),
         ],
     )?;
-    let manifest = run_required_output(
+    let configuration = run_required_output(
         "skopeo",
         &[
             "--override-os",
@@ -143,18 +144,12 @@ pub(super) fn attest(reference: &ImageRef, temporary: &Path) -> Result<(), Error
             "--override-arch",
             architecture,
             "inspect",
+            "--config",
             "--raw",
             &format!("oci-archive:{}", archive.display()),
         ],
     )?;
-    let manifest: Value = serde_json::from_slice(&manifest.stdout)
-        .map_err(|source| Error::DescriptorJson { source })?;
-    let config = Digest::parse(
-        manifest
-            .pointer("/config/digest")
-            .and_then(Value::as_str)
-            .ok_or(Error::InvalidMetadata)?,
-    )?;
+    let config = config_digest(&configuration.stdout)?;
     let after = super::run_required_output("container", &["image", "inspect", reference.as_str()])?;
     let value: Value =
         serde_json::from_slice(&after.stdout).map_err(|source| Error::DescriptorJson { source })?;
@@ -177,6 +172,21 @@ pub(super) fn attest(reference: &ImageRef, temporary: &Path) -> Result<(), Error
         .map_err(|error| error.error)?;
     File::open(root)?.sync_all()?;
     Ok(())
+}
+
+fn config_digest(bytes: &[u8]) -> Result<Digest, Error> {
+    if bytes.len() > 16 * 1024 * 1024 {
+        return Err(Error::InvalidMetadata);
+    }
+    let config: Value =
+        serde_json::from_slice(bytes).map_err(|source| Error::DescriptorJson { source })?;
+    if !config.is_object() || config.get("rootfs").is_none() {
+        return Err(Error::InvalidMetadata);
+    }
+    Ok(Digest::parse(&format!(
+        "sha256:{:x}",
+        Sha256::digest(bytes)
+    ))?)
 }
 
 fn reported_id(bytes: &[u8]) -> Result<ImageId, Error> {
