@@ -952,6 +952,11 @@ pub(super) fn stop(host: &Host) -> Result<()> {
     let Some(plan) = Plan::load(&authority(host.roots().state()))? else {
         return Ok(());
     };
+    stop_gateways(&plan, &authority(host.roots().state()))
+}
+
+// The caller has stopped the controller under its native lifecycle exclusion.
+fn stop_gateways(plan: &Plan, authority: &Path) -> Result<()> {
     for gateway in std::iter::once(&plan.gateway)
         .chain(&plan.obsolete)
         .chain(plan.preparing.as_ref())
@@ -975,11 +980,14 @@ pub(super) fn stop(host: &Host) -> Result<()> {
                 .obsolete
                 .iter()
                 .any(|old| old.generation == gateway.generation)
-            && runtime.status(&gateway.name.0)? == RuntimeStatus::Stopped
+            && matches!(
+                runtime.status(&gateway.name.0)?,
+                RuntimeStatus::Stopped | RuntimeStatus::Missing
+            )
         {
-            gateway.record_eligible(&authority(host.roots().state()))?;
+            gateway.record_eligible(authority)?;
         }
     }
-    File::open(authority(host.roots().state()))?.sync_all()?;
+    File::open(authority)?.sync_all()?;
     Ok(())
 }

@@ -3,6 +3,41 @@ use std::os::unix::fs::PermissionsExt as _;
 use super::*;
 
 #[test]
+fn explicit_cold_shutdown_retires_a_missing_obsolete_gateway_not_the_current_one() {
+    const CHILD: &str = "WRIX_TEST_COLD_GATEWAY_RETIREMENT";
+    if let Some(root) = std::env::var_os(CHILD) {
+        let mut plan = plan();
+        plan.obsolete.push(plan.gateway.clone());
+        plan.gateway.generation = Generation::new(NonZeroU64::new(2).unwrap());
+        plan.gateway.name = "wrix-gateway-2".to_owned().try_into().unwrap();
+        stop_gateways(&plan, Path::new(&root)).unwrap();
+        assert!(
+            plan.obsolete[0]
+                .retirement(Path::new(&root))
+                .unwrap()
+                .is_some()
+        );
+        assert!(plan.gateway.retirement(Path::new(&root)).unwrap().is_none());
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let runtime = root.path().join("podman");
+    std::fs::write(&runtime, "#!/bin/bash\nset -euo pipefail\n[[ \"$1\" == inspect ]] || exit 64\nprintf 'Error: no such container\\n' >&2\nexit 125\n").unwrap();
+    std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "lifecycle::generation::test::explicit_cold_shutdown_retires_a_missing_obsolete_gateway_not_the_current_one", "--nocapture"])
+        .env(CHILD, root.path())
+        .env("WRIX_CONTAINER_RUNTIME", runtime)
+        .output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn gateway_port_pair_is_distinct() {
     let [data, management] = available().unwrap();
     assert_ne!(data, management);
