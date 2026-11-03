@@ -573,27 +573,32 @@ fn pull_fallback_preserves_local_intent() -> TestResult {
 
 #[test]
 fn disables_auto_export_idempotently() -> TestResult {
-    let fixture = Fixture::new("auto-export")?;
-    setup_minimal_repo(fixture.repo())?;
-    assert!(fixture.auto_export_enabled()?);
+    for export_auto in [None, Some("true")] {
+        let fixture = Fixture::new("auto-export")?;
+        setup_minimal_repo(fixture.repo())?;
+        assert!(fixture.auto_export_enabled()?);
 
-    let push = || -> TestResult<Vec<u8>> {
-        let output = invoke_push(fixture.repo(), &[fixture.fake_bin()], |command| {
-            configure_bd(command, &fixture, "success");
-            command.env_remove("BD_EXPORT_AUTO");
-        })?;
-        assert_eq!(output.code, 0, "stderr:\n{}", output.stderr);
-        assert!(!fixture.auto_export_enabled()?);
-        assert!(!fixture.repo().join(".beads/issues.jsonl").exists());
-        Ok(fs::read(fixture.repo().join(".beads/config.yaml"))?)
-    };
+        let push = || -> TestResult<Vec<u8>> {
+            let output = invoke_push(fixture.repo(), &[fixture.fake_bin()], |command| {
+                configure_bd(command, &fixture, "success");
+                match export_auto {
+                    Some(value) => command.env("BD_EXPORT_AUTO", value),
+                    None => command.env_remove("BD_EXPORT_AUTO"),
+                };
+            })?;
+            assert_eq!(output.code, 0, "stderr:\n{}", output.stderr);
+            assert!(!fixture.auto_export_enabled()?);
+            assert!(!fixture.repo().join(".beads/issues.jsonl").exists());
+            Ok(fs::read(fixture.repo().join(".beads/config.yaml"))?)
+        };
 
-    let config = push()?;
-    assert_eq!(push()?, config);
-    assert_eq!(
-        count_command(&fixture.bd_lines()?, "bd\tconfig\tset\texport.auto\tfalse"),
-        2
-    );
+        let config = push()?;
+        assert_eq!(push()?, config);
+        assert_eq!(
+            count_command(&fixture.bd_lines()?, "bd\tconfig\tset\texport.auto\tfalse"),
+            2
+        );
+    }
     Ok(())
 }
 

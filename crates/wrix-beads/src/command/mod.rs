@@ -427,7 +427,15 @@ fn sql_quote(value: &str) -> String {
 }
 
 fn disable_auto_export() -> Result<()> {
-    run_required("bd", &["config", "set", "export.auto", "false"])
+    // The configuration command's own post-run hook can still see the original setting.
+    let output = process_command_in(
+        Path::new("."),
+        "bd",
+        &["config", "set", "export.auto", "false"],
+    )
+    .env("BD_EXPORT_AUTO", "false")
+    .output()?;
+    status_to_result("bd", &output)
 }
 
 fn sync_dolt_remote(context: &Context, stderr: &mut impl Write) -> Result<ExitCode> {
