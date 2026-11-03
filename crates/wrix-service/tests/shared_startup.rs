@@ -27,6 +27,8 @@ mod controller;
 mod native_backend;
 #[path = "../../wrix-cli/tests/common/network.rs"]
 mod network;
+#[path = "shared_startup/registration.rs"]
+mod registration;
 #[path = "../../wrix-cli/tests/common/service_binding.rs"]
 #[expect(
     dead_code,

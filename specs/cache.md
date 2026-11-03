@@ -864,7 +864,7 @@ valid unchanged key through the Celler publication/signing path.
   because the repositories differ. [system?](test-ci:test-cache-celler-sharing)
 - Private views follow the explicitly selected namespace under
   [Workspace Admission](workspaces.md), not implicit grouping of nested clones.
-  [test?](../crates/wrix-cache/tests/celler_sharing.rs::private_views_follow_canonical_workspace_identity)
+  [test](../crates/wrix-cli/tests/workspace_admission.rs::private_views_follow_checked_workspace_admission)
 - Ordinary cache requests from unrelated repositories cannot read private-only
   metadata or archives, even using known paths, hashes or direct archive URLs.
   [system?](test-ci:test-cache-celler-sharing)
@@ -873,7 +873,7 @@ valid unchanged key through the Celler publication/signing path.
   [system?](test-ci:test-cache-celler-sharing)
 - Repository/agent input and supplied cache names cannot broaden the exact
   common-plus-own-private read set or enroll an additional audience.
-  [test?](../crates/wrix-cache/tests/celler_sharing.rs::read_authority_is_common_and_own_private_only)
+  [test](../crates/wrix-cache/src/backend/issuer/test/pull/mod.rs::sandbox_pull_credentials_are_exact_read_only_and_expire_after_one_day)
 - Native Nix receives only authorized endpoints, credentials and public keys,
   preserving signatures and excluding agent publishing/management authority.
   [system?](test-ci:test-cache-celler-sharing)

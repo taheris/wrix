@@ -939,7 +939,7 @@ tenant or component compromise/fault isolation.
   [test?](../crates/wrix-service/tests/host_control.rs::restart_preserves_uncertainty_and_single_backend_ownership)
 - Namespace registration uses shared role listeners without dynamic runtime port
   publication, serving mount changes or container replacement.
-  [test?](../crates/wrix-service/tests/host_control.rs::namespace_registration_uses_existing_role_listeners)
+  [test](../crates/wrix-service/tests/shared_startup.rs::registration::new_workspace_registers_without_container_replacement)
 - Native shared SQL authorization denies peer database/file-remote access and
   unrestricted filesystem/network operations, including after namespace stop.
   [system?](test-ci:test-services-shared-sql-tenancy)
@@ -1005,7 +1005,7 @@ tenant or component compromise/fault isolation.
 
 - Concurrent ordinary starts across workspaces select one host-user deployment
   without competing generation activation and independently register namespaces.
-  [test?](../crates/wrix-service/tests/generation_handoff.rs::concurrent_starts_preserve_one_deployment_selection)
+  [test](../crates/wrix-service/tests/shared_startup.rs::registration::concurrent_starts_preserve_one_deployment_selection)
 
 - Apple sandbox Dolt endpoint publication is guest-reachable and fails if no
   safe reachable route exists.
@@ -1017,7 +1017,7 @@ tenant or component compromise/fault isolation.
 - Workspace identity produces stable namespaces, shared role endpoint
   references, workspace control/data roots and locks without a container
   identity per checkout
-  [test?](../crates/wrix-service/tests/host_service.rs::workspace_namespaces_are_stable_and_distinct)
+  [test](../crates/wrix-service/tests/shared_startup.rs::registration::new_workspace_registers_without_container_replacement)
 
 - `mkDevShell` starts the service container by default for the project cache,
   `nixCache = false` suppresses cache-only startup, and any service container
@@ -1080,12 +1080,12 @@ tenant or component compromise/fault isolation.
   fallback is bound, persisted and reachable without workspace TCP leases,
   retained service endpoints are not relocated, and inability to bind
   loopback-only fails.
-  [test?](../crates/wrix-service/tests/host_service.rs::role_port_leases_are_shared_reachable_and_loopback_only)
+  [test](../crates/wrix-service/tests/deployment_endpoints.rs::busy_saved_role_port_falls_back_to_a_bound_persisted_loopback_listener)
 
 - Two independent workspaces share one host-user deployment without replacing
   its serving generations when a new workspace registers; their workspace
   authorization/control roots remain distinct while role listeners are shared.
-  [test?](../crates/wrix-cli/tests/host_service.rs::new_workspace_registers_without_container_replacement)
+  [test](../crates/wrix-service/tests/shared_startup.rs::registration::new_workspace_registers_without_container_replacement)
 - Linux and Darwin managed Dolt/Celler data is narrowly mounted, including
   delegated cache-signing state, while host publishing/issuer/control roots,
   manifests and arbitrary host trees remain unmounted.
@@ -1103,7 +1103,7 @@ tenant or component compromise/fault isolation.
   even with Beads/cache disabled.
   [test?](../crates/wrix-cli/tests/host_service.rs::shared_startup_tracks_required_features_not_shell_lifetime)
 - Invalid or concurrent registrations do not overwrite peer namespace state.
-  [test?](../crates/wrix-service/tests/host_service.rs::namespace_registration_is_atomic_and_isolated)
+  [test](../crates/wrix-service/tests/shared_startup.rs::registration::malformed_and_concurrent_registrations_preserve_peer_namespace)
 - The packaged service image cohosts the proxy, Dolt and Celler through the
   existing image-source/install contract, without a host-native cache daemon.
   [system?](test-ci:test-services-host-image)

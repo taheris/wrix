@@ -61,6 +61,65 @@ fn integrated_admission_preserves_caller_and_primary_scope_and_is_idempotent() {
 }
 
 #[test]
+fn private_views_follow_checked_workspace_admission() {
+    use wrix_cache::backend::pull::ReadSet;
+    use wrix_core::path::WorkspaceHash;
+
+    let fixture = Fixture::new();
+    fixture.initialize();
+    let primary = fixture.repository("primary");
+    let first = fixture.repository("primary/.loom/beads/first");
+    let second = fixture.repository("primary/.loom/integration");
+    let unknown = fixture.repository("primary/.loom/beads/unknown");
+    let peer = fixture.repository("peer");
+    let mut admitted = Vec::new();
+    for checkout in [&first, &second, &peer] {
+        let (scope, membership) = if checkout == &peer {
+            (&peer, "peer")
+        } else {
+            (&primary, "shared")
+        };
+        fixture.adapter(checkout, scope, membership);
+        let before = snapshot(&fixture.state());
+        let missing = fixture.run(&["inspect", "--checkout", checkout.to_str().unwrap()]);
+        assert!(!missing.status.success());
+        assert_eq!(snapshot(&fixture.state()), before);
+        let admitted_reply = fixture.admit(checkout, membership, &["--allocate"]);
+        assert!(
+            admitted_reply.status.success(),
+            "{}",
+            String::from_utf8_lossy(&admitted_reply.stderr)
+        );
+        let before = snapshot(&fixture.state());
+        let inspected = fixture.run(&["inspect", "--checkout", checkout.to_str().unwrap()]);
+        assert!(
+            inspected.status.success(),
+            "{}",
+            String::from_utf8_lossy(&inspected.stderr)
+        );
+        let report = String::from_utf8(inspected.stdout).unwrap();
+        let key = report
+            .lines()
+            .find_map(|line| line.strip_prefix("native_key: "))
+            .unwrap();
+        admitted.push(ReadSet::for_workspace(&WorkspaceHash::parse(key).unwrap()).unwrap());
+        assert_eq!(snapshot(&fixture.state()), before);
+    }
+    assert_eq!(admitted[0].private(), admitted[1].private());
+    assert_ne!(admitted[0].private(), admitted[2].private());
+    assert_eq!(admitted[0].common(), admitted[2].common());
+    fixture.adapter(&unknown, &primary, "shared");
+    let before = snapshot(&fixture.state());
+    assert!(
+        !fixture
+            .run(&["inspect", "--checkout", unknown.to_str().unwrap()])
+            .status
+            .success()
+    );
+    assert_eq!(snapshot(&fixture.state()), before);
+}
+
+#[test]
 fn disabling_integration_does_not_release_a_native_key() {
     let fixture = Fixture::new();
     fixture.initialize();
