@@ -431,8 +431,8 @@ missing tools on `PATH`, or maintain a hook-id skip list.
   Darwin embeds both startup stages and selects its immutable network bootstrap
   as the image startup command. Bootstrap execution and capability-drop behavior
   are owned by `sandbox.md` [check](test-ci:test-image-entrypoint-command)
-- `wrix.prekHooks`, `wrix.prePushChecks`, and `wrix.skipIfMissing` all land in
-  every profile image's store closure [check](test-ci:test-prek-hooks-closure)
+- `wrix.prekHooks` and `wrix.prePushChecks` both land in every profile image's
+  store closure [check](test-ci:test-prek-hooks-closure)
 - The Linux entrypoint sets `core.hooksPath` for the `/workspace` Git repository
   to the `wrix.prekHooks` store path when `.pre-commit-config.yaml` is present
   [system](verify:images.linux-entrypoint-core-hooks-path)
@@ -486,10 +486,10 @@ missing tools on `PATH`, or maintain a hook-id skip list.
    platform agent entrypoint, and selects the bootstrap as the startup command.
    `sandbox.md` owns bootstrap execution and the capability-drop contract.
 7. **Hook installation** — every profile image carries `wrix.prekHooks` plus
-   `wrix.prePushChecks` and `wrix.skipIfMissing` on `PATH`; the entrypoint
-   configures `core.hooksPath` for the `/workspace` repository when
-   `.pre-commit-config.yaml` is present, including when `.git` is a
-   linked-worktree file. See `pre-commit.md` for the wrapper contracts.
+   `wrix.prePushChecks` on `PATH`; the entrypoint configures `core.hooksPath`
+   for the `/workspace` repository when `.pre-commit-config.yaml` is present,
+   including when `.git` is a linked-worktree file. See `pre-commit.md` for the
+   wrapper contracts.
 8. **Profile-image provenance-tiered layering** — each profile image is a
    four-tier graph (base → stable-profile → agent → leaf). Each tier's layer
    membership is fixed by its own closed contents and removes or skips the union

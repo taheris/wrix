@@ -55,7 +55,6 @@ let
   coreEnvPaths = [
     notifyClient
     prekWrappers.prePushChecks
-    prekWrappers.skipIfMissing
   ]
   ++ (profile.corePackages or [ ]);
 

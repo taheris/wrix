@@ -78,8 +78,7 @@ For compatibility with installers that only select the bundle, an absent binding
 can resolve packaged `wrix-prek` on PATH. An existing invalid/stale binding
 never falls back to another platform/context or an ambient runner. Missing
 bootstrap tools, runner, or packaged runtime fail with repair guidance, not a
-silent hook skip. Optional consumer tools still use explicit `skip-if-missing`
-policy.
+silent hook skip.
 [test](../crates/wrix-cli/tests/prek_runtime.rs::stale_binding_does_not_fall_back_to_ambient_runner)
 
 Reloading the updated Wrix devshell repairs the current binding even when
@@ -117,13 +116,13 @@ and one-use consumption rather than age.
 
 ## Hook-Entry Wrappers
 
-`wrix.prePushChecks` and `wrix.skipIfMissing` are sibling `writeShellScriptBin`
-derivations that prek hook `entry:` lines can name. `profiles.md` owns host
-devshell PATH exposure, while `image-builder.md` owns profile-image PATH
-exposure. The `prePushChecks` derivation packages the same script that this
-repository exposes at `bin/pre-push-checks`. Loom-managed repositories invoke
-the repo-local path so Loom can parse stable per-hook marker metadata without
-relying on ambient `PATH`; other consumers can use the packaged command.
+`wrix.prePushChecks` is a `writeShellScriptBin` derivation that prek hook
+`entry:` lines can name. `profiles.md` owns host devshell PATH exposure, while
+`image-builder.md` owns profile-image PATH exposure. The `prePushChecks`
+derivation packages the same script that this repository exposes at
+`bin/pre-push-checks`. Loom-managed repositories invoke the repo-local path so
+Loom can parse stable per-hook marker metadata without relying on ambient
+`PATH`; other consumers can use the packaged command.
 
 ### `pre-push-checks`
 
@@ -157,20 +156,6 @@ metadata. `loom gate verify-marker` is not a standalone pre-push hook: each slow
 hook asks the wrapper whether a marker covers that exact command and falls
 through normally when it does not.
 
-### `skip-if-missing`
-
-Wraps a check whose required tool may not be on `PATH` in every context.
-Contract:
-
-```
-skip-if-missing <tool> -- <command> [args…]
-```
-
-If `<tool>` resolves on `PATH`, `exec` the command. If absent, exit 0 silently.
-The wrapper keeps hooks inert in contexts that omit an optional runtime
-dependency. Knowledge of "this hook needs `<tool>`" lives in the hook entry,
-next to the command — not in a wrix-curated skip list.
-
 ### Relationship to `push-verified`
 
 The `.wrix/push-verified` stamp is an exact-transaction, one-use approval: the
@@ -186,8 +171,9 @@ bounded to one network attempt.
 PATH exposure, and entrypoint configuration of `core.hooksPath`, including
 linked-worktree handling. This spec owns the resulting hook behavior: configured
 pre-commit and pre-push stages dispatch through the shared bundle, and a failing
-hook aborts the Git operation. Optional tools remain explicit at the point of
-use through `skip-if-missing` rather than a wrix-side hook-id skip list.
+hook aborts the Git operation. Configured checks run directly; a missing
+required tool fails the hook rather than silently skipping verification.
+[system](verify:prek.config-wrapper-contract)
 
 ### Host Build Publication
 
@@ -203,10 +189,10 @@ success is included; arbitrary non-Nix build directories are not harvested.
 
 Cache-aware realization belongs at the Wrix-managed Nix execution seam after
 existing hook admission, not unconditional generic-wrapper discovery. The shared
-shims and marker/optional-tool wrappers retain their runtime dependency
-contracts. This integration neither changes configured checks or their
-full/scoped selection nor reruns checks skipped by exact-transaction stamps,
-valid markers or Git's `--no-verify` solely to create cache artifacts.
+shims and marker-aware wrapper retain their runtime dependency contracts. This
+integration neither changes configured checks or their full/scoped selection nor
+reruns checks skipped by exact-transaction stamps, valid markers or Git's
+`--no-verify` solely to create cache artifacts.
 
 Publication follows cache-owned automatic pending/error rules. Check failures
 still abort Git and cannot mint approval stamps; cache contents/upload success
@@ -282,7 +268,7 @@ marker. [system](verify:prek.ci-platform-policy)
 - Returning to a previously stamped HEAD after an intervening HEAD failed its
   checks runs the checks again rather than reviving the old approval
   [system](verify:prek.pre-push-stamp-cannot-revive)
-- `wrix.prePushChecks` and `wrix.skipIfMissing` are exposed by the wrix library
+- `wrix.prePushChecks` is exposed by the wrix library
   [check](verify:prek.wrappers-on-devshell-path)
 - `pre-push-checks` passes the hook id, entry, and push range to
   `loom gate verify-marker` and exits 0 without running the wrapped command when
@@ -299,14 +285,11 @@ marker. [system](verify:prek.ci-platform-policy)
   entry metadata is absent [system](verify:prek.pre-push-checks-no-metadata)
 - `pre-push-checks` execs the wrapped command when `loom gate verify-marker` is
   not on `PATH` [system](verify:prek.pre-push-checks-no-loom)
-- `skip-if-missing <tool> -- <cmd>` execs `<cmd>` when `<tool>` resolves on
-  `PATH` [system](verify:prek.skip-if-missing-present)
-- `skip-if-missing <tool> -- <cmd>` exits 0 without running `<cmd>` when
-  `<tool>` is absent from `PATH` [system](verify:prek.skip-if-missing-absent)
-- The wrappers add no utility dependencies of their own: `pre-push-checks` needs
-  only Bash and Git before handing control to optional Loom or the wrapped
-  command, and `skip-if-missing` needs only Bash before handing control to the
-  probed or wrapped command [system](verify:prek.wrapper-runtime-dependencies)
+- The repository Loom pre-push hook fails when Loom is absent from PATH.
+  [system](verify:prek.config-wrapper-contract)
+- The wrapper adds no utility dependencies of its own: `pre-push-checks` needs
+  only Bash and Git before handing control to optional marker validation or the
+  wrapped command [system](verify:prek.wrapper-runtime-dependencies)
 - A pre-commit hook configured in `.pre-commit-config.yaml` fires when
   `git commit` runs inside a profile container
   [system](test-ci:test-container-pre-commit)
@@ -374,10 +357,10 @@ marker. [system](verify:prek.ci-platform-policy)
 5. **Marker-aware short-circuit** — each pre-push entry supplies stable hook id,
    entry, and range metadata through `bin/pre-push-checks`; the wrapper consults
    `loom gate verify-marker` to skip only the exact covered command.
-6. **Graceful degrade in wrappers** — `pre-push-checks` executes the wrapped
-   command when the marker, hook id, or Loom binary is absent, or when marker
-   validation fails. `skip-if-missing` exits 0 silently when `<tool>` is absent
-   from `PATH`. Neither wrapper exits non-zero on a missing-input path.
+6. **Marker fallback** — `pre-push-checks` executes the wrapped command when the
+   marker, hook id, or Loom binary is absent, or when marker validation fails.
+   The wrapped command's failure, including a missing executable, fails the
+   hook.
 7. **Container hook parity** — once installed through the image-builder-owned
    surface, the shared bundle dispatches configured hooks equivalently inside
    the container and on the host.
@@ -391,8 +374,7 @@ marker. [system](verify:prek.ci-platform-policy)
    contract of `loom gate verify-marker`. Marker schema and validation evolution
    do not require a Wrix change.
 3. **Runtime dependency boundary** — `pre-push-checks` uses Bash and Git before
-   handing control to Loom or the wrapped command; `skip-if-missing` uses Bash
-   before handing control to the probed or wrapped command.
+   handing control to Loom or the wrapped command.
 4. **Pre-push coverage** — The pre-push chain runs selected CI-only realization
    targets on both Linux and Darwin. Remote Nix builders can realize Linux image
    closures for Darwin callers without removing checks from the push gate.
@@ -413,6 +395,4 @@ marker. [system](verify:prek.ci-platform-policy)
 - Specific hook commands in Wrix's or downstream projects'
   `.pre-commit-config.yaml` — wrix ships the wrappers, not the hook list.
 - `push-verified` stamp deprecation/removal — orthogonal to `pre-push-checks`.
-- A wrix-owned hook-id skip list for profiles that omit tools — optional
-  dependencies are handled via `skip-if-missing` at the point of use, not via a
-  wrix-side filter.
+- A wrix-owned hook-id skip list for profiles that omit tools.

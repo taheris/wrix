@@ -52,7 +52,7 @@ repos:
     hooks:
       - id: wrapper-on-path
         name: wrapper-on-path
-        entry: skip-if-missing nonexistent-tool-xyz -- false
+        entry: pre-push-checks -- true
         language: system
         stages: [$stage]
         always_run: true

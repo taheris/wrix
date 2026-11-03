@@ -17,8 +17,6 @@ GIT_DIR="$(dirname "$(command -v git)")"
 TOUCH_BIN="$(command -v touch)"
 PRE_PUSH_CHECKS_BIN="$(wrix_prek_wrapper_bin prePushChecks pre-push-checks)"
 PRE_PUSH_CHECKS_DIR="$(dirname "$PRE_PUSH_CHECKS_BIN")"
-SKIP_IF_MISSING_BIN="$(wrix_prek_wrapper_bin skipIfMissing skip-if-missing)"
-SKIP_IF_MISSING_DIR="$(dirname "$SKIP_IF_MISSING_BIN")"
 
 WORK="$TEST_TMP/work"
 LOOM_DIR="$TEST_TMP/loom-bin"
@@ -45,21 +43,4 @@ if [[ ! -e "$PRE_PUSH_SENTINEL" ]]; then
   exit 1
 fi
 
-TOOL_DIR="$TEST_TMP/tool-bin"
-mkdir -p "$TOOL_DIR"
-cat >"$TOOL_DIR/probe-tool" <<EOF
-#!$BASH_BIN
-set -euo pipefail
-exit 0
-EOF
-chmod +x "$TOOL_DIR/probe-tool"
-
-SKIP_SENTINEL="$TEST_TMP/skip-sentinel"
-env -i PATH="$TOOL_DIR:$SKIP_IF_MISSING_DIR" \
-  skip-if-missing probe-tool -- "$TOUCH_BIN" "$SKIP_SENTINEL"
-if [[ ! -e "$SKIP_SENTINEL" ]]; then
-  echo "FAIL: skip-if-missing did not run with only its probe and wrapped command available" >&2
-  exit 1
-fi
-
-printf 'PASS: wrappers require only their declared ambient commands\n'
+printf 'PASS: pre-push-checks requires only its declared ambient commands\n'

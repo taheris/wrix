@@ -33,7 +33,6 @@
           prekHooks
           profiles
           rustProfile
-          skipIfMissing
           ;
       };
     };

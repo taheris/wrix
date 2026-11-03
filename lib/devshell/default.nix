@@ -201,7 +201,6 @@ in
         ++ [
           rustCli.wrix
           prekWrappers.prePushChecks
-          prekWrappers.skipIfMissing
         ];
       env = (resolvedProfile.hostEnv or resolvedProfile.env) // cacheEnv // checkedEnv // projectEnv;
       shellHook = ''

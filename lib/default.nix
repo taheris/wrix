@@ -68,7 +68,7 @@ let
 in
 {
   inherit (devshell) mkDevShell;
-  inherit (prek) prekHooks prePushChecks skipIfMissing;
+  inherit (prek) prekHooks prePushChecks;
   inherit (profile) deriveProfile rustProfile;
   inherit (sandbox)
     capabilities

@@ -5,7 +5,7 @@
 #   `git push` runs inside a profile container.
 #
 # Seeds a workspace with a git repo + a local bare remote + a
-# .pre-commit-config.yaml naming two pre-push hooks (a skip-if-missing
+# .pre-commit-config.yaml naming two pre-push hooks (a pre-push-checks
 # wrapper probe and a sentinel touch), commits a seed file on the host
 # (no hooks installed there yet), then runs `git push origin main`
 # inside the container. The entrypoint installs core.hooksPath, the
@@ -149,7 +149,7 @@ repos:
     hooks:
       - id: wrapper-on-path
         name: wrapper-on-path
-        entry: skip-if-missing nonexistent-tool-xyz -- false
+        entry: pre-push-checks -- true
         language: system
         stages: [pre-push]
         always_run: true

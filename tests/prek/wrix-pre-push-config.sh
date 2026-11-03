@@ -21,11 +21,12 @@ require_tool bash
 require_tool chmod
 require_tool cp
 require_tool git
+require_tool grep
+require_tool ln
 require_tool mkdir
 require_tool mktemp
 require_tool prek
 require_tool rm
-require_tool skip-if-missing
 
 BASH_BIN="$(command -v bash)"
 PREK_BIN="$(command -v prek)"
@@ -67,7 +68,7 @@ chmod +x "$TEST_TMP/bin/loom"
     "$PREK_BIN" run --stage pre-push --all-files --no-progress
 )
 
-expected=$'nix-flake-check|nix flake check|@{u}..HEAD\nloom-gate-verify|skip-if-missing loom -- env WRIX_PRE_PUSH=1 RUSTC_WRAPPER= CARGO_BUILD_RUSTC_WRAPPER= loom gate verify --diff @{upstream}..HEAD|@{u}..HEAD'
+expected=$'nix-flake-check|nix flake check|@{u}..HEAD\nloom-gate-verify|env WRIX_PRE_PUSH=1 RUSTC_WRAPPER= CARGO_BUILD_RUSTC_WRAPPER= loom gate verify --diff @{upstream}..HEAD|@{u}..HEAD'
 actual="$(<"$CALL_LOG")"
 if [[ "$actual" != "$expected" ]]; then
   echo "FAIL: pre-push hooks did not pass canonical marker metadata" >&2
@@ -139,3 +140,32 @@ for nix_status in 0 100; do
 done
 
 printf 'PASS: Nix failure stops pre-push before Loom verification\n'
+
+MISSING_TOOL_PATH="$TEST_TMP/missing-tool-bin"
+mkdir -p "$MISSING_TOOL_PATH"
+for tool in bash env git; do
+  ln -s "$(command -v "$tool")" "$MISSING_TOOL_PATH/$tool"
+done
+for marker in absent present; do
+  if [[ "$marker" == present ]]; then
+    echo '{}' >"$WORK/.loom/marker.json"
+  fi
+  status=0
+  (
+    cd "$WORK"
+    PATH="$MISSING_TOOL_PATH" PREK_COLOR=never \
+      "$PREK_BIN" run loom-gate-verify --stage pre-push --all-files --no-progress
+  ) >"$TEST_TMP/missing-tool.log" 2>&1 || status=$?
+  if [[ "$status" -eq 0 ]]; then
+    echo "FAIL: missing Loom silently passed with marker $marker" >&2
+    exit 1
+  fi
+  if ! grep -F 'loom' "$TEST_TMP/missing-tool.log" >/dev/null ||
+    ! grep -Ei 'No such file|not found' "$TEST_TMP/missing-tool.log" >/dev/null; then
+    cat "$TEST_TMP/missing-tool.log" >&2
+    echo "FAIL: hook failed for a reason other than missing Loom" >&2
+    exit 1
+  fi
+done
+
+printf 'PASS: missing Loom fails pre-push with and without a marker\n'

@@ -52,8 +52,6 @@ in
   "prek.pre-push-checks-no-metadata".script =
     wholeRepoScript "tests/prek/pre-push-checks-no-metadata.sh";
   "prek.pre-push-checks-no-loom".script = wholeRepoScript "tests/prek/pre-push-checks-no-loom.sh";
-  "prek.skip-if-missing-present".script = wholeRepoScript "tests/prek/skip-if-missing-present.sh";
-  "prek.skip-if-missing-absent".script = wholeRepoScript "tests/prek/skip-if-missing-absent.sh";
   "prek.wrapper-runtime-dependencies".script =
     wholeRepoScript "tests/prek/wrapper-runtime-dependencies.sh";
   "prek.config-wrapper-contract".script = wholeRepoScript "tests/prek/wrix-pre-push-config.sh";

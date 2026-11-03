@@ -5,7 +5,7 @@
 #   `git commit` runs inside a profile container.
 #
 # Seeds a workspace with a git repo + a .pre-commit-config.yaml naming
-# two hooks (a skip-if-missing wrapper probe and a sentinel touch), then
+# two hooks (a pre-push-checks wrapper probe and a sentinel touch), then
 # runs `git add -A && git commit -m test` inside the container with the
 # entrypoint as the entrypoint. The entrypoint installs core.hooksPath
 # to wrix.prekHooks before exec'ing the override; the commit's
@@ -150,7 +150,7 @@ repos:
     hooks:
       - id: wrapper-on-path
         name: wrapper-on-path
-        entry: skip-if-missing nonexistent-tool-xyz -- false
+        entry: pre-push-checks -- true
         language: system
         stages: [pre-commit]
         always_run: true
@@ -208,7 +208,7 @@ cat "$commit_log" >&2
 }
 
 # The wrapper-on-path probe would have failed the commit if
-# `skip-if-missing` were not on PATH (`command not found` is non-zero);
-# the commit succeeding above is the evidence that both wrappers landed.
+# `pre-push-checks` were not on PATH (`command not found` is non-zero);
+# the commit succeeding above is the evidence that the wrapper landed.
 
 echo "PASS: container-pre-commit" >&2

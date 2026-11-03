@@ -28,7 +28,7 @@
 #     core.hooksPath still equals /some/old/path (passive opt-out by design).
 #
 #   test_wrappers_exposed_and_on_devshell_path
-#     pre-push-checks and skip-if-missing are exported from the flake library
+#     pre-push-checks is exported from the flake library
 #     and included in mkDevShell's package set.
 #
 # Usage:
@@ -360,9 +360,7 @@ test_wrappers_exposed_and_on_devshell_path() {
       packageNames = map (drv: drv.pname or drv.name or (builtins.toString drv)) shell.nativeBuildInputs;
     in {
       hasPrePushChecks = lib ? prePushChecks;
-      hasSkipIfMissing = lib ? skipIfMissing;
       prePushChecksPath = if lib ? prePushChecks then builtins.toString lib.prePushChecks else "";
-      skipIfMissingPath = if lib ? skipIfMissing then builtins.toString lib.skipIfMissing else "";
       inherit packageNames;
     }
   ')
@@ -372,24 +370,12 @@ test_wrappers_exposed_and_on_devshell_path() {
     echo "FAIL: flake legacyPackages.lib does not expose prePushChecks" >&2
     failed=$((failed + 1))
   fi
-  if [[ "$(jq -r '.hasSkipIfMissing' <<<"$result")" != "true" ]]; then
-    echo "FAIL: flake legacyPackages.lib does not expose skipIfMissing" >&2
-    failed=$((failed + 1))
-  fi
   if [[ -z "$(jq -r '.prePushChecksPath' <<<"$result")" ]]; then
     echo "FAIL: prePushChecks did not evaluate to a store path" >&2
     failed=$((failed + 1))
   fi
-  if [[ -z "$(jq -r '.skipIfMissingPath' <<<"$result")" ]]; then
-    echo "FAIL: skipIfMissing did not evaluate to a store path" >&2
-    failed=$((failed + 1))
-  fi
   if ! jq -e 'any(.packageNames[]; . == "pre-push-checks")' <<<"$result" >/dev/null; then
     echo "FAIL: mkDevShell nativeBuildInputs lacks pre-push-checks" >&2
-    failed=$((failed + 1))
-  fi
-  if ! jq -e 'any(.packageNames[]; . == "skip-if-missing")' <<<"$result" >/dev/null; then
-    echo "FAIL: mkDevShell nativeBuildInputs lacks skip-if-missing" >&2
     failed=$((failed + 1))
   fi
 

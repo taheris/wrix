@@ -181,7 +181,6 @@ let
     notifyClient
     prekRunner
     prekWrappers.prePushChecks
-    prekWrappers.skipIfMissing
   ]
   ++ (profile.packages or [ ])
   ++ agentPackages;

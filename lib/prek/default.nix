@@ -6,7 +6,7 @@ let
 
 in
 {
-  inherit (wrappers) prePushChecks skipIfMissing;
+  inherit (wrappers) prePushChecks;
 
   prekHooks = hooks;
 }

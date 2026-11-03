@@ -1464,7 +1464,7 @@ let
   };
   prekSurfaceChecks = concatStringsSep "\n" (
     mapAttrsToList (name: image: ''
-      check_surfaces "${name}" "${image.source_kind}" "${inspectionImage image}" "${prekHooksBundle}" "${prekRunner}" "${prekWrappers.prePushChecks}" "${prekWrappers.skipIfMissing}"
+      check_surfaces "${name}" "${image.source_kind}" "${inspectionImage image}" "${prekHooksBundle}" "${prekRunner}" "${prekWrappers.prePushChecks}"
     '') prekSurfaceImageMatrix
   );
   prekHooksClosureTest = pkgs.writeShellApplication {
@@ -1486,13 +1486,12 @@ let
           local hooks="$4"
           local runner="$5"
           local pre_push="$6"
-          local skip_missing="$7"
           local image_dir="$tmp/$image_name"
           local paths="$tmp/$image_name.paths"
           local surface_path
           prepare_image_artifact "$image_name" "$source_kind" "$source" "$image_dir" "$image_dir.layers"
           list_layer_store_paths "$image_dir" "$image_dir.layers" >"$paths"
-          for surface_path in "$hooks" "$runner" "$pre_push" "$skip_missing"; do
+          for surface_path in "$hooks" "$runner" "$pre_push"; do
               if ! grep -qxF "$surface_path" "$paths"; then
                   echo "FAIL: $surface_path is absent from emitted $image_name image layers" >&2
                   exit 1
