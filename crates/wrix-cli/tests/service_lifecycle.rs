@@ -121,8 +121,8 @@ fn public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql() -
         set_mode(&bin.join(name), 0o755)?;
     }
     native_backend::install(root.path())?;
-    let native_bd = std::env::var_os("WRIX_REAL_BD_BIN")
-        .or_else(|| std::env::var_os("WRIX_TEST_BD"))
+    let native_bd = std::env::var_os("WRIX_TEST_BD")
+        .or_else(|| std::env::var_os("WRIX_REAL_BD_BIN"))
         .ok_or("missing native Beads fixture")?;
     let native_package = root.path().join("native-package");
     fs::create_dir_all(native_package.join("bin"))?;

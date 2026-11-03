@@ -1,6 +1,40 @@
 use std::{collections::BTreeMap, fs, os::unix::fs::PermissionsExt, path::Path, process::Command};
 
 #[test]
+fn nextest_setup_does_not_inherit_injected_git_policy() {
+    let root = tempfile::tempdir().unwrap();
+    let environment = root.path().join("environment");
+    let script =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/prepare-isolated-host-roots.sh");
+    let output = Command::new("bash")
+        .arg(script)
+        .env("NEXTEST_ENV", &environment)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let text = fs::read_to_string(environment).unwrap();
+    let values: BTreeMap<_, _> = text
+        .lines()
+        .map(|line| line.split_once('=').unwrap())
+        .collect();
+    let mut git = Command::new("git");
+    git.current_dir(root.path())
+        .args(["config", "--get", "fixture.inherited"])
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "fixture.inherited")
+        .env("GIT_CONFIG_VALUE_0", "caller-policy");
+    let inherited = git.output().unwrap();
+    assert!(inherited.status.success());
+    assert_eq!(inherited.stdout, b"caller-policy\n");
+    let isolated = git.envs(values).output().unwrap();
+    assert_eq!(isolated.status.code(), Some(1));
+    assert!(isolated.stdout.is_empty());
+    assert!(isolated.stderr.is_empty());
+}
+
+#[test]
 fn nextest_setup_isolates_home_and_cache_without_mutating_the_callers_home() {
     let root = tempfile::tempdir().unwrap();
     let caller = root.path().join("caller-home");

@@ -228,7 +228,9 @@ impl Fixture {
         let fixture = Self {
             bd_log: base_path.join("bd.log"),
             git_log: base_path.join("git.log"),
-            real_bd: find_program("bd")?,
+            real_bd: env::var_os("WRIX_TEST_BD")
+                .map(PathBuf::from)
+                .map_or_else(|| find_program("bd"), Ok)?,
             _base: base,
             repo,
             home,

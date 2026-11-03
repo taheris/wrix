@@ -317,7 +317,7 @@ fn run_wrix_in(cwd: &Path, args: &[&str]) -> TestResult<RunResult> {
 }
 
 fn run_wrix_command(command: &mut Command) -> TestResult<RunResult> {
-    let output = command.output()?;
+    let output = command.env("HOSTNAME", "wrix-cli-fixture").output()?;
     Ok(RunResult {
         status: output.status,
         stdout: String::from_utf8(output.stdout)?,
