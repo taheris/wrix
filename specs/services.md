@@ -1007,10 +1007,11 @@ tenant or component compromise/fault isolation.
   without competing generation activation and independently register namespaces.
   [test?](../crates/wrix-service/tests/generation_handoff.rs::concurrent_starts_preserve_one_deployment_selection)
 
-- Apple sandbox Dolt endpoint publication is guest-reachable and stable across
-  authorized routing changes, fails if no safe reachable route exists, and keeps
-  physical-host publication loopback-only.
+- Apple sandbox Dolt endpoint publication is guest-reachable and fails if no
+  safe reachable route exists.
   [test](../crates/wrix-service/src/lifecycle/generation/test.rs::apple_endpoint_planning_rejects_unpublished_or_host_only_routes)
+- Apple sandbox Dolt endpoints stay stable across authorized routing changes,
+  while physical-host publication remains loopback-only.
   [test](../crates/wrix-service/src/route/guest_test.rs::apple_endpoint_routes_stay_stable_across_authorized_backend_changes)
 
 - Workspace identity produces stable namespaces, shared role endpoint
