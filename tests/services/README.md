@@ -36,17 +36,26 @@ filesystem export, native roots or installed-store availability.
 These are component integration tests, not deployed worker, container mount,
 production build sandbox, shared installed-store or performance acceptance. The
 native backend VM runs the complete backend suite with ignored cases enabled,
-then a real host-policy-withdrawal/fresh-Nix-import suite. It also runs all CLI
-service-lifecycle cases and the two simulated containment-lifetime cases that
-require host capability. These six host-only cases are ignored in ordinary
-Nextest: a worker marker must deny the host API, not be bypassed for tests. The
-disposable guest has no worker marker and runs those cases explicitly. This
-includes the seven canonical-daemon/native-lock cases: production backend
-ownership exclusion, native Rust store access and admitted-hook publication.
-Run:
+then a real host-policy-withdrawal/fresh-Nix-import suite. It also runs the two
+simulated containment-lifetime cases that require host capability. These six
+host-only cases are ignored in ordinary Nextest: a worker marker must deny the
+host API, not be bypassed for tests. The disposable guest has no worker marker
+and runs those cases explicitly. This includes the seven
+canonical-daemon/native-lock cases: production backend ownership exclusion,
+native Rust store access and admitted-hook publication. Run:
 
 ```sh
 nix run .#legacyPackages.x86_64-linux.ciApps.test-cache-celler-native-system
+```
+
+The broader native service-lifecycle gate retains that complete Celler and host
+boundary suite and additionally runs every CLI service-lifecycle case, including
+ignored cases, in isolated processes. It collects nonzero case results and fails
+after reporting them all; original case and production deadlines are unchanged.
+Its results are separate from focused Celler acceptance:
+
+```sh
+nix run .#legacyPackages.x86_64-linux.ciApps.test-service-lifecycle-native-system
 ```
 
 The Nix-built test executables and scripts are self-contained guest fixtures.

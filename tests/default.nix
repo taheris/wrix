@@ -213,6 +213,10 @@ let
   systemTests = optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
     services-userspace-vm-smoke = import ./services/userspace-vm.nix { inherit pkgs; };
     cache-celler-native-system = import ./services/cache-backend-system.nix { inherit pkgs wrix; };
+    service-lifecycle-native-system = import ./services/cache-backend-system.nix {
+      inherit pkgs wrix;
+      includeServiceLifecycle = true;
+    };
     shared-nix-pool-bootstrap = import ./store/pool-bootstrap.nix { inherit pkgs wrix; };
     beads-live-system = import ./services/beads-system.nix {
       inherit pkgs wrix;
@@ -543,6 +547,10 @@ let
       )
       (
         (mkCiApp (mkSystemTestCiApp "test-cache-celler-native-system" "cache-celler-native-system") "test-cache-celler-native-system")
+        // nixosVm
+      )
+      (
+        (mkCiApp (mkSystemTestCiApp "test-service-lifecycle-native-system" "service-lifecycle-native-system") "test-service-lifecycle-native-system")
         // nixosVm
       )
       (

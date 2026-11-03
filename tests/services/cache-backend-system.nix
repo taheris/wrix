@@ -1,4 +1,8 @@
-{ pkgs, wrix }:
+{
+  pkgs,
+  wrix,
+  includeServiceLifecycle ? false,
+}:
 
 let
   nativePackages = [
@@ -23,7 +27,8 @@ let
   ];
 in
 pkgs.testers.runNixOSTest {
-  name = "cache-celler-native-system";
+  name =
+    if includeServiceLifecycle then "service-lifecycle-native-system" else "cache-celler-native-system";
   requiredFeatures.kvm = false;
   nodes.machine = {
     imports = [ (import ../lib/userspace-vm.nix { inherit pkgs; }) ];
@@ -96,6 +101,8 @@ pkgs.testers.runNixOSTest {
             + " --test-threads=1 --nocapture",
             timeout=timedelta(minutes=5),
         ))
+  ''
+  + pkgs.lib.optionalString includeServiceLifecycle ''
     service_tests = "${wrix.rustPackage.cacheBackendTests}/bin/service-lifecycle-tests"
     cases = [
         line.removesuffix(": test")
@@ -125,6 +132,8 @@ pkgs.testers.runNixOSTest {
             failures.append((test, status))
     # Keep every case and its original deadline; collect failures rather than
     # restarting the entire guest after discovering only the first bad case.
+  ''
+  + ''
     machine.succeed("mkdir -p /etc/wrix; printf 'direct\\n' > /etc/wrix/image-agent")
     print(machine.succeed(
         environment + "${wrix.rustPackage.cacheBackendTests}/bin/workspace-admission-tests "
@@ -132,6 +141,8 @@ pkgs.testers.runNixOSTest {
         "worker_pool_issuance_denies_library_access_despite_forged_home_and_existing_approval --nocapture",
         timeout=timedelta(minutes=3),
     ))
+  ''
+  + pkgs.lib.optionalString includeServiceLifecycle ''
     assert not failures, f"Native Linux service cases failed: {failures}"
   '';
 }
