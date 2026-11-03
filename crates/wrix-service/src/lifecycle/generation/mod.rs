@@ -124,16 +124,29 @@ impl Gateway {
     }
     pub(crate) fn verify(&self, deployment: &Id) -> Result<()> {
         let runtime = self.runtime()?;
-        verify(&runtime, &self.name.0, &self.recipe)?;
-        let ports = runtime.published_ports(self.name.0.as_str())?;
-        if runtime
-            .inspect_label(self.name.0.as_str(), "wrix.service.deployment")?
-            .as_deref()
-            != Some(deployment.to_string().as_str())
-            || runtime
-                .inspect_label(self.name.0.as_str(), "wrix.service.generation")?
-                .as_deref()
-                != Some(self.generation.number().to_string().as_str())
+        let (ports, observed_deployment, observed_generation) =
+            match verify(&runtime, &self.name.0, &self.recipe)? {
+                Verified::Apple(snapshot) => {
+                    let deployment = snapshot
+                        .configuration
+                        .labels
+                        .get("wrix.service.deployment")
+                        .cloned();
+                    let generation = snapshot
+                        .configuration
+                        .labels
+                        .get("wrix.service.generation")
+                        .cloned();
+                    (snapshot.into_info().published_ports, deployment, generation)
+                }
+                Verified::Podman => (
+                    runtime.published_ports(self.name.0.as_str())?,
+                    runtime.inspect_label(self.name.0.as_str(), "wrix.service.deployment")?,
+                    runtime.inspect_label(self.name.0.as_str(), "wrix.service.generation")?,
+                ),
+            };
+        if observed_deployment.as_deref() != Some(deployment.to_string().as_str())
+            || observed_generation.as_deref() != Some(self.generation.number().to_string().as_str())
             || ![self.data.get(), self.management.get()]
                 .iter()
                 .all(|port| ports.contains(port))
@@ -343,8 +356,10 @@ impl Plan {
             return Ok(());
         }
         let runtime = runtime(self.backend.runtime)?;
-        verify(&runtime, &self.backend.name.0, &self.backend.recipe)?;
-        let ports = runtime.published_ports(self.backend.name.0.as_str())?;
+        let ports = match verify(&runtime, &self.backend.name.0, &self.backend.recipe)? {
+            Verified::Apple(snapshot) => snapshot.into_info().published_ports,
+            Verified::Podman => runtime.published_ports(self.backend.name.0.as_str())?,
+        };
         if ![
             self.backend.sql.get(),
             self.backend.cache.get(),
@@ -473,7 +488,37 @@ fn runtime(kind: RuntimeKind) -> Result<Runtime> {
         binding: None,
     })
 }
-fn verify(runtime: &Runtime, name: &ContainerName, recipe: &owner::Recipe) -> Result<()> {
+enum Verified {
+    Apple(super::apple::Snapshot),
+    Podman,
+}
+
+fn verify(runtime: &Runtime, name: &ContainerName, recipe: &owner::Recipe) -> Result<Verified> {
+    if runtime.kind == RuntimeKind::Container {
+        // One coherent native observation avoids both mixed identity fields and
+        // repeated external-engine startup while the readiness deadline runs.
+        let snapshot = runtime
+            .apple_snapshot(name.as_str())?
+            .ok_or(owner::Error::Conflict)?;
+        if snapshot.runtime_status() != RuntimeStatus::Running
+            || snapshot.image_id() != Some(&recipe.image_id)
+            || snapshot
+                .configuration
+                .labels
+                .get("wrix.kind")
+                .map(String::as_str)
+                != Some("service")
+            || snapshot
+                .configuration
+                .labels
+                .get("wrix.service.scope")
+                .map(String::as_str)
+                != Some("host")
+        {
+            return Err(owner::Error::Conflict.into());
+        }
+        return Ok(Verified::Apple(snapshot));
+    }
     if runtime.status(name)? != RuntimeStatus::Running
         || runtime.container_image_id(name)?.as_ref() != Some(&recipe.image_id)
         || runtime
@@ -487,7 +532,7 @@ fn verify(runtime: &Runtime, name: &ContainerName, recipe: &owner::Recipe) -> Re
     {
         return Err(owner::Error::Conflict.into());
     }
-    Ok(())
+    Ok(Verified::Podman)
 }
 fn available() -> Result<[NonZeroU16; 2]> {
     available_with(|| TcpListener::bind((Ipv4Addr::LOCALHOST, 0)))

@@ -2,6 +2,8 @@ use std::os::unix::fs::PermissionsExt as _;
 
 use super::*;
 
+mod observation;
+
 #[test]
 fn explicit_cold_shutdown_retires_a_missing_obsolete_gateway_not_the_current_one() {
     const CHILD: &str = "WRIX_TEST_COLD_GATEWAY_RETIREMENT";
