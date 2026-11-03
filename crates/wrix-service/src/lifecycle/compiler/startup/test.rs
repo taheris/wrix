@@ -1,5 +1,8 @@
 use super::*;
-use std::os::unix::fs::{PermissionsExt, symlink};
+use std::os::unix::{
+    fs::{PermissionsExt, symlink},
+    net::UnixListener,
+};
 
 fn fixture() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
     let root = tempfile::tempdir().unwrap();
@@ -64,6 +67,92 @@ fn malformed_previous_pid_is_not_normalized_into_cleanup_authority() {
         assert_eq!(
             fs::read_to_string(runtime.join("compiler/pid")).unwrap(),
             value
+        );
+    }
+}
+
+#[test]
+fn dead_owned_native_endpoints_are_retired_without_replacing_cache_ownership() {
+    let (_root, cache, runtime) = fixture();
+    let owner = lock(&cache.join("owner.lock")).unwrap();
+    let inode = owner.metadata().unwrap().ino();
+    drop(owner);
+    for name in ["sccache.sock", "drain.sock", "native.sock"] {
+        drop(UnixListener::bind(runtime.join("compiler").join(name)).unwrap());
+    }
+    let _startup = prepare(&cache, &runtime).unwrap();
+    for name in ["sccache.sock", "drain.sock", "native.sock"] {
+        let path = runtime.join("compiler").join(name);
+        assert!(!path.exists());
+        // Exercise the native bind that failed during restart, not just absence.
+        let _replacement = UnixListener::bind(path).unwrap();
+    }
+    assert_eq!(fs::metadata(cache.join("owner.lock")).unwrap().ino(), inode);
+}
+
+#[test]
+fn a_live_native_endpoint_preserves_dead_endpoints_and_release_markers() {
+    for live in ["sccache.sock", "drain.sock", "native.sock"] {
+        let (_root, cache, runtime) = fixture();
+        let mut listeners = Vec::new();
+        for name in ["sccache.sock", "drain.sock", "native.sock"] {
+            let listener = UnixListener::bind(runtime.join("compiler").join(name)).unwrap();
+            if name == live {
+                listeners.push(listener);
+            }
+        }
+        assert_eq!(listeners.len(), 1);
+        assert!(prepare(&cache, &runtime).is_err());
+        for name in ["sccache.sock", "drain.sock", "native.sock"] {
+            assert!(runtime.join("compiler").join(name).exists());
+        }
+        assert_eq!(fs::read(runtime.join("compiler/released")).unwrap(), b"0\n");
+        assert_eq!(
+            fs::read(runtime.join("backend/planned-stop")).unwrap(),
+            b"old planned stop"
+        );
+    }
+}
+
+#[test]
+fn compiler_ownership_excludes_dead_endpoint_retirement() {
+    let (_root, cache, runtime) = fixture();
+    let path = runtime.join("compiler/sccache.sock");
+    drop(UnixListener::bind(&path).unwrap());
+    let _owner = lock(&cache.join("owner.lock")).unwrap();
+    assert!(prepare(&cache, &runtime).is_err());
+    assert!(path.exists());
+    assert_eq!(fs::read(runtime.join("compiler/released")).unwrap(), b"0\n");
+}
+
+#[test]
+fn malformed_native_endpoint_preserves_the_entire_startup_state() {
+    for name in ["sccache.sock", "drain.sock", "native.sock"] {
+        let (root, cache, runtime) = fixture();
+        let path = runtime.join("compiler").join(name);
+        fs::write(&path, b"not a socket").unwrap();
+        assert!(prepare(&cache, &runtime).is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"not a socket");
+        fs::remove_file(&path).unwrap();
+        let target = root.path().join("foreign.sock");
+        drop(UnixListener::bind(&target).unwrap());
+        symlink(&target, &path).unwrap();
+        assert!(prepare(&cache, &runtime).is_err());
+        assert!(
+            fs::symlink_metadata(&path)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert!(target.exists());
+        fs::remove_file(&path).unwrap();
+        fs::hard_link(&target, &path).unwrap();
+        assert!(prepare(&cache, &runtime).is_err());
+        assert_eq!(fs::metadata(&target).unwrap().nlink(), 2);
+        assert_eq!(fs::read(runtime.join("compiler/released")).unwrap(), b"0\n");
+        assert_eq!(
+            fs::read(runtime.join("backend/planned-stop")).unwrap(),
+            b"old planned stop"
         );
     }
 }

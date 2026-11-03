@@ -4,7 +4,7 @@ use fs2::FileExt;
 use std::{
     fs::{self, File},
     io::{self, Read},
-    os::unix::fs::{MetadataExt, OpenOptionsExt},
+    os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt},
     path::Path,
 };
 
@@ -37,23 +37,39 @@ pub(super) fn prepare(cache: &Path, runtime: &Path) -> Result<File, Error> {
     let startup = lock(&backend.join("startup.lock"))?;
     let _ownership = lock(&cache.join("owner.lock"))?;
     let paths = [
-        backend.join("planned-stop"),
-        compiler.join("released"),
-        compiler.join("pid"),
+        (backend.join("planned-stop"), false),
+        (compiler.join("released"), false),
+        (compiler.join("pid"), false),
+        (compiler.join("sccache.sock"), true),
+        (compiler.join("drain.sock"), true),
+        // Older native backends used this name in the same private runtime directory.
+        (compiler.join("native.sock"), true),
     ];
     let mut observed = Vec::new();
-    for path in &paths {
+    for (path, socket) in &paths {
         let metadata = match fs::symlink_metadata(path) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
             Err(error) => return Err(error.into()),
         };
-        if !metadata.is_file()
-            || metadata.nlink() != 1
-            || metadata.mode() & 0o022 != 0
+        if (if *socket {
+            !metadata.file_type().is_socket()
+        } else {
+            !metadata.is_file() || metadata.mode() & 0o022 != 0
+        }) || metadata.nlink() != 1
             || metadata.uid() != rustix::process::geteuid().as_raw()
         {
             return Err(Error::UnsafePath);
+        }
+        if *socket {
+            // Only explicit refusal proves endpoint death under the original owner exclusion.
+            let probe = socket2::Socket::new(socket2::Domain::UNIX, socket2::Type::STREAM, None)?;
+            probe.set_nonblocking(true)?;
+            match probe.connect(&socket2::SockAddr::unix(path)?) {
+                Err(error) if error.kind() == io::ErrorKind::ConnectionRefused => (),
+                Ok(()) => return Err(Error::SocketBusy { path: path.clone() }),
+                Err(error) => return Err(error.into()),
+            }
         }
         if path == &compiler.join("pid") {
             if metadata.len() > 32 {
@@ -85,7 +101,7 @@ pub(super) fn prepare(cache: &Path, runtime: &Path) -> Result<File, Error> {
     }
     for (path, original) in observed {
         let current = fs::symlink_metadata(path)?;
-        if !current.is_file()
+        if current.file_type() != original.file_type()
             || current.dev() != original.dev()
             || current.ino() != original.ino()
             || current.nlink() != 1
