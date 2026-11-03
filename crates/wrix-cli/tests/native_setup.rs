@@ -30,8 +30,8 @@ fn nextest_setup_does_not_inherit_injected_git_policy() {
     assert_eq!(inherited.stdout, b"caller-policy\n");
     let isolated = git.envs(values).output().unwrap();
     assert_eq!(isolated.status.code(), Some(1));
-    assert!(isolated.stdout.is_empty());
-    assert!(isolated.stderr.is_empty());
+    assert_eq!(isolated.stdout, b"");
+    assert_eq!(isolated.stderr, b"");
 }
 
 #[test]
