@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import socket
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -17,8 +18,7 @@ class ClientTests(unittest.TestCase):
         self.env = {
             key: value
             for key, value in os.environ.items()
-            if not key.startswith("WRIX_NOTIFY_")
-            and key not in ("WRIX_FOCUS_TARGET", "WRIX_SESSION_ID", "XDG_RUNTIME_DIR")
+            if key in ("PATH", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE")
         }
         self.env.update(
             HOME=str(self.root),
@@ -68,12 +68,31 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(data.count(b"\n"), 1, data)
         return json.loads(data)
 
+    def test_harness_ignores_ambient_shell_startup_for_gateway_fixture(self):
+        startup = self.root / "shell-startup"
+        startup.write_text(
+            'set -euo pipefail\n'
+            'if [[ "${0##*/}" == ip ]]; then exec sleep 30; fi\n'
+        )
+        result = subprocess.run(
+            [sys.executable, __file__,
+             "ClientTests.test_gateway_fixture_conforms_to_ip_route_interface"],
+            env=os.environ | {"BASH_ENV": str(startup)},
+            capture_output=True,
+            text=True,
+            timeout=8,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_gateway_fixture_conforms_to_ip_route_interface(self):
         routes = "default via 127.0.0.1 dev eth0"
         result = self.invoke(self.ip, "route", WRIX_NOTIFY_TEST_ROUTES=routes)
         self.assertEqual(result.stdout, routes + "\n")
         self.assertEqual(self.ip_calls.read_text(), "route\n")
-        rejected = subprocess.run([self.ip, "unexpected"], env=self.env, check=False)
+        rejected = subprocess.run(
+            [self.ip, "unexpected"], env=self.env, timeout=3, check=False
+        )
         self.assertEqual(rejected.returncode, 64)
 
     def test_host_delivers_unix_envelope_and_ignores_tcp_endpoints(self):
