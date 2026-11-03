@@ -18,7 +18,8 @@ pub fn isolate() -> TestResult<bool> {
         let output = command(name)?.output()?;
         assert!(
             output.status.success(),
-            "{}\n{}",
+            "native fixture exited {}\n{}\n{}",
+            output.status,
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );

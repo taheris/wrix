@@ -82,7 +82,8 @@ fn public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql() -
             .output()?;
         assert!(
             output.status.success(),
-            "{}\n{}",
+            "native fixture exited {}\n{}\n{}",
+            output.status,
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
