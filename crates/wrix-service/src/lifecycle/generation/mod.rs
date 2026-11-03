@@ -593,7 +593,16 @@ pub(super) fn guest_endpoint(state: &Path, role: crate::route::Role) -> Result<S
         .enable_all()
         .build()?;
     let client = crate::control::Client::open(&authority(state)).map_err(io::Error::other)?;
-    match runtime.block_on(client.request(crate::control::Operation::InspectCore {})).map_err(io::Error::other)? {
+    published_guest(
+        runtime
+            .block_on(client.request(crate::control::Operation::InspectCore {}))
+            .map_err(io::Error::other)?,
+        role,
+    )
+}
+
+fn published_guest(reply: crate::control::Reply, role: crate::route::Role) -> Result<SocketAddrV4> {
+    match reply {
         crate::control::Reply::CoreInterface { version: 2, ports, guest: Some(address) } if address.is_private() => {
             let index = match role {
                 crate::route::Role::Sql => 0,

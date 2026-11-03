@@ -12,9 +12,10 @@ use std::{
 };
 
 pub(crate) mod socket;
+pub mod transport;
 
 /// The root credential remains inside the narrow service data mount, never a tenant export.
-pub async fn run(data: &Path, tcp: bool) -> Result<(), Error> {
+pub async fn run(data: &Path, transport: transport::Transport) -> Result<(), Error> {
     super::private_directory(data)?;
     let ownership = File::options()
         .read(true)
@@ -38,10 +39,13 @@ pub async fn run(data: &Path, tcp: bool) -> Result<(), Error> {
     socket::clear_path(data, Path::new("/run/wrix/dolt/native.sock"))?;
     super::private_directory(&data.join("databases"))?;
     super::private_directory(&data.join("run"))?;
-    socket::clear_path(data, &socket::Export::Sql.path(data, tcp))?;
+    socket::clear_path(data, &socket::Export::Sql.path(data, transport))?;
     initialize(data)?;
     let configuration = data.join("server.yaml");
-    super::atomic_json(&configuration, &configuration_value(data, tcp))?;
+    super::atomic_json(
+        &configuration,
+        &configuration_value(data, transport.tcp_sync()),
+    )?;
     let mut dolt = tokio::process::Command::new("dolt")
         .args(["sql-server", "--config"])
         .arg(&configuration)
@@ -62,8 +66,8 @@ pub async fn run(data: &Path, tcp: bool) -> Result<(), Error> {
     let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
     let gate = crate::lifecycle::sql::Gate::default();
     let result = {
-        let broker = super::broker::serve(data, tcp, gate.clone());
-        let sql = crate::lifecycle::sql::serve(data, gate.clone(), tcp);
+        let broker = super::broker::serve(data, transport, gate.clone());
+        let sql = crate::lifecycle::sql::serve(data, gate.clone(), transport);
         tokio::pin!(broker, sql);
         tokio::select! {
             result = dolt.wait() => { result?; Err(Error::Incomplete) },

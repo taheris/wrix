@@ -185,11 +185,11 @@ async fn native_sql_sessions_and_broker_work_drain_across_both_public_transports
         let serving = async {
             tokio::try_join!(
                 async {
-                    sql::serve(data, gate.clone(), false)
+                    sql::serve(data, gate.clone(), super::transport::Transport::Unix)
                         .await
                         .map_err(Error::from)
                 },
-                super::super::broker::serve(data, false, gate.clone())
+                super::super::broker::serve(data, super::transport::Transport::Unix, gate.clone())
             )
         };
         tokio::pin!(serving);

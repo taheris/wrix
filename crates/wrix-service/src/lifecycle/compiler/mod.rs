@@ -270,7 +270,10 @@ pub fn released() -> Result<bool, Error> {
 }
 
 /// No native idle exit or detached daemon may outlive supervision or own the cache concurrently.
-pub async fn run(data: &Path, tcp: bool) -> Result<(), Error> {
+pub async fn run(
+    data: &Path,
+    transport: crate::dolt::server::transport::Transport,
+) -> Result<(), Error> {
     let cache = data.parent().ok_or(Error::UnsafePath)?.join("compiler");
     crate::dolt::private_directory(&cache)?;
     let _startup = startup::prepare(&cache, Path::new("/run/wrix"))?;
@@ -300,7 +303,7 @@ pub async fn run(data: &Path, tcp: bool) -> Result<(), Error> {
         .spawn()?;
     let pid = compiler.id().ok_or(Error::Incomplete)?;
     fs::write(PID, format!("{pid}\n"))?;
-    let backend = crate::dolt::server::run(data, tcp);
+    let backend = crate::dolt::server::run(data, transport);
     let forwarding = forward();
     tokio::pin!(backend, forwarding);
     let mut released = false;

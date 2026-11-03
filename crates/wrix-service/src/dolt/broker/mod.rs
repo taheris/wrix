@@ -105,15 +105,15 @@ pub enum Endpoint {
 
 pub(crate) async fn serve(
     data: &Path,
-    tcp: bool,
+    transport: super::server::transport::Transport,
     gate: crate::lifecycle::sql::Gate,
 ) -> Result<(), Error> {
-    let socket = super::server::socket::Export::Sync.path(data, tcp);
+    let socket = super::server::socket::Export::Sync.path(data, transport);
     if socket.exists() {
         fs::remove_file(&socket)?;
     }
     let unix = tokio::net::UnixListener::bind(&socket)?;
-    let listener = if tcp {
+    let listener = if transport.tcp_sync() {
         Some(tokio::net::TcpListener::bind(("0.0.0.0", 3307)).await?)
     } else {
         None

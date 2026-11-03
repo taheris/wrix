@@ -38,6 +38,46 @@ fn explicit_cold_shutdown_retires_a_missing_obsolete_gateway_not_the_current_one
 }
 
 #[test]
+fn apple_endpoint_planning_rejects_unpublished_or_host_only_routes() {
+    use crate::{control::Reply, route::Role};
+    let ports = [23001, 21001, 31001, 31002, 23002].map(|port| NonZeroU16::new(port).unwrap());
+    let guest = Ipv4Addr::new(10, 83, 0, 1);
+    for (role, port) in Role::ALL.into_iter().zip(ports) {
+        let endpoint = published_guest(
+            Reply::CoreInterface {
+                version: 2,
+                ports,
+                guest: Some(guest),
+            },
+            role,
+        )
+        .unwrap();
+        assert_eq!(endpoint, SocketAddrV4::new(guest, port.get()));
+    }
+    for (version, guest) in [
+        (1, Some(guest)),
+        (3, Some(guest)),
+        (2, None),
+        (2, Some(Ipv4Addr::LOCALHOST)),
+        (2, Some(Ipv4Addr::UNSPECIFIED)),
+        (2, Some(Ipv4Addr::new(198, 51, 100, 7))),
+    ] {
+        assert!(
+            published_guest(
+                Reply::CoreInterface {
+                    version,
+                    ports,
+                    guest
+                },
+                Role::Sql
+            )
+            .is_err()
+        );
+    }
+    assert!(published_guest(Reply::Applied, Role::Sql).is_err());
+}
+
+#[test]
 fn gateway_port_pair_is_distinct() {
     let [data, management] = available().unwrap();
     assert_ne!(data, management);

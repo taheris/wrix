@@ -1010,7 +1010,8 @@ tenant or component compromise/fault isolation.
 - Apple sandbox Dolt endpoint publication is guest-reachable and stable across
   authorized routing changes, fails if no safe reachable route exists, and keeps
   physical-host publication loopback-only.
-  [test?](../crates/wrix-service/tests/generation_handoff.rs::apple_endpoint_is_stable_guest_reachable_and_host_loopback_only)
+  [test](../crates/wrix-service/src/lifecycle/generation/test.rs::apple_endpoint_planning_rejects_unpublished_or_host_only_routes)
+  [test](../crates/wrix-service/src/route/guest_test.rs::apple_endpoint_routes_stay_stable_across_authorized_backend_changes)
 
 - Workspace identity produces stable namespaces, shared role endpoint
   references, workspace control/data roots and locks without a container
@@ -1340,7 +1341,7 @@ tenant or component compromise/fault isolation.
 - Dolt, Celler and compiler data remain independently owned persistent areas,
   not concurrently opened writable state in both colors or an assumed
   parallel-attach Apple named volume.
-  [test?](../crates/wrix-service/tests/generation_handoff.rs::generation_storage_preserves_per_backend_single_ownership)
+  [test](../crates/wrix-service/src/lifecycle/deployment/ownership/mod.rs::generation_storage_preserves_per_backend_single_ownership)
 - Real Podman generations switch new sandbox proxy connections transparently,
   preserve an established slow transfer/CONNECT connection on Blue, revoke
   transferred ownership across colors and, after the update CLI has exited,

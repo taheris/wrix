@@ -230,9 +230,13 @@ fn clear_socket(path: &Path) -> Result<(), io::Error> {
 
 /// The backend supervisor holds its original data ownership inode before binding either plane.
 /// Dolt itself listens only on private native 127.0.0.1:13306 and a separate private socket.
-pub async fn serve(data: &Path, gate: Gate, tcp: bool) -> Result<(), io::Error> {
+pub async fn serve(
+    data: &Path,
+    gate: Gate,
+    transport: crate::dolt::server::transport::Transport,
+) -> Result<(), io::Error> {
     crate::dolt::private_directory(Path::new("/run/wrix/dolt")).map_err(io::Error::other)?;
-    let socket = crate::dolt::server::socket::Export::Sql.path(data, tcp);
+    let socket = crate::dolt::server::socket::Export::Sql.path(data, transport);
     clear_socket(&socket)?;
     clear_socket(Path::new(CONTROL))?;
     let unix = UnixListener::bind(&socket)?;

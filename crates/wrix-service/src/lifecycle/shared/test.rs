@@ -4,6 +4,37 @@ use wrix_core::git::Branch;
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
 #[test]
+fn native_backend_endpoint_planning_keeps_tcp_roles_and_mounted_unix_exports_distinct() -> TestResult
+{
+    use crate::dolt::server::transport::Transport;
+    for (requested, expected) in [
+        (DoltTransport::UnixSocket, Transport::NativeUnix),
+        (DoltTransport::Tcp, Transport::Tcp),
+    ] {
+        let root = tempfile::tempdir()?;
+        let guard = coordination::acquire(&root.path().join("host-lifecycle"))?;
+        let record = Record::prepare_native_for(
+            &guard,
+            NonZeroU16::new(23001).ok_or("zero SQL port")?,
+            NonZeroU16::new(23005).ok_or("zero sync port")?,
+            requested,
+        )?;
+        assert_eq!(record.backend_transport(), expected);
+        assert!(record.backend_transport().tcp_sync());
+        assert_eq!(record.endpoint(root.path()).transport(), requested);
+        let arguments = record.arguments(&root.path().join("service-data/dolt"));
+        for port in ["3306", "3307", "4226"] {
+            assert!(arguments.iter().any(|arg| {
+                arg.starts_with("127.0.0.1:") && arg.ends_with(&format!(":{port}"))
+            }));
+        }
+        let retained = Record::at(guard.root())?.ok_or("missing record")?;
+        assert_eq!(retained.backend_transport(), expected);
+    }
+    Ok(())
+}
+
+#[test]
 fn fresh_native_tcp_state_uses_the_already_bound_controller_sql_port() -> TestResult {
     let root = tempfile::tempdir()?;
     let guard = coordination::acquire(&root.path().join("host-lifecycle"))?;

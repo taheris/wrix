@@ -4,6 +4,69 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 #[tokio::test]
+async fn apple_endpoint_routes_stay_stable_across_authorized_backend_changes() -> TestResult {
+    tokio::time::timeout(Duration::from_secs(3), async {
+        let public = Listeners::bind([Port::Available; 4]).await?;
+        let host = public.address(Role::Sql)?;
+        for role in Role::ALL {
+            assert!(public.address(role)?.ip().is_loopback());
+        }
+        let guest = Listeners::bind([Port::Available; 4]).await?;
+        let address = guest.address(Role::Sql)?;
+        let ([blue, _, _, _, _], blue_route) = Listeners::bind([Port::Available; 4])
+            .await?
+            .into_generation()?;
+        let ([green, _, _, _, _], green_route) = Listeners::bind([Port::Available; 4])
+            .await?
+            .into_generation()?;
+        let front = FrontDoor::new(public, NonZeroUsize::MIN.saturating_add(3))?.with_guest(
+            guest,
+            crate::control::serving::apple::Address::loopback_for_test(),
+        );
+        let selected = front.selection();
+        selected.select(blue_route.confirm_ready(Role::Sql))?;
+        let (shutdown, stopped) = tokio::sync::oneshot::channel();
+        let serving = tokio::spawn(front.serve(async {
+            stopped.await.expect("shutdown sender");
+        }));
+        let mut existing = TcpStream::connect(address).await?;
+        existing.write_all(b"a").await?;
+        let (mut blue_stream, _) = blue.accept().await?;
+        let mut byte = [0];
+        blue_stream.read_exact(&mut byte).await?;
+        assert_eq!(&byte, b"a");
+        selected.select(green_route.confirm_ready(Role::Sql))?;
+        let mut next = TcpStream::connect(address).await?;
+        next.write_all(b"b").await?;
+        let (mut green_stream, _) = green.accept().await?;
+        green_stream.read_exact(&mut byte).await?;
+        assert_eq!(&byte, b"b");
+        blue_stream.write_all(b"c").await?;
+        existing.read_exact(&mut byte).await?;
+        assert_eq!(&byte, b"c");
+        let mut host_client = TcpStream::connect(host).await?;
+        host_client.write_all(b"d").await?;
+        let (mut host_stream, _) = green.accept().await?;
+        host_stream.read_exact(&mut byte).await?;
+        assert_eq!(&byte, b"d");
+        assert_eq!(blue_route.connections(Role::Sql), 1);
+        assert_eq!(green_route.connections(Role::Sql), 2);
+        drop((
+            existing,
+            next,
+            host_client,
+            blue_stream,
+            green_stream,
+            host_stream,
+        ));
+        shutdown.send(()).expect("live front door");
+        serving.await??;
+        Ok::<(), Box<dyn std::error::Error>>(())
+    })
+    .await?
+}
+
+#[tokio::test]
 async fn guest_routes_share_selection_and_retain_an_admitted_stream_while_admission_closes()
 -> TestResult {
     let public = Listeners::bind([Port::Available; 4]).await?;

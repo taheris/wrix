@@ -191,6 +191,15 @@ impl Record {
         }
     }
 
+    pub const fn backend_transport(&self) -> crate::dolt::server::transport::Transport {
+        use crate::dolt::server::transport::Transport;
+        match (&self.native, self.tcp) {
+            (_, true) => Transport::Tcp,
+            (Some(_), false) => Transport::NativeUnix,
+            (None, false) => Transport::Unix,
+        }
+    }
+
     pub fn arguments(&self, data: &Path) -> Vec<String> {
         let mut args = vec![
             "--label".into(),
@@ -214,10 +223,6 @@ impl Record {
             args.extend(["-p".into(), format!("127.0.0.1:{sync}:3307")]);
         }
         args
-    }
-
-    pub const fn transport(&self) -> &'static str {
-        if self.tcp { "tcp" } else { "unix" }
     }
 }
 

@@ -6,7 +6,11 @@ async fn closed_gate_rejects_broker_transport_before_request_parsing_or_native_w
     fs::create_dir(root.path().join("run")).unwrap();
     let gate = crate::lifecycle::sql::Gate::default();
     assert!(gate.admit_broker().is_err());
-    let serving = serve(root.path(), false, gate);
+    let serving = serve(
+        root.path(),
+        crate::dolt::server::transport::Transport::Unix,
+        gate,
+    );
     tokio::pin!(serving);
     let request = async {
         let socket = root.path().join("run/sync.sock");

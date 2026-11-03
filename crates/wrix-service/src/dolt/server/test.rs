@@ -28,7 +28,7 @@ async fn contended_original_owner_does_not_clear_the_previous_release_certificat
     owner.lock_exclusive()?;
     let certificate = root.path().join("native-release.json");
     fs::write(&certificate, b"retained original certificate")?;
-    let result = run(root.path(), false).await;
+    let result = run(root.path(), transport::Transport::Unix).await;
     assert!(
         matches!(&result, Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::WouldBlock),
         "contended original ownership returned {result:?}"

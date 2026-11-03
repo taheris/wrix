@@ -16,15 +16,36 @@ fn fixture() -> TestResult<tempfile::TempDir> {
 fn tcp_exports_keep_guest_unix_sockets_off_host_data_mounts() {
     let data = Path::new("/host/persistent/service-data/dolt");
     assert_eq!(
-        Export::Sql.path(data, true),
+        Export::Sql.path(data, super::super::transport::Transport::Tcp),
         Path::new("/run/wrix/dolt/dolt.sock")
     );
     assert_eq!(
-        Export::Sync.path(data, true),
+        Export::Sync.path(data, super::super::transport::Transport::Tcp),
         Path::new("/run/wrix/dolt/sync.sock")
     );
-    assert_eq!(Export::Sql.path(data, false), data.join("run/dolt.sock"));
-    assert_eq!(Export::Sync.path(data, false), data.join("run/sync.sock"));
+    assert_eq!(
+        Export::Sql.path(data, super::super::transport::Transport::Unix),
+        data.join("run/dolt.sock")
+    );
+    assert_eq!(
+        Export::Sync.path(data, super::super::transport::Transport::Unix),
+        data.join("run/sync.sock")
+    );
+}
+
+#[test]
+fn native_unix_exports_match_the_advertised_managed_data_sockets() {
+    let data = Path::new("/host/persistent/service-data/dolt");
+    let transport = super::super::transport::Transport::NativeUnix;
+    assert_eq!(
+        Export::Sql.path(data, transport),
+        data.join("run/dolt.sock")
+    );
+    assert_eq!(
+        Export::Sync.path(data, transport),
+        data.join("run/sync.sock")
+    );
+    assert!(transport.tcp_sync());
 }
 
 #[test]

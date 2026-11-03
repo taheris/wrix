@@ -2,7 +2,7 @@
 
 use std::{ffi::OsString, path::PathBuf, process::ExitCode};
 use wrix_service::{
-    dolt::Error,
+    dolt::{Error, server::transport::Transport},
     lifecycle::{
         compiler,
         drain::{Command, Role},
@@ -16,7 +16,7 @@ enum Entry {
     CompilerReady,
     Sql(Command),
     Backend(Role, Command),
-    Run { data: PathBuf, tcp: bool },
+    Run { data: PathBuf, transport: Transport },
 }
 
 impl Entry {
@@ -54,14 +54,10 @@ impl Entry {
             }
             _ => match tail {
                 [mode] => {
-                    let tcp = match mode.to_str() {
-                        Some("unix") => false,
-                        Some("tcp") => true,
-                        _ => return Err(Error::UnsafePath),
-                    };
+                    let transport = mode.to_str().ok_or(Error::UnsafePath)?.parse()?;
                     Ok(Self::Run {
                         data: PathBuf::from(first),
-                        tcp,
+                        transport,
                     })
                 }
                 _ => Err(Error::UnsafePath),
@@ -90,7 +86,7 @@ impl Entry {
                 &wrix_service::lifecycle::drain::dispatch(role, command)
                     .map_err(std::io::Error::other)?,
             ),
-            Self::Run { data, tcp } => compiler::run(&data, tcp).await,
+            Self::Run { data, transport } => compiler::run(&data, transport).await,
         }
     }
 }
@@ -187,12 +183,26 @@ mod test {
     fn normal_backend_entry_retains_compiler_supervision_and_transport() {
         assert!(matches!(
             parse(&["/data/dolt", "unix"]).unwrap(),
-            Entry::Run { tcp: false, .. }
+            Entry::Run {
+                transport: Transport::Unix,
+                ..
+            }
         ));
         assert!(matches!(
             parse(&["/data/dolt", "tcp"]).unwrap(),
-            Entry::Run { tcp: true, .. }
+            Entry::Run {
+                transport: Transport::Tcp,
+                ..
+            }
         ));
+        assert!(matches!(
+            parse(&["/data/dolt", "native-unix"]).unwrap(),
+            Entry::Run {
+                transport: Transport::NativeUnix,
+                ..
+            }
+        ));
+        assert!(parse(&["/data/dolt", "unknown"]).is_err());
         assert!(parse(&["/data/dolt", "tcp", "extra"]).is_err());
     }
 }

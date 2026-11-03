@@ -309,11 +309,7 @@ pub(in crate::lifecycle) fn ensure(
         .arg(image.as_str())
         .arg("wrix-shared-service")
         .arg(&data)
-        .arg(if shared.native_ports().is_some() {
-            "tcp"
-        } else {
-            shared.transport()
-        })
+        .arg(shared.backend_transport().as_str())
         .stdin(Stdio::null())
         .output()?;
     if !output.status.success() {

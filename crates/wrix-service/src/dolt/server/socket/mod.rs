@@ -14,16 +14,15 @@ pub enum Export {
 }
 
 impl Export {
-    pub fn path(self, data: &Path, tcp: bool) -> PathBuf {
+    pub fn path(self, data: &Path, transport: super::transport::Transport) -> PathBuf {
         let name = match self {
             Self::Sql => "dolt.sock",
             Self::Sync => "sync.sock",
         };
-        if tcp {
-            // Apple VirtioFS data mounts cannot host guest Unix sockets.
-            Path::new("/run/wrix/dolt").join(name)
-        } else {
+        if transport.mounted_sockets() {
             data.join("run").join(name)
+        } else {
+            Path::new("/run/wrix/dolt").join(name)
         }
     }
 }

@@ -176,6 +176,46 @@ mod test {
     }
 
     #[test]
+    fn generation_storage_preserves_per_backend_single_ownership() {
+        let root = tempfile::tempdir().unwrap();
+        let (celler, _) = layout(root.path());
+        fs::create_dir_all(root.path().join("service-data/compiler")).unwrap();
+        let mut owners = Role::ALL.map(|role| {
+            let file = File::options()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .mode(0o600)
+                .open(role.path(root.path(), &celler))
+                .unwrap();
+            file.lock_exclusive().unwrap();
+            Some(file)
+        });
+        let pins = Pin::capture(root.path(), &celler).unwrap();
+        let originals = pins.iter().map(Pin::record).collect::<Vec<_>>();
+        for index in 0..Role::ALL.len() {
+            for pin in &pins[index..] {
+                assert!(pin.confirm().is_err());
+            }
+            drop(owners[index].take());
+            pins[index].confirm().unwrap();
+            let competitor = File::options()
+                .read(true)
+                .write(true)
+                .open(Role::ALL[index].path(root.path(), &celler))
+                .unwrap();
+            assert!(competitor.try_lock_exclusive().is_err());
+        }
+        drop(pins);
+        let after = Pin::capture(root.path(), &celler).unwrap();
+        assert_eq!(after.iter().map(Pin::record).collect::<Vec<_>>(), originals);
+        for pin in &after {
+            pin.confirm().unwrap();
+        }
+    }
+
+    #[test]
     fn legacy_repair_requires_both_original_database_and_cache_ownership_records() {
         let root = tempfile::tempdir().unwrap();
         let (celler, _) = layout(root.path());
