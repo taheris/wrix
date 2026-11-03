@@ -112,9 +112,8 @@ impl Fixture {
             set_mode(&bin.join(name), 0o755)?;
         }
         native_backend::install(root.path())?;
-        let native_bd = std::env::var("WRIX_REAL_BD_BIN").unwrap_or_else(|_| {
-            "/nix/store/7aalmix7lxvs73apxl1pwkrvqw52snhm-beads-1.3.1/bin/bd".into()
-        });
+        let native_bd =
+            std::env::var("WRIX_REAL_BD_BIN").or_else(|_| std::env::var("WRIX_TEST_BD"))?;
         assert!(
             Path::new(&native_bd).is_file(),
             "native Beads executable unavailable"
