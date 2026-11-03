@@ -44,7 +44,7 @@ fn apple_endpoint_planning_rejects_unpublished_or_host_only_routes() {
     let guest = Ipv4Addr::new(10, 83, 0, 1);
     for (role, port) in Role::ALL.into_iter().zip(ports) {
         let endpoint = published_guest(
-            Reply::CoreInterface {
+            &Reply::CoreInterface {
                 version: 2,
                 ports,
                 guest: Some(guest),
@@ -64,7 +64,7 @@ fn apple_endpoint_planning_rejects_unpublished_or_host_only_routes() {
     ] {
         assert!(
             published_guest(
-                Reply::CoreInterface {
+                &Reply::CoreInterface {
                     version,
                     ports,
                     guest
@@ -74,7 +74,7 @@ fn apple_endpoint_planning_rejects_unpublished_or_host_only_routes() {
             .is_err()
         );
     }
-    assert!(published_guest(Reply::Applied, Role::Sql).is_err());
+    assert!(published_guest(&Reply::Applied, Role::Sql).is_err());
 }
 
 #[test]

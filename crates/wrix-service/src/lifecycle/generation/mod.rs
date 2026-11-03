@@ -594,14 +594,17 @@ pub(super) fn guest_endpoint(state: &Path, role: crate::route::Role) -> Result<S
         .build()?;
     let client = crate::control::Client::open(&authority(state)).map_err(io::Error::other)?;
     published_guest(
-        runtime
+        &runtime
             .block_on(client.request(crate::control::Operation::InspectCore {}))
             .map_err(io::Error::other)?,
         role,
     )
 }
 
-fn published_guest(reply: crate::control::Reply, role: crate::route::Role) -> Result<SocketAddrV4> {
+fn published_guest(
+    reply: &crate::control::Reply,
+    role: crate::route::Role,
+) -> Result<SocketAddrV4> {
     match reply {
         crate::control::Reply::CoreInterface { version: 2, ports, guest: Some(address) } if address.is_private() => {
             let index = match role {
@@ -611,7 +614,7 @@ fn published_guest(reply: crate::control::Reply, role: crate::route::Role) -> Re
                 crate::route::Role::Compiler => 3,
                 crate::route::Role::Sync => 4,
             };
-            Ok(SocketAddrV4::new(address, ports[index].get()))
+            Ok(SocketAddrV4::new(*address, ports[index].get()))
         }
         _ => Err(Error::Operation { message: "the running controller has no verified stable Apple guest data route; explicit host maintenance is required, without direct-generation or wildcard fallback".into() }),
     }
