@@ -259,7 +259,7 @@ impl Fixture {
 
     fn auto_export_enabled(&self) -> TestResult<bool> {
         let output = ProcessCommand::new(self.real_bd())
-            .args(["config", "get", "export.auto"])
+            .args(["--readonly", "config", "get", "export.auto"])
             .current_dir(self.repo())
             .env("HOME", self.home())
             .env_remove("BD_EXPORT_AUTO")
