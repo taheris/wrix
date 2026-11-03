@@ -427,15 +427,7 @@ fn sql_quote(value: &str) -> String {
 }
 
 fn disable_auto_export() -> Result<()> {
-    // The configuration command's own post-run hook can still see the original setting.
-    let output = process_command_in(
-        Path::new("."),
-        "bd",
-        &["config", "set", "export.auto", "false"],
-    )
-    .env("BD_EXPORT_AUTO", "false")
-    .output()?;
-    status_to_result("bd", &output)
+    run_required("bd", &["config", "set", "export.auto", "false"])
 }
 
 fn sync_dolt_remote(context: &Context, stderr: &mut impl Write) -> Result<ExitCode> {
@@ -924,6 +916,10 @@ fn process_command_in(cwd: &Path, program: &str, args: &[&str]) -> ProcessComman
     command.args(args);
     command.current_dir(cwd);
     command.stdin(Stdio::null());
+    if program == "bd" {
+        // Canonical sync must not emit legacy JSONL, even with a caller's explicit override.
+        command.env("BD_EXPORT_AUTO", "false");
+    }
     command
 }
 

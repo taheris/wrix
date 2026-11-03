@@ -80,6 +80,7 @@ set_origin_from_query() {
 }
 
 log_invocation "$@"
+printf '%s\n' "${BD_EXPORT_AUTO-<unset>}" >> "${state_dir}/export-auto.log"
 
 if [[ "$#" -eq 4 && "$arg1" == "config" && "$arg2" == "set" && "$arg3" == "export.auto" && "$arg4" == "false" ]]; then
   if [[ "${WRIX_BEADS_FAKE_CONFIG-}" == "1" ]]; then
@@ -597,6 +598,11 @@ fn disables_auto_export_idempotently() -> TestResult {
         assert_eq!(
             count_command(&fixture.bd_lines()?, "bd\tconfig\tset\texport.auto\tfalse"),
             2
+        );
+        let observed = fs::read_to_string(fixture.state_dir.join("export-auto.log"))?;
+        assert!(
+            observed.lines().all(|value| value == "false"),
+            "unprotected native Beads child environments: {observed}"
         );
     }
     Ok(())
