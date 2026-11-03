@@ -28,9 +28,17 @@ pub struct Server {
     pub(super) backend_environment: PathBuf,
 }
 
+fn host_state_root(root: &Path) -> PathBuf {
+    if cfg!(target_os = "macos") {
+        root.join("home/Library/Application Support/wrix")
+    } else {
+        root.join("state/wrix")
+    }
+}
+
 impl Server {
     pub fn start(root: &Path) -> TestResult<Self> {
-        Self::start_at(root, &crate::common::host_state_root(root))
+        Self::start_at(root, &host_state_root(root))
     }
 
     pub fn start_at(root: &Path, state: &Path) -> TestResult<Self> {
@@ -127,11 +135,7 @@ impl Server {
     }
 
     pub fn start_supervised(root: &Path) -> TestResult<Self> {
-        Self::supervise(
-            Self::start(root)?,
-            root,
-            &crate::common::host_state_root(root),
-        )
+        Self::supervise(Self::start(root)?, root, &host_state_root(root))
     }
 
     pub fn supervise(mut server: Self, root: &Path, state: &Path) -> TestResult<Self> {
