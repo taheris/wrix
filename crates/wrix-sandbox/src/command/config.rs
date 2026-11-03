@@ -853,7 +853,7 @@ const fn default_mount_mode() -> MountMode {
 }
 
 const fn default_memory_mb() -> u32 {
-    4096
+    8192
 }
 
 const fn default_pids_limit() -> u32 {

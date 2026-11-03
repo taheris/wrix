@@ -340,7 +340,8 @@ fn strict_boundaries_preserve_existing_map_and_default_semantics() {
             .as_str(),
         "CUSTOM_TOKEN_1"
     );
-    assert_eq!(parsed.resources.memory_mb, 4096);
+    assert_eq!(parsed.resources.memory_mb, 8192);
+    assert_eq!(parsed.resources.pids_limit, 4096);
     assert!(parsed.services.nix_cache.enabled);
     assert!(parsed.profile.mounts.is_empty());
     assert_eq!(parsed.profile.network_allowlist, []);
@@ -428,6 +429,8 @@ fn nix_generated_builtin_profiles_match_parser() {
         assert_eq!(wire["system"], case["system"]);
         assert_eq!(wire["services"]["beads"]["enable"], "auto");
         assert_eq!(wire["features"]["mcp_runtime"], false);
+        assert_eq!(config.resources.memory_mb, 8192);
+        assert_eq!(config.resources.pids_limit, 4096);
         assert_eq!(wire["resources"]["memory_mb"], config.resources.memory_mb);
         assert_eq!(wire["image"]["ref"], config.image.reference.as_str());
     }

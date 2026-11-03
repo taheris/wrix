@@ -369,7 +369,7 @@ Profile output naming remains in `profiles.md`.
 mkSandbox {
   profile = profiles.base;          # Workspace profile (profiles.md). Default: base
   cpus = null;                      # CPU limit honored by the platform launcher
-  memoryMb = 4096;                  # Memory limit MB
+  memoryMb = 8192;                  # Memory limit MB
   deployKey = "myproject";          # Default key identity, not permission to mount keys
   packages = [ pkgs.jq ];           # Extra packages merged into profile.packages
   mounts = [ {                      # Extra mounts merged into profile.mounts
@@ -501,7 +501,7 @@ Schema v1:
   },
   "resources": {
     "cpus": null,
-    "memory_mb": 4096,
+    "memory_mb": 8192,
     "pids_limit": 4096
   },
   "security": {

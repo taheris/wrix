@@ -369,7 +369,7 @@ let
     {
       profile ? profiles.base,
       cpus ? null,
-      memoryMb ? 4096,
+      memoryMb ? 8192,
       deployKey ? null,
       packages ? [ ],
       mounts ? [ ],
