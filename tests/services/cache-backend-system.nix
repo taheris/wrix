@@ -32,7 +32,10 @@ pkgs.testers.runNixOSTest {
       "flakes"
     ];
     virtualisation = {
-      memorySize = 2048;
+      # Native Dolt, Celler and compiler probes share this guest. Leave enough
+      # capacity for them under userspace emulation without relaxing deadlines.
+      cores = 4;
+      memorySize = 4096;
       diskSize = 4096;
     };
     environment.systemPackages = nativePackages;
@@ -111,11 +114,17 @@ pkgs.testers.runNixOSTest {
     # Match Nextest's process isolation and retain every applicable case,
     # including ignored native cases. Emit each result before the next starts.
     print(f"Running all {len(cases)} native Linux service cases", flush=True)
+    failures = []
     for test in cases:
-        print(machine.succeed(
+        status, output = machine.execute(
             environment + service_tests + " --include-ignored --exact " + quote(test) + " --nocapture",
             timeout=timedelta(minutes=17 if test == native_shared else 5),
-        ), flush=True)
+        )
+        print(output, flush=True)
+        if status != 0:
+            failures.append((test, status))
+    # Keep every case and its original deadline; collect failures rather than
+    # restarting the entire guest after discovering only the first bad case.
     machine.succeed("mkdir -p /etc/wrix; printf 'direct\\n' > /etc/wrix/image-agent")
     print(machine.succeed(
         environment + "${wrix.rustPackage.cacheBackendTests}/bin/workspace-admission-tests "
@@ -123,5 +132,6 @@ pkgs.testers.runNixOSTest {
         "worker_pool_issuance_denies_library_access_despite_forged_home_and_existing_approval --nocapture",
         timeout=timedelta(minutes=3),
     ))
+    assert not failures, f"Native Linux service cases failed: {failures}"
   '';
 }
