@@ -39,15 +39,15 @@ pkgs.testers.runNixOSTest {
     virtualisation = {
       # Native Dolt, Celler and compiler probes share this guest. Leave enough
       # capacity for them under userspace emulation without relaxing deadlines.
-      cores = 4;
-      memorySize = 4096;
+      cores = if includeServiceLifecycle then 4 else 1;
+      memorySize = if includeServiceLifecycle then 4096 else 2048;
       diskSize = 4096;
     };
     environment.systemPackages = nativePackages;
   };
   testScript = ''
     from datetime import timedelta
-    from shlex import quote
+    ${pkgs.lib.optionalString includeServiceLifecycle "from shlex import quote"}
 
     machine.start()
     machine.wait_for_unit("multi-user.target")
