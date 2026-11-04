@@ -1,13 +1,16 @@
 use std::{
     env, fs, io,
     path::{Component, Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
 };
 
 use displaydoc::Display;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use wrix_sandbox::image::{Digest, ImageRef, Source, SourceKind};
+
+#[cfg(test)]
+mod test;
 
 #[derive(Debug, Display, Error)]
 pub enum Error {
@@ -213,11 +216,14 @@ impl Artifact {
             .arg("--add-root")
             .arg(roots.join(name))
             .arg("--indirect")
-            .output()?;
-        if !output.status.success() {
-            return Err(Error::Derivation(
-                String::from_utf8_lossy(&output.stderr).into_owned(),
-            ));
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit())
+            .status()?;
+        if !output.success() {
+            return Err(Error::Derivation(format!(
+                "{} exited with {output}; see Nix output above",
+                self.derivation.display()
+            )));
         }
         Ok(())
     }

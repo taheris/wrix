@@ -100,6 +100,15 @@ fn cancellation_archives_the_real_intent_from_failed_image_realisation() -> Test
     fs::write(fixture.root.path().join("fail-image"), b"")?;
     let failed = run_command(target_command(&fixture, &binding)?.args(["service", "update"]))?;
     assert!(!failed.status.success());
+    for message in [
+        "WaitingForUpdateLock",
+        "RealizingImage",
+        "elapsed_secs=0",
+        "fixture image realisation interrupted",
+    ] {
+        assert!(failed.stderr.contains(message), "{}", failed.stderr);
+        assert!(!failed.stdout.contains(message), "{}", failed.stdout);
+    }
     assert_eq!(
         fs::read(fixture.root.path().join("fail-image"))?,
         b"realise\n"

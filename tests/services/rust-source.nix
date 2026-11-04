@@ -1,7 +1,7 @@
 { pkgs, rustPackage }:
 
 let
-  inherit (pkgs.lib) concatMapStringsSep;
+  inherit (pkgs.lib) concatMapStringsSep hasInfix;
 
   resources = [
     "crates/wrix-cli/tests/fixtures/service-runtime.sh"
@@ -20,6 +20,11 @@ let
   ];
 in
 assert rustPackage.clippy.src == rustPackage.nextest.src;
+assert toString rustPackage.runtimePackage.src == toString rustPackage.package.src;
+assert hasInfix "--bin wrix-service-supervisor" rustPackage.runtimePackage.buildPhase;
+assert hasInfix "--bin wrix-egress-gateway" rustPackage.runtimePackage.buildPhase;
+assert hasInfix "--bin wrix-shared-service" rustPackage.runtimePackage.buildPhase;
+assert hasInfix "--bin wrix-nix-pool-owner" rustPackage.runtimePackage.buildPhase;
 pkgs.runCommand "test-rust-source-fixtures" { } ''
   set -euo pipefail
   ${concatMapStringsSep "\n" (relative: ''

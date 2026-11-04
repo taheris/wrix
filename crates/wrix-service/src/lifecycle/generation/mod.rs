@@ -842,6 +842,21 @@ fn wait(authority: &Path, plan: &Plan) -> Result<()> {
     }
 }
 
+pub(super) fn needs_retirement_maintenance(state: &Path) -> Result<bool> {
+    let authority = authority(state);
+    let Some(plan) = Plan::load(&authority)? else {
+        return Ok(false);
+    };
+    for gateway in &plan.obsolete {
+        if gateway.retirement(&authority)?.is_none()
+            && gateway.runtime()?.status(&gateway.name.0)? == RuntimeStatus::Missing
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 pub(super) fn prepare_gateway(candidate: &super::binding::Candidate) -> Result<()> {
     let host = Host::discover().map_err(io::Error::other)?;
     let authority = authority(host.roots().state());

@@ -39,7 +39,7 @@ let
         "wrix.nix-pool.upgrade-version" = "1";
       }
   );
-  contents = [
+  stableContents = [
     dockerTools.binSh
     dockerTools.usrBinEnv
   ]
@@ -49,7 +49,6 @@ let
         coreutils
         dolt
         celler
-        supervisor
         compiler
         pkgs.rustc
         pkgs.stdenv.cc
@@ -63,6 +62,29 @@ let
         pool.bootstrap
       ]
   );
+  contents = stableContents ++ pkgs.lib.optional (pool == null) supervisor;
+  baseImage = imageBuilderPkgs.dockerTools.streamLayeredImage {
+    name = "${imageName}-base";
+    tag = "latest";
+    architecture = pkgs.go.GOARCH;
+    contents = stableContents;
+    maxLayers = 90;
+  };
+  baseLayout = mkOciLayout {
+    image = baseImage;
+    name = "${imageName}-base-oci";
+  };
+  baseClosure = imageBuilderPkgs.closureInfo { rootPaths = stableContents; };
+  leafLayering =
+    imageBuilderPkgs.runCommandLocal "${imageName}-layering.json"
+      { nativeBuildInputs = [ imageBuilderPkgs.jq ]; }
+      ''
+        set -euo pipefail
+        jq -n --rawfile paths ${baseClosure}/store-paths '
+          ($paths | split("\n") | map(select(length > 0))) as $base
+          | [["remove_paths", $base], ["popularity_contest"], ["limit_layers", 30]]
+        ' > "$out"
+      '';
   imageConfig = {
     Env = [
       "HOME=${if pool == null then "/tmp" else "/var/empty"}"
@@ -71,32 +93,36 @@ let
     Labels = labels;
   }
   // (if pool == null then { } else { Entrypoint = [ "${pool.bootstrap}/bin/wrix-nix-pool" ]; });
-  buildImage =
-    if asTarball then
-      imageBuilderPkgs.dockerTools.buildLayeredImage
-    else
-      dockerTools.streamLayeredImage;
-  rawImage = buildImage {
-    name = imageName;
-    tag = "latest";
-    architecture = pkgs.go.GOARCH;
+  rawImage = imageBuilderPkgs.dockerTools.streamLayeredImage (
+    {
+      name = imageName;
+      tag = "latest";
+      architecture = pkgs.go.GOARCH;
 
-    inherit contents;
-    includeNixDB = pool != null;
+      contents = if pool == null then [ supervisor ] else contents;
+      includeNixDB = pool != null;
 
-    extraCommands = ''
-      mkdir -p tmp
-      chmod 1777 tmp
-      ${if pool == null then "" else pool.imageCommands}
-    '';
+      extraCommands = ''
+        mkdir -p tmp
+        chmod 1777 tmp
+        ${if pool == null then "" else pool.imageCommands}
+      '';
 
-    config = imageConfig;
-  };
+      config = imageConfig;
+    }
+    // pkgs.lib.optionalAttrs (pool == null) { layeringPipeline = leafLayering; }
+  );
   sourceKind = if asTarball then "docker-archive" else "nix-descriptor";
-  mkOciLayout = import ../sandbox/oci-layout.nix { inherit pkgs; };
+  mkOciLayout = import ../sandbox/oci-layout.nix { pkgs = imageBuilderPkgs; };
   ociLayout = mkOciLayout {
     image = rawImage;
     name = "${imageName}-oci";
+    fromLayout = if pool == null then baseLayout else null;
+  };
+  archive = import ../sandbox/docker-archive.nix {
+    pkgs = imageBuilderPkgs;
+    layout = ociLayout;
+    name = imageName;
   };
   descriptorMetadata = {
     schema = 1;
@@ -135,37 +161,26 @@ let
           }' \
           ${descriptorMetadataFile} > "$out"
       '';
-  imageSource = if asTarball then rawImage else nixDescriptorSource;
+  imageSource = if asTarball then archive else nixDescriptorSource;
   digestFile =
     if asTarball then
-      imageBuilderPkgs.runCommandLocal "${imageName}-digest"
-        {
-          nativeBuildInputs = [
-            imageBuilderPkgs.jq
-            imageBuilderPkgs.skopeo
-          ];
-        }
-        ''
-          set -euo pipefail
-          export TMPDIR="$PWD/tmp"
-          export HOME="$TMPDIR"
-          mkdir -p "$TMPDIR"
-          skopeo --tmpdir "$TMPDIR" --insecure-policy copy --quiet \
-            "docker-archive:${rawImage}" "oci:$TMPDIR/image-oci:latest"
-          skopeo --tmpdir "$TMPDIR" inspect --raw "oci:$TMPDIR/image-oci:latest" \
-            | jq -r '.config.digest' > "$out"
-        ''
+      import ../sandbox/archive-digest.nix {
+        pkgs = imageBuilderPkgs;
+        layout = ociLayout;
+        name = imageName;
+      }
     else
       descriptorDigestFile;
-  imageTag = imageTagLib.mkImageTag rawImage;
+  imageTag = imageTagLib.mkImageTag imageSource;
   refPrefix = if asTarball then "" else "localhost/";
 in
 assert pool != null || (celler != null && supervisor != null);
-rawImage
+(if asTarball then archive else rawImage)
 // {
+  stream = rawImage;
   digest = digestFile;
   digestDerivation = if asTarball then digestFile else ociLayout;
-  inherit labels;
+  inherit labels ociLayout baseLayout;
   ref = "${refPrefix}${imageName}:${imageTag}";
   source = imageSource;
   source_kind = sourceKind;

@@ -13,8 +13,10 @@ use std::{
 use wrix_state::host::Host;
 
 mod cancel;
+mod progress;
 mod recovery;
 pub use cancel::run as cancel;
+use progress::Stage;
 
 const FILE: &str = "update.json";
 
@@ -187,6 +189,10 @@ pub fn resume() -> Result<String> {
 }
 
 fn run_target(target: Target) -> Result<String> {
+    progress::run(|progress| run_reported(target, progress))
+}
+
+fn run_reported(target: Target, progress: &progress::Reporter) -> Result<String> {
     let host = Host::discover().map_err(io::Error::other)?;
     let deployment = crate::control::existing_deployment(&host).map_err(io::Error::other)?
         .ok_or_else(|| Error::Operation { message: "service update requires an existing deployment; run `wrix service start` from a repository first".into() })?;
@@ -235,8 +241,11 @@ fn run_target(target: Target) -> Result<String> {
             publish(guard.root(), FILE, &intent)?;
         }
     }
+    progress.stage(Stage::RealizingImage);
     let digest = intent.candidate.realize(&root.join("update-roots"))?;
     begin_preparing(&root, &mut intent)?;
+    recovery::retire_missing_gateways(&host, progress)?;
+    progress.stage(Stage::PreparingController);
     let control = host.roots().state().join("control");
     let native = Native::for_package(
         Platform::current().map_err(io::Error::other)?,
@@ -246,7 +255,9 @@ fn run_target(target: Target) -> Result<String> {
     native
         .prepare_upgrade(&control, &intent.controller)
         .map_err(io::Error::other)?;
+    progress.stage(Stage::PreparingPools);
     let pools = intent.pools.begin(&host, &intent.controller)?;
+    progress.stage(Stage::CheckingOwnership);
     let guard = coordination::acquire(&root)?;
     let bytes = document(guard.root(), FILE)?.ok_or(owner::Error::Conflict)?;
     let current: Intent = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
@@ -301,6 +312,7 @@ fn run_target(target: Target) -> Result<String> {
         crate::control::maintenance::ready(&host).map_err(io::Error::other)?;
     }
     if native_core {
+        progress.stage(Stage::PreparingGateway);
         super::super::generation::prepare_gateway(&intent.candidate)?;
     }
     let replace = !same_image || !native_core;
@@ -336,6 +348,7 @@ fn run_target(target: Target) -> Result<String> {
                 intent.phase,
                 Phase::Releasing | Phase::Released | Phase::Starting
             ) {
+                progress.stage(Stage::DrainingBackend);
                 intent.phase = Phase::Draining;
                 publish(guard.root(), FILE, &intent)?;
                 super::super::generation::close_backend()?;
@@ -350,12 +363,14 @@ fn run_target(target: Target) -> Result<String> {
                 intent.phase = Phase::Releasing;
                 publish(guard.root(), FILE, &intent)?;
             }
+            progress.stage(Stage::ReleasingBackend);
             super::backend::release(&runtime, &selected, host.roots().state())?;
             status = RuntimeStatus::Stopped;
         }
         for pin in &pins {
             pin.confirm()?;
         }
+        progress.stage(Stage::Checkpointing);
         let ownership = intent.ownership.as_ref().ok_or(owner::Error::Invalid)?;
         super::checkpoint::create(
             host.roots().state(),
@@ -379,6 +394,7 @@ fn run_target(target: Target) -> Result<String> {
         intent.phase = Phase::Starting;
         publish(guard.root(), FILE, &intent)?;
     }
+    progress.stage(Stage::StartingBackend);
     let active = owner::host::ensure(&runtime, &guard, Some(&previous), None, true)?;
     if active
         .recipe
@@ -387,6 +403,7 @@ fn run_target(target: Target) -> Result<String> {
     {
         return Err(owner::Error::Conflict.into());
     }
+    progress.stage(Stage::CheckingReadiness);
     intent.phase = Phase::Checking;
     publish(guard.root(), FILE, &intent)?;
     let (sql, cache, compiler, sync) = super::super::shared::Record::at(guard.root())?
@@ -402,11 +419,13 @@ fn run_target(target: Target) -> Result<String> {
     }
     intent.phase = Phase::Activated;
     publish(guard.root(), FILE, &intent)?;
+    progress.stage(Stage::CheckingPools);
     if let Err(error) = pools.complete() {
         intent.failure = Some(Failure::PoolReadiness);
         publish(guard.root(), FILE, &intent)?;
         return Err(io::Error::other(error).into());
     }
+    progress.stage(Stage::Finalizing);
     if super::Shutdown::read(guard.root())?.is_some() {
         fs::remove_file(guard.root().join(super::SHUTDOWN))?;
     }

@@ -10,7 +10,7 @@ let
   inherit (builtins) concatStringsSep;
   inherit (pkgs.lib) makeBinPath removePrefix optionals;
 
-  workspace = rustProfile.buildPackage {
+  workspaceArgs = {
     src = ../..;
     cargoLock = ../../Cargo.lock;
     srcFilter =
@@ -48,6 +48,15 @@ let
       mainProgram = "wrix";
     };
   };
+
+  workspace = rustProfile.buildPackage workspaceArgs;
+  runtimeWorkspace = rustProfile.buildPackage (
+    workspaceArgs
+    // {
+      inherit (workspace) cargoArtifacts;
+      cargoExtraArgs = "--package wrix-cli --package wrix-service --bin wrix-service-supervisor --bin wrix-shared-service --bin wrix-egress-gateway --bin wrix-nix-pool-owner";
+    }
+  );
 
   cacheHookTestPublisher = pkgs.writeShellScriptBin "wrix-cache-test-publisher" ''
     set -euo pipefail
@@ -343,6 +352,7 @@ in
 
   testFixtures = fixtures.bundle;
   package = workspace.bin;
+  runtimePackage = runtimeWorkspace.bin;
   wrix = wrixPackage;
   binding = serviceBinding;
   inherit
@@ -357,17 +367,17 @@ in
   supervisor =
     pkgs.runCommand "wrix-service-supervisor" { meta = binaryMeta "wrix-service-supervisor"; }
       ''
-        install -Dm755 "${workspace.bin}/bin/wrix-service-supervisor" "$out/bin/wrix-service-supervisor"
-        install -Dm755 "${workspace.bin}/bin/wrix-shared-service" "$out/bin/wrix-shared-service"
+        install -Dm755 "${runtimeWorkspace.bin}/bin/wrix-service-supervisor" "$out/bin/wrix-service-supervisor"
+        install -Dm755 "${runtimeWorkspace.bin}/bin/wrix-shared-service" "$out/bin/wrix-shared-service"
         install -Dm755 "${
           import ./gateway.nix {
             inherit pkgs;
-            rustPackage = workspace.bin;
+            rustPackage = runtimeWorkspace.bin;
           }
         }/bin/wrix-egress-gateway" "$out/bin/wrix-egress-gateway"
       '';
   nixPoolOwner = pkgs.runCommand "wrix-nix-pool-owner" { meta = binaryMeta "wrix-nix-pool-owner"; } ''
-    install -Dm755 "${workspace.bin}/bin/wrix-nix-pool-owner" "$out/bin/wrix-nix-pool-owner"
+    install -Dm755 "${runtimeWorkspace.bin}/bin/wrix-nix-pool-owner" "$out/bin/wrix-nix-pool-owner"
   '';
   hostCachePolicy = mkBinaryPackage "wrix-host-cache-policy" [ ];
   cacheHook = mkBinaryPackage "wrix-cache-hook" [ ];

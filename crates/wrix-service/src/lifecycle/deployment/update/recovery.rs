@@ -12,6 +12,53 @@ use std::io;
 use wrix_sandbox::image::Digest;
 use wrix_state::host::Host;
 
+pub(super) fn retire_missing_gateways(
+    host: &Host,
+    progress: &super::progress::Reporter,
+) -> Result<()> {
+    let root = host.roots().state().join("host-lifecycle");
+    let guard = crate::lifecycle::coordination::acquire(&root)?;
+    if !crate::lifecycle::generation::needs_retirement_maintenance(host.roots().state())? {
+        return Ok(());
+    }
+    let selected = owner::Selected::read(guard.root())?.ok_or(owner::Error::Invalid)?;
+    let runtime = super::super::runtime(&selected)?;
+    require_cold_backend(runtime.status(&selected.container)?)?;
+    let shutdown = super::super::Shutdown::read(guard.root())?
+        .filter(|shutdown| shutdown.phase == super::super::Phase::Stopped)
+        .ok_or_else(retirement_refused)?;
+    shutdown.check(host, &selected, &shutdown.package)?;
+    let layout = wrix_cache::backend::layout::Layout::current()?;
+    let pins = super::super::ownership::Pin::capture(host.roots().state(), layout.metadata())?;
+    if pins
+        .iter()
+        .map(super::super::ownership::Pin::record)
+        .collect::<Vec<_>>()
+        != shutdown.locks
+    {
+        return Err(retirement_refused());
+    }
+    for pin in &pins {
+        pin.confirm()?;
+    }
+    drop(pins);
+    drop(guard);
+    progress.stage(super::Stage::RecoveringGatewayRetirement);
+    super::super::stop()?;
+    Ok(())
+}
+
+fn require_cold_backend(status: RuntimeStatus) -> Result<()> {
+    match status {
+        RuntimeStatus::Stopped | RuntimeStatus::Missing => Ok(()),
+        RuntimeStatus::Running => Err(retirement_refused()),
+    }
+}
+
+fn retirement_refused() -> Error {
+    Error::Operation { message: "an obsolete gateway is missing without native retirement evidence; automatic cold recovery requires a stopped backend and a verified completed host shutdown with unchanged storage ownership. Run `wrix service stop --host`, then `wrix service update --resume`; exact update intent and data are retained".into() }
+}
+
 pub(super) fn repair_endpoints(
     host: &Host,
     intent: &Intent,
@@ -97,4 +144,22 @@ pub(super) fn repair_endpoints(
 
 fn refused() -> Error {
     Error::Operation { message: "retained role endpoints conflict with controller leases; automatic relocation is forbidden. Current Wrix `service update --resume` can repair only a verified explicitly stopped legacy transition before release or a checkpointed Starting transition with no backend; no native generations may be provisioned; ownership, data and update intent remain retained".into() }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn missing_gateway_recovery_refuses_a_serving_backend() {
+        let error = require_cold_backend(RuntimeStatus::Running).unwrap_err();
+        assert!(error.to_string().contains("service stop --host"));
+    }
+
+    #[test]
+    fn missing_gateway_recovery_accepts_only_cold_backend_states() {
+        for status in [RuntimeStatus::Stopped, RuntimeStatus::Missing] {
+            require_cold_backend(status).unwrap();
+        }
+    }
 }

@@ -8,23 +8,34 @@ mod observation;
 fn explicit_cold_shutdown_retires_a_missing_obsolete_gateway_not_the_current_one() {
     const CHILD: &str = "WRIX_TEST_COLD_GATEWAY_RETIREMENT";
     if let Some(root) = std::env::var_os(CHILD) {
+        let state = Path::new(&root);
+        let authority = authority(state);
+        std::fs::create_dir_all(&authority).unwrap();
         let mut plan = plan();
+        plan.publish(&authority).unwrap();
+        assert!(!needs_retirement_maintenance(state).unwrap());
         plan.obsolete.push(plan.gateway.clone());
         plan.gateway.generation = Generation::new(NonZeroU64::new(2).unwrap());
         plan.gateway.name = "wrix-gateway-2".to_owned().try_into().unwrap();
-        stop_gateways(&plan, Path::new(&root)).unwrap();
-        assert!(
-            plan.obsolete[0]
-                .retirement(Path::new(&root))
-                .unwrap()
-                .is_some()
-        );
-        assert!(plan.gateway.retirement(Path::new(&root)).unwrap().is_none());
+        plan.publish(&authority).unwrap();
+        let observed = state.join("runtime-state");
+        for status in ["true", "false"] {
+            std::fs::write(&observed, status).unwrap();
+            assert!(!needs_retirement_maintenance(state).unwrap());
+        }
+        std::fs::write(&observed, "unknown").unwrap();
+        assert!(needs_retirement_maintenance(state).is_err());
+        std::fs::remove_file(&observed).unwrap();
+        assert!(needs_retirement_maintenance(state).unwrap());
+        stop_gateways(&plan, &authority).unwrap();
+        assert!(!needs_retirement_maintenance(state).unwrap());
+        assert!(plan.obsolete[0].retirement(&authority).unwrap().is_some());
+        assert!(plan.gateway.retirement(&authority).unwrap().is_none());
         return;
     }
     let root = tempfile::tempdir().unwrap();
     let runtime = root.path().join("podman");
-    std::fs::write(&runtime, "#!/bin/bash\nset -euo pipefail\n[[ \"$1\" == inspect ]] || exit 64\nprintf 'Error: no such container\\n' >&2\nexit 125\n").unwrap();
+    std::fs::write(&runtime, "#!/bin/bash\nset -euo pipefail\n[[ \"$1\" == inspect ]] || exit 64\nif [[ -f \"$WRIX_TEST_COLD_GATEWAY_RETIREMENT/runtime-state\" ]]; then\n  printf '%s\\n' \"$(<\"$WRIX_TEST_COLD_GATEWAY_RETIREMENT/runtime-state\")\"\n  exit 0\nfi\nprintf 'Error: no such container\\n' >&2\nexit 125\n").unwrap();
     std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o755)).unwrap();
     let output = Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "lifecycle::generation::test::explicit_cold_shutdown_retires_a_missing_obsolete_gateway_not_the_current_one", "--nocapture"])

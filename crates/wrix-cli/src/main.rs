@@ -5,11 +5,20 @@ use std::{
 };
 
 fn main() -> ExitCode {
-    if let Err(error) = tracing_subscriber::fmt()
-        .with_writer(io::stderr)
-        .with_max_level(tracing::Level::WARN)
-        .with_target(false)
-        .without_time()
+    use tracing_subscriber::{Layer, layer::SubscriberExt, util::SubscriberInitExt};
+
+    if let Err(error) = tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(io::stderr)
+                .with_target(false)
+                .without_time()
+                .with_filter(
+                    tracing_subscriber::filter::Targets::new()
+                        .with_default(tracing::Level::WARN)
+                        .with_target("wrix::service::update", tracing::Level::INFO),
+                ),
+        )
         .try_init()
     {
         let mut stderr = io::stderr().lock();

@@ -314,6 +314,7 @@ let
         inherit pkgs;
         inherit (wrix) rustPackage;
       };
+      service-image-incremental = import ./services/image-incremental.nix { inherit pkgs; };
       image-assembly-native = sandboxImageChecks.imageAssemblyNativeCheck;
       oci-layout-builder = pkgs.runCommandLocal "oci-layout-builder" { } ''
         set -euo pipefail

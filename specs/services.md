@@ -179,6 +179,18 @@ invoked package's controller and bound service image; ordinary start resumes
 recorded controller/backend versions, not the caller's newer package. Controller
 replacement/restart is not transparently stream-preserving.
 
+An explicit update or resume with a stopped/absent backend and a retained,
+completed host shutdown with unchanged storage ownership repairs missing
+obsolete-gateway retirement evidence through the host shutdown workflow before
+preparing gateway routing. This stops the controller and gateways under native
+ownership exclusion before recording retirement; it does not infer drained
+streams from an absent container alone. A running backend instead requires an
+explicit host stop. The recorded update target, data and software roots remain
+retained across recovery failures.
+[test](../crates/wrix-service/src/lifecycle/generation/test.rs::explicit_cold_shutdown_retires_a_missing_obsolete_gateway_not_the_current_one)
+[test](../crates/wrix-service/src/lifecycle/deployment/update/recovery.rs::missing_gateway_recovery_refuses_a_serving_backend)
+[test](../crates/wrix-service/src/lifecycle/deployment/update/recovery.rs::missing_gateway_recovery_accepts_only_cold_backend_states)
+
 Durable state records role versions, generation identities and ownership
 transition phases, not live proxy grants. After failure, uncertain ownership or
 readiness keeps affected admission closed until observed runtime/backend state
