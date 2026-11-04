@@ -1041,6 +1041,21 @@ tenant or component compromise/fault isolation.
   pruning, MRU-eight eviction or a separate service-specific installer
   [test](../crates/wrix-cli/tests/service_cache.rs::service_start_uses_shared_image_digest_preflight_without_pruning)
 
+- Apple content checks distinguish native index, platform manifest and OCI
+  configuration identities. Installation binds exported archive bytes to the
+  observed index; before/after mutable-reference observations alone are not
+  proof. Earlier receipt/owner records are preserved, not silently certified.
+  [test](../crates/wrix-sandbox/src/image/apple/producer_test.rs::apple_1_5_native_producer_keeps_index_manifest_and_config_identities_distinct)
+  [test](../crates/wrix-sandbox/src/image/apple/producer_test.rs::attestation_refuses_an_intervening_saved_image_before_writing_any_receipt)
+
+- Apple backend and gateway writers start only after a coherent stopped-instance
+  observation matches the prepared native image and expected ownership labels. A
+  changed image after creation refuses startup without replacing retained state.
+  [Apple image identity](../docs/darwin-image-identity.md) distinguishes
+  producer/fixture evidence from native lifecycle acceptance.
+  [test](../crates/wrix-cli/tests/service_lifecycle.rs::apple_changed_image_after_create_never_starts_a_backend_writer)
+  [test](../crates/wrix-service/src/lifecycle/apple/start_test.rs::apple_start_requires_stopped_bound_image_and_exact_ownership_before_execution)
+
 - Temp-directory scratch workspaces do not receive project-cache endpoints or
   publication authority. Explicit service startup still prepares the shared
   deployment's required native roles.

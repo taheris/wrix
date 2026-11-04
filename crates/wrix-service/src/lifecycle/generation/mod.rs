@@ -665,10 +665,30 @@ fn published_guest(
     }
 }
 
+fn start_apple_gateway(runtime: &Runtime, gateway: &Gateway, deployment: &Id) -> Result<()> {
+    runtime.start_bound_apple(
+        &gateway.name.0,
+        &gateway.recipe.image_id,
+        &[
+            ("wrix.kind", "service"),
+            ("wrix.service.scope", "host"),
+            ("wrix.service.role", "gateway"),
+            ("wrix.service.deployment", &deployment.to_string()),
+            (
+                "wrix.service.generation",
+                &gateway.generation.number().to_string(),
+            ),
+        ],
+    )
+}
+
 fn start_gateway(gateway: &Gateway, deployment: &Id) -> Result<()> {
     let runtime = gateway.runtime()?;
     match runtime.status(&gateway.name.0)? {
         RuntimeStatus::Running => return gateway.verify(deployment),
+        RuntimeStatus::Stopped if runtime.kind == RuntimeKind::Container => {
+            start_apple_gateway(&runtime, gateway, deployment)?;
+        }
         RuntimeStatus::Stopped => {
             let output = Command::new(&runtime.binary)
                 .args(["start", gateway.name.0.as_str()])
@@ -685,7 +705,14 @@ fn start_gateway(gateway: &Gateway, deployment: &Id) -> Result<()> {
                 return Err(Error::Operation { message: "the recorded gateway image is unavailable; restore that exact bound image through explicit host recovery, never select a newer version implicitly".into() });
             }
             let mut command = Command::new(&runtime.binary);
-            command.args(["run", "-d", "--name", gateway.name.0.as_str()]);
+            match gateway.runtime {
+                RuntimeKind::Container => {
+                    command.args(["create", "--name", gateway.name.0.as_str()])
+                }
+                RuntimeKind::Podman => {
+                    command.args(["run", "-d", "--name", gateway.name.0.as_str()])
+                }
+            };
             if gateway.runtime == RuntimeKind::Podman {
                 command.args(["--restart=unless-stopped", "--pull=never"]);
             }
@@ -721,6 +748,9 @@ fn start_gateway(gateway: &Gateway, deployment: &Id) -> Result<()> {
                         String::from_utf8_lossy(&output.stderr)
                     ),
                 });
+            }
+            if gateway.runtime == RuntimeKind::Container {
+                start_apple_gateway(&runtime, gateway, deployment)?;
             }
         }
     }

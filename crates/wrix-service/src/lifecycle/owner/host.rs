@@ -256,8 +256,11 @@ pub(in crate::lifecycle) fn ensure(
     recovered.persist(&candidate_root)?;
     let boot = crate::gateway::Secret::generate().map_err(std::io::Error::other)?;
     let mut command = Command::new(&runtime.binary);
+    match runtime.kind {
+        RuntimeKind::Container => command.args(["create", "--name", selected.container.as_str()]),
+        RuntimeKind::Podman => command.args(["run", "-d", "--name", selected.container.as_str()]),
+    };
     command
-        .args(["run", "-d", "--name", selected.container.as_str()])
         .arg("--label")
         .arg(format!("wrix.service.boot={}", boot.expose()))
         .args(["-e", "WRIX_BACKEND_BOOT"])
@@ -320,6 +323,17 @@ pub(in crate::lifecycle) fn ensure(
                 |port| runtime.port_in_use_error(port),
             ),
         );
+    }
+    if runtime.kind == RuntimeKind::Container {
+        runtime.start_bound_apple(
+            &selected.container,
+            &image.0.image_id,
+            &[
+                ("wrix.kind", "service"),
+                ("wrix.service.scope", "host"),
+                ("wrix.service.boot", boot.expose()),
+            ],
+        )?;
     }
     ready_all(runtime, &recovered, root, &issuer)?;
     commit(&recovered, previous, guard)?;

@@ -64,6 +64,9 @@ Celler packaging boundary, consumer handoff patch and independent host blockers.
 [Loom workspace safety troubleshooting](loom-troubleshooting.md) covers missing
 host associations and retained-history paths without resetting safety evidence.
 
+[Apple image identity](darwin-image-identity.md) distinguishes native index,
+manifest and configuration content, archive-bound receipts and pre-start checks.
+
 [Darwin attention setup and validation](darwin-attention.md) covers the
 optional, consumer-provided OmniWM CLI integration and desktop shortcuts.
 

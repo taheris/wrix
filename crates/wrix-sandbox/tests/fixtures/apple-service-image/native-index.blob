@@ -1,0 +1,1 @@
+{"annotations":{"com.apple.containerization.index.indirect":"true"},"manifests":[{"digest":"sha256:abc267b76505c7f114e027fd10e25c60c8698c1274c8b5395607ba42b3e8355e","mediaType":"application\/vnd.oci.image.manifest.v1+json","platform":{"architecture":"arm64","os":"linux"},"size":12182}],"mediaType":"application\/vnd.oci.image.index.v1+json","schemaVersion":2}

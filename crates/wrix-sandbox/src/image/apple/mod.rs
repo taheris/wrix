@@ -37,7 +37,7 @@ fn directory() -> Result<PathBuf, Error> {
         .roots()
         .state()
         .join("image")
-        .join("apple-config")
+        .join("apple-config-v2")
         .join(system()?.as_str()))
 }
 
@@ -91,7 +91,7 @@ fn read(root: &Path, expected: &Digest) -> Result<Option<Digest>, Error> {
     }
     let receipt: Receipt =
         serde_json::from_slice(&bytes).map_err(|source| Error::DescriptorJson { source })?;
-    if receipt.version != 1 || receipt.index != *expected || receipt.system != system()? {
+    if receipt.version != 2 || receipt.index != *expected || receipt.system != system()? {
         return Err(Error::InvalidMetadata);
     }
     Ok(Some(receipt.config))
@@ -136,6 +136,18 @@ pub(super) fn attest(reference: &ImageRef, temporary: &Path) -> Result<(), Error
             reference.as_str(),
         ],
     )?;
+    // Before/after reference inspection alone permits an A -> B -> A race.
+    // Bind the actual saved archive to the observed native index before using
+    // its configuration bytes. Historical v1 receipts remain untouched.
+    let saved_index = run_required_output(
+        "skopeo",
+        &[
+            "inspect",
+            "--raw",
+            &format!("oci-archive:{}", archive.display()),
+        ],
+    )?;
+    require_exported_index(&saved_index.stdout, &index)?;
     let configuration = run_required_output(
         "skopeo",
         &[
@@ -160,7 +172,7 @@ pub(super) fn attest(reference: &ImageRef, temporary: &Path) -> Result<(), Error
     let mut file = tempfile::NamedTempFile::new_in(&root)?;
     file.write_all(
         &serde_json::to_vec(&Receipt {
-            version: 1,
+            version: 2,
             index: index.clone(),
             config,
             system,
@@ -171,6 +183,15 @@ pub(super) fn attest(reference: &ImageRef, temporary: &Path) -> Result<(), Error
     file.persist(root.join(index.as_str().trim_start_matches("sha256:")))
         .map_err(|error| error.error)?;
     File::open(root)?.sync_all()?;
+    Ok(())
+}
+
+fn require_exported_index(bytes: &[u8], expected: &Digest) -> Result<(), Error> {
+    if bytes.len() > 16 * 1024 * 1024
+        || Digest::parse(&format!("sha256:{:x}", Sha256::digest(bytes)))? != *expected
+    {
+        return Err(Error::InvalidMetadata);
+    }
     Ok(())
 }
 
@@ -233,5 +254,7 @@ pub(super) fn reference(expected: &ImageId) -> Result<String, Error> {
     })
 }
 
+#[cfg(test)]
+mod producer_test;
 #[cfg(test)]
 mod test;

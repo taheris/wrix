@@ -80,7 +80,7 @@ fn config_receipt_is_bound_to_exact_native_index_and_private_metadata() {
     fs::write(
         &path,
         serde_json::to_vec(&Receipt {
-            version: 1,
+            version: 2,
             index: index.clone(),
             config: config.clone(),
             system: system().unwrap(),
@@ -104,7 +104,7 @@ fn a_receipt_for_another_native_index_is_not_a_cache_miss() {
     fs::write(
         &path,
         serde_json::to_vec(&Receipt {
-            version: 1,
+            version: 2,
             index: foreign.clone(),
             config: foreign,
             system: system().unwrap(),

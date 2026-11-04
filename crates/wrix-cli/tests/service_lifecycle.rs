@@ -517,7 +517,12 @@ impl Fixture {
         self.snapshot = json!([]);
         self.write_snapshot()?;
         let output = self.run("start")?;
-        assert!(output.status.success(), "{}", output.stderr);
+        assert!(
+            output.status.success(),
+            "{}\nfixture runtime calls:\n{}",
+            output.stderr,
+            fs::read_to_string(self.root.path().join("runtime.log")).unwrap_or_default()
+        );
         self.snapshot = serde_json::from_slice(&fs::read(self.root.path().join("runtime.json"))?)?;
         let output = self.run("endpoints")?;
         assert!(output.status.success(), "{}", output.stderr);
@@ -1016,6 +1021,44 @@ fn null_fixture_endpoint_reports_cli_workspace_and_payload() -> TestResult {
 }
 
 #[test]
+fn apple_changed_image_after_create_never_starts_a_backend_writer() -> TestResult {
+    let mut fixture = Fixture::new()?;
+    fixture.disable_dolt()?;
+    fixture.snapshot = json!([]);
+    fixture.write_snapshot()?;
+    fixture.api()?;
+    let retained = fixture.state_root()?.join("keys/cache.pub");
+    let before = fs::read(&retained)?;
+    let output = run_command(fixture.command()?.args(["service", "start"]).env(
+        "WRIX_TEST_APPLE_CREATED_IMAGE",
+        format!("sha256:{}", "b".repeat(64)),
+    ))?;
+    assert!(!output.status.success());
+    assert!(
+        output.stderr.contains("no backend was started"),
+        "{}",
+        output.stderr
+    );
+    let calls = fs::read_to_string(fixture.root.path().join("runtime.log"))?;
+    assert!(
+        calls.lines().any(|line| line.starts_with("create --name ")),
+        "{calls}"
+    );
+    assert!(
+        !calls
+            .lines()
+            .any(|line| line.starts_with("start ") || line.starts_with("run ")),
+        "{calls}"
+    );
+    let current: Value =
+        serde_json::from_slice(&fs::read(fixture.root.path().join("runtime.json"))?)?;
+    assert_eq!(current[0]["status"]["state"], "stopped");
+    assert!(!fixture.root.path().join("run.argv").exists());
+    assert_eq!(fs::read(retained)?, before);
+    Ok(())
+}
+
+#[test]
 fn repeated_apple_service_start_preserves_busy_owned_endpoints() -> TestResult {
     let fixture = Fixture::shared_cache()?;
     let selected = owner_selection(&fixture)?;
@@ -1090,7 +1133,7 @@ fn fresh_service_refuses_empty_dolt_source_without_discarding_it() -> TestResult
     let log = fs::read_to_string(fixture.root.path().join("runtime.log"))?;
     assert_eq!(
         log.lines()
-            .filter(|line| line.starts_with("run -d --name wrix-host-service "))
+            .filter(|line| line.starts_with("create --name wrix-host-service "))
             .count(),
         1
     );
@@ -1523,7 +1566,11 @@ fn cache_guest_endpoint_and_key_reach_both_launch_commands() -> TestResult {
                     "inspect {}",
                     fixture.metadata["container_name"].as_str().unwrap()
                 )));
-            assert!(log.lines().all(|line| !line.starts_with("run ")), "{log}");
+            assert!(
+                log.lines()
+                    .all(|line| !line.starts_with("run ") && !line.starts_with("create ")),
+                "{log}"
+            );
         }
     }
     Ok(())
@@ -1801,7 +1848,11 @@ fn all_obsolete_services_are_validated_before_any_container_is_removed() -> Test
     assert_cache_start_preserves_owner(&fixture)?;
     let calls = fs::read_to_string(fixture.root.path().join("runtime.log"))?;
     assert!(!calls.lines().any(|line| line.starts_with("rm ")));
-    assert!(!calls.lines().any(|line| line.starts_with("run ")));
+    assert!(
+        !calls
+            .lines()
+            .any(|line| line.starts_with("run ") || line.starts_with("create "))
+    );
     Ok(())
 }
 
@@ -2119,6 +2170,7 @@ fn stopped_backend_in_the_other_runtime_does_not_prevent_cache_reentry() -> Test
     let calls = fs::read_to_string(fixture.root.path().join("bin/peer.log"))?;
     assert!(!calls.lines().any(|line| line.starts_with("rm ")
         || line.starts_with("run ")
+        || line.starts_with("create ")
         || line.starts_with("start ")));
     assert!(!fixture.root.path().join("run.argv").exists());
     Ok(())
@@ -2484,10 +2536,9 @@ fn cache_namespaces_reuse_the_selected_shared_owner_and_retire_without_removing_
         serde_json::from_slice(&fs::read(fixture.root.path().join("runtime.json"))?)?;
     assert_eq!(remaining, fixture.snapshot);
     let log = fs::read_to_string(fixture.root.path().join("runtime.log"))?;
-    assert!(
-        !log.lines()
-            .any(|line| line.starts_with("run ") || line.starts_with("rm "))
-    );
+    assert!(!log.lines().any(|line| line.starts_with("run ")
+        || line.starts_with("create ")
+        || line.starts_with("rm ")));
     // Native SQL peer retirement and authenticated writes use genuine Beads
     // databases in public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql.
     Ok(())
@@ -2707,7 +2758,8 @@ fn repeated_recovery_reports_foreign_workspace_and_migration_without_mutation() 
     let calls = fs::read_to_string(fixture.root.path().join("runtime.log"))?;
     assert!(!calls.lines().any(|line| line.starts_with("stop ")
         || line.starts_with("rm ")
-        || line.starts_with("run ")));
+        || line.starts_with("run ")
+        || line.starts_with("create ")));
     Ok(())
 }
 
@@ -3039,7 +3091,7 @@ fn recovery_finishes_interrupted_initial_creation_without_the_original_repositor
     assert_eq!(
         calls
             .lines()
-            .filter(|line| line.starts_with("run -d --name wrix-host-service "))
+            .filter(|line| line.starts_with("create --name wrix-host-service "))
             .count(),
         1
     );
@@ -3120,7 +3172,7 @@ fn recovery_preserves_selection_when_authenticated_readiness_fails() -> TestResu
     assert_eq!(
         calls
             .lines()
-            .filter(|line| line.starts_with("run -d --name wrix-host-service "))
+            .filter(|line| line.starts_with("create --name wrix-host-service "))
             .count(),
         1
     );
@@ -3204,7 +3256,7 @@ fn concurrent_recovery_creates_one_owner() -> TestResult {
     let log = fs::read_to_string(fixture.root.path().join("runtime.log"))?;
     assert_eq!(
         log.lines()
-            .filter(|line| line.starts_with("run -d --name wrix-host-service "))
+            .filter(|line| line.starts_with("create --name wrix-host-service "))
             .count(),
         1,
         "{log}"
@@ -3433,7 +3485,7 @@ fn concurrent_service_starts_share_one_lifecycle_owner() -> TestResult {
     let log = fs::read_to_string(fixture.root.path().join("runtime.log"))?;
     assert_eq!(
         log.lines()
-            .filter(|line| line.starts_with("run -d --name wrix-host-service "))
+            .filter(|line| line.starts_with("create --name wrix-host-service "))
             .count(),
         1,
         "{log}"

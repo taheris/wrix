@@ -7,7 +7,7 @@ repos:
         exclude: ^(lib/services/celler-work-drain\.patch|crates/wrix-service/src/lifecycle/drain/native/compiler\.patch)$
       - id: end-of-file-fixer
         stages: [pre-commit]
-        exclude: ^(\.beads/config\.yaml|lib/services/celler-work-drain\.patch|crates/wrix-service/src/lifecycle/drain/native/compiler\.patch)$
+        exclude: ^(\.beads/config\.yaml|lib/services/celler-work-drain\.patch|crates/wrix-service/src/lifecycle/drain/native/compiler\.patch|crates/wrix-sandbox/tests/fixtures/apple-service-image/native-(index|config)\.blob)$
       - id: check-merge-conflict
         stages: [pre-commit]
 

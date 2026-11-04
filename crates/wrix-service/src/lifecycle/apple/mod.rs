@@ -126,6 +126,11 @@ impl<'de> Deserialize<'de> for PublishedPort {
     }
 }
 
+#[cfg(all(test, target_os = "macos"))]
+mod native_test;
+#[cfg(test)]
+mod start_test;
+
 #[cfg(test)]
 mod test {
     use serde_json::json;

@@ -1917,6 +1917,37 @@ impl Runtime {
             .transpose()
     }
 
+    fn start_bound_apple(
+        &self,
+        name: &ContainerName,
+        expected: &Digest,
+        labels: &[(&str, &str)],
+    ) -> Result<()> {
+        let snapshot = self
+            .apple_snapshot(name.as_str())?
+            .ok_or(owner::Error::Conflict)?;
+        if snapshot.runtime_status() != RuntimeStatus::Stopped
+            || snapshot.image_id() != Some(expected)
+            || labels.iter().any(|(key, value)| {
+                snapshot.configuration.labels.get(*key).map(String::as_str) != Some(*value)
+            })
+        {
+            return Err(Error::Operation {
+                message: "stopped Apple container does not match the immutable prepared image and ownership labels; no backend was started".into(),
+            });
+        }
+        let output = Command::new(&self.binary)
+            .args(["start", name.as_str()])
+            .stdin(Stdio::null())
+            .output()?;
+        if !output.status.success() {
+            return Err(Error::Operation {
+                message: String::from_utf8_lossy(&output.stderr).into_owned(),
+            });
+        }
+        Ok(())
+    }
+
     fn inspect_label(&self, name: &str, label: &str) -> Result<Option<String>> {
         if self.kind == RuntimeKind::Container {
             return Ok(self
@@ -2010,16 +2041,19 @@ impl Runtime {
         )?;
         if self.image_exists(candidate.image())? {
             let target = Target::Reference(candidate.image().clone());
-            let image_id = store
+            let native_id = store
                 .image_id(runtime, &target)?
                 .ok_or_else(|| Error::Operation {
                     message: "installed service image has no immutable native identity".into(),
                 })?;
-            let image_id = parse_image_id(image_id.as_str())?;
+            let image_id = parse_image_id(native_id.as_str())?;
             let verified = match self.kind {
                 RuntimeKind::Podman => image_id == digest,
                 RuntimeKind::Container => {
-                    store.image_digest(runtime, &target)?.as_ref() == Some(&digest)
+                    store
+                        .image_digest(runtime, &Target::Id(native_id))?
+                        .as_ref()
+                        == Some(&digest)
                 }
             };
             if !verified {

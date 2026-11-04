@@ -10,7 +10,8 @@ native_gateway() {
 if [[ "$#" == 4 && "$1" == exec && "$3" == wrix-shared-service && "$4" == compiler-ready ]]; then
   exec "${WRIX_TEST_SQL_CLIENT:?}" "${WRIX_TEST_ROLES_CONTROL:?}" compiler-ready
 fi
-if [[ "${1:-}" == start && -n "${WRIX_TEST_RUNTIME_JSON:-}" ]]; then
+if [[ "${1:-}" == start && -n "${WRIX_TEST_RUNTIME_JSON:-}" ]] \
+  && "${WRIX_TEST_JQ_BIN:?}" -e --arg name "${2:-}" 'any(.[]; .configuration.id == $name and .configuration.labels["wrix.dolt.shared"] == "native-v1")' "$WRIX_TEST_RUNTIME_JSON" >/dev/null; then
   [[ "$#" == 2 ]]
   printf '%s\n' "$*" >>"${WRIX_TEST_RUNTIME_LOG:?}"
   "${WRIX_TEST_JQ_BIN:?}" -e --arg name "$2" 'any(.[]; .configuration.id == $name and .status.state == "stopped" and .configuration.labels["wrix.dolt.shared"] == "native-v1")' "$WRIX_TEST_RUNTIME_JSON" >/dev/null
