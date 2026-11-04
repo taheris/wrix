@@ -39,9 +39,17 @@ pub(in crate::lifecycle) fn sql_ready() {}
     let mut terminate = signal();
 ''',
     IMAGE: '''
-  contents = [
+  stableContents = [
     celler
   ];
+  contents = stableContents ++ pkgs.lib.optional (pool == null) supervisor;
+  baseImage = {
+    contents = stableContents;
+  };
+  rawImage = {
+    contents = if pool == null then [ supervisor ] else contents;
+  };
+  sourceKind = "docker-archive";
 ''',
 }
 
@@ -72,6 +80,12 @@ class CacheTransportVerifierTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "")
         self.assertEqual(result.stderr, "")
+
+    def test_accepts_the_actual_split_service_image_recipe(self):
+        root = Path(__file__).resolve().parents[2]
+        fixture = {**FIXTURE, IMAGE: (root / IMAGE).read_text()}
+        result = self.run_verifier(fixture)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_rejects_missing_required_transport_configuration(self):
         required = [
@@ -105,7 +119,9 @@ class CacheTransportVerifierTests(unittest.TestCase):
             (LAUNCHER, "project-cache launcher path", "    fn load_project_cache() {"),
             (OWNER, "service container run path", "pub(in crate::lifecycle) fn ensure() {"),
             (SERVER, "service container command", "    let mut celler ="),
-            (IMAGE, "service image contents", "  contents = ["),
+            (IMAGE, "service image contents", "  stableContents = ["),
+            (IMAGE, "service image contents", "  contents = stableContents"),
+            (IMAGE, "service image contents", "  rawImage = {"),
         ]
         forbidden = [
             "file://",
@@ -145,7 +161,7 @@ class CacheTransportVerifierTests(unittest.TestCase):
                 "    let mut celler =",
                 "    let mut terminate =",
             ),
-            (IMAGE, "service image contents", "  contents = [", "  ];"),
+            (IMAGE, "service image contents", "  stableContents = [", "  sourceKind ="),
         ]
         for path, label, start, end in regions:
             for position, marker in [("start", start), ("end", end)]:

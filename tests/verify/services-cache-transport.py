@@ -59,8 +59,8 @@ def main():
     )
     image_contents = section(
         service_image,
-        "  contents = [",
-        "  ];",
+        "  stableContents = [",
+        "  sourceKind =",
         "service image contents",
     )
 
