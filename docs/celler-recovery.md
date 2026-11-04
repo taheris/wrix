@@ -320,6 +320,13 @@ the recorded runtime's equivalent) can still report `serving` afterward. Current
 backend images query an explicit session count, including zero, and continue
 refusing invalid or unauthenticated observations.
 
+The native Dolt termination regression also executes the production census query
+against a disposable server and feeds its raw JSON through the production
+parser. It uses an ephemeral port and canonical short temporary root, not the
+serving host deployment. The former ID query reproduces the missing-rows
+refusal; the explicit count returns zero without relaxing malformed-result
+checks.
+
 The census executes inside the running backend, so replacing only the host CLI
 cannot fix that backend. Keep the update intent and ownership evidence intact.
 After separately authorizing host-wide downtime and quiescing SQL/cache clients,

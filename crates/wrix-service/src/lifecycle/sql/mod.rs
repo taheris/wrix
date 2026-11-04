@@ -16,6 +16,8 @@ use tokio::{
 };
 
 const CONTROL: &str = "/run/wrix/dolt/drain.sock";
+pub const SESSION_CENSUS_QUERY: &str =
+    "SELECT COUNT(*) AS sessions FROM information_schema.processlist WHERE ID <> CONNECTION_ID()";
 struct State {
     closed: bool,
     sessions: usize,
@@ -185,7 +187,7 @@ fn native_sessions(data: &Path) -> Result<usize, io::Error> {
             "-r",
             "json",
             "-q",
-            "SELECT COUNT(*) AS sessions FROM information_schema.processlist WHERE ID <> CONNECTION_ID()",
+            SESSION_CENSUS_QUERY,
         ])
         .env("DOLT_CLI_PASSWORD", password)
         .output()?;
@@ -197,7 +199,7 @@ fn native_sessions(data: &Path) -> Result<usize, io::Error> {
     session_count(&output.stdout)
 }
 
-fn session_count(bytes: &[u8]) -> Result<usize, io::Error> {
+pub fn session_count(bytes: &[u8]) -> Result<usize, io::Error> {
     #[derive(serde::Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Census {

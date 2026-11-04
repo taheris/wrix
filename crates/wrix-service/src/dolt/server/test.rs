@@ -38,11 +38,11 @@ async fn contended_original_owner_does_not_clear_the_previous_release_certificat
     Ok(())
 }
 
-pub(super) fn native_query(
+fn native_query_bytes(
     data: &Path,
     port: u16,
     query: &str,
-) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let output = std::process::Command::new("dolt")
         .args([
             "--host",
@@ -73,7 +73,16 @@ pub(super) fn native_query(
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let values = serde_json::Deserializer::from_slice(&output.stdout)
+    Ok(output.stdout)
+}
+
+pub(super) fn native_query(
+    data: &Path,
+    port: u16,
+    query: &str,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let bytes = native_query_bytes(data, port, query)?;
+    let values = serde_json::Deserializer::from_slice(&bytes)
         .into_iter::<serde_json::Value>()
         .collect::<Result<Vec<_>, _>>()?;
     Ok(values.into_iter().next().unwrap_or(serde_json::Value::Null))
@@ -111,8 +120,9 @@ pub(super) async fn start_native(
 
 #[tokio::test]
 async fn native_dolt_term_reaps_zero_before_original_flock_release_and_data_reopen() -> TestResult {
-    let root = tempfile::Builder::new().prefix("wd-").tempdir()?;
-    let data = root.path();
+    let root = tempfile::Builder::new().prefix("wd-").tempdir_in("/tmp")?;
+    let canonical = root.path().canonicalize()?;
+    let data = canonical.as_path();
     fs::create_dir(data.join("databases"))?;
     let owner = File::options()
         .read(true)
@@ -137,6 +147,13 @@ async fn native_dolt_term_reaps_zero_before_original_flock_release_and_data_reop
     assert_eq!(
         native_query(data, port, "SELECT @@GLOBAL.secure_file_priv AS hardened")?["rows"][0]["hardened"],
         "/dev/null"
+    );
+    let idle = native_query_bytes(data, port, crate::lifecycle::sql::SESSION_CENSUS_QUERY)?;
+    assert_eq!(
+        crate::lifecycle::sql::session_count(&idle)?,
+        0,
+        "actual idle Dolt must produce an explicit zero census: {}",
+        String::from_utf8_lossy(&idle)
     );
     native_query(
         data,
