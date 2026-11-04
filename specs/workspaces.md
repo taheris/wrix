@@ -1,7 +1,8 @@
 # Workspace Admission and Host State
 
-Explicit host authorization associates external workspace members with stable
-native namespaces.
+Explicit host authorization associates verified checkouts with stable native
+namespaces, through external membership admission or a retained host
+association.
 
 ## Problem Statement
 
@@ -38,6 +39,54 @@ The identities have separate meanings:
 - Native namespace key: stable host storage identity selected by admission.
 - Operational authority: the checked host context plus each operation's existing
   locks, resource ownership and permission guards.
+
+### Explicit Retained Host Associations
+
+`workspace associate` accepts absolute primary/participant checkout paths, the
+primary's existing standalone native key and mandatory `--preserve-former`
+consent. The primary namespace must already have supported imported metadata;
+the command cannot allocate a replacement, choose an arbitrary key or silently
+reassign a previously admitted participant. Creation requires external
+resolution to be disabled and leaves its selection unchanged.
+[test](../crates/wrix-cli/tests/workspace_admission.rs::association::host_association_requires_retention_and_explicit_former_state_consent)
+[test](../crates/wrix-cli/tests/workspace_admission.rs::association::host_association_refuses_reassignment_to_another_primary)
+
+The host records checked Git directory/common-directory/checkout identities in
+the existing private binding and participant tables. The internal association
+slot is not selectable as an external executable. Recorded participants select
+the primary namespace and policy while caller-specific Git work retains the
+actual checkout. Other standalone repositories are unchanged. No association is
+inferred from `.loom` names, ancestry or matching Git remotes.
+[test](../crates/wrix-cli/tests/workspace_admission.rs::association::explicit_host_association_shares_the_existing_namespace_without_copying_payloads)
+[test](../crates/wrix-cli/tests/workspace_admission.rs::association::reserved_association_slots_cannot_select_an_external_executable)
+
+Former participant data, metadata, signing observations and native history stay
+retained, not merged, deleted or overwritten. A versioned host-owned former-key
+receipt reserves its old scope against ordinary new-client standalone use.
+Repeated matching association is byte-idempotent, including concurrent matching
+requests under the existing store lock. Malformed former-key receipts refuse
+without repair. Replacement or loss of either Git identity refuses access rather
+than re-attesting the path automatically.
+[test](../crates/wrix-cli/tests/workspace_admission.rs::association::repeated_host_association_is_byte_idempotent)
+[test](../crates/wrix-cli/tests/workspace_admission.rs::association::replaced_associated_git_administration_cannot_inherit_or_reconfirm_access)
+[test](../crates/wrix-cli/tests/workspace_admission.rs::association::replaced_primary_git_administration_invalidates_all_associated_access)
+
+Association changes future checked selection, not existing worker processes, SQL
+sessions or issued grants. Previously captured standalone preparation cannot be
+reauthorized as associated work. One-use observations freeze the association's
+namespace and both checked Git identities in addition to the caller selection.
+[test](../crates/wrix-cli/tests/workspace_admission.rs::association_guard::a_captured_standalone_context_cannot_survive_explicit_association)
+[test](../crates/wrix-cli/tests/workspace_admission.rs::association_guard::concurrent_matching_host_associations_preserve_one_binding)
+[test](../crates/wrix-cli/tests/workspace_admission.rs::association_guard::malformed_former_namespace_receipts_refuse_without_repair)
+
+Reload all host clients and explicitly upgrade any running host controller with
+the association-aware package's `service repair`. The metadata command does not
+start or upgrade services. An older binary cannot interpret the association and
+may still select retained former state or refuse the primary reservation. There
+is no transparent live migration or retroactive same-user binary fence. Existing
+installed-store approval, lifecycle ownership and effect-specific authorization
+checks still apply.
+[test](../crates/wrix-cli/tests/workspace_admission.rs::association::explicit_host_association_shares_the_existing_namespace_without_copying_payloads)
 
 ### Native Control Storage
 
@@ -95,6 +144,7 @@ wrix workspace acknowledge-scope --version 1
 wrix workspace integration select --slot SLOT --executable ABSOLUTE_PATH
 wrix workspace integration disable
 wrix workspace admit --integration SLOT --expect-membership ID --checkout PATH (--allocate | --retain KEY)
+wrix workspace associate --primary PATH --checkout PATH --retain KEY --preserve-former
 wrix workspace import-native --native-key KEY
 wrix workspace inspect --checkout PATH
 wrix workspace diagnose [--native-key KEY]
@@ -105,8 +155,10 @@ acknowledge standalone scope, import native files or enroll a checkout.
 Acknowledgment records independent consent to the versioned standalone scope
 rule. Integration selection chooses host-trusted executable code and a stable
 slot, not permission to associate its members. Import registers supported native
-metadata, not historical checkout provenance or external membership. Only
-explicit admission associates a verified member with a namespace.
+metadata, not historical checkout provenance or external membership. Explicit
+admission associates an externally verified member with a namespace. The
+separate host association below records an operator-authorized relationship
+without claiming external membership.
 
 Without an integration, the nearest actual Git checkout supplies standalone
 scope; outside Git, the canonical selected directory supplies scope. Independent

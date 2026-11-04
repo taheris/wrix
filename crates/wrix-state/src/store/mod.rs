@@ -1,6 +1,7 @@
 //! Host-private control metadata; payloads, secrets and live ownership stay outside SQLite.
 
 pub mod admission;
+pub(crate) mod association;
 mod record;
 mod schema;
 
@@ -243,8 +244,8 @@ impl Store {
         allocating: bool,
     ) -> Result<(), Error> {
         let reserved: bool = self.connection.query_row(
-            "SELECT EXISTS(SELECT 1 FROM binding WHERE native_key = ?1)",
-            [key.as_str()],
+            "SELECT EXISTS(SELECT 1 FROM binding WHERE native_key = ?1) OR EXISTS(SELECT 1 FROM namespace_metadata WHERE native_key = ?1 AND owner = ?2)",
+            rusqlite::params![key.as_str(), association::FORMER],
             |row| row.get(0),
         )?;
         if reserved {
@@ -280,6 +281,9 @@ impl Store {
 
     pub fn select(host: &Host, slot: &Slot, executable: &Path) -> Result<(), Error> {
         use std::os::unix::ffi::OsStrExt;
+        if association::reserved(slot.as_str()) {
+            return Err(Error::Invalid("reserved host association slot".into()));
+        }
         if !executable.is_absolute() {
             return Err(Error::Invalid(
                 "integration executable must be absolute".into(),

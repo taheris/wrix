@@ -41,6 +41,37 @@ input-list JSON and opaque runner commands alone are not executable authority
 under that protocol. The bounded backport retains the currently supported
 protocol rather than disabling the newer admission check.
 
+## Empty Beads database in the integration checkout
+
+An independent `.loom/integration` clone is a separate standalone Wrix scope
+unless explicitly admitted. Inspect both checkouts before changing anything:
+
+```bash
+wrix workspace inspect --checkout /absolute/operator
+wrix workspace inspect --checkout /absolute/operator/.loom/integration
+```
+
+To share the operator's existing namespace without enabling a global external
+resolver, use the association-aware host package and the exact retained key
+reported for the operator. If a host controller is running, first upgrade it
+with that package's `wrix service repair`; association itself only changes
+metadata and does not upgrade or restart services.
+
+```bash
+wrix workspace associate --primary /absolute/operator \
+  --checkout /absolute/operator/.loom/integration \
+  --retain RETAINED_NATIVE_KEY --preserve-former
+```
+
+This preserves the integration checkout's former namespace, including an empty
+or interrupted Git/Dolt bootstrap. It does not copy or merge databases, discard
+history or rewrite Git origins. Future commands from either checked participant
+select the operator's namespace. A changed/replaced checkout identity refuses
+access. Existing workers and SQL sessions retain their original selection.
+Reload both development shells before checking `bd status` and `bd dolt pull`;
+an older CLI does not understand the association. Do not delete the former
+namespace or redirect credentials to make an old client appear repaired.
+
 ## Workspace safety failures
 
 `worker isolation or host safety-history association failed` is a Loom host

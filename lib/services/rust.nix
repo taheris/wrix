@@ -351,6 +351,7 @@ in
   };
 
   testFixtures = fixtures.bundle;
+  testFixtureEnvironment = fixtures.environment;
   package = workspace.bin;
   runtimePackage = runtimeWorkspace.bin;
   wrix = wrixPackage;

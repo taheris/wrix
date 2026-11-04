@@ -8,7 +8,10 @@ use std::{
 };
 
 pub fn root(binary: &Path) -> (tempfile::TempDir, bool) {
-    let root = tempfile::tempdir().unwrap();
+    let root = tempfile::Builder::new()
+        .prefix("w-")
+        .tempdir_in(Path::new("/tmp").canonicalize().unwrap())
+        .unwrap();
     fs::create_dir_all(root.path().join("home")).unwrap();
     let isolated = Path::new("/etc/wrix/image-agent").exists();
     if isolated {
@@ -18,6 +21,18 @@ pub fn root(binary: &Path) -> (tempfile::TempDir, bool) {
         fs::write(root.path().join("dev/null"), []).unwrap();
     }
     (root, isolated)
+}
+
+#[test]
+fn fixture_home_uses_canonical_paths_without_relaxing_sqlite_nofollow() {
+    let executable = std::env::current_exe().unwrap();
+    let (root, _) = root(&executable);
+    assert_eq!(root.path(), root.path().canonicalize().unwrap());
+    let socket = root
+        .path()
+        .join("home/Library/Application Support/wrix/control/authority/control.sock");
+    fs::create_dir_all(socket.parent().unwrap()).unwrap();
+    let _listener = std::os::unix::net::UnixListener::bind(socket).unwrap();
 }
 
 pub fn command(root: &Path, isolated: bool, executable: &Path, args: &[&str]) -> Command {

@@ -26,7 +26,7 @@ fn selection(value: Option<&(crate::integration::Slot, PathBuf)>) -> serde_json:
 }
 
 fn observation(context: &Context) -> serde_json::Value {
-    serde_json::json!({
+    let mut value = serde_json::json!({
         "caller": crate::resolver::encode(&context.caller),
         "primary": crate::resolver::encode(&context.primary),
         "namespace": context.key.as_str(),
@@ -38,7 +38,11 @@ fn observation(context: &Context) -> serde_json::Value {
             "checkout": resolution.checkout().snapshot(),
             "primary": resolution.primary().snapshot(),
         })),
-    })
+    });
+    if let Some(association) = &context.association {
+        value["association"] = association.snapshot();
+    }
+    value
 }
 
 impl Snapshot {

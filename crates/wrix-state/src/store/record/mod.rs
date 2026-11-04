@@ -63,11 +63,26 @@ pub(super) fn check(db: &Connection) -> Result<(), Error> {
         ))
     })? {
         let (key, slot, membership, root, evidence) = row?;
-        WorkspaceHash::parse(&key).map_err(|_| Error::Unsupported)?;
+        let native = WorkspaceHash::parse(&key).map_err(|_| Error::Unsupported)?;
         Slot::parse(&slot)?;
         Membership::parse(&membership)?;
+        if super::association::reserved(&slot)
+            && (membership != key
+                || WorkspaceHash::from_path(&PathBuf::from(OsString::from_vec(root.clone())))
+                    != native)
+        {
+            return Err(Error::Unsupported);
+        }
         path(root)?;
         crate::resolver::check_evidence(&evidence)?;
+    }
+    let mut former =
+        db.prepare("SELECT native_key, value FROM namespace_metadata WHERE owner = ?1")?;
+    for row in former.query_map([super::association::FORMER], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+    })? {
+        let (key, bytes) = row?;
+        super::association::check_former(db, &key, &bytes)?;
     }
     let mut participants = db.prepare("SELECT checkout, evidence FROM participant")?;
     for row in participants.query_map([], |row| {

@@ -143,7 +143,7 @@ mod test {
 
     #[tokio::test]
     async fn fixture_role_snapshot_is_accepted_unchanged_by_the_native_controller() {
-        let owner = tempfile::tempdir().unwrap();
+        let owner = tempfile::tempdir_in(std::fs::canonicalize("/tmp").unwrap()).unwrap();
         let authority = owner
             .path()
             .canonicalize()

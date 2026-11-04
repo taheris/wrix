@@ -10,7 +10,7 @@ use std::{
 };
 use wrix_state::{host::Host, store::Store};
 
-pub const HELP: &str = "Manage workspace namespace admission.\n\nUsage: wrix workspace initialize\n       wrix workspace import-native --native-key <native-key>\n       wrix workspace acknowledge-scope --version 1\n       wrix workspace integration select --slot <slot> --executable <absolute-path>\n       wrix workspace integration disable\n       wrix workspace admit --integration <slot> --expect-membership <id> --checkout <absolute-directory> (--allocate | --retain <native-key>)\n       wrix workspace inspect --checkout <absolute-directory>\n       wrix workspace diagnose [--native-key <native-key>]\n";
+pub const HELP: &str = "Manage workspace namespace admission.\n\nUsage: wrix workspace initialize\n       wrix workspace import-native --native-key <native-key>\n       wrix workspace acknowledge-scope --version 1\n       wrix workspace integration select --slot <slot> --executable <absolute-path>\n       wrix workspace integration disable\n       wrix workspace admit --integration <slot> --expect-membership <id> --checkout <absolute-directory> (--allocate | --retain <native-key>)\n       wrix workspace associate --primary <absolute-directory> --checkout <absolute-directory> --retain <native-key> --preserve-former\n       wrix workspace inspect --checkout <absolute-directory>\n       wrix workspace diagnose [--native-key <native-key>]\n";
 
 fn parser() -> Command {
     Command::new("wrix workspace")
@@ -81,6 +81,29 @@ fn parser() -> Command {
                     Arg::new("retain")
                         .long("retain")
                         .required_unless_present("allocate"),
+                ),
+        )
+        .subcommand(
+            Command::new("associate")
+                .about("Associate host checkouts while preserving former namespace data.")
+                .arg(
+                    Arg::new("primary")
+                        .long("primary")
+                        .required(true)
+                        .value_parser(clap::value_parser!(PathBuf)),
+                )
+                .arg(
+                    Arg::new("checkout")
+                        .long("checkout")
+                        .required(true)
+                        .value_parser(clap::value_parser!(PathBuf)),
+                )
+                .arg(Arg::new("retain").long("retain").required(true))
+                .arg(
+                    Arg::new("preserve-former")
+                        .long("preserve-former")
+                        .required(true)
+                        .action(clap::ArgAction::SetTrue),
                 ),
         )
         .subcommand(
@@ -213,6 +236,24 @@ fn apply(matches: &clap::ArgMatches) -> Result<String, wrix_state::store::Error>
             let slot = wrix_state::integration::Slot::parse(slot)?;
             let key = Store::admit(&host, &slot, &expected, caller, &intent)?;
             Ok(format!("Admitted native key: {key}."))
+        }
+        Some(("associate", arguments)) => {
+            let primary = arguments
+                .get_one::<PathBuf>("primary")
+                .ok_or(Error::Unsupported)?;
+            let checkout = arguments
+                .get_one::<PathBuf>("checkout")
+                .ok_or(Error::Unsupported)?;
+            let key = wrix_core::path::WorkspaceHash::parse(
+                arguments
+                    .get_one::<String>("retain")
+                    .ok_or(Error::Unsupported)?,
+            )
+            .map_err(|error| Error::Invalid(error.to_string()))?;
+            let former = Store::associate(&host, primary, checkout, &key)?;
+            Ok(format!(
+                "Associated native key: {key}.\nFormer native key: {former}.\nFormer data and reservations retained, not merged; existing sessions keep their original namespace.\nReload every host client before using the association; older clients do not implement host associations and may still select the former namespace.\nUse an association-aware host controller (`service repair` with the current package); this metadata command does not upgrade services."
+            ))
         }
         Some(("inspect", arguments)) => {
             let checkout = arguments

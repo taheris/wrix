@@ -20,6 +20,7 @@ pub struct Context {
     primary: PathBuf,
     key: WorkspaceHash,
     resolution: Option<Resolution>,
+    association: Option<crate::store::association::Association>,
     checkout: Option<Checkout>,
     directory: (u64, u64),
     generation: Option<crate::store::Generation>,
@@ -51,7 +52,23 @@ impl Context {
             .map(Store::integration)
             .transpose()?
             .flatten();
-        let (primary, key, resolution, checkout) = if let Some((slot, executable)) = &selection {
+        let workspace = Workspace::from_service_path(&caller)?;
+        let native_checkout = workspace
+            .repository_root()
+            .map(|_| Checkout::discover(&caller))
+            .transpose()?;
+        let association = match (&store, &native_checkout) {
+            (Some(store), Some(checkout)) => store.association(checkout)?,
+            _ => None,
+        };
+        let (primary, key, resolution, checkout) = if let Some(association) = &association {
+            (
+                association.primary().root().to_path_buf(),
+                association.key().clone(),
+                None,
+                native_checkout,
+            )
+        } else if let Some((slot, executable)) = &selection {
             let store = store.as_ref().ok_or(Error::Uninitialized)?;
             if !store.initialized()? {
                 return Err(Error::Uninitialized);
@@ -65,15 +82,10 @@ impl Context {
                 None,
             )
         } else {
-            let workspace = Workspace::from_service_path(&caller)?;
             if let Some(store) = store {
                 store.standalone(workspace.hash(), false)?;
             }
-            let checkout = if workspace.repository_root().is_some() {
-                Some(Checkout::discover(&caller)?)
-            } else {
-                None
-            };
+            let checkout = native_checkout;
             let primary = checkout.as_ref().map_or_else(
                 || workspace.canonical_path().to_path_buf(),
                 |checkout| checkout.root().to_path_buf(),
@@ -87,6 +99,7 @@ impl Context {
             primary,
             key,
             resolution,
+            association,
             checkout,
             directory: (metadata.dev(), metadata.ino()),
             generation,
@@ -98,9 +111,14 @@ impl Context {
     }
 
     pub(crate) fn primary_checkout(&self) -> Option<&Checkout> {
-        self.resolution
+        self.association
             .as_ref()
-            .map(crate::resolver::Resolution::primary)
+            .map(crate::store::association::Association::primary)
+            .or_else(|| {
+                self.resolution
+                    .as_ref()
+                    .map(crate::resolver::Resolution::primary)
+            })
             .or(self.checkout.as_ref())
     }
 
@@ -114,7 +132,7 @@ impl Context {
         &self.key
     }
     pub const fn integrated(&self) -> bool {
-        self.resolution.is_some()
+        self.resolution.is_some() || self.association.is_some()
     }
 
     pub fn workspace(&self) -> Result<Workspace, Error> {
@@ -160,7 +178,24 @@ impl Context {
         {
             return Err(Error::Conflict);
         }
-        if let Some(resolution) = &self.resolution {
+        let checkout = self
+            .checkout
+            .as_ref()
+            .or_else(|| self.resolution.as_ref().map(Resolution::checkout));
+        let association = match (store, checkout) {
+            (Some(store), Some(checkout)) => store.association(checkout)?,
+            _ => None,
+        };
+        match (&self.association, &association) {
+            (Some(expected), Some(current)) if expected.matches(current) => (),
+            (None, None) => (),
+            _ => return Err(Error::Conflict),
+        }
+        if let Some(association) = &self.association {
+            if association.key() != &self.key || association.primary().root() != self.primary {
+                return Err(Error::Conflict);
+            }
+        } else if let Some(resolution) = &self.resolution {
             let store = store.ok_or(Error::Uninitialized)?;
             let slot = &self.selection.as_ref().ok_or(Error::Conflict)?.0;
             if store.admitted(host, slot, resolution)? != self.key {

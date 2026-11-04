@@ -4,6 +4,10 @@
 
 #[path = "workspace/admission_fixture.rs"]
 mod admission_fixture;
+#[path = "workspace/association.rs"]
+mod association;
+#[path = "workspace/association_guard.rs"]
+mod association_guard;
 mod common;
 #[path = "workspace/fixture.rs"]
 mod fixture;
