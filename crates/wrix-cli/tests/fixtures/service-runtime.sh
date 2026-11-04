@@ -17,14 +17,17 @@ fi
 runtime="${0##*/}"
 # Each external engine owns separate named containers and immutable launch recipes.
 records="${WRIX_TEST_RUNNING:?}.owners/$runtime"
-mkdir -p "$records"
+states="${WRIX_TEST_RUNNING:?}.created/$runtime"
+mkdir -p "$records" "$states"
 selected="${!#}"
 [[ "$selected" != --type=container ]] || selected="${4:-}"
 recipe="$records/$selected"
 
 printf '%s\0' "$@" >>"${WRIX_TEST_CALLS:?}"
 snapshot() {
-  "${WRIX_TEST_JQ_BIN:?}" --arg image "${WRIX_TEST_IMAGE_ID:-$WRIX_TEST_DIGEST}" -Rsc '
+  state=running
+  [[ ! -f "$states/${recipe##*/}" ]] || state=stopped
+  "${WRIX_TEST_JQ_BIN:?}" --arg image "${WRIX_TEST_IMAGE_ID:-$WRIX_TEST_DIGEST}" --arg state "$state" -Rsc '
     split("\u0000")[:-1] as $args |
     def values($flag): [range(0; ($args | length) - 1) as $i |
       select($args[$i] == $flag) | $args[$i + 1]];
@@ -36,7 +39,7 @@ snapshot() {
     })) as $ports |
     [{configuration: {id: values("--name")[0], labels: $labels, publishedPorts: $ports,
         image: {descriptor: {digest: (if $args[-4] | startswith("sha256:") then $args[-4] else $image end)}}},
-      status: {state: "running"}}]
+      status: {state: $state}}]
   ' "$recipe"
 }
 is_running() {
@@ -148,7 +151,8 @@ case "${1:-} ${2:-}" in
     is_running
     snapshot | "${WRIX_TEST_JQ_BIN:?}" -r '.[0].configuration.publishedPorts[] | "\(.containerPort)/tcp -> \(.hostAddress):\(.hostPort)"'
     ;;
-  'run -d')
+  'run -d' | 'create --name')
+    action=$1
     name=""
     previous=""
     for argument in "$@"; do
@@ -159,7 +163,13 @@ case "${1:-} ${2:-}" in
     recipe="$records/$name"
     rm -f "$recipe"
     printf '%s\0' "$@" >"$recipe"
-    if [[ "${!#}" != gateway ]]; then
+    if [[ "$action" == create ]]; then
+      touch "$states/$name"
+      if [[ "${!#}" == gateway ]]; then
+        printf '%s' "${WRIX_GATEWAY_KEY:?}" >"$states/$name.key"
+        chmod 600 "$states/$name.key"
+      fi
+    elif [[ "${!#}" != gateway ]]; then
       cp "$recipe" "${WRIX_TEST_RUN_ARGS:?}"
       rm "$recipe"
       ln -s "${WRIX_TEST_RUN_ARGS:?}" "$recipe"
@@ -167,6 +177,20 @@ case "${1:-} ${2:-}" in
     else
       native_gateway "$@"
     fi
+    ;;
+  'start '*)
+    [[ "$#" -eq 2 && -f "$recipe" && -f "$states/$2" ]]
+    args=()
+    while IFS= read -r -d '' arg; do args+=("$arg"); done <"$recipe"
+    if [[ "${args[-1]}" == gateway ]]; then
+      WRIX_GATEWAY_KEY="$(<"$states/$2.key")" native_gateway "${args[@]}"
+    else
+      cp "$recipe" "${WRIX_TEST_RUN_ARGS:?}"
+      rm "$recipe"
+      ln -s "${WRIX_TEST_RUN_ARGS:?}" "$recipe"
+      printf '%s\n' "$runtime" >"${WRIX_TEST_RUNNING:?}"
+    fi
+    rm "$states/$2"
     ;;
   *) printf 'unexpected service runtime arguments: %s\n' "$*" >&2; exit 64 ;;
 esac
