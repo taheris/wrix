@@ -40,6 +40,7 @@ expected = {
     "nix/var/nix/profiles/per-user/wrix": (1000, 1000, 0o755),
     "nix/var/nix/gcroots": (0, 0, 0o755),
     "nix/var/nix/gcroots/per-user": (0, 0, 0o755),
+    "nix/var/nix/gcroots/wrix-image": (0, 0, 0o755),
     "nix/var/nix/gcroots/per-user/wrix": (1000, 1000, 0o755),
     "nix/var/nix/gcroots/auto": (0, 0, 0o1777),
     "nix/var/log/nix/drvs": (1000, 1000, 0o755),
@@ -58,6 +59,14 @@ with tarfile.open(fileobj=io.BytesIO(layer)) as archive:
     marker = entries["etc/wrix/private-nix-version"]
     assert marker.isfile()
     assert archive.extractfile(marker).read() == b"1\n"
+    roots = archive.extractfile(entries["etc/wrix/store-roots"]).read().decode().splitlines()
+    assert roots
+    prefix = "nix/var/nix/gcroots/wrix-image/"
+    assert {name for name in entries if name.startswith(prefix)} == {prefix + pathlib.PurePosixPath(root).name for root in roots}
+    for root in roots:
+        link = entries[prefix + pathlib.PurePosixPath(root).name]
+        assert link.issym() and link.linkname == root, (root, link)
+        assert (link.uid, link.gid) == (0, 0), (root, link)
     assert config["config"]["Labels"]["wrix.nix.private"] == "1"
     assert "IS_SANDBOX=1" in config["config"]["Env"]
     assert "wrix.image.policy" not in config["config"]["Labels"]

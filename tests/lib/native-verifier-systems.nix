@@ -4,6 +4,7 @@ let
     "oci-layout-builder"
     "private-nix-api"
     "private-nix-state-preservation"
+    "private-nix-image-roots"
     "known-hosts-runtime-store-purity"
     "known-hosts-runtime-file-symlink"
   ];

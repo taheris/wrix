@@ -90,6 +90,13 @@ validation. `initialize-private-nix.sh` operates only on a marked staged image
 tree under dockerTools' fakeroot. No runtime store repair, recursive live
 chmod/chown, database replacement, or preflight relaxation is performed.
 Existing store contents, DB/WAL bytes, GC roots and logs survive provisioning.
+Every immutable root in `/etc/wrix/store-roots`, including inherited passwd,
+group and Nix configuration outputs, also has a root-owned direct symlink in
+`/nix/var/nix/gcroots/wrix-image`. A manifest outside the store is not itself a
+runtime GC root. Ordinary collection can remove unrelated garbage without
+breaking these account/configuration symlinks. This fix applies to rebuilt
+images; it does not mutate an existing worker or authorize collection of a host
+installed store.
 
 The `/nix`, `/nix/var`, and `/nix/var/nix` ancestors are root-owned `0755`. The
 private store and secure builds directory are writable by the image's `wrix`
@@ -143,13 +150,18 @@ prerequisites still apply.
 nix build --no-link \
   .#checks.x86_64-linux.private-nix-api \
   .#checks.x86_64-linux.private-nix-state-preservation \
+  .#checks.x86_64-linux.private-nix-image-roots \
   .#legacyPackages.x86_64-linux.ciChecks.private-nix-artifacts
 nix run .#legacyPackages.x86_64-linux.ciApps.test-loom-native-readiness
 ```
 
-API and preservation checks are lightweight. Artifact realization and live
-container acceptance belong to the CI-only tier. The artifact verifier checks
-actual OCI metadata for all three factory profiles, archive metadata, and
+API, preservation and isolated-store GC checks are lightweight. The GC check
+requires unrelated garbage to be removed and exact canonical account/config
+outputs to survive real collection and content verification. Linux additionally
+executes libc account-file lookups; Darwin verifies identical retained account
+bytes and real Nix configuration, not Linux libc execution. Artifact realization
+and live container acceptance belong to the CI-only tier. The artifact verifier
+checks actual OCI metadata for all three factory profiles, archive metadata, and
 source/digest/ProfileConfig agreement. The live runner uses a fresh,
 factory-produced Rust/Pi image as actual UID 1000: complete Loom preflight, Pi
 RPC `get_state`, additive build, new-path import, signed substitution,

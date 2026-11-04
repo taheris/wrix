@@ -130,6 +130,8 @@ in
         touch "$out"
       '';
 
+  private-nix-image-roots = import ./image-gc-roots.nix { inherit pkgs; };
+
   private-nix-artifacts =
     pkgs.runCommand "test-private-nix-artifacts"
       {

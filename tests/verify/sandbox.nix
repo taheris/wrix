@@ -40,6 +40,7 @@ in
   "sandbox.oci-layout-builder" = nativeCheck "oci-layout-builder";
   "sandbox.private-nix-api" = nativeCheck "private-nix-api";
   "sandbox.private-nix-state-preservation" = nativeCheck "private-nix-state-preservation";
+  "sandbox.private-nix-image-roots" = nativeCheck "private-nix-image-roots";
   "sandbox.known-hosts-runtime-store-purity" = nativeCheck "known-hosts-runtime-store-purity";
   "sandbox.known-hosts-runtime-file-symlink" = nativeCheck "known-hosts-runtime-file-symlink";
 

@@ -272,6 +272,26 @@ fakeroot. Existing store paths, database/WAL bytes, GC roots and logs are
 preserved; runtime repair and database replacement are not supported.
 [check](verify:sandbox.private-nix-state-preservation)
 
+Each materialized root listed in `/etc/wrix/store-roots` also has a direct,
+root-owned GC-root symlink under `/nix/var/nix/gcroots/wrix-image`. This
+includes inherited stable-tier passwd, group and Nix configuration outputs. The
+manifest alone is a build-closure reference, not a runtime GC root; dockerTools'
+leaf-only roots do not protect inherited outputs. Ordinary in-worker collection
+must retain these exact account/configuration files while removing unrelated
+garbage. The root directory is `0755`; initialization rejects malformed or
+symlinked manifests, staged directory aliases and conflicting existing roots
+without replacing retained state.
+[check](verify:sandbox.private-nix-image-roots)
+[check](verify:sandbox.private-nix-state-preservation)
+
+The isolated-store check uses real registration, garbage collection and content
+verification, followed by byte-identical account files and real Nix
+configuration parsing. Linux additionally runs native libc account-file lookups.
+Darwin cannot execute Linux libc; its file/configuration proof is not Linux
+account lookup or production runtime acceptance. Emitted archive/descriptor
+checks independently verify every manifest root's symlink and ownership.
+[check](test-ci:test-private-nix-artifacts)
+
 The ancestors `/nix`, `/nix/var`, and `/nix/var/nix` are root-owned `0755`. The
 store, secure builds directory and `wrix` per-user profile/root directories are
 UID/GID-1000-owned `0755`; DB and temporary-root directories are

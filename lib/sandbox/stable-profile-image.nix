@@ -160,4 +160,9 @@ image
     fromLayout = wrixBaseImage.ociLayout;
   };
   inherit lowerTiersClosure lowerTiersRootPaths lowerTiersContents;
+  configuration = {
+    passwd = passwdFile;
+    group = groupFile;
+    nix = nixConfig;
+  };
 }
