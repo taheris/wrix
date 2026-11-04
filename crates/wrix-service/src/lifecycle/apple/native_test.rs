@@ -82,6 +82,22 @@ fn native_stopped_apple_identity_refusal_precedes_start_and_owned_cleanup() -> T
                 .runtime_status(),
             RuntimeStatus::Stopped
         );
+        let foreign = [
+            ("wrix.kind", "identity-fixture"),
+            ("wrix.identity.fixture", "not-this-owner"),
+        ];
+        assert!(
+            runtime
+                .start_bound_apple(&name, &expected, &foreign)
+                .is_err()
+        );
+        assert_eq!(
+            runtime
+                .apple_snapshot(name.as_str())?
+                .ok_or("fixture disappeared after ownership refusal")?
+                .runtime_status(),
+            RuntimeStatus::Stopped
+        );
         runtime.start_bound_apple(&name, &expected, &labels)?;
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {

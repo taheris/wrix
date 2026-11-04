@@ -103,6 +103,14 @@ pub(super) fn cached(value: &Value) -> Result<Option<Digest>, Error> {
 
 /// Called only by image installation, never by passive inspection or preflight.
 pub(super) fn attest(reference: &ImageRef, temporary: &Path) -> Result<(), Error> {
+    attest_with_directory(reference, temporary, directory)
+}
+
+fn attest_with_directory(
+    reference: &ImageRef,
+    temporary: &Path,
+    directory: impl FnOnce() -> Result<PathBuf, Error>,
+) -> Result<(), Error> {
     let before =
         super::run_required_output("container", &["image", "inspect", reference.as_str()])?;
     let value: Value = serde_json::from_slice(&before.stdout)
@@ -254,6 +262,8 @@ pub(super) fn reference(expected: &ImageId) -> Result<String, Error> {
     })
 }
 
+#[cfg(all(test, target_os = "macos"))]
+mod native_test;
 #[cfg(test)]
 mod producer_test;
 #[cfg(test)]
