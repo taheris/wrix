@@ -95,59 +95,118 @@ impl Selected {
         if rename::pending(root)? {
             return Err(Error::RenamePending);
         }
-        Self::read_during_rename(root)
+        let selected = Self::read_during_rename(root)?;
+        if rename::pending(root)? {
+            return Err(Error::RenamePending);
+        }
+        Ok(selected)
     }
 
     fn read_during_rename(root: &Path) -> Result<Option<Self>, Error> {
-        let file = match OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(root.join(FILE))
-        {
-            Ok(file) => file,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error.into()),
-        };
-        let directory = fs::symlink_metadata(root)?;
-        let metadata = file.metadata()?;
-        if !directory.is_dir()
-            || directory.mode() & 0o077 != 0
-            || !metadata.is_file()
-            || metadata.mode() & 0o077 != 0
-            || metadata.nlink() != 1
-            || metadata.uid() != directory.uid()
-        {
-            return Err(Error::Permissions);
+        Self::read_observed(root, || {})
+    }
+
+    fn read_observed(root: &Path, mut after_open: impl FnMut()) -> Result<Option<Self>, Error> {
+        let mut directory_identity = None;
+        for _ in 0..4 {
+            let file = match OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                .open(root.join(FILE))
+            {
+                Ok(file) => file,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    return if directory_identity.is_none() {
+                        Ok(None)
+                    } else {
+                        Err(Error::Conflict)
+                    };
+                }
+                Err(error) => return Err(error.into()),
+            };
+            let directory = fs::symlink_metadata(root)?;
+            let identity = (
+                directory.dev(),
+                directory.ino(),
+                directory.uid(),
+                directory.mode(),
+            );
+            if directory_identity
+                .replace(identity)
+                .is_some_and(|previous| previous != identity)
+            {
+                return Err(Error::Conflict);
+            }
+            after_open();
+            let current_directory = fs::symlink_metadata(root)?;
+            if (
+                current_directory.dev(),
+                current_directory.ino(),
+                current_directory.uid(),
+                current_directory.mode(),
+            ) != identity
+            {
+                return Err(Error::Conflict);
+            }
+            let metadata = file.metadata()?;
+            if !directory.is_dir()
+                || directory.mode() & 0o077 != 0
+                || !metadata.is_file()
+                || metadata.mode() & 0o077 != 0
+                || !matches!(metadata.nlink(), 0 | 1)
+                || metadata.uid() != directory.uid()
+            {
+                return Err(Error::Permissions);
+            }
+            if metadata.nlink() == 0 {
+                // An atomic provenance replacement can unlink the already-open
+                // descriptor before fstat. It is not current ownership evidence.
+                // Retry only a different entry in this same retained directory;
+                // the new descriptor must pass every private-file check again.
+                let replacement = fs::symlink_metadata(root.join(FILE)).map_err(|error| {
+                    if error.kind() == io::ErrorKind::NotFound {
+                        Error::Conflict
+                    } else {
+                        error.into()
+                    }
+                })?;
+                if replacement.dev() == metadata.dev() && replacement.ino() != metadata.ino() {
+                    continue;
+                }
+                return Err(Error::Conflict);
+            }
+            let mut bytes = Vec::new();
+            file.take(LIMIT + 1).read_to_end(&mut bytes)?;
+            if bytes.len() as u64 > LIMIT {
+                return Err(Error::Invalid);
+            }
+            let wire: Wire = serde_json::from_slice(&bytes)?;
+            if !matches!(
+                (
+                    wire.schema_version,
+                    wire.recipe.is_some(),
+                    wire.workspace_hash.is_some()
+                ),
+                (1, false, true) | (2, true, true) | (3, _, false)
+            ) || wire.backend_version != CACHE_BACKEND_VERSION
+            {
+                return Err(Error::Invalid);
+            }
+            return Ok(Some(Self {
+                runtime: wire.runtime,
+                workspace: wire
+                    .workspace_hash
+                    .as_deref()
+                    .map(WorkspaceHash::parse)
+                    .transpose()
+                    .map_err(|_| Error::Invalid)?,
+                container: ContainerName::from_persisted(wire.container_name)
+                    .ok_or(Error::Invalid)?,
+                port: wire.cache_http_port,
+                recipe: wire.recipe,
+            }));
         }
-        let mut bytes = Vec::new();
-        file.take(LIMIT + 1).read_to_end(&mut bytes)?;
-        if bytes.len() as u64 > LIMIT {
-            return Err(Error::Invalid);
-        }
-        let wire: Wire = serde_json::from_slice(&bytes)?;
-        if !matches!(
-            (
-                wire.schema_version,
-                wire.recipe.is_some(),
-                wire.workspace_hash.is_some()
-            ),
-            (1, false, true) | (2, true, true) | (3, _, false)
-        ) || wire.backend_version != CACHE_BACKEND_VERSION
-        {
-            return Err(Error::Invalid);
-        }
-        Ok(Some(Self {
-            runtime: wire.runtime,
-            workspace: wire
-                .workspace_hash
-                .as_deref()
-                .map(WorkspaceHash::parse)
-                .transpose()
-                .map_err(|_| Error::Invalid)?,
-            container: ContainerName::from_persisted(wire.container_name).ok_or(Error::Invalid)?,
-            port: wire.cache_http_port,
-            recipe: wire.recipe,
-        }))
+        Err(Error::Conflict)
     }
 
     /// Call only after native authenticated readiness, retaining host lifecycle exclusion.

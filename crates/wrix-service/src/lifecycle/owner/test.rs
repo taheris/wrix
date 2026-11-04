@@ -34,6 +34,83 @@ fn host_owner_roundtrips_without_a_workspace_identity() {
 }
 
 #[test]
+fn atomic_owner_replacement_does_not_report_unsafe_private_metadata() {
+    let root = tempfile::tempdir().unwrap();
+    let host = root.path().join("host-lifecycle");
+    let guard = coordination::acquire(&host).unwrap();
+    let owner = selected(root.path());
+    owner.record(&guard).unwrap();
+    let mut replacement = owner;
+    replacement.port = NonZeroU16::new(21_346).unwrap();
+    let mut observations = 0;
+    let observed = Selected::read_observed(&host, || {
+        observations += 1;
+        if observations == 1 {
+            replacement.persist(&host).unwrap();
+        }
+    })
+    .unwrap();
+    assert_eq!(observations, 2);
+    assert_eq!(observed, Some(replacement));
+}
+
+#[test]
+fn repeated_owner_replacement_is_bounded_and_retains_last_record() {
+    let root = tempfile::tempdir().unwrap();
+    let host = root.path().join("host-lifecycle");
+    let guard = coordination::acquire(&host).unwrap();
+    let owner = selected(root.path());
+    owner.record(&guard).unwrap();
+    let mut observations = 0;
+    let result = Selected::read_observed(&host, || {
+        observations += 1;
+        owner.persist(&host).unwrap();
+    });
+    assert!(matches!(result, Err(Error::Conflict)));
+    assert_eq!(observations, 4);
+    assert_eq!(Selected::read(&host).unwrap(), Some(owner));
+}
+
+#[test]
+fn replacement_must_pass_private_metadata_checks_without_repair() {
+    let root = tempfile::tempdir().unwrap();
+    let host = root.path().join("host-lifecycle");
+    let guard = coordination::acquire(&host).unwrap();
+    let owner = selected(root.path());
+    owner.record(&guard).unwrap();
+    let mut observations = 0;
+    let result = Selected::read_observed(&host, || {
+        observations += 1;
+        if observations == 1 {
+            owner.persist(&host).unwrap();
+            fs::set_permissions(host.join(FILE), fs::Permissions::from_mode(0o644)).unwrap();
+        }
+    });
+    assert!(matches!(result, Err(Error::Permissions)));
+    assert_eq!(observations, 2);
+    assert_eq!(fs::metadata(host.join(FILE)).unwrap().mode() & 0o777, 0o644);
+}
+
+#[test]
+fn parent_replacement_is_not_an_owner_record_retry() {
+    let root = tempfile::tempdir().unwrap();
+    let host = root.path().join("host-lifecycle");
+    let guard = coordination::acquire(&host).unwrap();
+    let owner = selected(root.path());
+    owner.record(&guard).unwrap();
+    let retained = root.path().join("retained-lifecycle");
+    let result = Selected::read_observed(&host, || {
+        fs::rename(&host, &retained).unwrap();
+        fs::create_dir(&host).unwrap();
+        fs::set_permissions(&host, fs::Permissions::from_mode(0o700)).unwrap();
+        owner.persist(&host).unwrap();
+    });
+    assert!(matches!(result, Err(Error::Conflict)));
+    assert!(retained.join(FILE).is_file());
+    assert!(host.join(FILE).is_file());
+}
+
+#[test]
 fn passive_lookup_does_not_create_host_state() {
     let root = tempfile::tempdir().unwrap();
     let missing = root.path().join("host-lifecycle");

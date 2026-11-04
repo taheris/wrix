@@ -11,7 +11,8 @@ mod role_ports;
 
 use super::TestResult;
 use std::{
-    fs, io,
+    fs,
+    io::{self, Write as _},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     time::Duration,
@@ -243,10 +244,19 @@ impl Drop for Server {
             && let Some(root) = self.backend_environment.parent()
             && let Ok(bytes) = fs::read(root.join("controller.stderr"))
         {
-            tracing::error!(diagnostics = %String::from_utf8_lossy(&bytes[bytes.len().saturating_sub(8192)..]), "owned controller failure diagnostics");
+            // Retain failure evidence without needing a tracing subscriber or
+            // risking a second panic if stderr has already closed.
+            let _ = writeln!(
+                io::stderr().lock(),
+                "owned controller failure diagnostics: {}",
+                String::from_utf8_lossy(&bytes[bytes.len().saturating_sub(8192)..])
+            );
         }
         if let Err(error) = self.stop() {
-            tracing::error!(%error, "owned controller fixture cleanup failed");
+            let _ = writeln!(
+                io::stderr().lock(),
+                "owned controller fixture cleanup failed: {error}"
+            );
         }
     }
 }
