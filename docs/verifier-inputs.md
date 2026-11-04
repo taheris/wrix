@@ -14,10 +14,15 @@ Darwin browser guest launch checks retain Rust and image resources because they
 invoke the real host CLI; Linux host-browser checks do not. Loom/profile image
 wiring uses image resources rather than unrelated Rust sources. Legacy profile
 verifiers still use conservative `browser-resources.nix` scopes. Directory
-scopes include newly added resources. Every Nix-backed family retains all
-repository Nix definitions, `flake.lock`, `loom.toml`, patches and shared
-dispatch/protocol scripts, so toolchain and image-definition edits still select
-all genuine dependents. There is no target-name exclusion filter.
+scopes include newly added resources. Image/browser families retain their owning
+resource directories plus root flake/module and verifier-dispatch definitions,
+`flake.lock`, `loom.toml`, patches and shared protocol scripts. They no longer
+claim every repository Nix file as an input: service-only Nix edits select the
+service-inclusive runtime matrices, not unrelated worker-image/browser checks.
+Image resources explicitly include Beads wrappers and the native compiler
+sources packaged by profiles. Other Nix-backed families retain their
+conservative repository-wide Nix scope. There is no target-name exclusion
+filter.
 
 The existing target registries generate `--print-inputs` batch maps; there is no
 separate target/dependency registry. Opaque definitions are omitted, not encoded
@@ -85,6 +90,37 @@ verify emitted blob digests/sizes and link to immutable payloads. This bounds
 additional inspection disk by header/config size, not layer payload size; it
 does not eliminate the original Darwin image archives or promise zero image
 builds. Real CLI/service image checks and opaque always-run targets remain.
+
+## Metadata and artifact lanes
+
+Source-kind and ownership-label constructor matrices run without realizing image
+payloads. Hook closure checks inspect `materializedRoots`, not ten complete
+profile/agent archives. `checks.<system>.image-verifier-realization` rejects
+image-source string contexts in these scripts, and exercises its detector with a
+real image source. The metadata assertions include negative source/label
+fixtures. These are deliberately not claims about emitted bytes.
+
+The original emitted-descriptor/digest, label and hook-layer matrices remain
+available as System targets: `test-wrix-images-source-artifacts`,
+`test-wrix-image-label-artifacts`, and `test-prek-hooks-artifacts`. They are
+registered through the normal `test-ci` dispatcher and annotated in the image
+spec. Layer membership, generated-state, archive codec and native runtime
+coverage are not removed. Production image formats are unchanged.
+
+On the inspected Darwin host, the three affected targets' combined unique
+runtime NAR closure decreased from **14.72 GiB to 5.44 GiB** (about 63%). The
+new hook check still needs real profile package closures; this is not a claim of
+zero toolchain builds. The original broader 39-runner batch retained **30.5
+GiB** across 713 paths. These figures exclude build-only inputs and temporary
+space; they are not whole-store allocations or promised GC savings, since other
+roots may retain the same paths.
+
+The dispatcher also removes its temporary runner GC roots on handled INT, TERM
+and HUP, not only normal exit. Its interruption regression starts a real batch,
+confirms the runner symlinks exist, terminates its owned process group and
+requires the directory to disappear. SIGKILL cannot run cleanup; abandoned roots
+from killed older dispatchers still need operator review. No lifecycle,
+service-update or installed-software roots are removed by these changes.
 
 ## Bounded-inspection comparison
 

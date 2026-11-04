@@ -1129,14 +1129,30 @@ let
     '';
   };
 
+  metadata = import ../lib/image-metadata.nix { inherit (pkgs) lib; };
+  sourceMetadata = builtins.mapAttrs (_: entry: {
+    inherit (entry) expected_kind;
+    inherit (entry.image) source_kind source;
+  }) sourceKindMatrix;
+  wrixImagesSourceKindTest =
+    assert builtins.all metadata.source (builtins.attrValues sourceMetadata);
+    assert !metadata.source (sourceMetadata.base // { source_kind = "unsupported"; });
+    assert !metadata.source (sourceMetadata.base // { source = "/tmp/not-an-image"; });
+    pkgs.writeShellApplication {
+      name = "test-wrix-images-source-kind";
+      text = ''
+        echo "test-wrix-images-source-kind: PASS (constructor metadata; emitted sources use the artifact suite)"
+      '';
+    };
+
   sourceKindChecks = concatStringsSep "\n" (
     mapAttrsToList (name: entry: ''
       check_source_kind "${name}" "${entry.expected_kind}" "${entry.image.source_kind}" "${toString entry.image.source}" "${discardContext entry.image}"
     '') sourceKindMatrix
   );
 
-  wrixImagesSourceKindTest = pkgs.writeShellApplication {
-    name = "test-wrix-images-source-kind";
+  wrixImagesSourceArtifactsTest = pkgs.writeShellApplication {
+    name = "test-wrix-images-source-artifacts";
     runtimeInputs = [
       pkgs.coreutils
       pkgs.gnugrep
@@ -1226,7 +1242,7 @@ let
           exit 1
       fi
 
-      echo "test-wrix-images-source-kind: PASS"
+      echo "test-wrix-images-source-artifacts: PASS"
     '';
   };
 
@@ -1270,6 +1286,25 @@ let
       kind = "builder";
     };
   };
+  wrixImageLabelsTest =
+    assert builtins.all metadata.labels (builtins.attrValues imageLabelMatrix);
+    assert
+      !metadata.labels (
+        imageLabelMatrix.base
+        // {
+          image.labels = imageLabelMatrix.base.image.labels // {
+            "wrix.managed" = "false";
+          };
+        }
+      );
+    assert !metadata.labels (imageLabelMatrix.base // { agent = "unsupported"; });
+    pkgs.writeShellApplication {
+      name = "test-wrix-image-labels";
+      text = ''
+        echo "test-wrix-image-labels: PASS (constructor labels; emitted configs use the artifact suite)"
+      '';
+    };
+
   imageLabelChecks = concatStringsSep "\n" (
     mapAttrsToList (
       name: expected:
@@ -1282,8 +1317,8 @@ let
       ''
     ) imageLabelMatrix
   );
-  wrixImageLabelsTest = pkgs.writeShellApplication {
-    name = "test-wrix-image-labels";
+  wrixImageLabelArtifactsTest = pkgs.writeShellApplication {
+    name = "test-wrix-image-label-artifacts";
     runtimeInputs = [
       pkgs.coreutils
       pkgs.gnutar
@@ -1321,7 +1356,7 @@ let
       trap 'rm -rf "$tmp"' EXIT
       ${imageLabelChecks}
 
-      echo "test-wrix-image-labels: PASS"
+      echo "test-wrix-image-label-artifacts: PASS"
     '';
   };
 
@@ -1462,13 +1497,32 @@ let
         agent = "pi";
       }).image;
   };
+  prekClosureChecks = concatStringsSep "\n" (
+    mapAttrsToList (name: image: ''
+      for surface in "${prekHooksBundle}" "${prekRunner}" "${prekWrappers.prePushChecks}"; do
+        if ! grep -Fxq "$surface" "${materializedImageClosure image}/store-paths"; then
+          printf 'FAIL: %s is absent from the %s materialized closure\n' "$surface" '${name}' >&2
+          exit 1
+        fi
+      done
+    '') prekSurfaceImageMatrix
+  );
+  prekHooksClosureTest = pkgs.writeShellApplication {
+    name = "test-prek-hooks-closure";
+    runtimeInputs = [ pkgs.gnugrep ];
+    text = ''
+      ${prekClosureChecks}
+      echo "test-prek-hooks-closure: PASS (materialized closure; emitted layers use the artifact suite)"
+    '';
+  };
+
   prekSurfaceChecks = concatStringsSep "\n" (
     mapAttrsToList (name: image: ''
       check_surfaces "${name}" "${image.source_kind}" "${inspectionImage image}" "${prekHooksBundle}" "${prekRunner}" "${prekWrappers.prePushChecks}"
     '') prekSurfaceImageMatrix
   );
-  prekHooksClosureTest = pkgs.writeShellApplication {
-    name = "test-prek-hooks-closure";
+  prekHooksArtifactsTest = pkgs.writeShellApplication {
+    name = "test-prek-hooks-artifacts";
     runtimeInputs = [
       pkgs.coreutils
       pkgs.gawk
@@ -1503,7 +1557,7 @@ let
       trap 'rm -rf "$tmp"' EXIT
       ${prekSurfaceChecks}
 
-      echo "test-prek-hooks-closure: PASS"
+      echo "test-prek-hooks-artifacts: PASS"
     '';
   };
 
@@ -2944,6 +2998,25 @@ let
     '';
   };
 
+  metadataRealizationCheck =
+    let
+      sources =
+        map (entry: toString entry.image.source) (builtins.attrValues sourceKindMatrix)
+        ++ map (image: toString image.source) (builtins.attrValues prekSurfaceImageMatrix);
+      referencesImage =
+        text:
+        builtins.any (
+          source: builtins.intersectAttrs (builtins.getContext source) (builtins.getContext text) != { }
+        ) sources;
+    in
+    assert referencesImage (toString defaultImage.source);
+    assert !referencesImage wrixImagesSourceKindTest.text;
+    assert !referencesImage wrixImageLabelsTest.text;
+    assert !referencesImage prekHooksClosureTest.text;
+    pkgs.runCommandLocal "image-verifier-realization" { } ''
+      touch "$out"
+    '';
+
 in
 {
   inherit (resources) inputs runtimeInputs;
@@ -2961,7 +3034,10 @@ in
     profilePackagesBundledTest
     imageTierMembershipTest
     wrixImagesSourceKindTest
+    wrixImagesSourceArtifactsTest
     wrixImageLabelsTest
+    wrixImageLabelArtifactsTest
+    prekHooksArtifactsTest
     agentDeclaredDirectRunnerTest
     agentConsumerRuntimeClosuresTest
     agentClaudeRuntimeTest
@@ -2983,5 +3059,6 @@ in
     imageNixDbConsistentTest
     imageNixDbNoDanglingTest
     imageAssemblyNativeCheck
+    metadataRealizationCheck
     ;
 }

@@ -10,13 +10,25 @@ let
   directories =
     paths: builtins.concatLists (map (path: (definitions.directory (root + "/${path}")).inputs) paths);
   contracts = names: map (name: "/specs/${name}.md") names;
-  imageInputs = definitions.nix (
+  scopedNix =
+    inputs:
+    definitions.scopedNix inputs
+    ++ [
+      "/flake.nix"
+      "/modules/flake/"
+      "/tests/default.nix"
+      "/tests/verify/"
+    ];
+  imageInputs = scopedNix (
     sandbox.inputs
     ++ mcp.inputs
     ++ sandboxFixtures.inputs
     ++ directories [
       "lib/notify"
       "lib/prek"
+      "lib/profile"
+      "lib/beads"
+      "crates/wrix-service/src/lifecycle/drain/native"
       "lib/util"
       "tests/lib"
       "tests/fixtures"
@@ -32,6 +44,8 @@ let
     ]
     ++ [
       "/docs/tmux.md"
+      "/lib/default.nix"
+      "/bin/pre-push-checks"
       "/bin/test-ci-verifiers"
     ]
   );
@@ -46,7 +60,7 @@ let
       "/Cargo.toml"
       "/Cargo.lock"
     ];
-  browserInputs = definitions.nix (
+  browserInputs = scopedNix (
     mcp.inputs
     ++ browserFixtures.inputs
     ++ contracts [ "playwright-mcp" ]

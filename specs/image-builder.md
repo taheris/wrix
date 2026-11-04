@@ -339,6 +339,21 @@ Wrapper behavior, hook-stage semantics, and optional-tool policy remain owned by
 `pre-commit.md`. The image builder does not inject `SKIP=` env vars, stub
 missing tools on `PATH`, or maintain a hook-id skip list.
 
+## Verifier Cost Boundaries
+
+Constructor source-kind and label checks do not realize image payloads. Hook
+closure checks inspect the materialized root closure without building image
+archives. A context-boundary regression rejects image-source dependencies in
+these check scripts. [check](verify:sandbox.image-verifier-realization)
+
+The separate System artifact targets retain the full source-kind, emitted-label
+and hook-layer matrices; metadata success is not emitted-artifact acceptance.
+Other layer, package and native runtime checks remain independent. This split
+does not change production image formats or authorize deletion of lifecycle
+roots. [system](test-ci:test-wrix-images-source-artifacts)
+[system](test-ci:test-wrix-image-label-artifacts)
+[system](test-ci:test-prek-hooks-artifacts)
+
 ## Success Criteria
 
 - On Linux, the profile image builder emits a JSON image descriptor
@@ -432,7 +447,9 @@ missing tools on `PATH`, or maintain a hook-id skip list.
   as the image startup command. Bootstrap execution and capability-drop behavior
   are owned by `sandbox.md` [check](test-ci:test-image-entrypoint-command)
 - `wrix.prekHooks` and `wrix.prePushChecks` both land in every profile image's
-  store closure [check](test-ci:test-prek-hooks-closure)
+  store closure [check](test-ci:test-prek-hooks-closure); the full profile/agent
+  matrix is also checked in emitted layers
+  [system](test-ci:test-prek-hooks-artifacts)
 - The Linux entrypoint sets `core.hooksPath` for the `/workspace` Git repository
   to the `wrix.prekHooks` store path when `.pre-commit-config.yaml` is present
   [system](verify:images.linux-entrypoint-core-hooks-path)
@@ -453,12 +470,17 @@ missing tools on `PATH`, or maintain a hook-id skip list.
   [check](verify:images.inspection-artifacts)
 - Every wrix-managed Nix-built image source covered by this spec exposes the
   platform source kind (`nix-descriptor` on Linux, `docker-archive` on Darwin),
-  including service/support images such as `wrix-builder`
-  [check](test-ci:test-wrix-images-source-kind)
+  including service/support images such as `wrix-builder`. Constructor metadata
+  is checked without realizing image payloads
+  [check](test-ci:test-wrix-images-source-kind); emitted descriptors and native
+  archive digests are checked separately
+  [system](test-ci:test-wrix-images-source-artifacts)
 - Wrix-managed images carry wrix-managed image labels, including
   `wrix.managed=true` and `wrix.image.kind`; profile images also carry
-  `wrix.profile.name` and `wrix.agent.kind`
-  [check](test-ci:test-wrix-image-labels)
+  `wrix.profile.name` and `wrix.agent.kind`. Constructor labels are checked
+  without realizing image payloads [check](test-ci:test-wrix-image-labels);
+  emitted OCI configs retain independent full-matrix coverage
+  [system](test-ci:test-wrix-image-label-artifacts)
 
 ## Requirements
 

@@ -17,6 +17,13 @@ let
     substring
     toString
     ;
+  nixTools = [
+    "/flake.lock"
+    "/loom.toml"
+    "/patches/"
+    "/${relative ./verifier.sh}"
+    "/${relative ./print-inputs.sh}"
+  ];
   rootPrefix = "${toString root}/";
   relative =
     path:
@@ -55,18 +62,7 @@ in
     relative = relative path;
     inputs = [ "/${relative path}/" ];
   };
-  # Nix evaluation/packaging can depend on any repository Nix definition.
-  # Include new definitions, locked tools and the actual shared dispatch code;
-  # this is deliberately broader than the resource operands, not a per-ID map.
-  nix =
-    inputs:
-    [
-      "/**/*.nix"
-      "/flake.lock"
-      "/loom.toml"
-      "/patches/"
-      "/${relative ./verifier.sh}"
-      "/${relative ./print-inputs.sh}"
-    ]
-    ++ inputs;
+  # Unknown import graphs retain the conservative repository-wide Nix scope.
+  nix = inputs: [ "/**/*.nix" ] ++ nixTools ++ inputs;
+  scopedNix = inputs: nixTools ++ inputs;
 }

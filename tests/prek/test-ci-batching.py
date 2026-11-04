@@ -2,7 +2,9 @@ import json
 import os
 from pathlib import Path
 import shlex
+import signal
 import subprocess
+import time
 import sys
 import tempfile
 import unittest
@@ -75,6 +77,10 @@ class CiBatching(unittest.TestCase):
                   pass) exit 0 ;;
                   fail) echo fixture-failure >&2; exit 23 ;;
                   skip) echo fixture-skip >&2; exit 77 ;;
+                  wait)
+                    touch "$WRIX_TEST_CI_READY"
+                    while true; do sleep 0.1; done
+                    ;;
                 esac
               '';
               {VM} = mkRunner "{VM}" ''
@@ -135,7 +141,8 @@ class CiBatching(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         inputs = json.loads(result.stdout)["inputs"]
         for target in runtime + image_only:
-            self.assertIn("/**/*.nix", inputs[target])
+            self.assertNotIn("/**/*.nix", inputs[target])
+            self.assertIn("/modules/flake/", inputs[target])
             self.assertIn("/flake.lock", inputs[target])
             self.assertEqual("/crates/" in inputs[target], target in runtime)
             self.assertNotIn("/specs/", inputs[target])
@@ -162,6 +169,35 @@ class CiBatching(unittest.TestCase):
         self.assertTrue(all(v["outcome"] == "passed" for v in verdicts))
         self.assertEqual(calls, [PASS, STATUS, PASS])
         self.assertIn("trace: WRIX-CI-BATCH-QUERY", result.stderr)
+
+    def test_terminated_batch_removes_its_temporary_gc_roots(self):
+        with tempfile.TemporaryDirectory(prefix="ci-termination-", dir=self.root) as temp:
+            tmp = Path(temp)
+            ready = tmp / "ready"
+            env = dict(os.environ, TMPDIR=temp, WRIX_TEST_CI_STATUS="wait",
+                       WRIX_TEST_CI_CALLS=str(tmp / "calls"), WRIX_TEST_CI_READY=str(ready))
+            for name in GIT_LOCAL_ENV:
+                env.pop(name, None)
+            process = subprocess.Popen([RUNNER, "--json", PASS, STATUS], cwd=self.root,
+                                       env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                       text=True, start_new_session=True)
+            try:
+                deadline = time.monotonic() + 60
+                while not ready.exists():
+                    self.assertIsNone(process.poll(), "fixture exited before interruption")
+                    self.assertLess(time.monotonic(), deadline, "fixture never became ready")
+                    time.sleep(0.05)
+                roots = list(tmp.glob("wrix-ci-runners.*"))
+                self.assertEqual(len(roots), 1)
+                self.assertTrue((roots[0] / "runner").is_symlink())
+                os.killpg(process.pid, signal.SIGTERM)
+                process.communicate(timeout=10)
+                self.assertEqual(process.returncode, 143)
+                self.assertFalse(roots[0].exists(), "interrupted batch retained image GC roots")
+            finally:
+                if process.poll() is None:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.communicate()
 
     def test_fixture_execution_is_independent_of_caller_git_context(self):
         result, verdicts, calls = self.run_apps(PASS, STATUS, git_dir=self.root / "not-a-repository")

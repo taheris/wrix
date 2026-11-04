@@ -316,6 +316,7 @@ let
       };
       service-image-incremental = import ./services/image-incremental.nix { inherit pkgs; };
       image-assembly-native = sandboxImageChecks.imageAssemblyNativeCheck;
+      image-verifier-realization = sandboxImageChecks.metadataRealizationCheck;
       oci-layout-builder = pkgs.runCommandLocal "oci-layout-builder" { } ''
         set -euo pipefail
         export PYTHONDONTWRITEBYTECODE=1
@@ -483,12 +484,15 @@ let
       (mkImageCiApp sandboxImageChecks.profilePackagesBundledTest "test-profile-packages-bundled")
       (mkImageCiApp sandboxImageChecks.imageTierMembershipTest "test-image-tier-membership")
       (mkRuntimeImageCiApp sandboxImageChecks.wrixImagesSourceKindTest "test-wrix-images-source-kind")
+      (mkRuntimeImageCiApp sandboxImageChecks.wrixImagesSourceArtifactsTest "test-wrix-images-source-artifacts")
       (mkRuntimeImageCiApp sandboxImageChecks.wrixImageLabelsTest "test-wrix-image-labels")
+      (mkRuntimeImageCiApp sandboxImageChecks.wrixImageLabelArtifactsTest "test-wrix-image-label-artifacts")
       (mkImageCiApp sandboxImageChecks.agentDeclaredDirectRunnerTest "test-agent-declared-direct-runner")
       (mkImageCiApp sandboxImageChecks.agentConsumerRuntimeClosuresTest "test-agent-consumer-runtime-closures")
       (mkImageCiApp sandboxImageChecks.agentClaudeRuntimeTest "test-agent-claude-runtime")
       (mkImageCiApp sandboxImageChecks.claudeRuntimeNoopTest "test-claude-runtime-noop")
       (mkImageCiApp sandboxImageChecks.prekHooksClosureTest "test-prek-hooks-closure")
+      (mkImageCiApp sandboxImageChecks.prekHooksArtifactsTest "test-prek-hooks-artifacts")
       (mkImageCiApp sandboxImageChecks.baseImageUniversalTest "test-base-image-universal")
       (mkImageCiApp sandboxImageChecks.entrypointResolverBaseTest "test-entrypoint-resolver-base")
       (mkImageCiApp sandboxImageChecks.baseImageHashStableTest "test-base-image-hash-stable")
@@ -700,6 +704,9 @@ let
         batch_dir=""
         declare -A ci_runners=() ci_admission_status=() ci_admission_records=()
         trap 'if [[ -n "$batch_dir" ]]; then rm -rf "$batch_dir"; fi' EXIT
+        trap 'exit 130' INT
+        trap 'exit 143' TERM
+        trap 'exit 129' HUP
 
         admit_ci_app() {
           local app="$1" requirements record status

@@ -36,6 +36,7 @@ let
 
 in
 {
+  "sandbox.image-verifier-realization" = nativeCheck "image-verifier-realization";
   "sandbox.oci-layout-builder" = nativeCheck "oci-layout-builder";
   "sandbox.private-nix-api" = nativeCheck "private-nix-api";
   "sandbox.private-nix-state-preservation" = nativeCheck "private-nix-state-preservation";
