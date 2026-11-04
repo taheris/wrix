@@ -4,12 +4,14 @@ let
     all
     attrNames
     fromJSON
-    readFile
     removeAttrs
+    unsafeDiscardStringContext
     ;
   settingsFile = agentSettings: (wrix.mkSandbox { inherit agentSettings; }).image.piSettingsJson;
   defaultsFile = settingsFile { };
-  defaults = fromJSON (readFile defaultsFile);
+  # Metadata precedence is pure; the runtime consumer below reads emitted files.
+  parseSettings = file: fromJSON (unsafeDiscardStringContext file.text);
+  defaults = parseSettings defaultsFile;
   consumerSettings = {
     defaultProvider = "consumer-provider";
     defaultModel = "consumer-model";
@@ -20,14 +22,12 @@ let
     defaultTools = [ "read" ];
     codemode.mode = "only";
   };
-  overridden = fromJSON (readFile (settingsFile consumerSettings));
-  budgetSettings = fromJSON (
-    readFile (settingsFile {
-      codemode.inlineBudget = 42;
-    })
-  );
+  overridden = parseSettings (settingsFile consumerSettings);
+  budgetSettings = parseSettings (settingsFile {
+    codemode.inlineBudget = 42;
+  });
   disabledFile = settingsFile { defaultTools = [ "-codemode" ]; };
-  disabled = fromJSON (readFile disabledFile);
+  disabled = parseSettings disabledFile;
   pi = import ../../lib/sandbox/pi.nix { inherit pkgs; };
 in
 {

@@ -4,7 +4,7 @@
   src,
 }:
 let
-  inherit (builtins) fromJSON readFile unsafeDiscardStringContext;
+  inherit (builtins) fromJSON unsafeDiscardStringContext;
   inherit (pkgs.lib) getExe last;
   resources = import ../lib/image-resources.nix { };
   pi = import (resources.sandbox.path + "/pi.nix") { inherit pkgs; };
@@ -22,8 +22,10 @@ let
       mcpRuntime = runtime;
       mcp = if runtime then { } else { playwright = { }; };
     }).image.mcpAvailableJson;
+  # Compare the constructor's exact writeText payload without IFD. Emitted
+  # configuration wiring remains covered by the separate image consumer.
   parsedManifest =
-    agent: selection: fromJSON (unsafeDiscardStringContext (readFile (manifestFor agent selection)));
+    agent: selection: fromJSON (unsafeDiscardStringContext (manifestFor agent selection).text);
   explicit = parsedManifest "pi" false;
   runtime = parsedManifest "pi" true;
   nativeCheck =

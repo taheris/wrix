@@ -35,6 +35,9 @@
         in
         workspace.craneLib.cargoNextest {
           src = workspace.stagedSrc;
+          cargoToml = inputs.loom-src + "/Cargo.toml";
+          cargoLock = inputs.loom-src + "/Cargo.lock";
+          cargoVendorDir = workspace.bin.cargoVendorDir;
           inherit (workspace) cargoArtifacts;
           patches = loomPatches;
           nativeBuildInputs = [ pkgs.git ];
@@ -48,9 +51,23 @@
         inherit loomCli linuxLoomCli loomLib;
       };
       packages.loom = loomCli;
-      checks = {
-        loom-spawn-contract = loomContract "-p loom-driver -E 'test(wrix_launch_) | test(wrix_runner_) | test(profile_manifest) | test(resolve_launcher) | test(consumer_pin_)'";
-        loom-runner-inputs = loomContract "-p loom-gate -E 'test(inputs::tests)'";
-      };
+      checks =
+        let
+          contracts = {
+            loom-spawn-contract = loomContract "-p loom-driver -E 'test(wrix_launch_) | test(wrix_runner_) | test(profile_manifest) | test(resolve_launcher) | test(consumer_pin_)'";
+            loom-runner-inputs = loomContract "-p loom-gate -E 'test(inputs::tests)'";
+          };
+          canonicalInputs =
+            contract:
+            contract.cargoToml == inputs.loom-src + "/Cargo.toml"
+            && contract.cargoLock == inputs.loom-src + "/Cargo.lock"
+            && toString contract.cargoVendorDir == toString loomCli.cargoVendorDir;
+        in
+        contracts
+        // {
+          loom-contract-metadata =
+            assert builtins.all canonicalInputs (builtins.attrValues contracts);
+            pkgs.runCommand "loom-contract-metadata" { } ''touch "$out"'';
+        };
     };
 }

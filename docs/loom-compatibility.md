@@ -70,6 +70,26 @@ source copy with IFD disabled, preserving the real Loom checkout's local
 lockfile changes. Evaluation success is not service activation or admission
 success.
 
+## Packaged contract metadata
+
+The packaged Spawn/input contract checks use Loom's exact pinned Cargo manifests
+and the CLI's canonical vendor directory. Their staged source is execution
+input, not an evaluator directory to scan for Cargo metadata. This keeps cold
+metadata evaluation independent of a realized `loom-src-with-extras` output. The
+source patches and selected upstream tests are unchanged.
+
+```bash
+nix eval --json --option allow-import-from-derivation false \
+  --apply 'systems: builtins.mapAttrs (_: checks: builtins.mapAttrs (_: check: check.drvPath) checks) systems' \
+  .#checks
+```
+
+`loom-contract-metadata` checks both real contract derivations' canonical input
+bindings. Pi settings/MCP precedence checks likewise parse their constructor's
+exact `writeText` payload rather than reading a built output during evaluation;
+the emitted-configuration consumers remain separate and unchanged. Derivation
+evaluation is not artifact, host service or production runtime acceptance.
+
 ## Independent host blockers
 
 `wrix run --dry-run --json` deliberately omits sensitive input values. For an
