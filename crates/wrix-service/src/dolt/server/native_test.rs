@@ -207,6 +207,9 @@ async fn native_sql_sessions_and_broker_work_drain_across_both_public_transports
                 command(Command::Abort).await.status.phase,
                 crate::lifecycle::drain::Phase::Serving
             );
+            assert!(command(Command::Begin).await.status.drained());
+            assert!(command(Command::Quiesce).await.status.drained());
+            command(Command::Abort).await;
             let mut tcp = login(tokio::net::TcpStream::connect(("127.0.0.1", 3306)).await?).await;
             let mut unix = login(tokio::net::UnixStream::connect(&socket).await?).await;
             let mut direct =

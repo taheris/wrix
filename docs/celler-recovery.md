@@ -308,6 +308,35 @@ existing worker processes are not stopped by this repair, but revoked traffic
 permissions are not automatically restored. Do not run an older update process
 concurrently with current recovery.
 
+## Native Dolt census refusal during update
+
+An older running backend can reject `sql-drain begin` even with no SQL clients:
+its native session query returns `{}` for an empty result, which its census
+parser refuses. Update reports `BackendDrain` and
+`native dolt begin command failed`; that message alone is not proof of this bug.
+A passive
+`container exec <selected-container> wrix-shared-service sql-drain status` (or
+the recorded runtime's equivalent) can still report `serving` afterward. Current
+backend images query an explicit session count, including zero, and continue
+refusing invalid or unauthenticated observations.
+
+The census executes inside the running backend, so replacing only the host CLI
+cannot fix that backend. Keep the update intent and ownership evidence intact.
+After separately authorizing host-wide downtime and quiescing SQL/cache clients,
+use current Wrix:
+
+```bash
+"${WRIX_BIN:-wrix}" service stop --host
+"${WRIX_BIN:-wrix}" service update --resume
+"${WRIX_BIN:-wrix}" service start
+```
+
+Resume preserves the exact recorded target; if that target predates the census
+fix, a separate `service update` to a fixed package is still required. Host stop
+revokes existing worker traffic grants; existing worker processes are not
+stopped and their revoked grants are not automatically restored. Do not bypass
+the drain by changing journals, credentials or ownership files.
+
 ## Controller policy upgrade
 
 The shared SQL lifecycle uses controller policy epoch 2. An older running

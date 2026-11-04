@@ -185,7 +185,7 @@ fn native_sessions(data: &Path) -> Result<usize, io::Error> {
             "-r",
             "json",
             "-q",
-            "SELECT ID FROM information_schema.processlist WHERE ID <> CONNECTION_ID()",
+            "SELECT COUNT(*) AS sessions FROM information_schema.processlist WHERE ID <> CONNECTION_ID()",
         ])
         .env("DOLT_CLI_PASSWORD", password)
         .output()?;
@@ -194,12 +194,25 @@ fn native_sessions(data: &Path) -> Result<usize, io::Error> {
             "authenticated native SQL session census failed",
         ));
     }
-    let value: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-    value
-        .get("rows")
-        .and_then(serde_json::Value::as_array)
-        .map(Vec::len)
-        .ok_or_else(|| io::Error::other("native SQL session census response is invalid"))
+    session_count(&output.stdout)
+}
+
+fn session_count(bytes: &[u8]) -> Result<usize, io::Error> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Census {
+        rows: [Row; 1],
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Row {
+        sessions: String,
+    }
+    let census: Census = serde_json::from_slice(bytes)?;
+    census.rows[0]
+        .sessions
+        .parse()
+        .map_err(|_| io::Error::other("native SQL session census count is invalid"))
 }
 
 fn clear_socket(path: &Path) -> Result<(), io::Error> {
@@ -363,6 +376,31 @@ pub fn dispatch(command: Command) -> Result<Response, Failure> {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn census_reads_zero_and_busy_native_counts() {
+        assert_eq!(session_count(br#"{"rows":[{"sessions":"0"}]}"#).unwrap(), 0);
+        assert_eq!(session_count(br#"{"rows":[{"sessions":"3"}]}"#).unwrap(), 3);
+    }
+
+    #[test]
+    fn census_refuses_missing_malformed_or_ambiguous_counts() {
+        for bytes in [
+            "{}",
+            r#"{"rows":[]}"#,
+            r#"{"rows":[{}]}"#,
+            r#"{"rows":[{"sessions":0}]}"#,
+            r#"{"rows":[{"sessions":"-1"}]}"#,
+            r#"{"rows":[{"sessions":"18446744073709551616"}]}"#,
+            r#"{"rows":[{"sessions":"unknown"}]}"#,
+            r#"{"rows":[{"sessions":"0"},{"sessions":"1"}]}"#,
+            r#"{"rows":[{"sessions":"0"}],"error":"failed"}"#,
+            "not json",
+        ] {
+            assert!(session_count(bytes.as_bytes()).is_err(), "accepted {bytes}");
+        }
+    }
+
     #[tokio::test]
     async fn sql_gate_closes_admission_atomically_without_closing_existing_broker_work() {
         let root = tempfile::tempdir().unwrap();
