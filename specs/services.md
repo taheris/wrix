@@ -443,6 +443,17 @@ replace that binding. Resolve and validate it before live selection changes;
 missing input does not authorize guessing or repository discovery. Service
 operations do not require launcher-only `--profile-config`.
 
+Host backend VM limits belong to that package binding, not workspace settings or
+guest environment variables. Darwin packages default to 8 CPUs and 8192 MiB.
+`lib.withServiceResources { cpus = 4; memoryMiB = 4096; }` constructs a host
+library with different limits; provision its `rustPackage.wrix` and explicitly
+update an existing deployment to select them. A controller unable to decode a
+new binding schema must first be explicitly upgraded with `service repair`;
+resource selection does not authorize implicit controller replacement. Pool
+limits remain independent. Recovery uses the retained binding's limits,
+including the absence of explicit limits in older records; it does not adopt the
+invoking package's defaults.
+
 The update plan always includes all four core deployment roles: gateway, Dolt,
 Celler and shared sccache. Provisioned Nix pools add the ownership, drain and
 readiness obligations in
@@ -1317,6 +1328,17 @@ tenant or component compromise/fault isolation.
   strings, recorded selection or ambient image defaults; equivalent bindings
   reuse the same compatible target despite different package paths.
   [test](../crates/wrix-service/tests/generation_handoff.rs::update_target_uses_explicit_package_image_binding)
+- Backend creation passes the selected package's CPU and memory limits to the
+  runtime, without adopting a different invoking package's limits implicitly.
+  [test](../crates/wrix-cli/tests/service_cache.rs::selected_owner_preserves_its_record_when_the_callers_package_changes)
+- Package-selected backend resources survive retained recovery serialization.
+  [test](../crates/wrix-service/src/lifecycle/binding/test.rs::resource_binding_survives_recovery_serialization)
+- Changing resource limits changes the explicit update candidate, even when the
+  image source is unchanged.
+  [test](../crates/wrix-service/src/lifecycle/binding/test.rs::resource_change_is_an_explicit_package_change)
+- Recovery of an older binding does not acquire the invoking package's new
+  resource defaults.
+  [test](../crates/wrix-service/src/lifecycle/binding/test.rs::retained_legacy_binding_does_not_acquire_new_limits)
 - Actual Nix-packaged host Wrix supplies its service-image binding independently
   of both projects' generated launch configurations and installation directory;
   production update argv does not adopt either project's image overrides or

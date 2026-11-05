@@ -5,6 +5,14 @@
   crane,
   fenix,
   treefmt,
+  serviceResources ?
+    if pkgs.stdenv.hostPlatform.isDarwin then
+      {
+        cpus = 8;
+        memoryMiB = 8192;
+      }
+    else
+      null,
 }:
 
 let
@@ -43,6 +51,7 @@ let
       crane
       fenix
       treefmt
+      serviceResources
       ;
   };
 
@@ -80,4 +89,18 @@ in
   inherit (sandboxLib) nixPoolImage nixPoolOwner;
 
   rustPackage = rustCli;
+
+  withServiceResources =
+    resources:
+    import ./. {
+      inherit
+        pkgs
+        system
+        linuxPkgs
+        crane
+        fenix
+        treefmt
+        ;
+      serviceResources = resources;
+    };
 }

@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use wrix_sandbox::image::{Digest, ImageRef, Source, SourceKind};
 
+pub mod resources;
+
 #[cfg(test)]
 mod test;
 
@@ -45,6 +47,14 @@ struct Wire {
     source_kind: SourceKind,
     source: Artifact,
     digest: Artifact,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resources: Option<resources::Resources>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct Artifacts {
+    source: Artifact,
+    digest: Artifact,
 }
 
 /// An immutable package-selected image target, independent of executable and project paths.
@@ -53,8 +63,8 @@ struct Wire {
 pub struct Candidate {
     image: ImageRef,
     source: Source,
-    source_artifact: Artifact,
-    digest_artifact: Artifact,
+    artifacts: Box<Artifacts>,
+    resources: Option<resources::Resources>,
 }
 
 impl Candidate {
@@ -92,7 +102,7 @@ impl Candidate {
             ),
             (
                 "WRIX_SERVICE_IMAGE_DIGEST",
-                self.digest_artifact.path.as_os_str(),
+                self.artifacts.digest.path.as_os_str(),
             ),
         ] {
             if lookup(name).is_some_and(|value| value != expected) {
@@ -110,13 +120,18 @@ impl Candidate {
         &self.source
     }
 
+    /// VM limits belong to the selected package, including during recovery.
+    pub const fn resources(&self) -> Option<&resources::Resources> {
+        self.resources.as_ref()
+    }
+
     /// Realize and root the selected artifacts, never install a runtime image.
     pub fn realize(&self, roots: &Path) -> Result<Digest, Error> {
-        let source_output = self.source_artifact.output()?;
-        let digest_output = self.digest_artifact.output()?;
-        self.source_artifact.realize(roots, &source_output)?;
-        self.digest_artifact.realize(roots, &digest_output)?;
-        let value = fs::read_to_string(&self.digest_artifact.path)?;
+        let source_output = self.artifacts.source.output()?;
+        let digest_output = self.artifacts.digest.output()?;
+        self.artifacts.source.realize(roots, &source_output)?;
+        self.artifacts.digest.realize(roots, &digest_output)?;
+        let value = fs::read_to_string(&self.artifacts.digest.path)?;
         Digest::parse(value.trim()).map_err(|_| Error::Digest(value))
     }
 }
@@ -125,8 +140,11 @@ impl TryFrom<Wire> for Candidate {
     type Error = Error;
 
     fn try_from(wire: Wire) -> Result<Self, Error> {
-        if wire.schema != 1 {
-            return Err(Error::Metadata("unsupported schema"));
+        if !matches!(
+            (wire.schema, wire.resources.is_some()),
+            (1, false) | (2, true)
+        ) {
+            return Err(Error::Metadata("unsupported schema or resource policy"));
         }
         wire.source.check()?;
         wire.digest.check()?;
@@ -135,8 +153,11 @@ impl TryFrom<Wire> for Candidate {
         Ok(Self {
             image: wire.image,
             source,
-            source_artifact: wire.source,
-            digest_artifact: wire.digest,
+            artifacts: Box::new(Artifacts {
+                source: wire.source,
+                digest: wire.digest,
+            }),
+            resources: wire.resources,
         })
     }
 }
@@ -144,11 +165,12 @@ impl TryFrom<Wire> for Candidate {
 impl Serialize for Candidate {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         Wire {
-            schema: 1,
+            schema: if self.resources.is_some() { 2 } else { 1 },
             image: self.image.clone(),
             source_kind: self.source.kind(),
-            source: self.source_artifact.clone(),
-            digest: self.digest_artifact.clone(),
+            source: self.artifacts.source.clone(),
+            digest: self.artifacts.digest.clone(),
+            resources: self.resources.clone(),
         }
         .serialize(serializer)
     }

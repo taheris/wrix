@@ -1074,7 +1074,11 @@ fn selected_owner_preserves_its_record_when_the_callers_package_changes() -> Tes
         ("container", "docker-archive"),
     ] {
         let fixture = Fixture::new()?;
-        service_binding::create(fixture.root.path(), &fixture.bin, kind)?;
+        let package = service_binding::create(fixture.root.path(), &fixture.bin, kind)?;
+        let mut selected_package: Value = serde_json::from_slice(&fs::read(&package)?)?;
+        selected_package["schema"] = json!(2);
+        selected_package["resources"] = json!({"cpus":8,"memory_mib":8192});
+        fs::write(&package, serde_json::to_vec(&selected_package)?)?;
         let mut command = fixture.command(runtime)?;
         command
             .args(["service", "start"])
@@ -1111,6 +1115,7 @@ fn selected_owner_preserves_its_record_when_the_callers_package_changes() -> Tes
         let binding = fixture.root.path().join("binding.json");
         let mut caller: Value = serde_json::from_slice(&fs::read(&binding)?)?;
         caller["image"] = json!("wrix-service:new-package");
+        caller["resources"] = json!({"cpus":4,"memory_mib":4096});
         fs::write(&binding, serde_json::to_vec(&caller)?)?;
         fs::write(fixture.root.path().join("calls"), "")?;
         let output = run_command(&mut command)?;
@@ -1124,6 +1129,14 @@ fn selected_owner_preserves_its_record_when_the_callers_package_changes() -> Tes
         assert_eq!(fs::read(state.join("keys/cache.pub"))?, key);
         let args = fs::read(fixture.root.path().join("run.argv"))?;
         let mut args: Vec<_> = args.split(|byte| *byte == 0).map(<[u8]>::to_vec).collect();
+        assert!(
+            args.windows(2)
+                .any(|pair| pair[0] == b"--cpus" && pair[1] == b"8")
+        );
+        assert!(
+            args.windows(2)
+                .any(|pair| pair[0] == b"--memory" && pair[1] == b"8192M")
+        );
         let image = args.len() - 5;
         let expected = if runtime == "container" {
             b"wrix-service:test".to_vec()

@@ -5,6 +5,7 @@
   crane,
   fenix,
   treefmt,
+  serviceResources ? null,
 }:
 
 let
@@ -172,6 +173,7 @@ let
     pkgs = linuxPkgs;
     hostPkgs = pkgs;
     inherit (imageRustCli) celler supervisor;
+    hostResources = serviceResources;
     asTarball = isDarwin;
   };
 

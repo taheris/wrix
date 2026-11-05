@@ -5,6 +5,7 @@
   supervisor ? null,
   pool ? null,
   asTarball ? false,
+  hostResources ? null,
 }:
 
 let
@@ -184,4 +185,5 @@ assert pool != null || (celler != null && supervisor != null);
   ref = "${refPrefix}${imageName}:${imageTag}";
   source = imageSource;
   source_kind = sourceKind;
+  resources = (import ./resources.nix { inherit (pkgs) lib; }) hostResources;
 }

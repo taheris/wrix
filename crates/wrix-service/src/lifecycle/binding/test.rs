@@ -65,3 +65,60 @@ fn realization_child() {
     assert!(error.to_string().contains("23"), "{error}");
     assert!(error.to_string().contains("source.drv"), "{error}");
 }
+
+fn resource_binding() -> serde_json::Value {
+    serde_json::json!({
+        "schema": 2,
+        "image": "wrix-service:resource-test",
+        "source_kind": "docker-archive",
+        "source": {
+            "path": "/nix/store/test-service/image.tar.gz",
+            "derivation": "/nix/store/test-service.drv"
+        },
+        "digest": {
+            "path": "/nix/store/test-digest/digest",
+            "derivation": "/nix/store/test-digest.drv"
+        },
+        "resources": {"cpus":8,"memory_mib":8192}
+    })
+}
+
+#[test]
+fn resource_binding_survives_recovery_serialization() {
+    let wire = resource_binding();
+    let candidate: Candidate = serde_json::from_value(wire.clone()).unwrap();
+    assert_eq!(serde_json::to_value(candidate).unwrap(), wire);
+}
+
+#[test]
+fn retained_legacy_binding_does_not_acquire_new_limits() {
+    let mut wire = resource_binding();
+    wire["schema"] = 1.into();
+    wire.as_object_mut().unwrap().remove("resources");
+    let candidate: Candidate = serde_json::from_value(wire.clone()).unwrap();
+    assert_eq!(serde_json::to_value(candidate).unwrap(), wire);
+}
+
+#[test]
+fn resource_schema_requires_limits() {
+    let mut wire = resource_binding();
+    wire.as_object_mut().unwrap().remove("resources");
+    assert!(serde_json::from_value::<Candidate>(wire).is_err());
+}
+
+#[test]
+fn legacy_schema_cannot_smuggle_resource_limits() {
+    let mut wire = resource_binding();
+    wire["schema"] = 1.into();
+    assert!(serde_json::from_value::<Candidate>(wire).is_err());
+}
+
+#[test]
+fn resource_change_is_an_explicit_package_change() {
+    let wire = resource_binding();
+    let old: Candidate = serde_json::from_value(wire.clone()).unwrap();
+    let mut changed = wire;
+    changed["resources"]["cpus"] = 4.into();
+    let new: Candidate = serde_json::from_value(changed).unwrap();
+    assert_ne!(old, new);
+}

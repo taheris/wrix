@@ -260,6 +260,17 @@ pub(in crate::lifecycle) fn ensure(
         RuntimeKind::Container => command.args(["create", "--name", selected.container.as_str()]),
         RuntimeKind::Podman => command.args(["run", "-d", "--name", selected.container.as_str()]),
     };
+    if let Some(resources) = recovered
+        .recipe
+        .as_ref()
+        .and_then(|recipe| recipe.binding.resources())
+    {
+        command
+            .arg("--cpus")
+            .arg(resources.cpus().to_string())
+            .arg("--memory")
+            .arg(format!("{}M", resources.memory_mib()));
+    }
     command
         .arg("--label")
         .arg(format!("wrix.service.boot={}", boot.expose()))

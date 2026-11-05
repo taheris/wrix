@@ -33,6 +33,7 @@
           prekHooks
           profiles
           rustProfile
+          withServiceResources
           ;
       };
     };
