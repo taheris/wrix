@@ -76,7 +76,10 @@ let
   knownHosts = import ./known-hosts.nix { inherit pkgs; };
 
   # Darwin assembles Linux-targeted archives natively to avoid QEMU.
-  imageBuilderPkgs = if asTarball then hostPkgs else pkgs;
+  nativeImageBuilderPkgs = if asTarball then hostPkgs else pkgs;
+  imageBuilderPkgs = nativeImageBuilderPkgs // {
+    inherit ((import ./image-stream.nix { pkgs = nativeImageBuilderPkgs; })) dockerTools;
+  };
 
   notifyClient = import ../notify/client.nix { inherit pkgs; };
   piNotify = import ../notify/pi.nix { inherit pkgs; };

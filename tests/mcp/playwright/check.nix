@@ -172,6 +172,7 @@ let
         pkgs.jq
       ]
       ''
+        test -e ${import ../../sandbox/image-stream.nix { inherit pkgs; }}
         tmp=$(mktemp -d)
         trap 'rm -rf "$tmp"' EXIT
         layer_paths="$tmp/layers"
