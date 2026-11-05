@@ -90,30 +90,83 @@ impl Shutdown {
 }
 
 pub(crate) fn document(root: &Path, name: &str) -> Result<Option<Vec<u8>>> {
-    let file = match File::options()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(root.join(name))
-    {
-        Ok(file) => file,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.into()),
+    document_observed(root, name, || {})
+}
+
+fn document_observed(
+    root: &Path,
+    name: &str,
+    mut after_open: impl FnMut(),
+) -> Result<Option<Vec<u8>>> {
+    let identity = |metadata: &fs::Metadata| {
+        (
+            metadata.dev(),
+            metadata.ino(),
+            metadata.uid(),
+            metadata.mode(),
+        )
     };
-    let metadata = file.metadata()?;
-    if !metadata.is_file()
-        || metadata.mode() & 0o077 != 0
-        || metadata.uid() != fs::metadata(root)?.uid()
-        || metadata.nlink() != 1
-        || metadata.len() > LIMIT
-    {
-        return Err(owner::Error::Permissions.into());
+    let mut directory_identity = None;
+    for _ in 0..4 {
+        let file = match File::options()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(root.join(name))
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return if directory_identity.is_none() {
+                    Ok(None)
+                } else {
+                    Err(owner::Error::Conflict.into())
+                };
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let directory = fs::symlink_metadata(root)?;
+        let observed = identity(&directory);
+        if !directory.is_dir()
+            || directory_identity
+                .replace(observed)
+                .is_some_and(|previous| previous != observed)
+        {
+            return Err(owner::Error::Conflict.into());
+        }
+        after_open();
+        if identity(&fs::symlink_metadata(root)?) != observed {
+            return Err(owner::Error::Conflict.into());
+        }
+        let metadata = file.metadata()?;
+        if metadata.nlink() == 0 {
+            // Atomic publication superseded this descriptor; never admit its bytes as current evidence.
+            let replacement = fs::symlink_metadata(root.join(name)).map_err(|error| {
+                if error.kind() == io::ErrorKind::NotFound {
+                    Error::from(owner::Error::Conflict)
+                } else {
+                    Error::from(error)
+                }
+            })?;
+            if replacement.dev() == metadata.dev() && replacement.ino() != metadata.ino() {
+                continue;
+            }
+            return Err(owner::Error::Conflict.into());
+        }
+        if !metadata.is_file()
+            || metadata.mode() & 0o077 != 0
+            || metadata.uid() != directory.uid()
+            || metadata.nlink() != 1
+            || metadata.len() > LIMIT
+        {
+            return Err(owner::Error::Permissions.into());
+        }
+        let mut bytes = Vec::new();
+        file.take(LIMIT + 1).read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > LIMIT {
+            return Err(owner::Error::Invalid.into());
+        }
+        return Ok(Some(bytes));
     }
-    let mut bytes = Vec::new();
-    file.take(LIMIT + 1).read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > LIMIT {
-        return Err(owner::Error::Invalid.into());
-    }
-    Ok(Some(bytes))
+    Err(owner::Error::Conflict.into())
 }
 
 pub(super) fn publish(root: &Path, name: &str, value: &impl Serialize) -> Result<()> {
@@ -352,6 +405,154 @@ pub fn status() -> Result<String> {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn atomic_document_replacement_reopens_the_current_private_record() {
+        let root = tempfile::tempdir().unwrap();
+        publish(root.path(), "status.json", &1).unwrap();
+        let mut observations = 0;
+        let bytes = document_observed(root.path(), "status.json", || {
+            observations += 1;
+            if observations == 1 {
+                publish(root.path(), "status.json", &2).unwrap();
+            }
+        })
+        .unwrap()
+        .unwrap();
+        assert_eq!(observations, 2);
+        assert_eq!(bytes, b"2");
+    }
+
+    #[test]
+    fn repeated_document_replacement_is_bounded_without_repair() {
+        let root = tempfile::tempdir().unwrap();
+        publish(root.path(), "status.json", &0).unwrap();
+        let mut observations = 0;
+        let result = document_observed(root.path(), "status.json", || {
+            observations += 1;
+            publish(root.path(), "status.json", &observations).unwrap();
+        });
+        assert!(matches!(
+            result,
+            Err(Error::SelectedCeller(owner::Error::Conflict))
+        ));
+        assert_eq!(observations, 4);
+        assert_eq!(document(root.path(), "status.json").unwrap().unwrap(), b"4");
+    }
+
+    #[test]
+    fn disappearing_document_is_not_reinterpreted_as_initial_absence() {
+        let root = tempfile::tempdir().unwrap();
+        publish(root.path(), "status.json", &1).unwrap();
+        let result = document_observed(root.path(), "status.json", || {
+            fs::remove_file(root.path().join("status.json")).unwrap();
+        });
+        assert!(matches!(
+            result,
+            Err(Error::SelectedCeller(owner::Error::Conflict))
+        ));
+        assert!(!root.path().join("status.json").exists());
+    }
+
+    #[test]
+    fn replacement_document_must_still_be_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        publish(root.path(), "status.json", &1).unwrap();
+        let mut observations = 0;
+        let result = document_observed(root.path(), "status.json", || {
+            observations += 1;
+            if observations == 1 {
+                publish(root.path(), "status.json", &2).unwrap();
+                fs::set_permissions(
+                    root.path().join("status.json"),
+                    fs::Permissions::from_mode(0o644),
+                )
+                .unwrap();
+            }
+        });
+        assert!(matches!(
+            result,
+            Err(Error::SelectedCeller(owner::Error::Permissions))
+        ));
+        assert_eq!(observations, 2);
+        assert_eq!(
+            fs::metadata(root.path().join("status.json"))
+                .unwrap()
+                .mode()
+                & 0o777,
+            0o644
+        );
+    }
+
+    #[test]
+    fn replacement_document_must_still_have_exactly_one_link() {
+        let root = tempfile::tempdir().unwrap();
+        publish(root.path(), "status.json", &1).unwrap();
+        let retained = root.path().join("retained.json");
+        let mut observations = 0;
+        let result = document_observed(root.path(), "status.json", || {
+            observations += 1;
+            if observations == 1 {
+                publish(root.path(), "status.json", &2).unwrap();
+                fs::hard_link(root.path().join("status.json"), &retained).unwrap();
+            }
+        });
+        assert!(matches!(
+            result,
+            Err(Error::SelectedCeller(owner::Error::Permissions))
+        ));
+        assert_eq!(observations, 2);
+        assert_eq!(fs::metadata(&retained).unwrap().nlink(), 2);
+        assert_eq!(fs::read(retained).unwrap(), b"2");
+    }
+
+    #[test]
+    fn document_directory_replacement_is_not_a_record_retry() {
+        let root = tempfile::tempdir().unwrap();
+        let state = root.path().join("state");
+        let retained = root.path().join("retained");
+        fs::create_dir(&state).unwrap();
+        publish(&state, "status.json", &1).unwrap();
+        let result = document_observed(&state, "status.json", || {
+            fs::rename(&state, &retained).unwrap();
+            fs::create_dir(&state).unwrap();
+            publish(&state, "status.json", &2).unwrap();
+        });
+        assert!(matches!(
+            result,
+            Err(Error::SelectedCeller(owner::Error::Conflict))
+        ));
+        assert_eq!(document(&retained, "status.json").unwrap().unwrap(), b"1");
+        assert_eq!(document(&state, "status.json").unwrap().unwrap(), b"2");
+    }
+
+    #[test]
+    fn replacement_document_must_still_respect_the_size_limit() {
+        let root = tempfile::tempdir().unwrap();
+        publish(root.path(), "status.json", &1).unwrap();
+        let mut observations = 0;
+        let result = document_observed(root.path(), "status.json", || {
+            observations += 1;
+            if observations == 1 {
+                publish(root.path(), "status.json", &2).unwrap();
+                fs::write(
+                    root.path().join("status.json"),
+                    vec![b' '; usize::try_from(LIMIT).unwrap() + 1],
+                )
+                .unwrap();
+            }
+        });
+        assert!(matches!(
+            result,
+            Err(Error::SelectedCeller(owner::Error::Permissions))
+        ));
+        assert_eq!(observations, 2);
+        assert_eq!(
+            fs::metadata(root.path().join("status.json")).unwrap().len(),
+            LIMIT + 1
+        );
+    }
 
     #[test]
     fn passive_shutdown_lookup_does_not_create_directories() {
