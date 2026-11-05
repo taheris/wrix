@@ -61,6 +61,8 @@ impl HttpFixture {
             while !server_stop.load(Ordering::SeqCst) {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
+                        // Darwin inherits the listener's nonblocking flag on accept.
+                        stream.set_nonblocking(false).unwrap();
                         stream
                             .set_read_timeout(Some(Duration::from_secs(5)))
                             .unwrap();
@@ -106,6 +108,22 @@ impl Drop for HttpFixture {
             server.join().unwrap();
         }
     }
+}
+
+#[test]
+fn http_fixture_waits_for_delayed_and_fragmented_request_headers() -> TestResult {
+    let server = HttpFixture::start(BTreeMap::from([("/payload".into(), b"bytes".to_vec())]))?;
+    let mut stream = TcpStream::connect(server.url.trim_start_matches("http://"))?;
+    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+    thread::sleep(Duration::from_millis(40));
+    stream.write_all(b"GET /payload HTTP/1.1\r\n")?;
+    thread::sleep(Duration::from_millis(40));
+    stream.write_all(b"Host: localhost\r\n\r\n")?;
+    let mut response = String::new();
+    stream.read_to_string(&mut response)?;
+    assert!(response.contains("200 OK\r\n"));
+    assert!(response.ends_with("bytes"));
+    Ok(())
 }
 
 #[test]
