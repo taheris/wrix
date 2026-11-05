@@ -15,6 +15,11 @@ mod registration;
 pub mod serving;
 pub mod supervision;
 
+#[cfg(test)]
+mod sql_admission_test;
+#[cfg(test)]
+mod sql_registration_test;
+
 use std::{
     collections::BTreeMap,
     fs::{self, DirBuilder, File},
@@ -139,6 +144,19 @@ pub(crate) fn required_sql(state: &Path) -> Result<Vec<Namespace>, Error> {
         .collect())
 }
 
+fn commit_sql_registration(
+    state: &Path,
+    namespace: &Namespace,
+    _lease: &registration::Lease,
+) -> Result<(), Error> {
+    crate::dolt::readiness_credentials(state, std::slice::from_ref(namespace))
+        .map_err(io::Error::other)?;
+    let mut registry = registration::Store::open(&state.join("control/authority"))?.lock()?;
+    let policy = registry.get_mut(namespace).ok_or(Error::UnknownNamespace)?;
+    policy.dolt = Access::Allowed;
+    registry.commit()
+}
+
 /// An independent host-management credential, never a cache/proxy traffic token.
 struct Credential([u8; 32]);
 
@@ -214,6 +232,16 @@ pub enum Permission {
     Compiler,
 }
 
+const fn denied_policy() -> Policy {
+    Policy {
+        dolt: Access::Denied,
+        private_cache_read: Access::Denied,
+        common_cache_read: Access::Denied,
+        egress: Access::Denied,
+        compiler: Access::Denied,
+    }
+}
+
 impl Policy {
     const fn access(self, permission: Permission) -> Access {
         match permission {
@@ -253,8 +281,8 @@ impl<'a> Authorization<'a> {
         Self::host_sql_policy(selection, false)
     }
 
-    /// Explicit host lifecycle admission, never passive client delivery.
-    pub(crate) fn admit_host_sql(
+    /// Prepare host-only registration authority without publishing SQL access.
+    pub(crate) fn prepare_host_sql(
         selection: &'a wrix_state::context::Selection,
     ) -> Result<Self, Error> {
         Self::host_sql_policy(selection, true)
@@ -280,22 +308,12 @@ impl<'a> Authorization<'a> {
         let lease = store.lease(&namespace)?;
         let mut registry = store.lock()?;
         if admit {
-            if !registry.contains_key(&namespace) && registry.len() >= MAX_NAMESPACES {
-                return Err(Error::InvalidRegistration);
-            }
-            let policy = registry.entry(namespace.clone()).or_insert(Policy {
-                dolt: Access::Denied,
-                private_cache_read: Access::Denied,
-                common_cache_read: Access::Denied,
-                egress: Access::Denied,
-                compiler: Access::Denied,
-            });
-            policy.dolt = Access::Allowed;
-            registry.commit()?;
+            registry.prepare_sql(&namespace)?;
         }
-        if registry
-            .get(&namespace)
-            .is_none_or(|policy| policy.dolt != Access::Allowed)
+        if !admit
+            && registry
+                .get(&namespace)
+                .is_none_or(|policy| policy.dolt != Access::Allowed)
         {
             return Err(Error::PermissionDenied);
         }
@@ -309,6 +327,23 @@ impl<'a> Authorization<'a> {
             namespace: Namespace::from(selection.workspace().hash()),
             permission: Permission::Sql,
         })
+    }
+
+    /// Publish only after durable native registration and workspace cutover.
+    /// The namespace lease excludes concurrent issuance, registration and retirement.
+    pub(crate) fn commit_host_sql(&self) -> Result<(), Error> {
+        let Authority::Host {
+            _host: host,
+            _lease: lease,
+            ..
+        } = &self.authority
+        else {
+            return Err(Error::PermissionDenied);
+        };
+        if self.permission != Permission::Sql {
+            return Err(Error::PermissionDenied);
+        }
+        commit_sql_registration(host.roots().state(), &self.namespace, lease)
     }
 
     pub(crate) fn retire_sql(self) -> Result<(), Error> {

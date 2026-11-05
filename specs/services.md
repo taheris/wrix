@@ -212,6 +212,14 @@ Linux may retain narrow namespace Unix-socket aliases. Each generation's role
 listeners are established at creation through supported runtime mechanisms; the
 controller changes fixed authorized destinations, not live runtime publication.
 
+First-time host SQL preparation reserves a denied namespace entry while holding
+its policy lease. Publish SQL permission only after durable ready registration
+and successful workspace metadata cutover. Failed preparation must not make an
+unregistered namespace required for cold deployment readiness; it must not
+withdraw an already-existing SQL grant or alter other audience permissions.
+Missing or incomplete registrations for already-allowed namespaces still fail
+readiness closed.
+
 Host publication remains loopback-only. Backend-specific guest routes must be
 proven reachable without LAN/wildcard fallback, host firewall mutation, assumed
 cross-VM Unix sockets or treating host loopback as directly guest-reachable.
@@ -960,6 +968,15 @@ tenant or component compromise/fault isolation.
   retirement, without concurrent backend opens, grant revival, replay or
   fabricated execution completion.
   [test?](../crates/wrix-service/tests/host_control.rs::restart_preserves_uncertainty_and_single_backend_ownership)
+- Unregistered SQL preparation cannot publish permission or poison cold
+  controller readiness.
+  [test](../crates/wrix-service/src/control/sql_admission_test.rs::unregistered_preparation_never_publishes_sql_or_poison_cold_readiness)
+- Failed SQL re-preparation preserves existing authorization and other
+  audiences.
+  [test](../crates/wrix-service/src/control/sql_admission_test.rs::failed_repreparation_preserves_an_existing_sql_policy_and_other_audiences)
+- Publishing SQL permission requires durable ready registration without changing
+  other audience permissions.
+  [test](../crates/wrix-service/src/control/sql_registration_test.rs::sql_publication_requires_durable_ready_registration_and_preserves_peer_policy)
 - Namespace registration uses shared role listeners without dynamic runtime port
   publication, serving mount changes or container replacement.
   [test](../crates/wrix-service/tests/shared_startup.rs::registration::new_workspace_registers_without_container_replacement)

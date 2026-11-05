@@ -104,6 +104,19 @@ impl DerefMut for Guard {
     }
 }
 impl Guard {
+    /// Reserve capacity without advertising a database that is not ready yet.
+    pub(super) fn prepare_sql(&mut self, namespace: &Namespace) -> Result<(), Error> {
+        if !self.namespaces.contains_key(namespace) {
+            if self.namespaces.len() >= MAX_NAMESPACES {
+                return Err(Error::InvalidRegistration);
+            }
+            self.namespaces
+                .insert(namespace.clone(), super::denied_policy());
+            self.commit()?;
+        }
+        Ok(())
+    }
+
     pub(super) fn commit(&self) -> Result<(), Error> {
         self.store.commit(&self.namespaces)
     }

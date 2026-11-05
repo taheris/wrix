@@ -243,7 +243,7 @@ pub(super) fn register(plan: &Plan, runtime: &Runtime) -> Result<()> {
         .selection
         .as_ref()
         .ok_or(super::owner::Error::Invalid)?;
-    let authorization = Authorization::admit_host_sql(selection).map_err(io::Error::other)?;
+    let authorization = Authorization::prepare_host_sql(selection).map_err(io::Error::other)?;
     let manager = manager(plan, runtime, &authorization)?;
     let root = host_root(plan)?;
     let namespace = root
@@ -262,6 +262,7 @@ pub(super) fn register(plan: &Plan, runtime: &Runtime) -> Result<()> {
     super::managed::metadata::restore(plan.workspace().canonical_path(), credentials.database())?;
     fs::create_dir_all(plan.workspace().canonical_path().join(".beads/dolt"))?;
     super::managed::atomic_write(&plan.workspace().canonical_path().join(".beads/dolt/WRIX-MANAGED"), b"Host-managed shared Dolt namespace. Retained source is a recovery checkpoint, not a serving database.\n")?;
+    authorization.commit_host_sql().map_err(io::Error::other)?;
     Ok(())
 }
 
