@@ -98,6 +98,15 @@ breaking these account/configuration symlinks. This fix applies to rebuilt
 images; it does not mutate an existing worker or authorize collection of a host
 installed store.
 
+Copied settings retain their contextual runtime store references through a small
+configuration-root farm. Evaluation collects tokens without importing `.drv`
+files: an output context does not imply its recipe is already stored. The
+builder resolves output names against its declared native input closure; opaque
+source paths remain exact. Missing or out-of-closure references fail rather than
+becoming unprotected paths. Generated observation JSON stays a build input, not
+an installed root, and unrelated plaintext settings do not change the installed
+seed closure.
+
 The `/nix`, `/nix/var`, and `/nix/var/nix` ancestors are root-owned `0755`. The
 private store and secure builds directory are writable by the image's `wrix`
 account; the DB, temporary roots and pre-created GC lock are accessible without

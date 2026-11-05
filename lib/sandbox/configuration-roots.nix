@@ -1,53 +1,31 @@
-# Keep runtime references without installing generated JSON or plaintext inputs.
-{ lib }:
+# Resolve output tokens against the immutable input closure at build time.
+# Opaque source paths are already exact; do not expand .drv metadata into builds.
+{ pkgs }:
 inputs:
 let
-  references =
+  inherit (pkgs) lib;
+  candidates = import ./configuration-candidates.nix { inherit lib; } inputs;
+  knownRoot =
     value:
-    if builtins.isString value || builtins.isPath value || lib.isDerivation value then
-      let
-        text = builtins.toJSON value;
-        context = builtins.getContext text;
-        plain = builtins.unsafeDiscardStringContext text;
-        contextPaths = lib.concatMap (
-          path:
-          let
-            reference = context.${path};
-            source = builtins.appendContext path { ${path}.path = true; };
-            # Reading already-instantiated .drv metadata does not build outputs
-            # or require import-from-derivation evaluation.
-            metadata = builtins.import source;
-            outputs =
-              if reference.allOutputs or false then
-                map (output: output.outPath) metadata.all
-              else
-                map (name: metadata.${name}.outPath) (reference.outputs or [ ]);
-          in
-          lib.optional ((reference.path or false) || (reference.allOutputs or false)) source ++ outputs
-        ) (builtins.attrNames context);
-        contains = path: lib.hasInfix (builtins.unsafeDiscardStringContext path) plain;
-        tokens = map builtins.head (
-          builtins.filter builtins.isList (
-            builtins.split "(/nix/store/[0-9abcdfghijklmnpqrsvwxyz]{32}-[-a-zA-Z0-9+._?=]+)" plain
-          )
-        );
-        # Contexts can name files whose contents reference other input-closure
-        # paths. Preserve those references too; exportReferencesGraph still
-        # requires every requested path to belong to the declared input closure.
-        indirect = builtins.filter (
-          token:
-          !(lib.any (path: lib.hasPrefix (builtins.unsafeDiscardStringContext path) token) contextPaths)
-        ) tokens;
-      in
-      if context == { } then
-        [ ]
-      else
-        builtins.filter contains contextPaths ++ map (lib.strings.addContextFrom text) indirect
-    else if builtins.isAttrs value then
-      lib.concatMap references (builtins.attrValues value)
-    else if builtins.isList value then
-      lib.concatMap references value
-    else
-      [ ];
+    let
+      context = builtins.getContext value;
+      matches = builtins.filter (
+        path:
+        (context.${path}.path or false) && lib.hasPrefix path (builtins.unsafeDiscardStringContext value)
+      ) (builtins.attrNames context);
+      ordered = lib.sort (a: b: builtins.stringLength a < builtins.stringLength b) matches;
+      path = lib.last ordered;
+    in
+    if matches == [ ] then null else builtins.appendContext path { ${path}.path = true; };
+  known = lib.unique (builtins.filter (value: value != null) (map knownRoot candidates));
+  dynamic = builtins.filter (value: knownRoot value == null) candidates;
+  observations = pkgs.writeText "wrix-configuration-references.json" (builtins.toJSON dynamic);
+  sources = pkgs.writeText "wrix-configuration-sources.json" (builtins.toJSON known);
+  closure = pkgs.closureInfo { rootPaths = [ observations ]; };
 in
-lib.sort builtins.lessThan (lib.unique (references inputs))
+if candidates == [ ] then
+  null
+else
+  pkgs.runCommand "wrix-image-configuration" { } ''
+    ${lib.getBin pkgs.python3}/bin/python3 ${./configuration-roots.py} ${observations} ${closure}/store-paths "$out" ${sources}
+  ''

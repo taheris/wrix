@@ -228,7 +228,7 @@ let
   );
 
   # Copied configuration and scripts retain runtime tool roots, not their generated source packages.
-  configurationRoots = import ./configuration-roots.nix { inherit (pkgs) lib; } (
+  configurationRoot = import ./configuration-roots.nix { pkgs = imageBuilderPkgs; } (
     [
       mcpAvailable
       sharedNixTools
@@ -239,14 +239,7 @@ let
     ]
     ++ optional (agent == "pi") piSettings
   );
-  configurationContents = optional (configurationRoots != [ ]) (
-    pkgs.linkFarm "wrix-image-configuration" (
-      map (path: {
-        name = "share/wrix/image-inputs/${builtins.unsafeDiscardStringContext (baseNameOf path)}";
-        inherit path;
-      }) configurationRoots
-    )
-  );
+  configurationContents = optional (configurationRoot != null) configurationRoot;
 
   leafContents = [
     pkgs.dockerTools.usrBinEnv

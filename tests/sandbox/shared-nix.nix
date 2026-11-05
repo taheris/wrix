@@ -13,9 +13,25 @@ let
     toString
     ;
   resources = import ../lib/image-resources.nix { };
+  coldLib = builtins.path {
+    path = pkgs.path + "/lib";
+    name = "configuration-nixpkgs-lib";
+  };
   configOnly = linuxPkgs.writeText "configuration-only-extension.js" ''
     export default function () {}
   '';
+  questionName = linuxPkgs.writeText "configuration?native-name.js" "native";
+  multiOutput =
+    pkgs.runCommand "configuration-multiple-outputs"
+      {
+        outputs = [
+          "out"
+          "dev"
+        ];
+      }
+      ''
+        mkdir "$out" "$dev"
+      '';
   mkFixture =
     agent: settings:
     wrix.mkSandbox {
@@ -41,9 +57,57 @@ let
     env.WRIX_CONFIGURATION_REFERENCE = "${configOnly}";
     env.WRIX_PLAINTEXT_VARIANT = "does-not-change-the-installed-store";
   };
-  configurationRoots = import (resources.sandbox.path + "/configuration-roots.nix") {
-    inherit (pkgs) lib;
-  };
+  configurationRoots = import (resources.sandbox.path + "/configuration-roots.nix") { inherit pkgs; };
+  referenceCases = [
+    {
+      input = questionName;
+      expected = [ (toString questionName) ];
+    }
+    {
+      input = "${multiOutput.dev}/include";
+      expected = [ (toString multiOutput.dev) ];
+    }
+    {
+      input.nested = [
+        configOnly
+        "${configOnly}/bin/tool"
+      ];
+      expected = [ (toString configOnly) ];
+    }
+    {
+      input = "${configOnly}?annotation";
+      expected = [ (toString configOnly) ];
+    }
+    {
+      input = configOnly.drvPath;
+      expected = [ configOnly.drvPath ];
+    }
+    {
+      input = pkgs.lib.strings.addContextFrom configOnly "plaintext";
+      expected = [ ];
+    }
+    {
+      input = builtins.unsafeDiscardStringContext "${configOnly}";
+      expected = [ ];
+    }
+    {
+      input = [
+        null
+        true
+        1
+        { ignored = "plaintext"; }
+      ];
+      expected = [ ];
+    }
+  ];
+  referenceResults = pkgs.writeText "configuration-reference-cases.json" (
+    toJSON (
+      map (case: {
+        root = configurationRoots case.input;
+        expected = map builtins.unsafeDiscardOutputDependency case.expected;
+      }) referenceCases
+    )
+  );
   archive = import (resources.sandbox.path + "/image.nix") {
     pkgs = linuxPkgs;
     hostPkgs = pkgs;
@@ -86,26 +150,6 @@ let
     ++ [ ((imageCase archive) // { required_paths = [ (toString configOnly) ]; }) ];
   casesFile = pkgs.writeText "shared-nix-images.json" (toJSON cases);
   api =
-    assert
-      configurationRoots {
-        nested = [
-          configOnly
-          "${configOnly}/bin/tool"
-        ];
-      } == [
-        (toString configOnly)
-      ];
-    assert configurationRoots "${configOnly}?annotation" == [ (toString configOnly) ];
-    assert configurationRoots configOnly.drvPath == [ configOnly.drvPath ];
-    assert configurationRoots (pkgs.lib.strings.addContextFrom configOnly "plaintext") == [ ];
-    assert configurationRoots (builtins.unsafeDiscardStringContext "${configOnly}") == [ ];
-    assert
-      configurationRoots [
-        null
-        true
-        1
-        { ignored = "plaintext"; }
-      ] == [ ];
     assert wrix.capabilities.privateNix == 1;
     assert wrix.capabilities.sharedNix == 1;
     assert all (
@@ -125,7 +169,22 @@ let
     assert changed.image.sharedNix.seed_closure == plaintextChanged.image.sharedNix.seed_closure;
     assert changed.image.ociLayout.storeLayers == plaintextChanged.image.ociLayout.storeLayers;
     assert changed.image.source != plaintextChanged.image.source;
-    pkgs.runCommandLocal "shared-nix-api" { } ''touch "$out"'';
+    pkgs.runCommandLocal "shared-nix-api" { } ''
+      # The legacy evaluator defaults to read-only. The enclosing sandbox
+      # supplies these immutable source files; no live daemon/store is used.
+      ${pkgs.lib.getBin pkgs.nix}/bin/nix-instantiate --eval --strict --json --store dummy:// --option allow-import-from-derivation false --expr '
+        let lib = import ${coldLib}; in
+        import ${./configuration-cold.nix} {
+          inherit lib;
+          candidates = import ${../../lib/sandbox/configuration-candidates.nix} { inherit lib; };
+          system = "${pkgs.stdenv.hostPlatform.system}";
+        }
+      ' > cold.json
+      ${pkgs.lib.getBin pkgs.python3}/bin/python3 -c 'import json; assert json.load(open("cold.json")) is True'
+      ${pkgs.lib.getBin pkgs.python3}/bin/python3 ${./test_configuration_roots.py} ${../../lib/sandbox/configuration-roots.py}
+      ${pkgs.lib.getBin pkgs.python3}/bin/python3 ${./configuration-roots-native.py} ${referenceResults}
+      touch "$out"
+    '';
   artifacts =
     pkgs.runCommandLocal "shared-nix-image-contract" { nativeBuildInputs = [ pkgs.python3 ]; }
       ''
