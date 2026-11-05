@@ -242,6 +242,8 @@ let
     "script-syntax"
   ];
 
+  dockerImageStreamCheck = import ./sandbox/image-stream.nix { inherit pkgs; };
+
   ciChecks =
     rustChecks
     // {
@@ -250,6 +252,7 @@ let
       devshell-cli-selection = devshellCliSelection;
       host-service-package-binding = import ./services/package-binding.nix { inherit pkgs wrix; };
       shared-nix-host-binding = import ./store/pool-binding.nix { inherit pkgs wrix; };
+      docker-image-stream = dockerImageStreamCheck;
     }
     // builtins.intersectAttrs { private-nix-artifacts = null; } loomTests.checks
     // {
@@ -315,7 +318,7 @@ let
         inherit (wrix) rustPackage;
       };
       service-image-incremental = import ./services/image-incremental.nix { inherit pkgs; };
-      docker-image-stream = import ./sandbox/image-stream.nix { inherit pkgs; };
+      docker-image-stream = dockerImageStreamCheck.unit;
       image-assembly-native = sandboxImageChecks.imageAssemblyNativeCheck;
       image-verifier-realization = sandboxImageChecks.metadataRealizationCheck;
       oci-layout-builder = pkgs.runCommandLocal "oci-layout-builder" { } ''
@@ -657,6 +660,7 @@ let
           host-service-package-binding
           cache-celler-packaging
           shared-nix-host-binding
+          docker-image-stream
           image-builds
           ${if ciChecks ? private-nix-artifacts then "private-nix-artifacts" else ""}
           linux-pasta-port-forwarding-disabled

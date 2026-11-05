@@ -467,8 +467,9 @@ roots. [system](test-ci:test-wrix-images-source-artifacts)
   as the image startup command. Bootstrap execution and capability-drop behavior
   are owned by `sandbox.md` [check](test-ci:test-image-entrypoint-command)
 - `wrix.prekHooks` and `wrix.prePushChecks` both land in every profile image's
-  store closure [check](test-ci:test-prek-hooks-closure); the full profile/agent
-  matrix is also checked in emitted layers
+  store closure [check](test-ci:test-prek-hooks-closure)
+- The full profile/agent matrix also contains `wrix.prekHooks` and
+  `wrix.prePushChecks` in emitted layers
   [system](test-ci:test-prek-hooks-artifacts)
 - The Linux entrypoint sets `core.hooksPath` for the `/workspace` Git repository
   to the `wrix.prekHooks` store path when `.pre-commit-config.yaml` is present
@@ -492,14 +493,16 @@ roots. [system](test-ci:test-wrix-images-source-artifacts)
   platform source kind (`nix-descriptor` on Linux, `docker-archive` on Darwin),
   including service/support images such as `wrix-builder`. Constructor metadata
   is checked without realizing image payloads
-  [check](test-ci:test-wrix-images-source-kind); emitted descriptors and native
-  archive digests are checked separately
+  [check](test-ci:test-wrix-images-source-kind)
+- Emitted descriptors and native archive digests retain separate coverage for
+  every Wrix-managed image source covered by this spec
   [system](test-ci:test-wrix-images-source-artifacts)
 - Wrix-managed images carry wrix-managed image labels, including
   `wrix.managed=true` and `wrix.image.kind`; profile images also carry
   `wrix.profile.name` and `wrix.agent.kind`. Constructor labels are checked
-  without realizing image payloads [check](test-ci:test-wrix-image-labels);
-  emitted OCI configs retain independent full-matrix coverage
+  without realizing image payloads [check](test-ci:test-wrix-image-labels)
+- Emitted OCI configs retain independent full-matrix coverage for the
+  Wrix-managed, profile and agent labels above
   [system](test-ci:test-wrix-image-label-artifacts)
 
 ## Requirements

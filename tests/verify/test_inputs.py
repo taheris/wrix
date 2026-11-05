@@ -93,12 +93,26 @@ class VerifierInputs(unittest.TestCase):
         for program, target in [(VERIFY, KNOWN), (CI, CI_KNOWN)]:
             inputs = self.query(program)
             self.assertIn(target, inputs)
+            self.assertIn("/**/*.nix", inputs[target])
             for paths in inputs.values():
                 self.assertIsInstance(paths, list)
                 self.assertTrue(all(isinstance(path, str) for path in paths))
-                self.assertIn("/**/*.nix", paths)
                 self.assertIn("/flake.lock", paths)
                 self.assertIn("/tests/lib/verifier.sh", paths)
+
+    def test_image_recipes_retain_scoped_nix_inputs_without_a_blanket_repo_glob(self):
+        targets = ["test-wrix-images-source-kind", "test-image-agent-marker"]
+        inputs = self.query(CI, *targets)
+        self.assertEqual(set(inputs), set(targets))
+        for paths in inputs.values():
+            self.assertNotIn("/**/*.nix", paths)
+            self.assertIn("/lib/sandbox/", paths)
+            self.assertIn("/modules/flake/", paths)
+            self.assertIn("/tests/default.nix", paths)
+            self.assertIn("/specs/image-builder.md", paths)
+        self.assertNotIn("/crates/", inputs["test-image-agent-marker"])
+        self.assertIn("/crates/", inputs["test-wrix-images-source-kind"])
+        self.assertIn("/lib/services/", inputs["test-wrix-images-source-kind"])
 
     def test_unknown_id_rejects_whole_description_before_output(self):
         for program, target in [(VERIFY, KNOWN), (CI, CI_KNOWN)]:
