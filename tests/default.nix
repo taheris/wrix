@@ -243,6 +243,7 @@ let
   ];
 
   dockerImageStreamCheck = import ./sandbox/image-stream.nix { inherit pkgs; };
+  layerPlannerChecks = import ./sandbox/layer-planner.nix { inherit pkgs; };
 
   ciChecks =
     rustChecks
@@ -253,6 +254,8 @@ let
       host-service-package-binding = import ./services/package-binding.nix { inherit pkgs wrix; };
       shared-nix-host-binding = import ./store/pool-binding.nix { inherit pkgs wrix; };
       docker-image-stream = dockerImageStreamCheck;
+      layer-planner-differential = layerPlannerChecks.differential;
+      layer-planner-upstream = layerPlannerChecks.upstream;
     }
     // builtins.intersectAttrs { private-nix-artifacts = null; } loomTests.checks
     // {
@@ -319,6 +322,7 @@ let
       service-image-incremental = import ./services/image-incremental.nix { inherit pkgs; };
       docker-image-stream = dockerImageStreamCheck.unit;
       image-tools-native = import ./sandbox/image-tools.nix { inherit pkgs; };
+      layer-planner-native = layerPlannerChecks.native;
       image-assembly-native = sandboxImageChecks.imageAssemblyNativeCheck;
       image-verifier-realization = sandboxImageChecks.metadataRealizationCheck;
       oci-layout-builder = pkgs.runCommandLocal "oci-layout-builder" { } ''

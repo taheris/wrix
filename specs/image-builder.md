@@ -376,6 +376,25 @@ roots. [system](test-ci:test-wrix-images-source-artifacts)
 
 ## Success Criteria
 
+- Both default size-based and custom pipeline layer planning use native Rust,
+  retaining their distinct algorithms, path exclusion rules and layer budgets.
+  Acyclic custom pipelines preserve upstream ordering. Cyclic components retain
+  every path deterministically; default equal-closure-size ties use canonical
+  path order instead of upstream hash-set iteration.
+  [test](../crates/wrix-image-tools/src/planner/test.rs::documented_popularity_recurrence_and_layer_merge_match)
+  [test](../crates/wrix-image-tools/src/planner/test/property.rs::generated_cyclic_and_rootless_graphs_retain_paths_deterministically_in_all_partitions)
+  [test](../crates/wrix-image-tools/src/planner/auto/test.rs::default_algorithm_is_size_based_not_custom_popularity_ranking)
+  [system](verify:sandbox.layer-planner-differential)
+- Minimal default/custom image recipes have no igraph, Plotly, Narwhals or
+  dataframe-backend build dependencies from layer planning. Explicitly selected
+  profile packages remain independent of this planner-only boundary.
+  [check](verify:sandbox.layer-planner-graph)
+- Emitted native-planner archives preserve payload bytes and honest layer
+  digests, retain inherited paths exactly once, and reproduce byte-identically
+  when only the output derivation name changes. The unchanged upstream test
+  suite remains independent reference verification, not an image dependency.
+  [check](verify:sandbox.layer-planner-native)
+  [system](verify:sandbox.layer-planner-differential)
 - Native build-platform Rust helpers compute OCI configuration digests without a
   Python runtime. Hashing removes only insignificant JSON whitespace, retaining
   string escapes, number spelling, duplicate keys and object order.

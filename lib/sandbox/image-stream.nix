@@ -2,6 +2,7 @@
 { pkgs }:
 let
   inherit (pkgs) lib;
+  baseDockerTools = import ./docker-tools.nix { inherit pkgs; };
   upstreamSource = pkgs.path + "/pkgs/build-support/docker/stream_layered_image.py";
   indent =
     text:
@@ -90,14 +91,14 @@ let
 in
 {
   inherit upstreamSource patchedSource;
-  dockerTools = pkgs.dockerTools // {
+  dockerTools = baseDockerTools // {
     streamLayeredImage = lib.makeOverridable (
-      args: patchStream (pkgs.dockerTools.streamLayeredImage args)
+      args: patchStream (baseDockerTools.streamLayeredImage args)
     );
     buildLayeredImage = lib.makeOverridable (
       args:
       let
-        image = pkgs.dockerTools.buildLayeredImage args;
+        image = baseDockerTools.buildLayeredImage args;
         stream = patchStream image.stream;
       in
       image.overrideAttrs (previous: {

@@ -20,7 +20,10 @@ let
     writeText
     ;
 
-  imageBuilderPkgs = if asTarball then hostPkgs else pkgs;
+  nativeImageBuilderPkgs = if asTarball then hostPkgs else pkgs;
+  imageBuilderPkgs = nativeImageBuilderPkgs // {
+    dockerTools = import ../sandbox/docker-tools.nix { pkgs = nativeImageBuilderPkgs; };
+  };
   compiler = import ../../crates/wrix-service/src/lifecycle/drain/native/compiler.nix {
     inherit pkgs;
   };

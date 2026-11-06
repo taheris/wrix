@@ -11,7 +11,9 @@
 # The archive remains available for Darwin; Linux composes cached OCI blobs.
 {
   pkgs,
-  imageBuilderPkgs ? pkgs,
+  imageBuilderPkgs ? pkgs // {
+    dockerTools = import ./docker-tools.nix { inherit pkgs; };
+  },
 }:
 
 let

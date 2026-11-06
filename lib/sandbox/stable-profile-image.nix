@@ -9,7 +9,9 @@
 # Darwin uses the archive chain; Linux references the parent's OCI blobs.
 {
   pkgs,
-  imageBuilderPkgs ? pkgs,
+  imageBuilderPkgs ? pkgs // {
+    dockerTools = import ./docker-tools.nix { inherit pkgs; };
+  },
   profile,
 }:
 
@@ -112,10 +114,9 @@ let
   # across base (64) + stable-profile (40) + agent (8) + leaf (15).
   maxLayers = 40;
 
-  # Split only this tier's own paths into layers. dockerMakeLayers (the custom
-  # layeringPipeline path) does not dedup fromImage the way the default
-  # popularity-contest path does, so remove_paths strips the lower tier's
-  # (wrix-base-image's) closure first — a path base already ships is never
+  # Split only this tier's own paths into layers. Neither upstream planner
+  # excludes fromImage store paths automatically. remove_paths strips the lower
+  # tier's (wrix-base-image's) closure first — a path base already ships is never
   # re-emitted here.
   layeringPipeline =
     imageBuilderPkgs.runCommandLocal "wrix-stable-profile-${profile.name}-layering.json"

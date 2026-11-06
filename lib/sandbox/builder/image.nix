@@ -23,7 +23,10 @@ let
     writeTextDir
     ;
 
-  imageBuilderPkgs = if asTarball then hostPkgs else pkgs;
+  nativeImageBuilderPkgs = if asTarball then hostPkgs else pkgs;
+  imageBuilderPkgs = nativeImageBuilderPkgs // {
+    dockerTools = import ../docker-tools.nix { pkgs = nativeImageBuilderPkgs; };
+  };
 
   # Static busybox for bootstrapping when /nix volume is empty
   # Provides /bin/sh and basic commands independent of /nix/store
@@ -136,7 +139,7 @@ let
     if asTarball then
       imageBuilderPkgs.dockerTools.buildLayeredImage
     else
-      dockerTools.streamLayeredImage;
+      imageBuilderPkgs.dockerTools.streamLayeredImage;
   rawImage = buildImage {
     name = imageName;
     tag = "latest";
