@@ -1,10 +1,9 @@
-{ pkgs }:
+{ pkgs, fixtureRuntime }:
 let
   backend =
     name:
-    pkgs.writeScriptBin name ''
-      #!${pkgs.python3}/bin/python3
-      ${builtins.readFile ./backend-runtime.py}
+    pkgs.writeShellScriptBin name ''
+      exec ${fixtureRuntime}/bin/wrix-native-fixtures backend-runtime ${name} "$@"
     '';
   manager = pkgs.writeShellScriptBin "systemctl" ''
     set -euo pipefail

@@ -43,11 +43,12 @@ impl Maintenance {
         let mut policy: serde_json::Value = serde_json::from_slice(&fs::read(&registry)?)?;
         policy["version"] = serde_json::json!(1);
         fs::write(&registry, serde_json::to_vec(&policy)?)?;
-        let script =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/controller-maintenance.py");
-        let child = Command::new("python3")
-            .arg(&script)
-            .arg("serve")
+        let runtime = PathBuf::from(
+            std::env::var_os("WRIX_TEST_FIXTURE_RUNTIME")
+                .ok_or("missing native fixture runtime")?,
+        );
+        let child = Command::new(&runtime)
+            .args(["maintenance", "serve"])
             .arg(&control)
             .arg(package.executable())
             .env("PATH", path)
@@ -63,8 +64,8 @@ impl Maintenance {
         fs::write(
             &adapter,
             format!(
-                "#!/usr/bin/env bash\nset -euo pipefail\nexec python3 '{}' request '{}' \"$@\"\n",
-                script.display(),
+                "#!/usr/bin/env bash\nset -euo pipefail\nexec '{}' maintenance request '{}' \"$@\"\n",
+                runtime.display(),
                 control.join("manager.sock").display()
             ),
         )?;

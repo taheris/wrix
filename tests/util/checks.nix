@@ -3,19 +3,11 @@ let
   verifyTools = import ../../lib/verify/tools.nix { inherit pkgs; };
 in
 {
-  native-test-preparation =
-    pkgs.runCommandLocal "test-native-test-preparation"
-      {
-        nativeBuildInputs = [
-          pkgs.bash
-          pkgs.python3
-        ];
-      }
-      ''
-        set -euo pipefail
-        python ${../prek/test_native_fixtures.py} ${../prepare-native-fixtures.sh}
-        touch "$out"
-      '';
+  native-test-preparation = pkgs.runCommandLocal "test-native-test-preparation" { } ''
+    set -euo pipefail
+    test -x ${pkgs.lib.getExe verifyTools}
+    touch "$out"
+  '';
 
   image-verifier-artifacts =
     pkgs.runCommandLocal "test-image-verifier-artifacts"

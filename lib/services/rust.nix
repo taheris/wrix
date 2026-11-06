@@ -217,8 +217,34 @@ let
     '';
   });
 
+  fixtureRuntime = workspace.bin.overrideAttrs (old: {
+    pname = "wrix-native-fixtures";
+    buildPhase =
+      assert pkgs.lib.assertMsg (
+        builtins.length (pkgs.lib.splitString "cargoWithProfile build" old.buildPhase) == 2
+      ) "Crane native fixture build command changed; review the explicit example target";
+      builtins.replaceStrings
+        [ "cargoWithProfile build" ]
+        [ "cargoWithProfile build -p wrix-service --example wrix-native-fixtures" ]
+        old.buildPhase;
+    doCheck = true;
+    checkPhase = ''
+      runHook preCheck
+      cargoWithProfile test --offline --locked -p wrix-service --example wrix-native-fixtures
+      test ! -e ${workspace.bin}/bin/wrix-native-fixtures
+      runHook postCheck
+    '';
+    installPhase = ''
+      mkdir -p "$out/bin"
+      cp "target/''${CARGO_BUILD_TARGET:+$CARGO_BUILD_TARGET/}release/examples/wrix-native-fixtures" "$out/bin/"
+    '';
+    meta = old.meta // {
+      mainProgram = "wrix-native-fixtures";
+    };
+  });
+
   fixtures = import ../../tests/prek/native-fixtures.nix {
-    inherit pkgs;
+    inherit pkgs fixtureRuntime;
     celler = cellerPackage;
     packagedWrix = wrixPackage;
     controller = fixtureController;

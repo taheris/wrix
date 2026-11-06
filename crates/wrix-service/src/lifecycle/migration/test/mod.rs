@@ -15,7 +15,19 @@ impl Fixture {
         let root = tempfile::tempdir()?;
         fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))?;
         let binary = root.path().join("podman-alias");
-        fs::write(&binary, include_str!("runtime.py"))?;
+        let runtime = std::env::var_os("WRIX_TEST_FIXTURE_RUNTIME")
+            .ok_or("missing native fixture runtime; run through nextest packaging setup")?;
+        let quote = |path: &std::path::Path| {
+            format!("'{}'", path.to_string_lossy().replace('\'', "'\"'\"'"))
+        };
+        fs::write(
+            &binary,
+            format!(
+                "#!/usr/bin/env bash\nset -euo pipefail\nexec {} inventory {} \"$@\"\n",
+                quote(std::path::Path::new(&runtime)),
+                quote(root.path()),
+            ),
+        )?;
         fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))?;
         let mut containers = json!({});
         for (name, workspace, running) in

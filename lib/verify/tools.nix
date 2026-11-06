@@ -7,6 +7,7 @@ import ../util/rust-tool.nix {
   extraSources = [
     ../../loom.toml
     ../../tests/loom-nextest-file-targets.sh
+    ../../tests/prepare-native-fixtures.sh
     ../../lib/sandbox/install-known-hosts.sh
     ../../lib/util/git-ssh-setup.sh
   ];

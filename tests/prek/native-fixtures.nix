@@ -1,6 +1,7 @@
 {
   pkgs,
   packagedWrix,
+  fixtureRuntime,
   celler,
   devshellHook ? null,
   controller ? null,
@@ -20,15 +21,15 @@ let
     WRIX_TEST_SCCACHE = "${
       import ../../crates/wrix-service/src/lifecycle/drain/native/compiler.nix { inherit pkgs; }
     }/bin/sccache";
-    WRIX_TEST_SQL_CLIENT = pkgs.writeScript "native-sql-wire-client" ''
-      #!${pkgs.python3}/bin/python3
-      ${builtins.readFile ../../crates/wrix-cli/tests/fixtures/sql-client.py}
+    WRIX_TEST_FIXTURE_RUNTIME = "${fixtureRuntime}/bin/wrix-native-fixtures";
+    WRIX_TEST_SQL_CLIENT = pkgs.writeShellScript "native-sql-wire-client" ''
+      exec ${fixtureRuntime}/bin/wrix-native-fixtures sql-client "$@"
     '';
   }
   // optionalAttrs (controller != null && serviceImage != null) {
     WRIX_TEST_CONTROLLER_BINDING = import ../../lib/services/control-binding.nix {
       inherit pkgs controller;
-      runtime = import ./controller-runtime.nix { inherit pkgs; };
+      runtime = import ./controller-runtime.nix { inherit pkgs fixtureRuntime; };
       image = serviceImage;
     };
   }
@@ -75,6 +76,10 @@ in
       {
         name = "sql-client";
         path = environment.WRIX_TEST_SQL_CLIENT;
+      }
+      {
+        name = "fixture-runtime";
+        path = environment.WRIX_TEST_FIXTURE_RUNTIME;
       }
     ]
     ++ optionals (controller != null && serviceImage != null) [

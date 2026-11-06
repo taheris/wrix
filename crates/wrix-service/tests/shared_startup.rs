@@ -110,7 +110,12 @@ impl Fixture {
         fs::create_dir(root.path().join("home"))?;
         fs::create_dir(root.path().join("host-context"))?;
         for name in ["podman", "container"] {
-            fs::write(bin.join(name), include_str!("fixtures/shared-runtime.py"))?;
+            fs::write(
+                bin.join(name),
+                format!(
+                    "#!/usr/bin/env bash\nset -euo pipefail\nexec \"${{WRIX_TEST_FIXTURE_RUNTIME:?native fixture must be prepared}}\" shared-runtime {name} \"$@\"\n"
+                ),
+            )?;
             set_mode(&bin.join(name), 0o755)?;
         }
         native_backend::install(root.path())?;
@@ -158,7 +163,10 @@ impl Fixture {
             [b"#!/usr/bin/env bash\n".as_slice(), &rendered.stdout].concat(),
         )?;
         set_mode(&bin.join("bd"), 0o755)?;
-        fs::write(bin.join("wrix"), include_str!("fixtures/shared-cli.py"))?;
+        fs::write(
+            bin.join("wrix"),
+            "#!/usr/bin/env bash\nset -euo pipefail\nexec \"${WRIX_TEST_FIXTURE_RUNTIME:?native fixture must be prepared}\" shared-cli \"$@\"\n",
+        )?;
         set_mode(&bin.join("wrix"), 0o755)?;
         service_binding::create(root.path(), &bin, "nix-descriptor")?;
         let first = root.path().join("first");

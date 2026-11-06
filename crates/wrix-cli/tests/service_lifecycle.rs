@@ -117,7 +117,9 @@ fn public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql() -
     for name in ["podman", "container"] {
         fs::write(
             bin.join(name),
-            include_str!("../../wrix-service/tests/fixtures/shared-runtime.py"),
+            format!(
+                "#!/usr/bin/env bash\nset -euo pipefail\nexec \"${{WRIX_TEST_FIXTURE_RUNTIME:?native fixture must be prepared}}\" shared-runtime {name} \"$@\"\n"
+            ),
         )?;
         set_mode(&bin.join(name), 0o755)?;
     }
