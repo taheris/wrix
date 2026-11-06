@@ -2,6 +2,7 @@
 
 let
   inherit (pkgs) dockerTools runCommandLocal writeText;
+  imageToolsContract = import ../sandbox/image-tools.nix { inherit pkgs; };
   mkLayout = import ../../lib/sandbox/oci-layout.nix { inherit pkgs; };
   mkService =
     supervisor:
@@ -63,8 +64,7 @@ runCommandLocal "service-image-incremental"
   ''
     set -euo pipefail
     export HOME="$TMPDIR"
-    WRIX_CONFIG_DIGEST=${../../lib/sandbox/config-digest.py} \
-      python ${../sandbox/test_config_digest.py}
+    test -e ${imageToolsContract}
     skopeo --insecure-policy copy --quiet \
       "docker-archive:${archive}" "oci:$TMPDIR/roundtrip:latest"
     actual=$(skopeo inspect --raw "oci:$TMPDIR/roundtrip:latest" | jq -r '.config.digest')

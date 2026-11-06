@@ -4,6 +4,7 @@
 inputs:
 let
   inherit (pkgs) lib;
+  imageTools = import ./image-tools.nix { pkgs = pkgs.buildPackages; };
   candidates = import ./configuration-candidates.nix { inherit lib; } inputs;
   knownRoot =
     value:
@@ -27,5 +28,5 @@ if candidates == [ ] then
   null
 else
   pkgs.runCommand "wrix-image-configuration" { } ''
-    ${lib.getBin pkgs.python3}/bin/python3 ${./configuration-roots.py} ${observations} ${closure}/store-paths "$out" ${sources}
+    ${lib.getExe imageTools} configuration-roots ${observations} ${closure}/store-paths "$out" ${sources}
   ''

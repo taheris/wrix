@@ -4,6 +4,7 @@ members = [
   "crates/wrix-cache",
   "crates/wrix-cli",
   "crates/wrix-core",
+  "crates/wrix-image-tools",
   "crates/wrix-notify",
   "crates/wrix-sandbox",
   "crates/wrix-service",

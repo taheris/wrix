@@ -319,6 +319,7 @@ let
       };
       service-image-incremental = import ./services/image-incremental.nix { inherit pkgs; };
       docker-image-stream = dockerImageStreamCheck.unit;
+      image-tools-native = import ./sandbox/image-tools.nix { inherit pkgs; };
       image-assembly-native = sandboxImageChecks.imageAssemblyNativeCheck;
       image-verifier-realization = sandboxImageChecks.metadataRealizationCheck;
       oci-layout-builder = pkgs.runCommandLocal "oci-layout-builder" { } ''

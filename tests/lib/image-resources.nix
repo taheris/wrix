@@ -21,6 +21,15 @@ let
     ];
   imageInputs = scopedNix (
     sandbox.inputs
+    ++ [
+      "/Cargo.toml"
+      "/Cargo.lock"
+      "/clippy.toml"
+      "/crates/**/Cargo.toml"
+      "/crates/**/lib.rs"
+      "/crates/**/main.rs"
+      "/crates/wrix-image-tools/"
+    ]
     ++ mcp.inputs
     ++ sandboxFixtures.inputs
     ++ directories [

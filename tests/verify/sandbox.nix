@@ -38,6 +38,7 @@ in
 {
   "sandbox.image-verifier-realization" = nativeCheck "image-verifier-realization";
   "sandbox.oci-layout-builder" = nativeCheck "oci-layout-builder";
+  "sandbox.image-tools-native" = nativeCheck "image-tools-native";
   "sandbox.private-nix-api" = nativeCheck "private-nix-api";
   "sandbox.private-nix-state-preservation" = nativeCheck "private-nix-state-preservation";
   "sandbox.private-nix-image-roots" = nativeCheck "private-nix-image-roots";

@@ -376,6 +376,19 @@ roots. [system](test-ci:test-wrix-images-source-artifacts)
 
 ## Success Criteria
 
+- Native build-platform Rust helpers compute OCI configuration digests without a
+  Python runtime. Hashing removes only insignificant JSON whitespace, retaining
+  string escapes, number spelling, duplicate keys and object order.
+  [test](../crates/wrix-image-tools/src/digest/test.rs::string_whitespace_and_escapes_are_retained)
+  [test](../crates/wrix-image-tools/src/digest/test.rs::numbers_escapes_and_key_order_are_not_normalized)
+  [check](verify:sandbox.image-tools-native)
+- Runtime configuration tokens resolve only against their declared native input
+  closure, using its longest matching root rather than guessed derivation names.
+  Opaque native source paths are checked without following source symlinks;
+  malformed and out-of-closure references fail before root publication.
+  [test](../crates/wrix-image-tools/src/roots/test.rs::longest_native_prefix_wins_without_name_guessing)
+  [test](../crates/wrix-image-tools/src/roots/test.rs::missing_native_sources_fail_before_publication)
+  [check](verify:sandbox.image-tools-native)
 - On Linux, the profile image builder emits a JSON image descriptor
   (`source_kind = "nix-descriptor"`) as the selected source path; the descriptor
   points at a prebuilt OCI layout but is not itself the raw image output, a

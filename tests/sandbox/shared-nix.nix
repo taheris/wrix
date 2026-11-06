@@ -181,7 +181,7 @@ let
         }
       ' > cold.json
       ${pkgs.lib.getBin pkgs.python3}/bin/python3 -c 'import json; assert json.load(open("cold.json")) is True'
-      ${pkgs.lib.getBin pkgs.python3}/bin/python3 ${./test_configuration_roots.py} ${../../lib/sandbox/configuration-roots.py}
+      test -e ${import ./image-tools.nix { inherit pkgs; }}
       ${pkgs.lib.getBin pkgs.python3}/bin/python3 ${./configuration-roots-native.py} ${referenceResults}
       touch "$out"
     '';

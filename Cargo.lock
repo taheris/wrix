@@ -3494,6 +3494,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "wrix-image-tools"
+version = "0.1.0"
+dependencies = [
+ "displaydoc",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "wrix-notify"
 version = "0.1.0"
 dependencies = [
