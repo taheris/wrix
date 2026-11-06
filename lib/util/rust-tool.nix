@@ -4,6 +4,7 @@
   package,
   description,
   extraSources ? [ ],
+  nativeCheckInputs ? [ ],
 }:
 let
   inherit (pkgs) lib;
@@ -42,6 +43,7 @@ pkgs.rustPlatform.buildRustPackage {
     };
   };
   nativeBuildInputs = [ pkgs.bash ];
+  inherit nativeCheckInputs;
   cargoBuildFlags = [
     "--package"
     package

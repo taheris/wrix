@@ -1,5 +1,7 @@
 { pkgs }:
-
+let
+  verifyTools = import ../../lib/verify/tools.nix { inherit pkgs; };
+in
 {
   native-test-preparation =
     pkgs.runCommandLocal "test-native-test-preparation"
@@ -26,19 +28,13 @@
         touch "$out"
       '';
 
-  known-hosts-image-local =
-    pkgs.runCommandLocal "known-hosts-image-local"
-      {
-        nativeBuildInputs = [
-          pkgs.bash
-          pkgs.python3
-        ];
-      }
-      ''
-        set -euo pipefail
-        python ${./test_known_hosts.py} ${../../lib/sandbox/install-known-hosts.sh}
-        touch "$out"
-      '';
+  known-hosts-image-local = pkgs.runCommandLocal "known-hosts-image-local" { } ''
+    set -euo pipefail
+    # Building the native toolkit executes the Rust installer contract tests
+    # against the declared original shell source on this build platform.
+    test -x ${pkgs.lib.getExe verifyTools}
+    touch "$out"
+  '';
 
   known-hosts-runtime-store-purity = pkgs.runCommandLocal "known-hosts-runtime-store-purity" { } ''
     set -euo pipefail

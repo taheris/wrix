@@ -29,12 +29,14 @@ let
       "crates/wrix-notify/tests" = ../../crates/wrix-notify/tests;
       "crates/wrix-sandbox/tests" = ../../crates/wrix-sandbox/tests;
       "crates/wrix-service/tests" = ../../crates/wrix-service/tests;
+      "crates/wrix-verify-tools/tests" = ../../crates/wrix-verify-tools/tests;
       ".config/nextest.toml" = ../../.config/nextest.toml;
       "loom.toml" = ../../loom.toml;
       "tests/loom-nextest-file-targets.sh" = ../../tests/loom-nextest-file-targets.sh;
       "tests/prepare-native-fixtures.sh" = ../../tests/prepare-native-fixtures.sh;
       "tests/store/cleanup-native-fixtures.py" = ../../tests/store/cleanup-native-fixtures.py;
       "lib/util/git-ssh-setup.sh" = ../util/git-ssh-setup.sh;
+      "lib/sandbox/install-known-hosts.sh" = ../sandbox/install-known-hosts.sh;
       "lib/beads/package.nix" = ../beads/package.nix;
       "lib/services/host-nix-config.sh" = ./host-nix-config.sh;
       "lib/sandbox/darwin/nix-bridge.c" = ../sandbox/darwin/nix-bridge.c;
