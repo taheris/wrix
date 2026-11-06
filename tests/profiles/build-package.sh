@@ -102,18 +102,18 @@ set_expected_rustc() {
   local source="$1"
   local expected="$2"
 
-  python3 - "$source" "$expected" <<'PY'
-from pathlib import Path
-import sys
-
-source = Path(sys.argv[1])
-expected = sys.argv[2]
-marker = "@EXPECTED_RUSTC@"
-contents = source.read_text(encoding="utf-8")
-if contents.count(marker) != 2:
-    raise SystemExit(f"expected two {marker} markers in {source}")
-source.write_text(contents.replace(marker, expected), encoding="utf-8")
-PY
+  if [[ -z "${WRIX_BUILD_PACKAGE_TOOLS:-}" ]]; then
+    local tools
+    tools=$(REPO_ROOT="$REPO_ROOT" nix build --no-link --print-out-paths --impure --no-warn-dirty --expr '
+      let
+        root = builtins.getEnv "REPO_ROOT";
+        flake = builtins.getFlake ("git+file://" + root);
+        pkgs = flake.inputs.nixpkgs.legacyPackages.${builtins.currentSystem};
+      in import (root + "/lib/verify/tools.nix") { inherit pkgs; }
+    ')
+    export WRIX_BUILD_PACKAGE_TOOLS="$tools/bin/wrix-verify-tools"
+  fi
+  "$WRIX_BUILD_PACKAGE_TOOLS" stamp-rustc "$source" "$expected"
 }
 
 assert_eq() {

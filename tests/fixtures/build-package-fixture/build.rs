@@ -16,7 +16,9 @@ fn resolve_rustc(rustc: &str) -> Result<PathBuf, io::Error> {
 fn main() -> Result<(), Box<dyn Error>> {
     let rustc = env::var("RUSTC")?;
     let selected = resolve_rustc(&rustc)?;
-    if EXPECTED_RUSTC != "@EXPECTED_RUSTC@" && selected != PathBuf::from(EXPECTED_RUSTC) {
+    if EXPECTED_RUSTC != concat!("@EXPECTED_", "RUSTC@")
+        && selected != PathBuf::from(EXPECTED_RUSTC)
+    {
         return Err(io::Error::other(format!(
             "Cargo selected {}, expected {EXPECTED_RUSTC}",
             selected.display()

@@ -56,7 +56,19 @@ let
     '';
   };
 
-  buildPackage = function: repoScript "tests/profiles/build-package.sh" function;
+  buildPackage =
+    function:
+    let
+      target = repoScript "tests/profiles/build-package.sh" function;
+      tools = import ../../lib/verify/tools.nix { inherit pkgs; };
+    in
+    target
+    // {
+      script = ''
+        export WRIX_BUILD_PACKAGE_TOOLS=${escapeShellArg (pkgs.lib.getExe tools)}
+        ${target.script}
+      '';
+    };
   corePackages = function: repoScript "tests/profiles/core-packages.sh" function;
   mkDevShell = function: repoScript "tests/profiles/mkdevshell.sh" function;
   mkDevShellPrek = function: repoScript "tests/profiles/mkdevshell-prek.sh" function;

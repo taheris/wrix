@@ -378,35 +378,40 @@ roots. [system](test-ci:test-wrix-images-source-artifacts)
 
 - Both default size-based and custom pipeline layer planning use native Rust,
   retaining their distinct algorithms, path exclusion rules and layer budgets.
-  Acyclic custom pipelines preserve upstream ordering. Cyclic components retain
-  every path deterministically; default equal-closure-size ties use canonical
-  path order instead of upstream hash-set iteration.
-  [test](../crates/wrix-image-tools/src/planner/test.rs::documented_popularity_recurrence_and_layer_merge_match)
-  [test](../crates/wrix-image-tools/src/planner/test/property.rs::generated_cyclic_and_rootless_graphs_retain_paths_deterministically_in_all_partitions)
-  [test](../crates/wrix-image-tools/src/planner/auto/test.rs::default_algorithm_is_size_based_not_custom_popularity_ranking)
   [system](verify:sandbox.layer-planner-differential)
+- Default planning remains size-based rather than custom popularity ranking.
+  [test](../crates/wrix-image-tools/src/planner/auto/test.rs::default_algorithm_is_size_based_not_custom_popularity_ranking)
+- Acyclic custom pipelines preserve upstream ordering.
+  [test](../crates/wrix-image-tools/src/planner/test.rs::documented_popularity_recurrence_and_layer_merge_match)
+- Cyclic components retain every path deterministically.
+  [test](../crates/wrix-image-tools/src/planner/test/property.rs::generated_cyclic_and_rootless_graphs_retain_paths_deterministically_in_all_partitions)
+- Default equal-closure-size ties use canonical path order instead of upstream
+  hash-set iteration.
+  [test](../crates/wrix-image-tools/src/planner/auto/test.rs::equal_closure_size_layer_order_is_canonical)
 - Minimal default/custom image recipes have no igraph, Plotly, Narwhals or
   dataframe-backend build dependencies from layer planning. Explicitly selected
   profile packages remain independent of this planner-only boundary.
   [check](verify:sandbox.layer-planner-graph)
 - Emitted native-planner archives preserve payload bytes and honest layer
   digests, retain inherited paths exactly once, and reproduce byte-identically
-  when only the output derivation name changes. The unchanged upstream test
-  suite remains independent reference verification, not an image dependency.
+  when only the output derivation name changes.
   [check](verify:sandbox.layer-planner-native)
-  [system](verify:sandbox.layer-planner-differential)
+- The unchanged upstream test suite remains independent reference verification,
+  not an image dependency. [system](verify:sandbox.layer-planner-differential)
 - Native build-platform Rust helpers compute OCI configuration digests without a
-  Python runtime. Hashing removes only insignificant JSON whitespace, retaining
-  string escapes, number spelling, duplicate keys and object order.
+  Python runtime. [check](verify:sandbox.image-tools-native)
+- Digest hashing removes only insignificant JSON whitespace, retaining string
+  whitespace and escapes.
   [test](../crates/wrix-image-tools/src/digest/test.rs::string_whitespace_and_escapes_are_retained)
+- Digest hashing retains number spelling, duplicate keys and object order.
   [test](../crates/wrix-image-tools/src/digest/test.rs::numbers_escapes_and_key_order_are_not_normalized)
-  [check](verify:sandbox.image-tools-native)
 - Runtime configuration tokens resolve only against their declared native input
   closure, using its longest matching root rather than guessed derivation names.
-  Opaque native source paths are checked without following source symlinks;
-  malformed and out-of-closure references fail before root publication.
   [test](../crates/wrix-image-tools/src/roots/test.rs::longest_native_prefix_wins_without_name_guessing)
+- Opaque native source paths are checked without following source symlinks;
+  malformed and out-of-closure references fail before root publication.
   [test](../crates/wrix-image-tools/src/roots/test.rs::missing_native_sources_fail_before_publication)
+- Packaged native helpers preserve the configuration-root resolution boundary.
   [check](verify:sandbox.image-tools-native)
 - On Linux, the profile image builder emits a JSON image descriptor
   (`source_kind = "nix-descriptor"`) as the selected source path; the descriptor

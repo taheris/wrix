@@ -14,6 +14,7 @@ import ../util/rust-tool.nix {
     ../../lib/sandbox/install-known-hosts.sh
     ../../lib/util/git-ssh-setup.sh
     ../../lib/services/nix-pool/bootstrap-process.sh
+    ../../tests/fixtures/build-package-fixture/build.rs
     ../../tests/sandbox/entrypoint-contract.sh
     ../../lib/sandbox/linux/entrypoint.sh
     ../../lib/sandbox/darwin/entrypoint.sh

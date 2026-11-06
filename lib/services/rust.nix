@@ -40,6 +40,8 @@ let
       "lib/beads/package.nix" = ../beads/package.nix;
       "lib/services/host-nix-config.sh" = ./host-nix-config.sh;
       "lib/services/nix-pool/bootstrap-process.sh" = ./nix-pool/bootstrap-process.sh;
+      "tests/fixtures/build-package-fixture/build.rs" =
+        ../../tests/fixtures/build-package-fixture/build.rs;
       "tests/sandbox/entrypoint-contract.sh" = ../../tests/sandbox/entrypoint-contract.sh;
       "lib/sandbox/linux/entrypoint.sh" = ../sandbox/linux/entrypoint.sh;
       "lib/sandbox/darwin/entrypoint.sh" = ../sandbox/darwin/entrypoint.sh;
