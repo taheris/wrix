@@ -40,6 +40,14 @@ let
       "lib/beads/package.nix" = ../beads/package.nix;
       "lib/services/host-nix-config.sh" = ./host-nix-config.sh;
       "lib/services/nix-pool/bootstrap-process.sh" = ./nix-pool/bootstrap-process.sh;
+      "tests/sandbox/entrypoint-contract.sh" = ../../tests/sandbox/entrypoint-contract.sh;
+      "lib/sandbox/linux/entrypoint.sh" = ../sandbox/linux/entrypoint.sh;
+      "lib/sandbox/darwin/entrypoint.sh" = ../sandbox/darwin/entrypoint.sh;
+      "lib/sandbox/network-ready.sh" = ../sandbox/network-ready.sh;
+      "lib/sandbox/mcp-manifest.sh" = ../sandbox/mcp-manifest.sh;
+      "lib/sandbox/shared-nix-client.sh" = ../sandbox/shared-nix-client.sh;
+      "lib/sandbox/tool-cache.sh" = ../sandbox/tool-cache.sh;
+      "lib/beads/sandbox.sh" = ../beads/sandbox.sh;
       "lib/sandbox/darwin/nix-bridge.c" = ../sandbox/darwin/nix-bridge.c;
       "lib/services/celler-work-drain-state.rs" = ./celler-work-drain-state.rs;
       "crates/wrix-service/src/lifecycle/drain/native" =

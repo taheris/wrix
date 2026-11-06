@@ -344,23 +344,11 @@ let
             ${pkgs.python3}/bin/python3 ${./security}/test_execution_lifecycle.py fixtures ${executionFixtureRunner}/bin/test-command-runner
             touch "$out"
           '';
-      entrypoint-hook-failures =
-        pkgs.runCommandLocal "entrypoint-hook-failures"
-          {
-            nativeBuildInputs = [
-              bash
-              coreutils
-              git
-              jq
-              pkgs.python3
-            ];
-          }
-          ''
-            set -euo pipefail
-            export REPO_ROOT=${src}
-            ${pkgs.python3}/bin/python3 ${./sandbox/test_entrypoint_failures.py}
-            touch "$out"
-          '';
+      entrypoint-hook-failures = pkgs.runCommandLocal "entrypoint-hook-failures" { } ''
+        set -euo pipefail
+        test -x ${pkgs.lib.getExe (import ../lib/verify/tools.nix { inherit pkgs; })}
+        touch "$out"
+      '';
       pi-auth-storage = import ./security/pi-auth.nix { inherit pkgs; };
       profile-images-data = import ./profiles/manifest.nix { inherit pkgs wrix; };
       verifier-inputs = import ./lib/inputs-test.nix { inherit pkgs; };
