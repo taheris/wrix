@@ -50,6 +50,78 @@ async fn interface_bound_data_listeners_include_native_dolt_sync_without_wildcar
     Ok(())
 }
 
+fn loopback_binding() -> io::Result<(Interface, [std::num::NonZeroU16; 5])> {
+    let reserved = (0..5)
+        .map(|_| std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)))
+        .collect::<io::Result<Vec<_>>>()?;
+    let ports = reserved
+        .iter()
+        .map(|listener| {
+            std::num::NonZeroU16::new(listener.local_addr()?.port()).ok_or_else(invalid)
+        })
+        .collect::<io::Result<Vec<_>>>()?
+        .try_into()
+        .map_err(|_| invalid())?;
+    let interface = Interface {
+        address: Address::loopback_for_test(),
+        name: if cfg!(target_os = "macos") {
+            "lo0"
+        } else {
+            "lo"
+        }
+        .into(),
+    };
+    Ok((interface, ports))
+}
+
+#[tokio::test]
+async fn stopped_guest_listener_rebinds_after_accepted_sync_connection_closes()
+-> Result<(), Box<dyn std::error::Error>> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let (interface, ports) = loopback_binding()?;
+    let bound = interface.bind(ports)?;
+    let endpoint = bound.address(crate::route::Role::Sync)?;
+    let ([_, _, _, _, listener], _) = bound.into_generation()?;
+    let mut old_peer = tokio::net::TcpStream::connect(endpoint).await?;
+    let (mut old_stream, _) = listener.accept().await?;
+    old_stream.shutdown().await?;
+    drop(old_stream);
+    let mut byte = [0];
+    assert_eq!(old_peer.read(&mut byte).await?, 0);
+    drop(listener);
+    drop(old_peer);
+    // Both userspace owners are gone; the kernel can still retain TIME_WAIT.
+    let replacement = interface.bind(ports)?;
+    let ([_, _, _, _, listener], _) = replacement.into_generation()?;
+    let mut peer = tokio::net::TcpStream::connect(endpoint).await?;
+    peer.write_all(b"new").await?;
+    let (mut stream, _) = listener.accept().await?;
+    let mut payload = [0; 3];
+    stream.read_exact(&mut payload).await?;
+    assert_eq!(&payload, b"new");
+    Ok(())
+}
+
+#[tokio::test]
+async fn guest_address_reuse_never_admits_a_second_live_listener()
+-> Result<(), Box<dyn std::error::Error>> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let (interface, ports) = loopback_binding()?;
+    let bound = interface.bind(ports)?;
+    assert!(
+        matches!(interface.bind(ports), Err(error) if error.kind() == io::ErrorKind::AddrInUse)
+    );
+    let endpoint = bound.address(crate::route::Role::Sync)?;
+    let ([_, _, _, _, listener], _) = bound.into_generation()?;
+    let mut peer = tokio::net::TcpStream::connect(endpoint).await?;
+    peer.write_all(b"owner").await?;
+    let (mut stream, _) = listener.accept().await?;
+    let mut payload = [0; 5];
+    stream.read_exact(&mut payload).await?;
+    assert_eq!(&payload, b"owner");
+    Ok(())
+}
+
 #[test]
 fn reserved_default_vmnet_requires_positive_isolated_host_interface_evidence() {
     let result = resolve(&network(), INTERFACES, "25.0.0\n").unwrap();

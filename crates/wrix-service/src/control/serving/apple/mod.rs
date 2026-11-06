@@ -99,9 +99,23 @@ impl Interface {
         let bind = |port: std::num::NonZeroU16| -> io::Result<tokio::net::TcpListener> {
             let socket = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP))?;
             socket.bind_device_by_index_v4(Some(index))?;
+            // Reclaim our recorded endpoint while closed connections remain in TIME_WAIT.
+            // SO_REUSEPORT stays disabled: a live listener still excludes this bind.
+            socket.set_reuse_address(true)?;
             socket.set_nonblocking(true)?;
             socket
-                .bind(&std::net::SocketAddr::from((self.address.gateway(), port.get())).into())?;
+                .bind(&std::net::SocketAddr::from((self.address.gateway(), port.get())).into())
+                .map_err(|error| {
+                    io::Error::new(
+                        error.kind(),
+                        format!(
+                            "cannot bind vmnet guest listener {}:{} on {}: {error}",
+                            self.address.gateway(),
+                            port,
+                            self.name,
+                        ),
+                    )
+                })?;
             socket.listen(128)?;
             tokio::net::TcpListener::from_std(socket.into())
         };

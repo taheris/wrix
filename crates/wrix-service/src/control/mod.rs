@@ -3,6 +3,7 @@
 mod assignment;
 pub mod cache;
 mod deployment;
+pub mod diagnostics;
 mod endpoint;
 pub(crate) use endpoint::{
     needs_repair as endpoints_need_repair, repair as repair_retained_endpoints,
@@ -84,6 +85,8 @@ pub enum Error {
     RegistryUpgrade,
     /// updated host controller did not confirm compatible authenticated readiness
     ControllerReadiness,
+    /// private controller connection closed; last recorded controller failure (not readiness evidence): {detail}
+    ControllerClosed { detail: String },
     /// workspace namespace is not registered
     UnknownNamespace,
     /// workspace policy denies the requested permission
@@ -1198,7 +1201,9 @@ impl Client {
             },
         )
         .await?;
-        let reply = receive(&mut stream).await?;
+        let reply = receive(&mut stream)
+            .await
+            .map_err(|error| diagnostics::explain(&self.socket, error))?;
         Ok((stream, reply))
     }
 }

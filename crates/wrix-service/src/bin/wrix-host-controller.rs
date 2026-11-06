@@ -31,21 +31,31 @@ async fn run() -> Result<(), Error> {
         }
         root
     };
-    if root.join("stopped").try_exists()? {
-        return Ok(());
+    let result = async {
+        if root.join("stopped").try_exists()? {
+            return Ok(());
+        }
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        let issuer = root
+            .parent()
+            .ok_or(Error::Arguments)?
+            .join("host-control/celler-issuer");
+        let controller = Controller::bind(&root.join("authority"))?.with_cache_issuer(&issuer)?;
+        let host = Host::bind(controller, CONNECTION_CAPACITY).await?;
+        host.serve(async move {
+            terminate.recv().await;
+        })
+        .await?;
+        Ok::<(), Error>(())
     }
-    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
-    let issuer = root
-        .parent()
-        .ok_or(Error::Arguments)?
-        .join("host-control/celler-issuer");
-    let controller = Controller::bind(&root.join("authority"))?.with_cache_issuer(&issuer)?;
-    let host = Host::bind(controller, CONNECTION_CAPACITY).await?;
-    host.serve(async move {
-        terminate.recv().await;
-    })
-    .await?;
-    Ok(())
+    .await;
+    if let Err(error) = &result
+        && let Err(diagnostic) = wrix_service::control::diagnostics::record_failure(&root, error)
+    {
+        tracing::error!(%diagnostic, "cannot record private controller failure");
+    }
+    result
 }
 
 #[tokio::main]

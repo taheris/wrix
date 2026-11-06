@@ -957,6 +957,18 @@ tenant or component compromise/fault isolation.
   explicit host stop prevents resurrection and temporary Nix provision retains
   the active controller closure.
   [system?](test-ci:test-services-host-control-lifecycle)
+- Device-bound guest listeners reclaim their recorded addresses after accepted
+  connections close and leave kernel TCP state, without relocating endpoints or
+  changing interface/address restrictions.
+  [test](../crates/wrix-service/src/control/serving/apple/test.rs::stopped_guest_listener_rebinds_after_accepted_sync_connection_closes)
+- Address reuse does not admit a second live listener or disrupt its owner.
+  [test](../crates/wrix-service/src/control/serving/apple/test.rs::guest_address_reuse_never_admits_a_second_live_listener)
+- An authenticated private-control EOF reports the last recorded controller
+  failure when available, explicitly as diagnostics rather than readiness.
+  [test](../crates/wrix-service/src/control/diagnostics/mod.rs::authenticated_client_eof_includes_recorded_bind_failure)
+- Failure diagnostics reject non-private files and symlink targets without
+  reading or replacing their contents.
+  [test](../crates/wrix-service/src/control/diagnostics/mod.rs::untrusted_diagnostic_permissions_and_symlinks_are_not_read)
 - Private control compatibility is admitted before effects, and installing a new
   host package cannot replace a running controller.
   [test?](../crates/wrix-service/tests/host_control.rs::client_compatibility_does_not_authorize_replacement)
