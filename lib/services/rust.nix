@@ -39,6 +39,7 @@ let
       "lib/sandbox/install-known-hosts.sh" = ../sandbox/install-known-hosts.sh;
       "lib/beads/package.nix" = ../beads/package.nix;
       "lib/services/host-nix-config.sh" = ./host-nix-config.sh;
+      "lib/services/nix-pool/bootstrap-process.sh" = ./nix-pool/bootstrap-process.sh;
       "lib/sandbox/darwin/nix-bridge.c" = ../sandbox/darwin/nix-bridge.c;
       "lib/services/celler-work-drain-state.rs" = ./celler-work-drain-state.rs;
       "crates/wrix-service/src/lifecycle/drain/native" =

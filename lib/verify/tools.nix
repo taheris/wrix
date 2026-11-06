@@ -10,5 +10,6 @@ import ../util/rust-tool.nix {
     ../../tests/prepare-native-fixtures.sh
     ../../lib/sandbox/install-known-hosts.sh
     ../../lib/util/git-ssh-setup.sh
+    ../../lib/services/nix-pool/bootstrap-process.sh
   ];
 }

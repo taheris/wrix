@@ -305,8 +305,6 @@ let
             export PYTHONDONTWRITEBYTECODE=1
             ${pkgs.python3}/bin/python3 ${./store}/test_cleanup_native_fixtures.py
             ${pkgs.python3}/bin/python3 ${./store}/test_interrupt_native_test.py
-            WRIX_TEST_BOOTSTRAP_PROCESS_SCRIPT=${../lib/services/nix-pool/bootstrap-process.sh} \
-              ${pkgs.python3}/bin/python3 ${./store}/test_bootstrap_process.py
             test -x ${pkgs.lib.getExe (import ../lib/verify/tools.nix { inherit pkgs; })}
             touch "$out"
           '';
