@@ -9,6 +9,7 @@ members = [
   "crates/wrix-sandbox",
   "crates/wrix-service",
   "crates/wrix-state",
+  "crates/wrix-verify-tools",
 ]
 resolver = "3"
 

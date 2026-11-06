@@ -1,0 +1,16 @@
+[package]
+name = "wrix-verify-tools"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+displaydoc.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

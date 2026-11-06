@@ -2,6 +2,7 @@
 
 let
   inherit (pkgs.lib) escapeShellArg;
+  verifyTools = import ../../lib/verify/tools.nix { inherit pkgs; };
   # Retain the existing store source without coercing/copying its path again.
   nixpkgsSource =
     let
@@ -72,7 +73,7 @@ in
     local list_output
     root="$(repo_root)"
     list_output="$("$SELF" --list)"
-    printf '%s\n' "$list_output" | python3 ${./check-runner-config.py} "$root/loom.toml"
+    printf '%s\n' "$list_output" | ${pkgs.lib.getExe verifyTools} runner-policy "$root/loom.toml"
     assert_contains "verify inventory" "$list_output" "verify:cli.package-surface"
     assert_contains "verify inventory" "$list_output" "verify:cli.shared-verifier-app"
     assert_contains "verify inventory" "$list_output" "verify:cli.verify-runner-batching"

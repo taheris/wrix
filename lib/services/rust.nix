@@ -30,6 +30,8 @@ let
       "crates/wrix-sandbox/tests" = ../../crates/wrix-sandbox/tests;
       "crates/wrix-service/tests" = ../../crates/wrix-service/tests;
       ".config/nextest.toml" = ../../.config/nextest.toml;
+      "loom.toml" = ../../loom.toml;
+      "tests/loom-nextest-file-targets.sh" = ../../tests/loom-nextest-file-targets.sh;
       "tests/prepare-native-fixtures.sh" = ../../tests/prepare-native-fixtures.sh;
       "tests/store/cleanup-native-fixtures.py" = ../../tests/store/cleanup-native-fixtures.py;
       "lib/util/git-ssh-setup.sh" = ../util/git-ssh-setup.sh;

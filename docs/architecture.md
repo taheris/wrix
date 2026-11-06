@@ -52,6 +52,7 @@ crates/
 ├── wrix-cli/            # Human-facing `wrix` binary: run, spawn, service, beads
 ├── wrix-sandbox/        # Rust host orchestration for container launch
 ├── wrix-image-tools/    # Native image metadata hashing and configuration-root resolution
+├── wrix-verify-tools/   # Native verifier policy, registry and source-selector audits
 ├── wrix-service/        # Host-user service lifecycle, workspace namespaces, compiler contexts
 ├── wrix-cache/          # Celler integration, selected host publication, and hook support
 └── wrix-beads/          # Passive workspace information and explicit beads synchronization
