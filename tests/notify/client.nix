@@ -53,6 +53,11 @@ let
     inherit pkgs;
     ipCommand = "${gatewayFixture}/bin/ip";
   };
+  nativeHarness = import ../../lib/util/rust-tool.nix {
+    inherit pkgs;
+    package = "wrix-notify";
+    description = "Native notification client conformance tests";
+  };
 in
 {
   notify-host-darwin-eval =
@@ -65,17 +70,17 @@ in
       touch "$out"
     '';
 
-  notify-client-behavior =
-    pkgs.runCommand "notify-client-behavior"
-      {
-        nativeBuildInputs = [ pkgs.python3 ];
-        WRIX_TEST_NOTIFY_HOST = "${hostClient}/bin/wrix-notify-host";
-        WRIX_TEST_NOTIFY_CLIENT = "${gatewayClient}/bin/wrix-notify";
-        WRIX_TEST_IP_COMMAND = "${gatewayFixture}/bin/ip";
-      }
-      ''
-        set -euo pipefail
-        python3 ${./test_client.py}
-        touch "$out"
-      '';
+  notify-client-behavior = nativeHarness.overrideAttrs {
+    pname = "notify-client-behavior";
+    cargoTestFlags = [
+      "--package"
+      "wrix-notify"
+      "--test"
+      "client"
+    ];
+    checkFlags = [ "--ignored" ];
+    WRIX_TEST_NOTIFY_HOST = "${hostClient}/bin/wrix-notify-host";
+    WRIX_TEST_NOTIFY_CLIENT = "${gatewayClient}/bin/wrix-notify";
+    WRIX_TEST_IP_COMMAND = "${gatewayFixture}/bin/ip";
+  };
 }

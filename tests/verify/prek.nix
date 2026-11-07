@@ -42,7 +42,9 @@ in
     local root formatter
     root="$(repo_root)"
     formatter="$(build_flake_package formatter.${system})"
-    python3 "$root/tests/prek/treefmt-cache.py" "$root" "$formatter/bin/treefmt"
+    WRIX_TEST_REPOSITORY="$root" WRIX_TEST_FORMATTER="$formatter/bin/treefmt" \
+      cargo nextest run --offline --locked --manifest-path "$root/Cargo.toml" \
+      --package wrix-verify-tools --test treefmt_cache --run-ignored only
   '';
   "prek.pre-push-checks-marker-valid".script =
     wholeRepoScript "tests/prek/pre-push-checks-marker-valid.sh";
