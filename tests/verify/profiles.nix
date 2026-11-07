@@ -118,7 +118,8 @@ in
   "profiles.repository-integration-source-isolation".script = ''
     local root
     root="$(repo_root)"
-    python3 "$root/tests/profiles/repository-source-isolation.py" "$root"
+    cargo run --quiet --offline --locked --manifest-path "$root/Cargo.toml" \
+      --package wrix-cli --example repository-source-isolation -- "$root"
   '';
   "profiles.rust-build-package-exposed" = buildPackage "test_build_package_exposed";
   "profiles.rust-build-package-extra-srcs-scoped-to-checks" =
