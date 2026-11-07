@@ -38,17 +38,12 @@ let
       "crates/wrix-verify-tools/tests" = ../../crates/wrix-verify-tools/tests;
       ".config/nextest.toml" = ../../.config/nextest.toml;
       "loom.toml" = ../../loom.toml;
-      "tests/loom-nextest-file-targets.sh" = ../../tests/loom-nextest-file-targets.sh;
-      "tests/prepare-native-fixtures.sh" = ../../tests/prepare-native-fixtures.sh;
-      "tests/store/cleanup-native-fixtures.py" = ../../tests/store/cleanup-native-fixtures.py;
+      "tests" = ../../tests;
       "lib/util/git-ssh-setup.sh" = ../util/git-ssh-setup.sh;
       "lib/sandbox/install-known-hosts.sh" = ../sandbox/install-known-hosts.sh;
       "lib/beads/package.nix" = ../beads/package.nix;
       "lib/services/host-nix-config.sh" = ./host-nix-config.sh;
       "lib/services/nix-pool/bootstrap-process.sh" = ./nix-pool/bootstrap-process.sh;
-      "tests/fixtures/build-package-fixture/build.rs" =
-        ../../tests/fixtures/build-package-fixture/build.rs;
-      "tests/sandbox/entrypoint-contract.sh" = ../../tests/sandbox/entrypoint-contract.sh;
       "lib/sandbox/linux/entrypoint.sh" = ../sandbox/linux/entrypoint.sh;
       "lib/sandbox/darwin/entrypoint.sh" = ../sandbox/darwin/entrypoint.sh;
       "lib/sandbox/network-ready.sh" = ../sandbox/network-ready.sh;
@@ -60,7 +55,6 @@ let
       "lib/services/celler-work-drain-state.rs" = ./celler-work-drain-state.rs;
       "crates/wrix-service/src/lifecycle/drain/native" =
         ../../crates/wrix-service/src/lifecycle/drain/native;
-      "tests/standalone/notify-runtime.sh" = ../../tests/standalone/notify-runtime.sh;
     }
     // exampleSources;
     nativeBuildInputs = [ pkgs.git ];

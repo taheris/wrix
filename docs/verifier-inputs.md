@@ -119,13 +119,14 @@ identities were unchanged. These are fixture output/reference sizes, not
 whole-push peak-disk or timing claims.
 
 Wrix's production source projection excludes crate test/example directories and
-root test fixtures. Lint/test sources restore the examples and declared fixture
-inputs; explicit fixture executables share a separate example source and one
-Cargo build for the controller and runtime adapters. Nix source regressions
-verify that changing tests/examples leaves production source identity unchanged,
-changing production code does not, and a leaking projection is rejected.
-Production bootstrap script inclusion and complete example/test staging remain
-checked against the original sources.
+root test fixtures. Lint/test sources restore the examples and complete root
+`tests` directory, including Nextest setup scripts and their resources; explicit
+fixture executables share a separate example source and one Cargo build for the
+controller and runtime adapters. Nix source regressions verify that changing
+tests/examples leaves production source identity unchanged, changing production
+code does not, and a leaking projection is rejected. Production bootstrap script
+inclusion and complete example/test staging remain checked against the original
+sources.
 
 ## Metadata and artifact lanes
 

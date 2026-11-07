@@ -163,6 +163,7 @@ pkgs.runCommand "test-rust-source-fixtures" { } ''
   done
   diff -r "${rustPackage.clippy.src}/crates/wrix-service/src/lifecycle/drain/native" \
     "${../../crates/wrix-service/src/lifecycle/drain/native}"
+  diff -r "${rustPackage.clippy.src}/tests" "${../../tests}"
   for crate in wrix-cache wrix-cli wrix-core wrix-sandbox wrix-service; do
     [[ ! -e "${rustPackage.package.src}/crates/$crate/tests" ]]
     diff -r "${rustPackage.clippy.src}/crates/$crate/tests" "${../../crates}/$crate/tests"
