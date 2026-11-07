@@ -50,10 +50,43 @@ in
     root="$(repo_root)"
     nix build --no-link --no-warn-dirty "$root#checks.${system}.verifier-inputs"
     loom="$(build_flake_package loom)"
-    python3 "$root/tests/verify/test_results.py" "$SELF" "$loom/bin/loom" ${../lib/verifier.sh} ${../standalone/builder-test.sh}
     nix run --no-warn-dirty "$root#test-ci" -- --list >/dev/null
     test_ci="$(nix eval --raw --no-warn-dirty "$root#apps.${system}.test-ci.program")"
-    python3 "$root/tests/verify/test_inputs.py" "$SELF" "$test_ci" "$loom/bin/loom" "$root" ${escapeShellArg nixpkgsSource} ${escapeShellArg system}
+    (
+      local snapshot database caller_cache
+      snapshot="$(mktemp -d)"
+      trap 'rm -rf "$snapshot"' EXIT
+      # Nix's pinned-source metadata is not an admission/verdict cache. Take
+      # consistent read-only backups before nextest isolates HOME; each Rust
+      # fixture copies standalone databases into its private cache. A suite-owned
+      # Git object cache avoids repeated network fetches; it never links back to
+      # caller files. Do not copy configuration, Wrix state, or live databases.
+      caller_cache="''${XDG_CACHE_HOME:-$HOME/.cache}/nix"
+      if [[ -d "$caller_cache/gitv3" ]]; then
+        ${pkgs.coreutils}/bin/cp --recursive --reflink=auto --preserve=mode,timestamps \
+          "$caller_cache/gitv3" "$snapshot/gitv3"
+        if [[ -n "$(${pkgs.findutils}/bin/find "$snapshot/gitv3" -type l -print -quit)" ]] ||
+          [[ -n "$(${pkgs.findutils}/bin/find "$snapshot/gitv3" -path '*/objects/info/alternates' -type f -size +0c -print -quit)" ]]; then
+          fail "Nix source-cache snapshot must not reference external mutable objects"
+        fi
+      fi
+      for database in "$caller_cache"/fetcher-cache-v[0-9]*.sqlite; do
+        [[ -f "$database" ]] || continue
+        ${pkgs.sqlite}/bin/sqlite3 -readonly "$database" ".backup '$snapshot/''${database##*/}'"
+      done
+      export WRIX_TEST_FETCHER_CACHE_SNAPSHOT="$snapshot"
+      export WRIX_TEST_VERIFY="$SELF"
+      export WRIX_TEST_LOOM="$loom/bin/loom"
+      export WRIX_TEST_VERIFIER_LIBRARY=${../lib/verifier.sh}
+      export WRIX_TEST_BUILDER_SUITE=${../standalone/builder-test.sh}
+      export WRIX_TEST_CI="$test_ci"
+      export WRIX_TEST_SOURCE="$root"
+      export WRIX_TEST_NIXPKGS=${escapeShellArg nixpkgsSource}
+      export WRIX_TEST_SYSTEM=${escapeShellArg system}
+      cargo nextest run --offline --locked --manifest-path "$root/Cargo.toml" \
+        --package wrix-verify-tools --test verifier_results --test verifier_inputs \
+        --run-ignored only --test-threads 4 --no-fail-fast
+    )
   '';
 
   "cli.browser-gate-scope" = {

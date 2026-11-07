@@ -49,6 +49,18 @@ introduced. See
 [Loom troubleshooting](loom-troubleshooting.md#runner-input-discovery) for the
 integration boundary of a full upstream update.
 
+`verify:cli.shared-verifier-app` runs 44 Rust dispatcher and input-discovery
+cases against the actual verifier, CI dispatcher, consumed Loom and Nix. Four
+independent fixture repositories run concurrently. Each fixture has private
+mutable state and copies of consistent read-only backups of Nix fetcher
+metadata. Only a separate suite-owned Git object cache is shared; it contains no
+links or alternates into caller files. Caller configuration and Wrix
+admission/verdict caches are not inherited. Nix still resolves and verifies the
+original pinned sources. Capability/skip authorization, invocation order,
+foreign-platform inventory, malformed discovery and real builder-suite
+conformance remain asserted. These external cases are ignored in ordinary Cargo
+runs and explicitly selected by their owning verifier.
+
 `verify:cli.browser-gate-scope` exercises the real consumed Loom planner and
 production Wrix runners in disposable Git repositories. It checks changed
 fixture/contract/lock/image/dispatch subjects in both lanes, opaque selection,
