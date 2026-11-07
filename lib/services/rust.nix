@@ -8,20 +8,26 @@
 
 let
   inherit (builtins) concatStringsSep;
-  inherit (pkgs.lib) makeBinPath removePrefix optionals;
+  inherit (pkgs.lib) makeBinPath optionals;
+
+  exampleCrates = builtins.filter (name: builtins.pathExists (../../crates + "/${name}/examples")) (
+    builtins.attrNames (builtins.readDir ../../crates)
+  );
+  exampleSources = builtins.listToAttrs (
+    map (name: {
+      name = "crates/${name}/examples";
+      value = ../../crates + "/${name}/examples";
+    }) exampleCrates
+  );
 
   workspaceArgs = {
     src = ../..;
     cargoLock = ../../Cargo.lock;
-    srcFilter =
-      path: type:
-      let
-        relative = removePrefix "${toString ../..}/" path;
-      in
-      builtins.match "crates/[^/]+/tests(/.*)?" relative == null
-      && (
-        relative == "lib/sandbox/network-bootstrap.sh" || rustProfile.craneLib.filterCargoSources path type
-      );
+    srcFilter = import ./rust-source-filter.nix {
+      inherit (pkgs) lib;
+      inherit (rustProfile.craneLib) filterCargoSources;
+      root = ../..;
+    };
     extraSrcs = {
       "crates/wrix-cache/tests" = ../../crates/wrix-cache/tests;
       "crates/wrix-cli/tests" = ../../crates/wrix-cli/tests;
@@ -55,7 +61,8 @@ let
       "crates/wrix-service/src/lifecycle/drain/native" =
         ../../crates/wrix-service/src/lifecycle/drain/native;
       "tests/standalone/notify-runtime.sh" = ../../tests/standalone/notify-runtime.sh;
-    };
+    }
+    // exampleSources;
     nativeBuildInputs = [ pkgs.git ];
 
     meta = {
@@ -215,39 +222,37 @@ let
     inherit (rustProfile) craneLib;
   };
 
-  fixtureController = workspace.bin.overrideAttrs (old: {
-    pname = "wrix-host-controller-fixture";
-    buildPhase =
-      builtins.replaceStrings
-        [ "cargoWithProfile build" ]
-        [ "cargoWithProfile build -p wrix-service --example host-controller-fixture" ]
-        old.buildPhase;
-    installPhase = ''
-      mkdir -p "$out/bin"
-      cp "target/''${CARGO_BUILD_TARGET:+$CARGO_BUILD_TARGET/}release/examples/host-controller-fixture" "$out/bin/wrix-host-controller"
-    '';
-  });
+  fixtureSource = pkgs.runCommand "wrix-fixture-source" { } ''
+    cp -r ${workspace.bin.src} "$out"
+    chmod -R u+w "$out"
+    cp -r ${../../crates/wrix-service/examples} "$out/crates/wrix-service/examples"
+  '';
 
-  fixtureRuntime = workspace.bin.overrideAttrs (old: {
-    pname = "wrix-native-fixtures";
+  fixtureExamples = workspace.bin.overrideAttrs (old: {
+    pname = "wrix-test-examples";
+    src = fixtureSource;
     buildPhase =
       assert pkgs.lib.assertMsg (
         builtins.length (pkgs.lib.splitString "cargoWithProfile build" old.buildPhase) == 2
       ) "Crane native fixture build command changed; review the explicit example target";
       builtins.replaceStrings
         [ "cargoWithProfile build" ]
-        [ "cargoWithProfile build -p wrix-service --example wrix-native-fixtures" ]
+        [
+          "cargoWithProfile build -p wrix-service --example host-controller-fixture --example wrix-native-fixtures"
+        ]
         old.buildPhase;
     doCheck = true;
     checkPhase = ''
       runHook preCheck
       cargoWithProfile test --offline --locked -p wrix-service --example wrix-native-fixtures
       test ! -e ${workspace.bin}/bin/wrix-native-fixtures
+      test ! -e ${workspace.bin}/bin/host-controller-fixture
       runHook postCheck
     '';
     installPhase = ''
       mkdir -p "$out/bin"
       cp "target/''${CARGO_BUILD_TARGET:+$CARGO_BUILD_TARGET/}release/examples/wrix-native-fixtures" "$out/bin/"
+      cp "target/''${CARGO_BUILD_TARGET:+$CARGO_BUILD_TARGET/}release/examples/host-controller-fixture" "$out/bin/wrix-host-controller"
     '';
     meta = old.meta // {
       mainProgram = "wrix-native-fixtures";
@@ -255,10 +260,11 @@ let
   });
 
   fixtures = import ../../tests/prek/native-fixtures.nix {
-    inherit pkgs fixtureRuntime;
+    inherit pkgs;
+    fixtureRuntime = fixtureExamples;
     celler = cellerPackage;
     packagedWrix = wrixPackage;
-    controller = fixtureController;
+    controller = fixtureExamples;
     inherit serviceImage;
     devshellHook = prekDevShellHook;
   };

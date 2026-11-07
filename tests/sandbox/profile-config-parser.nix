@@ -52,7 +52,7 @@ rustNextest.overrideAttrs {
   WRIX_TEST_PROFILE_CONFIGS = manifest;
   checkPhase = ''
     runHook preCheck
-    cargo test -p wrix-sandbox --test config_contract nix_generated_builtin_profiles_match_parser -- --ignored --exact
+    cargoWithProfile test --offline --locked -p wrix-sandbox --test config_contract nix_generated_builtin_profiles_match_parser -- --ignored --exact
     runHook postCheck
   '';
 }

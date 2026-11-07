@@ -261,8 +261,11 @@ let
 
       commonArgs = {
         src = cleanedSrc;
+        cargoLock = builtins.path {
+          path = cargoLock;
+          name = "Cargo.lock";
+        };
         inherit
-          cargoLock
           cargoExtraArgs
           buildInputs
           propagatedBuildInputs
@@ -284,10 +287,24 @@ let
               chmod -R u+w $out
             ''
             + concatStringsSep "\n" (
-              mapAttrsToList (rel: abs: ''
-                mkdir -p "$(dirname "$out/${rel}")"
-                cp -r ${abs} "$out/${rel}"
-              '') extraSrcs
+              mapAttrsToList (
+                rel: abs:
+                let
+                  source = builtins.path {
+                    path = abs;
+                    name = "extra-source";
+                  };
+                in
+                ''
+                  if [[ -d "${source}" ]]; then
+                    mkdir -p "$out/${rel}"
+                    cp -r "${source}/." "$out/${rel}/"
+                  else
+                    mkdir -p "$(dirname "$out/${rel}")"
+                    cp "${source}" "$out/${rel}"
+                  fi
+                ''
+              ) extraSrcs
             )
           );
 
@@ -304,6 +321,7 @@ let
         // {
           src = stagedSrc;
           cargoArtifacts = resolvedCargoArtifacts;
+          doInstallCargoArtifacts = false;
           cargoClippyExtraArgs = "--all-targets";
         }
       );
@@ -313,6 +331,7 @@ let
         // {
           src = stagedSrc;
           cargoArtifacts = resolvedCargoArtifacts;
+          doInstallCargoArtifacts = false;
         }
       );
     in

@@ -316,6 +316,7 @@ let
       rust-source-fixtures = import ./services/rust-source.nix {
         inherit pkgs;
         inherit (wrix) rustPackage;
+        rustProfile = wrix.profiles.rust;
       };
       service-image-incremental = import ./services/image-incremental.nix { inherit pkgs; };
       docker-image-stream = dockerImageStreamCheck.unit;

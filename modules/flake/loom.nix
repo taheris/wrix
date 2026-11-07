@@ -39,6 +39,7 @@
           cargoLock = inputs.loom-src + "/Cargo.lock";
           cargoVendorDir = workspace.bin.cargoVendorDir;
           inherit (workspace) cargoArtifacts;
+          doInstallCargoArtifacts = false;
           patches = loomPatches;
           nativeBuildInputs = [ pkgs.git ];
           inherit cargoNextestExtraArgs;
@@ -59,7 +60,8 @@
           };
           canonicalInputs =
             contract:
-            contract.cargoToml == inputs.loom-src + "/Cargo.toml"
+            !contract.doInstallCargoArtifacts
+            && contract.cargoToml == inputs.loom-src + "/Cargo.toml"
             && contract.cargoLock == inputs.loom-src + "/Cargo.lock"
             && toString contract.cargoVendorDir == toString loomCli.cargoVendorDir;
         in

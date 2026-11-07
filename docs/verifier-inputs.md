@@ -91,6 +91,42 @@ additional inspection disk by header/config size, not layer payload size; it
 does not eliminate the original Darwin image archives or promise zero image
 builds. Real CLI/service image checks and opaque always-run targets remain.
 
+## Rust check storage
+
+Rust lint and test derivations, including the consumed Loom contract checks,
+retain success outputs rather than exporting unused Cargo target caches. The
+separate `cargoArtifacts` dependency cache is still built and reused. The
+profile-config parser check uses the inherited Cargo profile, avoiding a second
+debug build beside release dependencies. Neither change disables checks or
+changes their selected cases.
+
+Lock-file and extra-source inputs are copied to content-scoped paths before
+staging. This prevents string-valued paths inside a store-backed source tree
+from pulling the entire parent snapshot into a build identity; Nix literal-path
+inputs already have this property. Store-backed regressions cover both forms:
+test/example changes keep binary and dependency-cache identities stable,
+unrelated documentation changes also preserve check identities, production
+changes invalidate binaries but not dependencies, and changed lock bytes still
+invalidate dependencies. Directory overlays merge at their declared paths rather
+than nesting another source directory.
+
+For the artifact-export policy alone, a controlled real Cargo fixture kept all
+compiler, source and test inputs fixed. Its Clippy output decreased from 635,112
+NAR bytes to 96 and its Nextest output from 605,288 to 96. The latter's
+reference closure decreased from 1,579,712,128 bytes to 96 because its unused
+artifacts retained compiler paths. Binary and dependency-cache derivation
+identities were unchanged. These are fixture output/reference sizes, not
+whole-push peak-disk or timing claims.
+
+Wrix's production source projection excludes crate test/example directories and
+root test fixtures. Lint/test sources restore the examples and declared fixture
+inputs; explicit fixture executables share a separate example source and one
+Cargo build for the controller and runtime adapters. Nix source regressions
+verify that changing tests/examples leaves production source identity unchanged,
+changing production code does not, and a leaking projection is rejected.
+Production bootstrap script inclusion and complete example/test staging remain
+checked against the original sources.
+
 ## Metadata and artifact lanes
 
 Source-kind and ownership-label constructor matrices run without realizing image
