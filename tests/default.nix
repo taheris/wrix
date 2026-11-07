@@ -313,6 +313,11 @@ let
       celler-consumer-runtime = import ./services/celler-runtime.nix { inherit pkgs wrix; };
       devshell-cli-selection = devshellCliSelection;
       builder-vmnet-route = builderRouteTest;
+      cargo-target-handoff = import ./services/cargo-target-handoff.nix {
+        inherit pkgs;
+        inherit (wrix) rustPackage;
+        rustProfile = wrix.profiles.rust;
+      };
       rust-source-fixtures = import ./services/rust-source.nix {
         inherit pkgs;
         inherit (wrix) rustPackage;

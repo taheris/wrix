@@ -100,6 +100,14 @@ profile-config parser check uses the inherited Cargo profile, avoiding a second
 debug build beside release dependencies. Neither change disables checks or
 changes their selected cases.
 
+The native backend-test package selects its immutable output target directory in
+`prePatch`, before Crane restores dependency artifacts in `postPatch`. Changing
+it later in `buildPhase` strands the restored target and starts a second
+dependency build. The `cargo-target-handoff` Nix check executes the package's
+actual handoff and Crane's restoration hook, including a late-handoff negative
+control. Compiled test sources and embedded executable paths remain in the
+output; unused target artifacts are still removed after packaging.
+
 Lock-file and extra-source inputs are copied to content-scoped paths before
 staging. This prevents string-valued paths inside a store-backed source tree
 from pulling the entire parent snapshot into a build identity; Nix literal-path

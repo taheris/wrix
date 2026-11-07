@@ -336,12 +336,16 @@ in
     // fixtures.environment
   );
 
-  cacheBackendTests = workspace.nextest.overrideAttrs {
+  cacheBackendTests = workspace.nextest.overrideAttrs (old: {
+    # Crane restores dependencies in postPatch. Select the immutable target
+    # before that hook, not in buildPhase where it strands the restored cache.
+    prePatch = (old.prePatch or "") + ''
+      export CARGO_TARGET_DIR="$out/target"
+    '';
     pname = "wrix-celler-backend-tests";
     doCheck = false;
     doInstallCargoArtifacts = false;
     buildPhase = ''
-      export CARGO_TARGET_DIR="$out/target"
       runHook preBuild
       # Runtime fixture reads use CARGO_MANIFEST_DIR. Compile against retained
       # immutable sources, not the disposable Nix build directory. Do not copy
@@ -390,7 +394,7 @@ in
       "$out/bin/celler-auth-tests" --list | grep -Fx \
         'withdrawn_private_policy_denies_renewal_but_old_native_grants_read_new_publications: test'
     '';
-  };
+  });
 
   testFixtures = fixtures.bundle;
   testFixtureEnvironment = fixtures.environment;
