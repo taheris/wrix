@@ -12,6 +12,18 @@ let
     agentPkg = runner;
   };
   runtimeManifest = (wrix.mkSandbox { mcpRuntime = true; }).image.mcpAvailableJson;
+  guidanceHarness = import ../../lib/util/rust-tool.nix {
+    inherit pkgs;
+    package = "wrix-verify-tools";
+    description = "Native executable tmux guidance conformance";
+    nativeCheckInputs = [
+      pkgs.bash
+      pkgs.tmux
+      pkgs.curl
+      # The guide intentionally runs upstream Python's HTTP server example.
+      pkgs.python3
+    ];
+  };
 in
 {
   inherit sandbox;
@@ -34,22 +46,21 @@ in
         bash "$REPO_ROOT/tests/sandbox/entrypoint-contract.sh" test_retired_tmux_selection_rejected
         touch "$out"
       '';
-  checks.tmux-guidance-commands =
-    pkgs.runCommand "tmux-guidance-commands"
-      {
-        nativeBuildInputs = [
-          pkgs.bash
-          pkgs.tmux
-          pkgs.curl
-          pkgs.python3
-        ];
-      }
-      ''
-        set -euo pipefail
-        export REPO_ROOT=${src}
-        python3 "$REPO_ROOT/tests/tmux/test_guidance.py"
-        touch "$out"
-      '';
+  checks.tmux-guidance-commands = guidanceHarness.overrideAttrs {
+    pname = "tmux-guidance-commands";
+    cargoTestFlags = [
+      "--package"
+      "wrix-verify-tools"
+      "--test"
+      "tmux_guidance"
+    ];
+    checkFlags = [
+      "--ignored"
+      "--exact"
+      "documented_commands_support_native_debugging"
+    ];
+    WRIX_TEST_TMUX_GUIDE = ../../docs/tmux.md;
+  };
   checks.tmux-workflow-syntax =
     pkgs.runCommand "tmux-workflow-syntax"
       {
