@@ -41,22 +41,32 @@ let
     };
   lifecycle = mkRunner "test-services-devshell-start-independent" "services-devshell-start-independent";
   cache = mkRunner "test-services-limit-mode-cache-endpoint" "services-limit-mode-cache-endpoint";
-in
-pkgs.runCommandLocal "system-test-prerequisites"
-  {
-    nativeBuildInputs = [
+  harness = import ../../lib/util/rust-tool.nix {
+    inherit pkgs;
+    package = "wrix-verify-tools";
+    description = "Native Linux VM prerequisite conformance";
+    nativeCheckInputs = [
       pkgs.bash
       pkgs.coreutils
       pkgs.git
       pkgs.jq
       pkgs.nix
-      pkgs.python3
       pkgs.util-linux
     ];
-  }
-  ''
-    set -euo pipefail
-    python3 ${./test_vm_prerequisites.py} \
-      ${lifecycle} ${cache} ${../lib/verifier.sh} ${system} ${pkgs.bash}
-    touch "$out"
-  ''
+  };
+in
+harness.overrideAttrs {
+  pname = "system-test-prerequisites";
+  cargoTestFlags = [
+    "--package"
+    "wrix-verify-tools"
+    "--test"
+    "vm_prerequisites"
+  ];
+  checkFlags = [ "--ignored" ];
+  WRIX_TEST_VM_LIFECYCLE = lifecycle;
+  WRIX_TEST_VM_CACHE = cache;
+  WRIX_TEST_VM_LIBRARY = ../lib/verifier.sh;
+  WRIX_TEST_VM_SYSTEM = system;
+  WRIX_TEST_VM_BASH = "${pkgs.bash}/bin/bash";
+}
