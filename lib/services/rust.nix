@@ -66,6 +66,12 @@ let
   };
 
   workspace = rustProfile.buildPackage workspaceArgs;
+  compileOnlyWorkspace = rustProfile.buildPackage (
+    (import ./rust-compile-only-source.nix workspaceArgs)
+    // {
+      inherit (workspace) cargoArtifacts;
+    }
+  );
   runtimeWorkspace = rustProfile.buildPackage (
     workspaceArgs
     // {
@@ -336,7 +342,7 @@ in
     // fixtures.environment
   );
 
-  cacheBackendTests = workspace.nextest.overrideAttrs (old: {
+  cacheBackendTests = compileOnlyWorkspace.nextest.overrideAttrs (old: {
     # Crane restores dependencies in postPatch. Select the immutable target
     # before that hook, not in buildPhase where it strands the restored cache.
     prePatch = (old.prePatch or "") + ''

@@ -11,6 +11,21 @@ use serde_json::{Value, json};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 type Derivations = BTreeMap<String, String>;
+const DERIVATIONS: [&str; 6] = [
+    "launcher",
+    "image",
+    "clippy",
+    "nextest",
+    "dependencies",
+    "backend",
+];
+
+#[derive(Clone, Copy, Debug)]
+enum Change {
+    Configuration,
+    Integration,
+    Production,
+}
 
 fn execute(command: &mut Command) -> Result<Output> {
     let output = command.output()?;
@@ -86,6 +101,7 @@ fn derivations(root: &Path, git_env: &[String], source: &Path) -> Result<Derivat
         clippy = flake.legacyPackages.${system}.ciChecks.wrix-rust-clippy.drvPath;
         nextest = flake.legacyPackages.${system}.ciChecks.wrix-rust-nextest.drvPath;
         dependencies = rust.cargoArtifacts.drvPath;
+        backend = rust.cacheBackendTests.drvPath;
       }
     "#,
         ],
@@ -94,11 +110,13 @@ fn derivations(root: &Path, git_env: &[String], source: &Path) -> Result<Derivat
     Ok(serde_json::from_value(value)?)
 }
 
-fn compare(before: &Derivations, after: &Derivations, production: bool) -> Result<()> {
-    for key in ["launcher", "image", "clippy", "nextest", "dependencies"] {
+fn compare(before: &Derivations, after: &Derivations, change: Change) -> Result<()> {
+    for key in DERIVATIONS {
         let left = before.get(key).ok_or_else(|| format!("missing {key}"))?;
         let right = after.get(key).ok_or_else(|| format!("missing {key}"))?;
-        let changed = production && key != "dependencies" || matches!(key, "clippy" | "nextest");
+        let changed = matches!(change, Change::Production) && key != "dependencies"
+            || matches!(key, "clippy" | "nextest")
+            || key == "backend" && matches!(change, Change::Integration);
         if (left != right) != changed {
             return Err(format!("{key}: expected changed={changed}; {left} -> {right}").into());
         }
@@ -139,19 +157,19 @@ fn run(root: &Path) -> Result<Value> {
         "\n# Source-isolation probe.\n",
     )?;
     let configuration = derivations(&root, &git_env, &source)?;
-    compare(&original, &configuration, false)?;
+    compare(&original, &configuration, Change::Configuration)?;
     append(
         &source.join("crates/wrix-cli/tests/arguments.rs"),
         "\n// Source-isolation probe.\n",
     )?;
     let integration = derivations(&root, &git_env, &source)?;
-    compare(&configuration, &integration, false)?;
+    compare(&configuration, &integration, Change::Integration)?;
     append(
         &source.join("crates/wrix-cli/src/main.rs"),
         "\n// Source-isolation probe.\n",
     )?;
     let production = derivations(&root, &git_env, &source)?;
-    compare(&integration, &production, true)?;
+    compare(&integration, &production, Change::Production)?;
     Ok(
         json!({"original": original, "configuration_edit": configuration, "integration_edit": integration, "production_edit": production}),
     )
@@ -177,7 +195,7 @@ mod tests {
     use super::*;
 
     fn values() -> Derivations {
-        ["launcher", "image", "clippy", "nextest", "dependencies"]
+        DERIVATIONS
             .into_iter()
             .map(|key| (key.into(), key.into()))
             .collect()
@@ -185,15 +203,20 @@ mod tests {
 
     #[test]
     fn detector_rejects_each_wrong_dependency_or_missing_invalidation() {
-        for production in [false, true] {
+        for (change, changed_keys) in [
+            (Change::Configuration, &["clippy", "nextest"][..]),
+            (Change::Integration, &["clippy", "nextest", "backend"][..]),
+            (
+                Change::Production,
+                &["launcher", "image", "clippy", "nextest", "backend"][..],
+            ),
+        ] {
             let before = values();
             let mut after = before.clone();
-            for key in ["launcher", "image", "clippy", "nextest", "dependencies"] {
-                if production && key != "dependencies" || matches!(key, "clippy" | "nextest") {
-                    after.insert(key.into(), format!("changed-{key}"));
-                }
+            for key in changed_keys {
+                after.insert((*key).into(), format!("changed-{key}"));
             }
-            assert!(compare(&before, &after, production).is_ok());
+            assert!(compare(&before, &after, change).is_ok());
             for key in before.keys() {
                 let mut broken = after.clone();
                 broken.insert(
@@ -205,11 +228,11 @@ mod tests {
                     },
                 );
                 assert!(
-                    compare(&before, &broken, production).is_err(),
-                    "{production}: {key}"
+                    compare(&before, &broken, change).is_err(),
+                    "{change:?}: {key}"
                 );
                 broken.remove(key);
-                assert!(compare(&before, &broken, production).is_err());
+                assert!(compare(&before, &broken, change).is_err());
             }
         }
     }

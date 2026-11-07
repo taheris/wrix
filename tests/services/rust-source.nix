@@ -24,32 +24,36 @@ let
       name = "source";
       path = ./source-fixture + "/${name}";
     };
-  storedPackage =
-    root: lock:
-    rustProfile.buildPackage {
-      src = root;
-      cargoLock = lock;
-      extraSrcs = builtins.listToAttrs (
-        map
-          (name: {
-            inherit name;
-            value = root + "/${name}";
-          })
-          (
-            builtins.filter (name: builtins.pathExists (root + "/${name}")) [
-              ".config/nextest.toml"
-              "crates/probe/tests"
-              "crates/probe/examples"
-              "tests"
-            ]
-          )
-      );
-      srcFilter = import ../../lib/services/rust-source-filter.nix {
-        inherit (pkgs) lib;
-        inherit (craneLib) filterCargoSources;
-        inherit root;
-      };
+  storedArguments = root: lock: {
+    src = root;
+    cargoLock = lock;
+    extraSrcs = builtins.listToAttrs (
+      map
+        (name: {
+          inherit name;
+          value = root + "/${name}";
+        })
+        (
+          builtins.filter (name: builtins.pathExists (root + "/${name}")) [
+            ".config/nextest.toml"
+            "crates/probe/tests"
+            "crates/probe/examples"
+            "tests"
+          ]
+        )
+    );
+    srcFilter = import ../../lib/services/rust-source-filter.nix {
+      inherit (pkgs) lib;
+      inherit (craneLib) filterCargoSources;
+      inherit root;
     };
+  };
+  storedPackage = root: lock: rustProfile.buildPackage (storedArguments root lock);
+  compileOnlyPackage =
+    root: lock:
+    rustProfile.buildPackage (
+      import ../../lib/services/rust-compile-only-source.nix (storedArguments root lock)
+    );
   storedA = storedPackage (storedRoot "a") (storedRoot "a" + "/Cargo.lock");
   storedB = storedPackage (storedRoot "b") (storedRoot "b" + "/Cargo.lock");
   typedLock = storedPackage (storedRoot "a") (builtins.toPath (storedRoot "a" + "/Cargo.lock"));
@@ -72,6 +76,11 @@ let
     builtins.readFile ./source-fixture/a/Cargo.lock + "\n# Different lock bytes.\n"
   );
   lockChanged = storedPackage (storedRoot "a") changedLock;
+  compiledA = compileOnlyPackage (storedRoot "a") (storedRoot "a" + "/Cargo.lock");
+  compiledB = compileOnlyPackage (storedRoot "b") (storedRoot "b" + "/Cargo.lock");
+  compiledC = compileOnlyPackage (storedRoot "c") (storedRoot "c" + "/Cargo.lock");
+  compiledE = compileOnlyPackage configChanged (configChanged + "/Cargo.lock");
+  compiledLockChanged = compileOnlyPackage (storedRoot "a") changedLock;
 
   filtered =
     root:
@@ -135,6 +144,16 @@ assert storedA.bin.drvPath == storedE.bin.drvPath;
 assert storedA.cargoArtifacts.drvPath == storedE.cargoArtifacts.drvPath;
 assert storedA.clippy.drvPath != storedE.clippy.drvPath;
 assert storedA.nextest.drvPath != storedE.nextest.drvPath;
+assert compiledA.nextest.drvPath == compiledE.nextest.drvPath;
+assert compiledA.nextest.src == compiledE.nextest.src;
+assert compiledA.nextest.src != storedA.nextest.src;
+assert compiledA.bin.drvPath == storedA.bin.drvPath;
+assert compiledA.cargoArtifacts.drvPath == storedA.cargoArtifacts.drvPath;
+assert compiledA.nextest.drvPath != compiledB.nextest.drvPath;
+assert compiledA.nextest.drvPath != compiledC.nextest.drvPath;
+assert compiledA.cargoArtifacts.drvPath == compiledB.cargoArtifacts.drvPath;
+assert compiledA.cargoArtifacts.drvPath == compiledC.cargoArtifacts.drvPath;
+assert compiledA.cargoArtifacts.drvPath != compiledLockChanged.cargoArtifacts.drvPath;
 assert storedA.bin.drvPath != storedC.bin.drvPath;
 assert storedA.cargoArtifacts.drvPath == storedC.cargoArtifacts.drvPath;
 assert storedA.cargoArtifacts.drvPath != lockChanged.cargoArtifacts.drvPath;
@@ -146,6 +165,7 @@ assert receiptProbe.nextest.doCheck;
 assert !rustPackage.clippy.doInstallCargoArtifacts;
 assert !rustPackage.nextest.doInstallCargoArtifacts;
 assert rustPackage.cargoArtifacts.doInstallCargoArtifacts;
+assert rustPackage.cacheBackendTests.cargoArtifacts == rustPackage.cargoArtifacts;
 assert rustPackage.clippy.src == rustPackage.nextest.src;
 assert toString rustPackage.runtimePackage.src == toString rustPackage.package.src;
 assert hasInfix "--bin wrix-service-supervisor" rustPackage.runtimePackage.buildPhase;
@@ -164,6 +184,13 @@ pkgs.runCommand "test-rust-source-fixtures" { } ''
   ${concatMapStringsSep "\n" (relative: ''
     cmp "${rustPackage.clippy.src}/${relative}" "${../../. + "/${relative}"}"
   '') resources}
+  [[ ! -e ${compiledA.nextest.src}/.config/nextest.toml ]]
+  [[ ! -e ${rustPackage.cacheBackendTests.src}/.config/nextest.toml ]]
+  diff -r ${compiledA.nextest.src}/crates/probe/tests ${./source-fixture/a/crates/probe/tests}
+  diff -r ${compiledA.nextest.src}/tests ${./source-fixture/a/tests}
+  ${concatMapStringsSep "\n" (relative: ''
+    cmp "${rustPackage.cacheBackendTests.src}/${relative}" "${../../. + "/${relative}"}"
+  '') (builtins.filter (relative: relative != ".config/nextest.toml") resources)}
   cmp ${original}/lib/sandbox/network-bootstrap.sh ${./source-fixture/a/lib/sandbox/network-bootstrap.sh}
   [[ ! -e ${original}/tests ]]
   [[ ! -e ${original}/crates/probe/tests ]]
@@ -177,9 +204,11 @@ pkgs.runCommand "test-rust-source-fixtures" { } ''
   diff -r "${rustPackage.clippy.src}/crates/wrix-service/src/lifecycle/drain/native" \
     "${../../crates/wrix-service/src/lifecycle/drain/native}"
   diff -r "${rustPackage.clippy.src}/tests" "${../../tests}"
+  diff -r "${rustPackage.cacheBackendTests.src}/tests" "${../../tests}"
   for crate in wrix-cache wrix-cli wrix-core wrix-sandbox wrix-service; do
     [[ ! -e "${rustPackage.package.src}/crates/$crate/tests" ]]
     diff -r "${rustPackage.clippy.src}/crates/$crate/tests" "${../../crates}/$crate/tests"
+    diff -r "${rustPackage.cacheBackendTests.src}/crates/$crate/tests" "${../../crates}/$crate/tests"
   done
   mkdir "$out"
 ''

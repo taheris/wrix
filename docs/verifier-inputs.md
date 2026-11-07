@@ -125,8 +125,12 @@ The native backend-test package selects its immutable output target directory in
 it later in `buildPhase` strands the restored target and starts a second
 dependency build. The `cargo-target-handoff` Nix check executes the package's
 actual handoff and Crane's restoration hook, including a late-handoff negative
-control. Compiled test sources and embedded executable paths remain in the
-output; unused target artifacts are still removed after packaging.
+control. Its compile-only source lane omits unused Nextest runner configuration,
+so scheduling edits do not recompile these seven binaries. Ordinary Clippy and
+Nextest checks retain that configuration. Native Nix mutation controls preserve
+Rust/test/lock invalidation and complete runtime fixture staging. Compiled test
+sources and embedded executable paths remain in the output; unused target
+artifacts are still removed after packaging.
 
 Lock-file and extra-source inputs are copied to content-scoped paths before
 staging. This prevents string-valued paths inside a store-backed source tree
