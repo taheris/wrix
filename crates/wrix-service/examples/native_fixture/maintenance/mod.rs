@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     ffi::OsString,
     fs::{self, File, OpenOptions},
-    io::{self, Read, Write},
+    io::{self, BufRead, BufReader, Read, Write},
     net::Shutdown,
     os::unix::net::{UnixListener, UnixStream},
     path::{Path, PathBuf},
@@ -34,7 +34,7 @@ struct Reply {
 
 fn read_bounded(reader: &mut impl Read, limit: u64) -> Result<Vec<u8>, Error> {
     let mut bytes = Vec::new();
-    reader.take(limit + 1).read_to_end(&mut bytes)?;
+    BufReader::new(reader.take(limit + 1)).read_until(b'\n', &mut bytes)?;
     if bytes.len() as u64 > limit {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -174,6 +174,7 @@ async fn serve(root: &Path, executable: &Path) -> Result<(), Error> {
         }
         match listener.accept() {
             Ok((mut stream, _)) => {
+                stream.set_nonblocking(false)?;
                 stream.set_read_timeout(Some(Duration::from_secs(10)))?;
                 let args: Vec<String> = serde_json::from_slice(&read_bounded(&mut stream, 8192)?)?;
                 let mut log = OpenOptions::new()
@@ -186,6 +187,7 @@ async fn serve(root: &Path, executable: &Path) -> Result<(), Error> {
                     &mut stream,
                     &dispatch(root, executable, &mut child, &args)?,
                 )?;
+                stream.write_all(b"\n")?;
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
             Err(error) => return Err(error.into()),
@@ -285,13 +287,14 @@ mod test {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("manager.sock");
         let listener = UnixListener::bind(&path).unwrap();
+        let (release, released) = std::sync::mpsc::channel();
         let server = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             let args: Vec<String> =
                 serde_json::from_slice(&read_bounded(&mut stream, 8192).unwrap()).unwrap();
-            assert_eq!(args, ["two words", "", "λ"]);
+            assert_eq!(args, ["two words", "", "λ", "two\nlines"]);
             serde_json::to_writer(
-                stream,
+                &mut stream,
                 &Reply {
                     code: 91,
                     stdout: "output λ".into(),
@@ -299,11 +302,18 @@ mod test {
                 },
             )
             .unwrap();
+            stream.write_all(b"\n").unwrap();
+            released.recv_timeout(Duration::from_secs(20)).unwrap();
         });
-        let reply = request(&path, &["two words", "", "λ"].map(OsString::from)).unwrap();
+        let reply = request(
+            &path,
+            &["two words", "", "λ", "two\nlines"].map(OsString::from),
+        )
+        .unwrap();
         assert_eq!(reply.code, 91);
         assert_eq!(reply.stdout, "output λ");
         assert_eq!(reply.stderr, "diagnostic\n");
+        release.send(()).unwrap();
         server.join().unwrap();
     }
 
@@ -333,8 +343,20 @@ mod test {
     }
 
     #[test]
+    fn socket_frame_completes_without_peer_write_shutdown() {
+        let (mut reader, mut writer) = UnixStream::pair().unwrap();
+        reader
+            .set_read_timeout(Some(Duration::from_millis(100)))
+            .unwrap();
+        writer.write_all(b"[]\n").unwrap();
+        assert_eq!(read_bounded(&mut reader, 8192).unwrap(), b"[]\n");
+    }
+
+    #[test]
     fn socket_payload_limit_rejects_oversized_input() {
         assert!(read_bounded(&mut &b"12345"[..], 4).is_err());
         assert_eq!(read_bounded(&mut &b"1234"[..], 4).unwrap(), b"1234");
+        assert!(read_bounded(&mut &b"1234\n"[..], 4).is_err());
+        assert_eq!(read_bounded(&mut &b"123\n"[..], 4).unwrap(), b"123\n");
     }
 }

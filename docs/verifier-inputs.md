@@ -120,6 +120,11 @@ tests with the same 150 skips and identical passed IDs. Execution decreased from
 from the final result to result 330. These are warm native execution
 measurements, not cold Nix setup or whole-push timings.
 
+Maintenance fixture requests and replies use bounded newline-delimited JSON, not
+peer EOF as message completion. Native controls keep the peer open while
+checking complete arguments, Unicode/newlines, streams, failure status and
+payload bounds. The existing client/server deadlines are unchanged.
+
 The native backend-test package selects its immutable output target directory in
 `prePatch`, before Crane restores dependency artifacts in `postPatch`. Changing
 it later in `buildPhase` strands the restored target and starts a second
