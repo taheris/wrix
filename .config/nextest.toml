@@ -43,5 +43,5 @@ setup = "isolated-host-roots"
 command = ["bash", "tests/prepare-native-fixtures.sh"]
 
 [[profile.default.scripts]]
-filter = "(package(wrix-cli) & (binary(service_cache) | binary(service_lifecycle) | binary(beads_push) | binary(init_config) | binary(init_idempotency) | binary(init_prek) | binary(prek_bundle_build) | binary(prek_runtime) | (binary(workspace_admission) & test(hardening::consolidation)))) | (package(wrix-cache) & (binary(celler_backend) | binary(host_signed_exclusion))) | (package(wrix-service) & (binary(celler_auth) | binary(shared_startup) | binary(host_control) | (binary(wrix_service) & test(lifecycle::migration::test::))))"
+filter = "(package(wrix-cli) & (binary(service_cache) | binary(service_lifecycle) | binary(beads_push) | binary(host_configuration) | binary(init_config) | binary(init_idempotency) | binary(init_prek) | binary(prek_bundle_build) | binary(prek_runtime) | (binary(workspace_admission) & test(hardening::consolidation)))) | (package(wrix-cache) & (binary(celler_backend) | binary(host_signed_exclusion))) | (package(wrix-service) & (binary(celler_auth) | binary(shared_startup) | binary(host_control) | (binary(wrix_service) & test(lifecycle::migration::test::))))"
 setup = "packaging-fixtures"

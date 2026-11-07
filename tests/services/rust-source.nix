@@ -37,6 +37,7 @@ let
           })
           (
             builtins.filter (name: builtins.pathExists (root + "/${name}")) [
+              ".config/nextest.toml"
               "crates/probe/tests"
               "crates/probe/examples"
               "tests"
@@ -60,6 +61,13 @@ let
     printf 'Unrelated project documentation.\n' > "$out/README.md"
   '';
   storedD = storedPackage notesChanged (notesChanged + "/Cargo.lock");
+  configChanged = pkgs.runCommand "source" { } ''
+    set -euo pipefail
+    cp -r ${storedRoot "a"} "$out"
+    chmod -R u+w "$out"
+    printf '[profile.default]\ntest-threads = 2\n' > "$out/.config/nextest.toml"
+  '';
+  storedE = storedPackage configChanged (configChanged + "/Cargo.lock");
   changedLock = builtins.toFile "Cargo.lock" (
     builtins.readFile ./source-fixture/a/Cargo.lock + "\n# Different lock bytes.\n"
   );
@@ -123,6 +131,10 @@ assert builtins.all (field: storedA.${field}.drvPath == storedD.${field}.drvPath
   "cargoArtifacts"
 ];
 assert storedA.cargoArtifacts.drvPath == storedB.cargoArtifacts.drvPath;
+assert storedA.bin.drvPath == storedE.bin.drvPath;
+assert storedA.cargoArtifacts.drvPath == storedE.cargoArtifacts.drvPath;
+assert storedA.clippy.drvPath != storedE.clippy.drvPath;
+assert storedA.nextest.drvPath != storedE.nextest.drvPath;
 assert storedA.bin.drvPath != storedC.bin.drvPath;
 assert storedA.cargoArtifacts.drvPath == storedC.cargoArtifacts.drvPath;
 assert storedA.cargoArtifacts.drvPath != lockChanged.cargoArtifacts.drvPath;
@@ -157,6 +169,7 @@ pkgs.runCommand "test-rust-source-fixtures" { } ''
   [[ ! -e ${original}/crates/probe/tests ]]
   [[ ! -e ${original}/crates/probe/examples ]]
   [[ ! -e ${rustPackage.package.src}/tests ]]
+  [[ ! -e ${rustPackage.package.src}/.config/nextest.toml ]]
   for crate in ${concatStringsSep " " exampleCrates}; do
     [[ ! -e "${rustPackage.package.src}/crates/$crate/examples" ]]
     diff -r "${rustPackage.clippy.src}/crates/$crate/examples" "${../../crates}/$crate/examples"
