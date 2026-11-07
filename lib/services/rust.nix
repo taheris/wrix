@@ -329,6 +329,7 @@ in
       preCheck = preCheck + ''
         HOME="$(mktemp -d)"
         export HOME
+        git -c init.defaultBranch=main init --quiet
       '';
       WRIX_TEST_PUBLISHER_HELPER = "${cacheHookTestPublisher}/bin/wrix-cache-test-publisher";
     }

@@ -126,7 +126,10 @@ controller and runtime adapters. Nix source regressions verify that changing
 tests/examples leaves production source identity unchanged, changing production
 code does not, and a leaking projection is rejected. Production bootstrap script
 inclusion and complete example/test staging remain checked against the original
-sources.
+sources. Packaged Nextest initializes an isolated Git worktree in its disposable
+build source so in-process repository-policy checks have the same Git context as
+ordinary Cargo runs, without personal Git metadata or changes to production
+packages.
 
 ## Metadata and artifact lanes
 
