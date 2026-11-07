@@ -112,6 +112,14 @@ profile-config parser check uses the inherited Cargo profile, avoiding a second
 debug build beside release dependencies. Neither change disables checks or
 changes their selected cases.
 
+Nextest schedules the existing long SSH backpressure regression early rather
+than shortening its waiting budget. A matched local all-target experiment kept
+eight threads, all groups and all test bodies unchanged: both runs passed 1,594
+tests with the same 150 skips and identical passed IDs. Execution decreased from
+165.501 to 141.814 seconds; the regression still ran for 31.27 seconds, moving
+from the final result to result 330. These are warm native execution
+measurements, not cold Nix setup or whole-push timings.
+
 The native backend-test package selects its immutable output target directory in
 `prePatch`, before Crane restores dependency artifacts in `postPatch`. Changing
 it later in `buildPhase` strands the restored target and starts a second

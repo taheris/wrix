@@ -3,6 +3,11 @@ experimental = ["setup-scripts"]
 [profile.default]
 test-threads = 8
 
+# Start long backpressure coverage early without shortening its waiting budget.
+[[profile.default.overrides]]
+filter = "package(wrix-service) & test(paused_ssh_receiver_keeps_bounded_flow_control_and_reverse_traffic_without_write_deadline)"
+priority = 100
+
 [test-groups.deployment-role-ports]
 max-threads = 1
 
