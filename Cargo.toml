@@ -71,6 +71,14 @@ wrix-service = { path = "crates/wrix-service" }
 wrix-service-server = { path = "crates/wrix-service-server" }
 wrix-state = { path = "crates/wrix-state" }
 
+# Keep file/line backtraces without duplicating full type debug information in
+# every native test executable. Production release settings remain unchanged.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.test]
+debug = "line-tables-only"
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
