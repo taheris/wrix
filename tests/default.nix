@@ -254,6 +254,7 @@ let
       host-service-package-binding = import ./services/package-binding.nix { inherit pkgs wrix; };
       client-package-boundary = import ./services/client-package.nix { inherit pkgs wrix; };
       client-server-dependency-boundary = import ./services/client-graph.nix { inherit pkgs wrix; };
+      profile-catalogue = import ./profiles/catalogue.nix { inherit pkgs wrix linuxPkgs; };
       shared-nix-host-binding = import ./store/pool-binding.nix { inherit pkgs wrix; };
       docker-image-stream = dockerImageStreamCheck;
       layer-planner-differential = layerPlannerChecks.differential;
@@ -517,6 +518,20 @@ let
       (mkDefinedCiApp linuxBuilderChecks.sourceKindLoadTransportTest "test-linux-builder-source-kind-load-transport")
       (mkCiApp testProfilesBuildPackage "test-profiles-build-package")
       (mkCiApp testProfileImagesManifestShape "test-profile-images-manifest-shape")
+      (mkCiApp (pkgs.writeShellApplication {
+        name = "test-profile-catalogue-realization";
+        runtimeInputs = [
+          pkgs.nix
+          pkgs.jq
+          pkgs.coreutils
+          pkgs.diffutils
+          pkgs.gnugrep
+        ];
+        text = ''
+          exec ${pkgs.bash}/bin/bash ${./profiles/catalogue-realization.sh} \
+            ${ciChecks.profile-catalogue.catalogue} rust direct
+        '';
+      }) "test-profile-catalogue-realization")
       (mkCiApp testProfileConfigImageSourceKind "test-profile-config-image-source-kind")
       (mkCiApp testProfileConfigWrapper "test-profile-config-wrapper")
       (mkCiApp testProfileConfigParserAgreement "test-profile-config-parser-agreement")
@@ -686,6 +701,7 @@ let
           host-service-package-binding
           client-package-boundary
           client-server-dependency-boundary
+          profile-catalogue
           cache-celler-packaging
           shared-nix-host-binding
           docker-image-stream

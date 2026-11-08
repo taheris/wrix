@@ -15,6 +15,8 @@ nix-darwin, `nix profile add` and temporary Nix provision remain supported; see
 `wrix service prepare`, bounded consumer fixtures and the separate Loom image
 catalogue fan-out. Pure images/configuration remain available for programmatic
 `spawn`; configured sandbox runners are not compatibility entry points.
+[Profile Catalogue Integration](profile-catalogue.md) describes the separate
+lightweight catalogue API, selected provisioning and remaining Loom migration.
 
 [Claude stdio clients](claude-stdio.md) describes the explicit
 permission-protocol opt-in through `SpawnConfig.agent_args` and its
@@ -99,6 +101,7 @@ optional, consumer-provided OmniWM CLI integration and desktop shortcuts.
 | **prek**                          | Rust-based pre-commit framework (drop-in replacement for pre-commit)                                                                                                              |
 | **project Nix cache**             | Celler-backed authorized read set of canonical repository-private and approved common public-dependency views; archives may be physically shared and age-evicted                  |
 | **profile**                       | Pre-configured set of packages and environment variables                                                                                                                          |
+| **profile catalogue**             | Versioned profile/agent metadata retaining recipes for explicit single-entry image/configuration provisioning, not realized image paths                                           |
 | **ProfileConfig**                 | Immutable Nix-generated JSON config consumed by the Rust `wrix` launcher                                                                                                          |
 | **sandbox**                       | Isolated container environment for running Pi, Claude, or a consumer-supplied agent runner                                                                                        |
 | **host controller**               | Host-user Wrix control service owning stable role routing, private management/issuance and generation lifecycle outside replaceable containers; not an agent supervisor           |

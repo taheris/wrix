@@ -513,6 +513,37 @@ Bundled `packages.profile-images` covers the built-in Pi images. External flakes
 use the same data-only helper for custom profiles and explicit consumer direct
 runners; there is no redundant `profile-images-pi` manifest.
 
+### Lightweight Profile Catalogue
+
+`mkProfileCatalogue` accepts a profile → agent → `mkSandbox.image` matrix and
+returns schema-1 JSON `{ schema, profiles }`. Each entry contains `ref`,
+`source_kind` and `realization = { path, derivation }`. The latter pair binds
+one immutable, single-entry manifest in the existing `mkProfileImages` format.
+`catalogue.provisions.<profile>.<agent>` exposes that manifest derivation for
+explicit Nix provisioning. `capabilities.profileCatalogue == 1` advertises this
+producer interface, not host/runtime readiness.
+
+Building or copying the catalogue retains recipes without realizing images,
+configurations or another Wrix executable. Sources and configurations are pinned
+derivations; invalid/mismatched agent keys, unsupported source kinds, missing
+configuration and output-bearing catalogue metadata are rejected. Selected
+provisioning retains normal image/configuration output contexts, so a real GC
+root on the selected manifest retains its payload closure. A change to one entry
+invalidates its catalogue metadata and manifest, without invalidating unrelated
+selected manifests. [check](test-ci:profile-catalogue)
+[system](test-ci:test-profile-catalogue-realization)
+
+A consumer explicitly selects an entry, checks its bound derivation output,
+realizes that recipe through trusted Nix with a GC root, and parses the
+resulting manifest before launch. Catalogue metadata is not a materialized
+ProfileConfig or a substitute for image, agent, native capability, runtime and
+authenticated controller checks. Catalogue support does not alter
+`mkProfileImages` or make legacy manifest consumers lazy. Consumer migration and
+admission requirements are described in
+[Profile Catalogue Integration](../docs/profile-catalogue.md).
+[check](test-ci:profile-catalogue)
+[system](test-ci:test-profile-catalogue-realization)
+
 ## Flake Outputs
 
 Acceptance: [Manifest and Output Acceptance](#manifest-and-output-acceptance).

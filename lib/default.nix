@@ -84,6 +84,7 @@ in
     profiles
     mkSandbox
     mkProfileImages
+    mkProfileCatalogue
     ;
   inherit beads serviceImage;
   inherit (sandboxLib) nixPoolImage nixPoolOwner;
