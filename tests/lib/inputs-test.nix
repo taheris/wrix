@@ -88,6 +88,13 @@ let
     };
     system = "aarch64-darwin";
   };
+  linuxBrowser = import ../verify/playwright-mcp.nix {
+    pkgs = {
+      inherit (pkgs) lib;
+      stdenv.hostPlatform.isDarwin = false;
+    };
+    system = "aarch64-linux";
+  };
   browserChecks = import ../mcp/playwright/check.nix {
     pkgs = throw "description evaluated browser tools";
     linuxPkgs = throw "description evaluated browser packages";
@@ -106,6 +113,11 @@ assert !(elem "/crates/" browserChecks.executablePathCheck.inputs);
 assert !(elem "/specs/" browserChecks.executablePathCheck.inputs);
 assert elem "/crates/" imageResources.runtimeInputs;
 assert elem "/crates/" darwinBrowser."playwright-mcp.screenshot".inputs;
+assert elem "/crates/wrix-verify-tools/" linuxBrowser."playwright-mcp.screenshot".inputs;
+assert elem "/lib/util/rust-tool.nix" linuxBrowser."playwright-mcp.screenshot".inputs;
+assert elem "/Cargo.lock" linuxBrowser."playwright-mcp.screenshot".inputs;
+assert !(elem "/crates/" linuxBrowser."playwright-mcp.screenshot".inputs);
+assert !(elem "/crates/wrix-verify-tools/" linuxBrowser."playwright-mcp.smoke".inputs);
 assert elem "/lib/sandbox/" darwinBrowser."playwright-mcp.smoke".inputs;
 assert !(elem "/crates/" darwinBrowser."playwright-mcp.registry-triple".inputs);
 assert elem "/lib/services/" imageResources.runtimeInputs;

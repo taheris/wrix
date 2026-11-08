@@ -27,6 +27,17 @@ let
   playwrightFunctions =
     if pkgs.stdenv.hostPlatform.isDarwin then playwrightGuestFunctions else playwrightScriptFunctions;
   playwrightAll = script: playwrightFunctions script [ ];
+  cleanupInputs = [
+    "/Cargo.toml"
+    "/Cargo.lock"
+    "/clippy.toml"
+    "/crates/**/Cargo.toml"
+    "/crates/**/lib.rs"
+    "/crates/**/main.rs"
+    "/crates/wrix-verify-tools/"
+    "/lib/util/rust-tool.nix"
+    "/tests/fixtures/build-package-fixture/build.rs"
+  ];
 in
 {
   "playwright-mcp.registry-triple" = defined ''
@@ -36,7 +47,12 @@ in
       "$root#legacyPackages.${system}.testApps.playwright-mcp-registry"
   '';
 
-  "playwright-mcp.screenshot" = playwrightAll "screenshot-test";
+  "playwright-mcp.screenshot" = (playwrightAll "screenshot-test") // {
+    inputs =
+      (if pkgs.stdenv.hostPlatform.isDarwin then resources.runtimeInputs else [ ])
+      ++ resources.browserInputs
+      ++ cleanupInputs;
+  };
 
   "playwright-mcp.smoke" = playwrightFunctions "smoke-test" [
     "test_network_guard_blocks_ipv4_connect"
