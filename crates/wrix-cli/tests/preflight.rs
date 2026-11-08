@@ -6,6 +6,8 @@ use std::{
 };
 
 use serde_json::{Value, json};
+#[path = "../../wrix-sandbox/tests/common/runtime_environment.rs"]
+mod runtime_environment;
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
@@ -307,13 +309,17 @@ fn dry_run_reports_launch_policy_and_provenance() -> TestResult {
         String::from_utf8_lossy(&output.stderr)
     );
     let argv = String::from_utf8(fs::read(fixture.root.path().join("argv"))?)?;
-    for expected in [
-        "localhost/wrix-test:latest",
-        "WRIX_EFFECTIVE_GIT_SIGN=1",
-        "WRIX_NETWORK=open",
-    ] {
-        assert!(argv.contains(expected), "{expected}: {argv}");
-    }
+    assert!(argv.contains("localhost/wrix-test:latest"));
+    let delivered = runtime_environment::read(&fixture.root.path().join("argv.environment"))?;
+    assert_eq!(
+        delivered.get("WRIX_EFFECTIVE_GIT_SIGN").map(String::as_str),
+        Some("1")
+    );
+    assert_eq!(
+        delivered.get("WRIX_NETWORK").map(String::as_str),
+        Some("open")
+    );
+    assert!(!delivered.contains_key("WRIX_DEPLOY_KEY"));
     let arguments: Vec<_> = argv.split('\0').collect();
     let resources = if cfg!(target_os = "macos") {
         &["-c", "2", "-m", "1234M"][..]
