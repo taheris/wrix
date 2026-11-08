@@ -398,6 +398,8 @@ pub enum Error {
     ImageId { source: ImageIdParseError },
     /// image does not implement private Nix v1: {image_ref}; rebuild the sandbox and use its matching ProfileConfig
     PrivateNixUnavailable { image_ref: String },
+    /// image does not implement private environment delivery v1: {image_ref}; update Wrix and rebuild the matching worker image
+    RuntimeEnvironmentUnavailable { image_ref: String },
     /// image ID is unavailable for store target: {target}
     MissingImageId { target: String },
     /// {source}
@@ -840,6 +842,21 @@ pub fn require_private_nix(runtime: Runtime, image_ref: &ImageRef) -> Result<(),
     Ok(())
 }
 
+/// Require the image-pinned guest decoder before staging any runtime environment.
+pub fn require_runtime_environment(runtime: Runtime, image_ref: &ImageRef) -> Result<(), Error> {
+    let version = inspect_value(
+        runtime,
+        &Target::Reference(image_ref.clone()),
+        InspectField::RuntimeEnvironment,
+    )?;
+    if version.as_deref() != Some("1") {
+        return Err(Error::RuntimeEnvironmentUnavailable {
+            image_ref: image_ref.as_str().to_owned(),
+        });
+    }
+    Ok(())
+}
+
 fn linux_store_ref(image_ref: &ImageRef) -> String {
     // Store discovery is optional: containers-storage resolves its configured default
     // when Podman cannot supply explicit graph/run roots.
@@ -869,6 +886,7 @@ enum InspectField {
     Managed,
     Kind,
     PrivateNix,
+    RuntimeEnvironment,
 }
 
 fn runtime_selector(runtime: Runtime, target: &Target) -> Result<String, Error> {
@@ -898,6 +916,9 @@ fn inspect_value(
                 InspectField::Managed => "{{ index .Config.Labels \"wrix.managed\" }}",
                 InspectField::Kind => "{{ index .Config.Labels \"wrix.image.kind\" }}",
                 InspectField::PrivateNix => "{{ index .Config.Labels \"wrix.nix.private\" }}",
+                InspectField::RuntimeEnvironment => {
+                    "{{ index .Config.Labels \"wrix.runtime.environment\" }}"
+                }
             };
             run_output(
                 "podman",
@@ -945,6 +966,9 @@ fn inspect_container_value(stdout: &[u8], field: InspectField) -> Result<Option<
         InspectField::Managed => consistent_container_label(&value, "wrix.managed"),
         InspectField::Kind => consistent_container_label(&value, "wrix.image.kind"),
         InspectField::PrivateNix => consistent_container_label(&value, "wrix.nix.private"),
+        InspectField::RuntimeEnvironment => {
+            consistent_container_label(&value, "wrix.runtime.environment")
+        }
     }
 }
 
@@ -1420,6 +1444,38 @@ mod test {
             inspect_container_value(b"[{}]", InspectField::PrivateNix).expect("parse image"),
             None
         );
+    }
+
+    #[test]
+    fn apple_runtime_environment_version_requires_consistent_matching_label_shapes() {
+        for image in [
+            json!([{"labels": {"wrix.runtime.environment": "1"}}]),
+            json!([{"Labels": {"wrix.runtime.environment": "1"}}]),
+            json!([{"variants": [{"config": {"config": {"Labels": {"wrix.runtime.environment": "1"}}}}]}]),
+        ] {
+            assert_eq!(
+                inspect_container_value(
+                    &serde_json::to_vec(&image).unwrap(),
+                    InspectField::RuntimeEnvironment
+                )
+                .unwrap(),
+                Some("1".to_owned())
+            );
+        }
+        for image in [
+            json!([{}]),
+            json!([{"labels": {"wrix.nix.private": "1"}}]),
+            json!([{"labels": {"wrix.runtime.environment": "1"}, "Labels": {"wrix.runtime.environment": "2"}}]),
+        ] {
+            assert_eq!(
+                inspect_container_value(
+                    &serde_json::to_vec(&image).unwrap(),
+                    InspectField::RuntimeEnvironment
+                )
+                .unwrap(),
+                None
+            );
+        }
     }
 
     #[test]

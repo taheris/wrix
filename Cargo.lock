@@ -3578,6 +3578,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "wrix-runtime-env"
+version = "0.1.0"
+dependencies = [
+ "displaydoc",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "wrix-sandbox"
 version = "0.1.0"
 dependencies = [
@@ -3596,6 +3605,7 @@ dependencies = [
  "wrix-cache",
  "wrix-core",
  "wrix-notify",
+ "wrix-runtime-env",
  "wrix-state",
 ]
 

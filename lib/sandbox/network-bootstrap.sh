@@ -1,6 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 
+if [[ "${WRIX_NETWORK_ENVIRONMENT_READY:-}" != 1 ]]; then
+  exec /usr/local/libexec/wrix-runtime-env network "$@"
+fi
+
 # Privileged firewall setup uses image-pinned tools on both platforms.
 # No workspace code may run before this process is replaced through capsh.
 readonly WRIX_NETWORK_TOOL_DIR="/usr/local/libexec/wrix-network"

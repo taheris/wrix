@@ -1,6 +1,8 @@
 mod common;
 #[path = "common/lifecycle/mod.rs"]
 mod lifecycle;
+#[path = "common/runtime_environment.rs"]
+mod runtime_environment;
 
 use std::{
     collections::BTreeMap,
@@ -110,11 +112,14 @@ fn unsafe_podman_socket_opt_in_mounts_existing_socket() -> TestResult {
         "{}:/run/podman/podman.sock",
         socket_path.display()
     )));
-    assert!(
-        run.stdout
-            .contains("CONTAINER_HOST=unix:///run/podman/podman.sock")
+    assert_eq!(
+        run.guest_environment
+            .get("CONTAINER_HOST")
+            .map(String::as_str),
+        Some("unix:///run/podman/podman.sock")
     );
-    assert!(run.stdout.contains("GC_HOST_WORKSPACE="));
+    assert!(run.guest_environment.contains_key("GC_HOST_WORKSPACE"));
+    assert!(!run.stdout.contains("CONTAINER_HOST="));
     Ok(())
 }
 
@@ -143,17 +148,17 @@ fn git_grants_follow_override_repo_default_precedence() -> TestResult {
                     )?;
                     assert!(output.success, "{}", output.stderr);
                     assert_key_environment(
-                        &output.stdout,
+                        fixture.root.path(),
                         overrides.unwrap_or(deploy),
                         sign_override.unwrap_or(sign),
-                    );
+                    )?;
                 }
             }
         }
         fs::remove_file(fixture.workspace.join("wrix.toml"))?;
         let output = fixture.run(mode, GitGrants::default(), Vec::new(), true)?;
         assert!(output.success, "{}", output.stderr);
-        assert_key_environment(&output.stdout, false, false);
+        assert_key_environment(fixture.root.path(), false, false)?;
     }
     Ok(())
 }
@@ -182,7 +187,7 @@ fn git_key_identity_uses_the_selected_repository_before_profile() -> TestResult 
         )?;
         let output = fixture.run(mode, GitGrants::default(), Vec::new(), true)?;
         assert!(output.success, "{}", output.stderr);
-        assert_key_environment(&output.stdout, true, false);
+        assert_key_environment(fixture.root.path(), true, false)?;
 
         fixture.workspace = fixture
             .workspace
@@ -197,7 +202,7 @@ fn git_key_identity_uses_the_selected_repository_before_profile() -> TestResult 
         )?;
         let output = fixture.run(mode, GitGrants::default(), Vec::new(), true)?;
         assert!(output.success, "{}", output.stderr);
-        assert_key_environment(&output.stdout, false, true);
+        assert_key_environment(fixture.root.path(), false, true)?;
     }
     Ok(())
 }
@@ -214,7 +219,7 @@ fn git_key_grants_are_independent_and_ambient_sources_do_not_grant() -> TestResu
             let ambient = fixture.pointer_environment(ambient_valid, ambient_valid);
             let output = fixture.run(mode, GitGrants::default(), ambient, true)?;
             assert!(output.success, "{}", output.stderr);
-            assert_key_environment(&output.stdout, false, false);
+            assert_key_environment(fixture.root.path(), false, false)?;
         }
         for (deploy, sign) in grant_combinations() {
             for invalid_ungranted in [false, true] {
@@ -234,7 +239,8 @@ fn git_key_grants_are_independent_and_ambient_sources_do_not_grant() -> TestResu
                         true,
                     )?;
                     assert!(output.success, "{}", output.stderr);
-                    assert_key_environment(&output.stdout, deploy, sign);
+                    assert_key_environment(fixture.root.path(), deploy, sign)?;
+                    assert!(!output.guest_environment.contains_key("WRIX_GIT_SIGN"));
                     assert!(!output.stdout.contains("WRIX_GIT_SIGN="));
                     assert!(!output.stdout.contains("host-source"));
                 }
@@ -243,7 +249,7 @@ fn git_key_grants_are_independent_and_ambient_sources_do_not_grant() -> TestResu
         fs::remove_dir_all(fixture.root.path().join("home/.ssh"))?;
         let output = fixture.run(mode, GitGrants::default(), Vec::new(), true)?;
         assert!(output.success, "{}", output.stderr);
-        assert_key_environment(&output.stdout, false, false);
+        assert_key_environment(fixture.root.path(), false, false)?;
     }
     Ok(())
 }
@@ -324,43 +330,13 @@ fn independent_git_grants_use_fixed_private_key_destinations() -> TestResult {
             )?;
             assert!(output.success, "{}", output.stderr);
             let argv = fixture.argv()?;
-            let env = argv
-                .iter()
-                .filter_map(|arg| arg.strip_prefix("WRIX_"))
-                .collect::<Vec<_>>();
-            assert_eq!(
-                env.iter()
-                    .filter(|arg| arg.starts_with("DEPLOY_KEY="))
-                    .copied()
-                    .collect::<Vec<_>>(),
-                if deploy {
-                    vec!["DEPLOY_KEY=/etc/wrix/keys/repo-key"]
-                } else {
-                    vec![]
-                }
-            );
-            assert_eq!(
-                env.iter()
-                    .filter(|arg| arg.starts_with("SIGNING_KEY="))
-                    .copied()
-                    .collect::<Vec<_>>(),
-                if sign {
-                    vec!["SIGNING_KEY=/etc/wrix/keys/repo-key-signing"]
-                } else {
-                    vec![]
-                }
-            );
-            assert!(!env.iter().any(|arg| arg.starts_with("GIT_SIGN=")));
-            assert_eq!(
-                env.iter()
-                    .filter(|arg| arg.starts_with("EFFECTIVE_GIT_SIGN="))
-                    .copied()
-                    .collect::<Vec<_>>(),
-                if sign {
-                    vec!["EFFECTIVE_GIT_SIGN=1"]
-                } else {
-                    vec!["EFFECTIVE_GIT_SIGN=0"]
-                }
+            let env =
+                runtime_environment::read_pairs(&fixture.root.path().join("argv.environment"))?;
+            assert_delivered_key_environment(&env, deploy, sign);
+            assert!(!env.iter().any(|(name, _)| name == "WRIX_GIT_SIGN"));
+            assert!(
+                !env.iter()
+                    .any(|(_, value)| value.contains("host-source") || value.contains(".pub"))
             );
             assert!(
                 !argv
@@ -516,9 +492,11 @@ fn deploy_key_mount_uses_container_key_dir_without_public_key() -> TestResult {
 
     assert!(run.success, "{}", run.stderr);
     assert!(run.stdout.contains(":/etc/wrix/keys:ro"));
-    assert!(
-        run.stdout
-            .contains("WRIX_DEPLOY_KEY=/etc/wrix/keys/repo-key")
+    assert_eq!(
+        run.guest_environment
+            .get("WRIX_DEPLOY_KEY")
+            .map(String::as_str),
+        Some("/etc/wrix/keys/repo-key")
     );
     assert!(!run.stdout.contains("repo-key.pub"));
     assert!(!run.stdout.contains(&key_path.display().to_string()));
@@ -596,8 +574,20 @@ fn host_provider_credentials_reach_run_environment() -> TestResult {
     )?;
 
     assert!(run.success, "{}", run.stderr);
-    assert!(run.stdout.contains("OPENAI_API_KEY=openai-test"));
-    assert!(run.stdout.contains("ANTHROPIC_API_KEY=anthropic-test"));
+    assert_eq!(
+        run.guest_environment
+            .get("OPENAI_API_KEY")
+            .map(String::as_str),
+        Some("openai-test")
+    );
+    assert_eq!(
+        run.guest_environment
+            .get("ANTHROPIC_API_KEY")
+            .map(String::as_str),
+        Some("anthropic-test")
+    );
+    assert!(!run.stdout.contains("openai-test"));
+    assert!(!run.stdout.contains("anthropic-test"));
     Ok(())
 }
 
@@ -632,10 +622,13 @@ fn declared_custom_runtime_secret_reaches_run_environment() -> TestResult {
     )?;
 
     assert!(run.success, "{}", run.stderr);
-    assert!(
-        run.stdout
-            .contains("CUSTOM_PROVIDER_TOKEN=custom-secret-value")
+    assert_eq!(
+        run.guest_environment
+            .get("CUSTOM_PROVIDER_TOKEN")
+            .map(String::as_str),
+        Some("custom-secret-value")
     );
+    assert!(!run.stdout.contains("custom-secret-value"));
     Ok(())
 }
 
@@ -705,17 +698,14 @@ fn runtime_mcp_selection_reaches_entrypoint() -> TestResult {
                 environment.push(("WRIX_MCP", selection));
             }
             let argv = fixture.launched_argv(child, &environment)?;
-            let forwarded: Vec<_> = argv
-                .iter()
-                .filter(|arg| arg.starts_with("WRIX_MCP="))
-                .collect();
-            assert_eq!(
-                forwarded,
-                selection
-                    .map(|value| format!("WRIX_MCP={value}"))
-                    .iter()
-                    .collect::<Vec<_>>()
+            let delivered = runtime_environment::read(&fixture.root().join("argv.environment"))?;
+            assert_eq!(delivered.get("WRIX_MCP").map(String::as_str), selection);
+            assert!(
+                !delivered
+                    .keys()
+                    .any(|name| name.starts_with("WRIX_MCP_TMUX_"))
             );
+            assert!(!argv.iter().any(|arg| arg.starts_with("WRIX_MCP=")));
             assert!(!argv.iter().any(|arg| arg.starts_with("WRIX_MCP_TMUX_")));
         }
     }
@@ -829,9 +819,11 @@ fn pi_auth_file_uses_platform_delivery_path() -> TestResult {
         "{}.wrix-auth:/mnt/wrix/pi-agent-auth",
         auth.display()
     )));
-    assert!(
-        run.stdout
-            .contains("WRIX_PI_AUTH_JSON=/mnt/wrix/pi-agent-auth/auth.json")
+    assert_eq!(
+        run.guest_environment
+            .get("WRIX_PI_AUTH_JSON")
+            .map(String::as_str),
+        Some("/mnt/wrix/pi-agent-auth/auth.json")
     );
     assert!(!run.stdout.contains("sibling"));
     assert!(auth.is_symlink());
@@ -980,6 +972,7 @@ fn linux_default_boundary_preserves_real_identity() -> TestResult {
         Vec::new(),
     )?;
     assert!(run.success, "{}", run.stderr);
+    assert!(!run.guest_environment.contains_key("LD_PRELOAD"));
     assert!(!run.stdout.contains("LD_PRELOAD="));
     assert!(!run.stdout.contains("LD_PRELOAD"));
     assert!(!run.stdout.contains("libfakeuid"));
@@ -1056,13 +1049,22 @@ fn profile_mounts_expand_only_home_and_user_variables() -> TestResult {
     assert!(run.success, "{}", run.stderr);
     for index in 0..mounts.len() {
         assert!(
-            run.stdout.contains(&format!("/mnt/test{index}")),
+            run.stdout.contains(&format!("/mnt/test{index}"))
+                || run
+                    .guest_environment
+                    .values()
+                    .any(|value| value.contains(&format!("/mnt/test{index}"))),
             "{}",
             run.stdout
         );
     }
     assert!(!run.stdout.contains("$HOME"));
     assert!(!run.stdout.contains("$USER"));
+    assert!(
+        !run.guest_environment
+            .values()
+            .any(|value| value.contains("$HOME") || value.contains("$USER"))
+    );
     Ok(())
 }
 
@@ -1099,7 +1101,14 @@ fn claude_spawn_forwards_explicit_permission_protocol_arguments() -> TestResult 
         .split(|byte| *byte == 0)
         .map(String::from_utf8_lossy)
         .collect();
-    assert!(argv.iter().any(|arg| arg == "WRIX_STDIO=1"));
+    assert_eq!(
+        result
+            .guest_environment
+            .get("WRIX_STDIO")
+            .map(String::as_str),
+        Some("1")
+    );
+    assert!(!argv.iter().any(|arg| arg == "WRIX_STDIO=1"));
     assert_eq!(&argv[argv.len() - arguments.len()..], &arguments);
     Ok(())
 }
@@ -1221,25 +1230,36 @@ fn deploy_key_fixture() -> ProfileFixture {
     }
 }
 
-fn assert_key_environment(output: &str, deploy: bool, sign: bool) {
-    assert!(
-        output.contains(&format!("WRIX_EFFECTIVE_GIT_SIGN={}\n", u8::from(sign))),
-        "{output}"
+fn assert_key_environment(root: &Path, deploy: bool, sign: bool) -> TestResult {
+    let pairs = runtime_environment::read_pairs(&root.join("argv.environment"))?;
+    assert_delivered_key_environment(&pairs, deploy, sign);
+    Ok(())
+}
+
+fn assert_delivered_key_environment(pairs: &[(String, String)], deploy: bool, sign: bool) {
+    assert_eq!(
+        pairs
+            .iter()
+            .filter(|(name, _)| name == "WRIX_EFFECTIVE_GIT_SIGN")
+            .map(|(_, value)| value.as_str())
+            .collect::<Vec<_>>(),
+        [if sign { "1" } else { "0" }]
     );
     for (name, granted, path) in [
         ("WRIX_DEPLOY_KEY", deploy, "/etc/wrix/keys/repo-key"),
         ("WRIX_SIGNING_KEY", sign, "/etc/wrix/keys/repo-key-signing"),
     ] {
-        let actual = output
-            .lines()
-            .filter(|line| line.starts_with(&format!("{name}=")))
+        let actual = pairs
+            .iter()
+            .filter(|(key, _)| key == name)
+            .map(|(key, value)| format!("{key}={value}"))
             .collect::<Vec<_>>();
         let expected = if granted {
             vec![format!("{name}={path}")]
         } else {
             Vec::new()
         };
-        assert_eq!(actual, expected, "{output}");
+        assert_eq!(actual, expected);
     }
 }
 

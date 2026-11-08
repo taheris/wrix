@@ -19,8 +19,8 @@ case "${1:-} ${2:-}" in
     ;;
   'image inspect')
     if [[ "$(basename "$0")" == "container" ]]; then
-      jq -cn --arg digest "${WRIX_TEST_DIGEST:?}" '[{id: $digest, digest: $digest, labels: {"wrix.nix.private":"1"}}]'
-    elif [[ "${4:-}" == '{{ index .Config.Labels "wrix.nix.private" }}' ]]; then
+      jq -cn --arg digest "${WRIX_TEST_DIGEST:?}" '[{id: $digest, digest: $digest, labels: {"wrix.nix.private":"1","wrix.runtime.environment":"1"}}]'
+    elif [[ "${4:-}" == '{{ index .Config.Labels "wrix.nix.private" }}' || "${4:-}" == '{{ index .Config.Labels "wrix.runtime.environment" }}' ]]; then
       printf '1\n'
     else
       printf '%s\n' "${WRIX_TEST_DIGEST:?}"
@@ -35,6 +35,19 @@ case "${1:-} ${2:-}" in
     pairs=()
     while [[ "$#" -gt 0 ]]; do
       case "$1" in
+        -v)
+          volume="${2:?}"
+          if [[ "$volume" == *:/run/wrix/runtime-environment:ro ]]; then
+            exec 4<"${volume%:/run/wrix/runtime-environment:ro}/environment"
+            IFS= read -r -d '' magic <&4
+            [[ "$magic" == wrix-runtime-env-v1 ]]
+            while IFS= read -r -d '' name <&4; do
+              IFS= read -r -d '' value <&4
+              pairs+=("$name=$value")
+            done
+            exec 4<&-
+          fi
+          shift 2 ;;
         -e) pairs+=("${2:?}"); shift 2 ;;
         *) shift ;;
       esac

@@ -49,6 +49,7 @@ let
     linuxPkgs = throw "inventory evaluated image packages";
     focusBinary = throw "inventory evaluated an opaque runtime";
     hostCachePolicy = throw "inventory evaluated the host cache policy runtime";
+    runtimeEnvironmentTests = throw "inventory evaluated native protocol tests";
     src = ../..;
   };
   loom = import ../loom.nix {

@@ -4,6 +4,7 @@
   linuxPkgs,
   focusBinary,
   hostCachePolicy,
+  runtimeEnvironmentTests,
   src ? ../..,
 }:
 
@@ -48,7 +49,14 @@ let
     (import ./prek.nix { inherit pkgs system; })
     (import ./profiles.nix { inherit pkgs system; })
     (import ./sandbox.nix { inherit pkgs system; })
-    (import ./security.nix { inherit pkgs system; })
+    (import ./security.nix {
+      inherit
+        pkgs
+        system
+        linuxPkgs
+        runtimeEnvironmentTests
+        ;
+    })
     (import ./services.nix { inherit pkgs hostCachePolicy; })
     (import ./tmux.nix { inherit pkgs system; })
   ];

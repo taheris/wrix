@@ -1,6 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 
+if [[ "${WRIX_NETWORK_ENVIRONMENT_READY:-}" != 1 ]]; then
+  exec /usr/local/libexec/wrix-runtime-env agent "$@"
+fi
+
 # shellcheck source=/dev/null
 . /network-ready.sh
 

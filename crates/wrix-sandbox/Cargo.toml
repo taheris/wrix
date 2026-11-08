@@ -5,6 +5,7 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
+wrix-runtime-env.workspace = true
 rustix = { workspace = true }
 chrono = { workspace = true }
 displaydoc = { workspace = true }

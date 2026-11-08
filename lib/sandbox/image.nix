@@ -48,6 +48,7 @@ let
     optionalString
     ;
   privateNix = import ./private-nix.nix { inherit (pkgs) lib; };
+  runtimeEnvironment = import ./runtime-environment.nix { inherit pkgs; };
   sharedNixContract = import ./shared-nix.nix;
   appleNixBridge = pkgs.pkgsStatic.stdenv.mkDerivation {
     name = "wrix-apple-nix-bridge-1";
@@ -342,6 +343,7 @@ let
     "wrix.profile.name" = profile.name;
     "wrix.agent.kind" = agent;
     "wrix.nix.private" = toString privateNix.version;
+    "wrix.runtime.environment" = toString runtimeEnvironment.version;
     "wrix.nix.shared" = toString sharedNix.version;
     "wrix.nix.client" = "1";
     "wrix.nix.apple.bridge.version" = "1";
@@ -366,8 +368,11 @@ let
       chmod 1777 tmp var/cache var/tmp
       chmod 0755 run var/run
       chmod 777 home/wrix
+      mkdir -p run/wrix/runtime-environment
+      chmod 0700 run/wrix/runtime-environment
 
-      mkdir -p etc/wrix
+      mkdir -p etc/wrix usr/local/libexec
+      ln -s ${runtimeEnvironment.package}/bin/wrix-runtime-env usr/local/libexec/wrix-runtime-env
       printf '%s\n' '${agent}' > etc/wrix/image-agent
       printf '%s\n' '${toString privateNix.version}' > etc/wrix/private-nix-version
       printf '%s\n' '${toString sharedNix.version}' > etc/wrix/shared-nix-version

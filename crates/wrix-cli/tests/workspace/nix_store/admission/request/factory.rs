@@ -107,7 +107,7 @@ fn factory_delivery_derives_only_fixed_execution_private_sources_and_exact_endpo
             .get_args()
             .map(std::ffi::OsStr::to_os_string)
             .collect();
-        assert_eq!(args.len(), 10);
+        assert_eq!(args.len(), 8);
         assert_eq!(args[0], "-v");
         assert_eq!(args[2], "-v");
         assert_eq!(args[4], "-v");
@@ -115,11 +115,9 @@ fn factory_delivery_derives_only_fixed_execution_private_sources_and_exact_endpo
         for index in [1, 3, 5, 7] {
             assert!(args[index].to_str().unwrap().ends_with(":ro"));
         }
-        assert_eq!(args[8], "-e");
-        assert_eq!(
-            args[9],
-            "WRIX_NETWORK_LOCAL_ENDPOINTS=169.254.1.2:12345/tcp"
-        );
+        assert_eq!(delivery.local_endpoint(), "169.254.1.2:12345/tcp");
+        assert!(!args.iter().any(|arg| arg == "-e"));
+        assert_eq!(command.get_envs().count(), 0);
         assert!(!expected.exists());
         return;
     }

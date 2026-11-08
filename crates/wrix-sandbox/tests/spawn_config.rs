@@ -1,4 +1,6 @@
 mod common;
+#[path = "common/runtime_environment.rs"]
+mod runtime_environment;
 
 use std::{collections::BTreeMap, ffi::OsString, fs};
 
@@ -149,24 +151,42 @@ fn documented_spawn_config_fields_render_into_launch_plan() -> TestResult {
 
     assert!(run.success, "{}", run.stderr);
     assert!(run.stderr.is_empty(), "{}", run.stderr);
-    for expected in [
-        "WRIX_STDIO=1",
-        "WRIX_AGENT=direct",
-        "WRIX_NETWORK_ALLOWLIST=[{\"host\":\"example.org\",\"ports\":[443]}]",
-        "localhost/wrix-test:latest",
-        "FOO=bar",
-        "EMPTY=",
-        "WRIX_MCP=spawn-selected",
-        "--print",
-        "hello",
-        "/mnt/schema",
-    ] {
+    for expected in ["localhost/wrix-test:latest", "--print", "hello"] {
         assert!(
             run.stdout.contains(expected),
             "missing {expected}: {}",
             run.stdout
         );
     }
+    assert!(
+        run.stdout.contains("/mnt/schema")
+            || run
+                .guest_environment
+                .values()
+                .any(|value| value.contains("/mnt/schema"))
+    );
+    for (key, value) in [
+        ("WRIX_STDIO", "1"),
+        ("WRIX_AGENT", "direct"),
+        (
+            "WRIX_NETWORK_ALLOWLIST",
+            "[{\"host\":\"example.org\",\"ports\":[443]}]",
+        ),
+        ("FOO", "bar"),
+        ("EMPTY", ""),
+        ("WRIX_MCP", "spawn-selected"),
+    ] {
+        assert_eq!(
+            run.guest_environment.get(key).map(String::as_str),
+            Some(value),
+            "{key}"
+        );
+    }
+    assert!(
+        !run.guest_environment
+            .values()
+            .any(|value| value.contains("ambient-host"))
+    );
     assert!(!run.stdout.contains("ambient-host"));
     Ok(())
 }
@@ -374,7 +394,13 @@ fn provider_credentials_in_spawn_config_reach_runtime() -> TestResult {
     let run = fixture.run("provider-redaction", &config)?;
 
     assert!(run.success, "{}", run.stderr);
-    assert!(run.stdout.contains("OPENAI_API_KEY=spawn-secret"));
+    assert_eq!(
+        run.guest_environment
+            .get("OPENAI_API_KEY")
+            .map(String::as_str),
+        Some("spawn-secret")
+    );
+    assert!(!run.stdout.contains("spawn-secret"));
     Ok(())
 }
 

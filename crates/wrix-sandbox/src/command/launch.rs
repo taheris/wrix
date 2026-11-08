@@ -197,6 +197,8 @@ pub enum LaunchError {
     Metadata { source: execution_metadata::Error },
     /// {0}
     Cache(#[from] cache_credentials::Error),
+    /// {0}
+    RuntimeEnvironment(#[from] wrix_runtime_env::codec::Error),
 }
 
 impl From<io::Error> for LaunchError {
@@ -946,6 +948,18 @@ struct KrunPlan {
 }
 
 impl KrunPlan {
+    fn environment(&self) -> Vec<(String, String)> {
+        let mut values = vec![
+            ("WRIX_TERM_ROWS".to_owned(), self.rows.to_string()),
+            ("WRIX_TERM_COLS".to_owned(), self.columns.to_string()),
+            ("WRIX_KRUN_INIT".to_owned(), "1".to_owned()),
+        ];
+        if let Some(command) = &self.command {
+            values.push(("WRIX_KRUN_CMD".to_owned(), command.clone()));
+        }
+        values
+    }
+
     fn new(args: &[String]) -> Self {
         let (rows, columns) = terminal_size().unwrap_or((24, 80));
         let command = (!args.is_empty()).then(|| serialize_shell_args(args));
@@ -956,34 +970,22 @@ impl KrunPlan {
         }
     }
 
-    fn configure(&self, command: &mut ProcessCommand, interactive: bool) {
-        self.configure_runtime(command, interactive, std::ffi::OsStr::new("krun"));
+    const fn target(interactive: bool) -> &'static str {
+        if interactive {
+            "krun-relay"
+        } else {
+            "krun-init"
+        }
     }
 
-    fn configure_runtime(
-        &self,
-        command: &mut ProcessCommand,
-        interactive: bool,
-        runtime: &std::ffi::OsStr,
-    ) {
+    fn configure_runtime(command: &mut ProcessCommand, runtime: &std::ffi::OsStr) {
         command
             .arg("--runtime")
             .arg(runtime)
             .arg("--userns=keep-id:uid=0,gid=0")
             .arg("--user=0:0")
             .arg("--entrypoint")
-            .arg(if interactive {
-                "/krun-relay"
-            } else {
-                "/krun-init.sh"
-            })
-            .arg("-e")
-            .arg(format!("WRIX_TERM_ROWS={}", self.rows))
-            .arg("-e")
-            .arg(format!("WRIX_TERM_COLS={}", self.columns));
-        if let Some(args) = &self.command {
-            command.arg("-e").arg(format!("WRIX_KRUN_CMD={args}"));
-        }
+            .arg(wrix_runtime_env::codec::GUEST_PROGRAM);
     }
 }
 
@@ -1246,27 +1248,35 @@ impl<'a> Plan<'a> {
             for volume in &volumes {
                 command.arg("-v").arg(volume.podman_arg());
             }
-            for (key, value) in self.env_pairs(
+            let mut environment = self.env_pairs(
                 credentials.as_ref(),
                 pi_auth
                     .is_some()
                     .then_some(pi_auth::CONTAINER_FILE.to_owned()),
                 services,
-            )? {
-                command.arg("-e").arg(format!("{key}={value}"));
-            }
-            for (key, value) in self.host_podman_socket_env_pairs(staged_beads.as_deref()) {
-                command.arg("-e").arg(format!("{key}={value}"));
-            }
+            )?;
+            environment.extend(self.host_podman_socket_env_pairs(staged_beads.as_deref()));
             if let Some(krun) = &krun {
+                environment.extend(krun.environment());
+            }
+            if let Some(shared) = &shared {
+                environment.push((
+                    "WRIX_NETWORK_LOCAL_ENDPOINTS".to_owned(),
+                    shared.delivery().local_endpoint(),
+                ));
+            }
+            command
+                .arg("-v")
+                .arg(staging.environment(environment)?.podman_arg());
+            if krun.is_some() {
                 match &shared {
                     Some(shared) => {
                         let runtime = shared
                             .krun_runtime()
                             .ok_or(crate::nix_store::Error::Delivery)?;
-                        krun.configure_runtime(&mut command, !self.spawn(), runtime.as_os_str());
+                        KrunPlan::configure_runtime(&mut command, runtime.as_os_str());
                     }
-                    None => krun.configure(&mut command, !self.spawn()),
+                    None => KrunPlan::configure_runtime(&mut command, std::ffi::OsStr::new("krun")),
                 }
             }
             if let Some(shared) = &shared {
@@ -1277,7 +1287,9 @@ impl<'a> Plan<'a> {
                     shared.image().digest().as_str()
                 }),
             );
-            if krun.is_none() {
+            if krun.is_some() {
+                command.arg(KrunPlan::target(!self.spawn()));
+            } else {
                 command.args(&self.agent_args);
             }
             command
@@ -1422,24 +1434,25 @@ impl<'a> Plan<'a> {
             if let Some(credentials) = &credentials {
                 command.arg("-v").arg(credentials.mount().podman_arg());
             }
-            for (key, value) in self.env_pairs(
+            let mut environment = self.env_pairs(
                 credentials.as_ref(),
                 pi_auth
                     .is_some()
                     .then_some(pi_auth::CONTAINER_FILE.to_owned()),
                 services,
-            )? {
-                command.arg("-e").arg(format!("{key}={value}"));
-            }
+            )?;
             if let Some(value) = darwin_mounts.dir_env() {
-                command.arg("-e").arg(format!("WRIX_DIR_MOUNTS={value}"));
+                environment.push(("WRIX_DIR_MOUNTS".to_owned(), value));
             }
             if let Some(value) = darwin_mounts.file_env() {
-                command.arg("-e").arg(format!("WRIX_FILE_MOUNTS={value}"));
+                environment.push(("WRIX_FILE_MOUNTS".to_owned(), value));
             }
             if vpn_conflict {
-                command.arg("-e").arg("WRIX_WAIT_FOR_ROUTE=1");
+                environment.push(("WRIX_WAIT_FOR_ROUTE".to_owned(), "1".to_owned()));
             }
+            command
+                .arg("-v")
+                .arg(staging.environment(environment)?.podman_arg());
             if let Some(shared) = &shared {
                 shared.delivery().configure(&mut command);
             }
@@ -1584,6 +1597,7 @@ impl<'a> Plan<'a> {
             )?,
         )?;
         image::require_private_nix(runtime, &self.image_ref)?;
+        image::require_runtime_environment(runtime, &self.image_ref)?;
         Ok(())
     }
 
@@ -2358,6 +2372,25 @@ struct Staging {
 }
 
 impl Staging {
+    fn environment(&self, pairs: Vec<(String, String)>) -> Result<RenderedMount, LaunchError> {
+        use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+        let payload = wrix_runtime_env::codec::Payload::from_pairs(pairs)?;
+        let directory = self.root.join("runtime-environment");
+        fs::DirBuilder::new().mode(0o700).create(&directory)?;
+        let mut file = fs::File::options()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(directory.join("environment"))?;
+        payload.write(&mut file)?;
+        Ok(RenderedMount {
+            host: directory.display().to_string(),
+            container: wrix_runtime_env::codec::GUEST_DIRECTORY.to_owned(),
+            mode: MountMode::Ro,
+            optional: false,
+        })
+    }
+
     fn create() -> Result<Self, LaunchError> {
         let root = env::var_os("XDG_CACHE_HOME")
             .map_or_else(|| home_dir().join(".cache"), PathBuf::from)
@@ -3273,6 +3306,47 @@ mod test {
     use crate::command::config::{MountMode, Platform, ProfileMount, SpawnMount};
 
     #[test]
+    fn runtime_environment_is_a_private_readonly_data_mount_not_runtime_arguments() {
+        use std::{fs, os::unix::fs::MetadataExt};
+        let root = tempfile::tempdir().unwrap();
+        let staging = Staging {
+            root: root.path().to_owned(),
+        };
+        let mount = staging
+            .environment(vec![
+                (
+                    "TOKEN".into(),
+                    "synthetic-managed-token\nwith=tail\n".into(),
+                ),
+                ("EMPTY".into(), String::new()),
+                ("CONTAINER_HOST".into(), "guest-only".into()),
+            ])
+            .unwrap();
+        assert_eq!(mount.container, "/run/wrix/runtime-environment");
+        assert_eq!(mount.mode, MountMode::Ro);
+        assert!(!mount.optional);
+        assert_eq!(fs::metadata(&mount.host).unwrap().mode() & 0o777, 0o700);
+        let file = Path::new(&mount.host).join("environment");
+        assert_eq!(fs::metadata(&file).unwrap().mode() & 0o777, 0o600);
+        assert_eq!(fs::read(file).unwrap(), b"wrix-runtime-env-v1\0TOKEN\0synthetic-managed-token\nwith=tail\n\0EMPTY\0\0CONTAINER_HOST\0guest-only\0");
+        assert!(!mount.podman_arg().contains("synthetic-managed-token"));
+        assert!(!mount.podman_arg().contains("CONTAINER_HOST"));
+    }
+
+    #[test]
+    fn invalid_runtime_environment_is_rejected_before_any_payload_file_exists() {
+        let root = tempfile::tempdir().unwrap();
+        let staging = Staging {
+            root: root.path().to_owned(),
+        };
+        assert!(matches!(
+            staging.environment(vec![("KEY".into(), "bad\0value".into())]),
+            Err(LaunchError::RuntimeEnvironment(_))
+        ));
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
+    }
+
+    #[test]
     fn launcher_stages_only_beads_config_and_metadata() {
         use std::fs;
 
@@ -3461,7 +3535,7 @@ mod test {
 
     #[test]
     fn krun_configuration_maps_host_identity_to_managed_guest_root() {
-        for (interactive, entrypoint) in [(true, "/krun-relay"), (false, "/krun-init.sh")] {
+        for (interactive, target) in [(true, "krun-relay"), (false, "krun-init")] {
             for args in [None, Some(String::from("'/bin/bash' 'two words'"))] {
                 let plan = super::KrunPlan {
                     rows: 31,
@@ -3469,30 +3543,32 @@ mod test {
                     command: args.clone(),
                 };
                 let mut command = std::process::Command::new("podman");
-                plan.configure(&mut command, interactive);
-                let actual: Vec<_> = command
+                super::KrunPlan::configure_runtime(&mut command, std::ffi::OsStr::new("krun"));
+                assert_eq!(super::KrunPlan::target(interactive), target);
+                let actual = command
                     .get_args()
                     .map(|arg| arg.to_str().unwrap())
-                    .collect();
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    actual,
+                    [
+                        "--runtime",
+                        "krun",
+                        "--userns=keep-id:uid=0,gid=0",
+                        "--user=0:0",
+                        "--entrypoint",
+                        "/usr/local/libexec/wrix-runtime-env"
+                    ]
+                );
                 let mut expected = vec![
-                    "--runtime",
-                    "krun",
-                    "--userns=keep-id:uid=0,gid=0",
-                    "--user=0:0",
-                    "--entrypoint",
-                    entrypoint,
-                    "-e",
-                    "WRIX_TERM_ROWS=31",
-                    "-e",
-                    "WRIX_TERM_COLS=97",
-                ]
-                .into_iter()
-                .map(String::from)
-                .collect::<Vec<_>>();
-                if let Some(args) = &args {
-                    expected.extend([String::from("-e"), format!("WRIX_KRUN_CMD={args}")]);
+                    ("WRIX_TERM_ROWS".into(), "31".into()),
+                    ("WRIX_TERM_COLS".into(), "97".into()),
+                    ("WRIX_KRUN_INIT".into(), "1".into()),
+                ];
+                if let Some(args) = args {
+                    expected.push(("WRIX_KRUN_CMD".into(), args));
                 }
-                assert_eq!(actual, expected);
+                assert_eq!(plan.environment(), expected);
                 assert_eq!(command.get_envs().count(), 0);
             }
         }
@@ -3500,15 +3576,10 @@ mod test {
 
     #[test]
     fn shared_krun_command_uses_only_the_recorded_package_runtime() {
-        let plan = super::KrunPlan {
-            rows: 24,
-            columns: 80,
-            command: Some("'echo' 'ready'".into()),
-        };
         let runtime =
             std::ffi::OsStr::new("/nix/store/00000000000000000000000000000000-tools/bin/krun");
         let mut command = std::process::Command::new("podman");
-        plan.configure_runtime(&mut command, false, runtime);
+        super::KrunPlan::configure_runtime(&mut command, runtime);
         let arguments: Vec<_> = command.get_args().collect();
         assert_eq!(arguments[0], "--runtime");
         assert_eq!(arguments[1], runtime);
@@ -3519,7 +3590,7 @@ mod test {
                 .count(),
             1
         );
-        assert!(arguments.contains(&std::ffi::OsStr::new("/krun-init.sh")));
+        assert!(arguments.contains(&std::ffi::OsStr::new("/usr/local/libexec/wrix-runtime-env")));
         assert!(arguments.contains(&std::ffi::OsStr::new("--userns=keep-id:uid=0,gid=0")));
         assert_eq!(command.get_envs().count(), 0);
     }

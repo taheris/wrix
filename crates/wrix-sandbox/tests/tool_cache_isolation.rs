@@ -2,6 +2,8 @@ mod common;
 #[cfg(test)]
 #[path = "common/tool_cache.rs"]
 mod coordination;
+#[path = "common/runtime_environment.rs"]
+mod runtime_environment;
 
 use std::{ffi::OsString, fs, path::PathBuf};
 
