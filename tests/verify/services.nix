@@ -1,4 +1,4 @@
-{ pkgs, ... }:
+{ pkgs, hostCachePolicy, ... }:
 
 let
   inherit (pkgs.lib) escapeShellArg;
@@ -21,6 +21,8 @@ in
   "services.rust-helper-binaries".script = serviceScript "cli-surface" "test_rust_helper_binaries";
 
   "services.host-nix-config".script = ''
+    export WRIX_HOST_CACHE_POLICY_BIN="${hostCachePolicy}/bin/wrix-host-cache-policy"
+    ${serviceScript "host-nix-config" "test_host_nix_hook_generations_survive_gc"}
     ${hostNix "test_fake_nix_config_show_matches_real_nix"}
     ${hostNix "test_runtime_image_inspection_and_tagging_are_stateful"}
     ${hostNix "test_host_nix_configures_cache_and_hook"}

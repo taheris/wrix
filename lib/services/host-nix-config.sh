@@ -113,15 +113,33 @@ wrix_host_store_hook() {
   "$nix_store_bin" --add-fixed sha256 --recursive "$hook_dir"
 }
 
+wrix_host_prepare_hook() {
+  local state_root="$6"
+  local build_root source store
+  build_root="$(mktemp -d "$state_root/hook-wrapper.XXXXXXXX")" || return 1
+  source="$build_root/hook-wrapper"
+  if ! wrix_host_write_hook_source "$source" "$@"; then
+    rm -rf "$build_root"
+    return 1
+  fi
+  if ! store="$(wrix_host_store_hook "$source")"; then
+    rm -rf "$build_root"
+    return 1
+  fi
+  rm -rf "$build_root"
+  printf '%s\n' "$store"
+}
+
 wrix_host_retain_hook() {
   local root_dir="$1"
   local hook_store="$2"
   local hook_bin="$3"
   local publish_bin="$4"
   local nix_store_bin="${WRIX_NIX_STORE_BIN:-nix-store}"
-  local label binary store_path
-  mkdir -p "$root_dir"
-  "$nix_store_bin" --add-root "$root_dir/wrapper" --indirect --realise "$hook_store" >/dev/null || return 1
+  local label binary store_path generation_dir
+  generation_dir="$root_dir/generations/${hook_store##*/}"
+  mkdir -p "$generation_dir"
+  "$nix_store_bin" --add-root "$generation_dir/wrapper" --indirect --realise "$hook_store" >/dev/null || return 1
   # Fixed-output imports do not record references to the wrapper's runtime.
   for label in hook publisher bash; do
     case "$label" in
@@ -136,10 +154,11 @@ wrix_host_retain_hook() {
       /nix/store/*)
         store_path="${binary#/nix/store/}"
         store_path="/nix/store/${store_path%%/*}"
-        "$nix_store_bin" --add-root "$root_dir/$label" --indirect --realise "$store_path" >/dev/null || return 1
+        "$nix_store_bin" --add-root "$generation_dir/$label" --indirect --realise "$store_path" >/dev/null || return 1
         ;;
     esac
   done
+  "$nix_store_bin" --add-root "$root_dir/wrapper" --indirect --realise "$hook_store" >/dev/null || return 1
 }
 
 wrix_host_append_nix_config() {
@@ -166,7 +185,7 @@ wrix_host_nix_config_main() {
   local publish_bin="${WRIX_CACHE_PUBLISH_BIN:-wrix-cache-publish}"
   local policy_bin="${WRIX_HOST_CACHE_POLICY_BIN:-wrix-host-cache-policy}"
   local require_trusted cache_config cache_status
-  local endpoints workspace_hash state_root cache_root cache_http manifest_path hook_build_root hook_store hook_path before_config after_config owner_uid owner_gid
+  local endpoints workspace_hash state_root cache_root cache_http manifest_path hook_store hook_path before_config after_config owner_uid owner_gid
 
   command -v "${WRIX_NIX_BIN:-nix}" >/dev/null 2>&1 || { wrix_host_fail "nix is not on PATH"; return 1; }
   command -v "${WRIX_NIX_STORE_BIN:-nix-store}" >/dev/null 2>&1 || { wrix_host_fail "nix-store is not on PATH"; return 1; }
@@ -203,10 +222,7 @@ wrix_host_nix_config_main() {
   owner_uid="$(id -u)"
   owner_gid="$(id -g)"
 
-  hook_build_root="$state_root/hook-wrapper"
-  rm -rf "$hook_build_root"
-  wrix_host_write_hook_source "$hook_build_root" "$hook_bin" "$publish_bin" "$workspace_hash" "$owner_uid" "$owner_gid" "$state_root" "$cache_root" "$manifest_path" "$cache_config" || return 1
-  hook_store="$(wrix_host_store_hook "$hook_build_root")" || return 1
+  hook_store="$(wrix_host_prepare_hook "$hook_bin" "$publish_bin" "$workspace_hash" "$owner_uid" "$owner_gid" "$state_root" "$cache_root" "$manifest_path" "$cache_config")" || return 1
   wrix_host_retain_hook "$state_root/host-nix-roots" "$hook_store" "$hook_bin" "$publish_bin" || return 1
   hook_path="$hook_store/bin/wrix-cache-post-build-hook"
 

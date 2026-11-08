@@ -239,11 +239,8 @@ case "$*" in
   --add-fixed*)
     src="${@: -1}"
     store_root="${WRIX_FAKE_NIX_STORE_ROOT:?}"
-    out="$store_root/00000000000000000000000000000000-wrix-cache-hook-wrapper"
-    if [[ -d "$out" ]]; then
-      chmod -R u+w "$out"
-    fi
-    rm -rf "$out"
+    hash="$(nix-hash --type sha256 --base32 "$src")"
+    out="$store_root/$hash-wrix-cache-hook-wrapper"
     mkdir -p "$store_root"
     cp -R "$src" "$out"
     chmod -R a-w "$out"
@@ -321,8 +318,11 @@ with_fake_tools() {
     local reference binding="" digest_path digest_derivation digest image
     while IFS= read -r reference; do
       if [[ "$reference" == *-wrix-service-binding.json ]]; then
-        [[ -z "$binding" ]] || fail "multiple service bindings"
-        binding="$reference"
+        image="$(json_get "$reference" image)"
+        if [[ "$image" == wrix-service:* || "$image" == localhost/wrix-service:* ]]; then
+          [[ -z "$binding" ]] || fail "multiple service bindings"
+          binding="$reference"
+        fi
       fi
     done < <("$REAL_NIX_STORE" --query --references "${wrix_bin%/bin/wrix}")
     [[ -n "$binding" ]] || fail "packaged wrix has no service binding"
@@ -823,11 +823,112 @@ post-build-hook = $TEST_TMP/conformance-hook"
     || { fail "fake Nix post-build-hook diverges from real Nix"; return 1; }
 }
 
+assert_hook_generations_survive_isolated_gc() {
+  local fixture="$TEST_TMP/isolated-gc"
+  local generation label runtime hook publisher interpreter wrapper old_generation
+  local -a retained=() obsolete=()
+  mkdir -p "$fixture"
+  cat >"$fixture/nix-store" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${WRIX_TEST_FAIL_HOOK_IMPORT:-0}" == 1 && "${1:-}" == --add-fixed ]]; then
+  printf 'injected hook import failure\n' >&2
+  exit 97
+fi
+exec "$WRIX_TEST_REAL_NIX_STORE" --store "$WRIX_TEST_ISOLATED_STORE" "$@"
+EOF
+  chmod +x "$fixture/nix-store"
+  export WRIX_TEST_REAL_NIX_STORE="$REAL_NIX_STORE"
+  export WRIX_TEST_ISOLATED_STORE="$fixture/store"
+  export WRIX_NIX_STORE_BIN="$fixture/nix-store"
+  export NIX_CONFIG=""
+  for generation in old new; do
+    for label in hook publisher bash; do
+      mkdir -p "$fixture/$generation-$label/bin"
+      printf '%s\n' "$generation-$label" >"$fixture/$generation-$label/bin/runtime"
+      runtime="$("$WRIX_NIX_STORE_BIN" --add "$fixture/$generation-$label")"
+      retained+=("$runtime")
+      case "$label" in
+        hook) hook="$runtime/bin/runtime" ;;
+        publisher) publisher="$runtime/bin/runtime" ;;
+        bash) interpreter="$runtime/bin/runtime" ;;
+      esac
+    done
+    WRIX_BASH_BIN="$interpreter" wrix_host_write_hook_source \
+      "$fixture/$generation-wrapper" "$hook" "$publisher" fixture 1000 1000 \
+      "$fixture/state" "$fixture/cache" "$fixture/manifest" '{"generation":"'"$generation"'"}'
+    wrapper="$(wrix_host_store_hook "$fixture/$generation-wrapper")"
+    retained+=("$wrapper")
+    WRIX_BASH_BIN="$interpreter" wrix_host_retain_hook "$fixture/roots" "$wrapper" "$hook" "$publisher"
+    if [[ "$generation" == old ]]; then
+      obsolete=("${retained[@]}")
+      old_generation="$fixture/roots/generations/${wrapper##*/}"
+    fi
+  done
+  "$WRIX_NIX_STORE_BIN" --gc || return 1
+  "$WRIX_NIX_STORE_BIN" --check-validity "${retained[@]}" || return 1
+  rm -rf "$old_generation"
+  "$WRIX_NIX_STORE_BIN" --gc || return 1
+  for runtime in "${obsolete[@]}"; do
+    if "$WRIX_NIX_STORE_BIN" --check-validity "$runtime"; then
+      fail "unrooted negative control survived isolated GC: $runtime"
+      return 1
+    fi
+  done
+  "$WRIX_NIX_STORE_BIN" --check-validity "$wrapper" "${hook%/bin/*}" "${publisher%/bin/*}" "${interpreter%/bin/*}"
+}
+
+assert_hook_preparation_is_private_and_repeatable() {
+  local fixture="$TEST_TMP/preparation"
+  local first_pid second_pid first second remaining failed=0
+  mkdir -p "$fixture/state"
+  (
+    wrix_host_prepare_hook /bin/true /bin/true fixture 1000 1000 \
+      "$fixture/state" "$fixture/cache" "$fixture/manifest" '{"generation":"same"}' >"$fixture/first"
+  ) &
+  first_pid="$!"
+  (
+    wrix_host_prepare_hook /bin/true /bin/true fixture 1000 1000 \
+      "$fixture/state" "$fixture/cache" "$fixture/manifest" '{"generation":"same"}' >"$fixture/second"
+  ) &
+  second_pid="$!"
+  if ! wait "$first_pid"; then failed=1; fi
+  if ! wait "$second_pid"; then failed=1; fi
+  [[ "$failed" == 0 ]] || { fail "concurrent hook preparation failed"; return 1; }
+  first="$(<"$fixture/first")"
+  second="$(<"$fixture/second")"
+  [[ "$first" == "$second" ]] || { fail "identical concurrent activations did not reuse the wrapper"; return 1; }
+  "$WRIX_NIX_STORE_BIN" --check-validity "$first" || return 1
+  if WRIX_TEST_FAIL_HOOK_IMPORT=1 wrix_host_prepare_hook /bin/true /bin/true fixture 1000 1000 \
+    "$fixture/state" "$fixture/cache" "$fixture/manifest" '{"generation":"failure"}'; then
+    fail "hook import failure was not propagated"
+    return 1
+  fi
+  remaining="$(find "$fixture/state" -mindepth 1 -maxdepth 1 -print)"
+  [[ -z "$remaining" ]] || { fail "hook preparation left temporary sources behind"; return 1; }
+}
+
+test_host_nix_hook_generations_survive_gc() {
+  cat >"$TEST_TMP/service" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  'service cache config') printf '%s\n' '{"require_trusted_nix":false}' ;;
+  'service endpoints') printf '%s\n' '{"endpoints":{"cache_http":null}}' ;;
+  *) exit 64 ;;
+esac
+EOF
+  chmod +x "$TEST_TMP/service"
+  WRIX_SERVICE_BIN="$TEST_TMP/service" . "$REPO_ROOT/lib/services/host-nix-config.sh"
+  assert_hook_generations_survive_isolated_gc || return 1
+  assert_hook_preparation_is_private_and_repeatable
+}
+
 test_host_nix_configures_cache_and_hook() {
   if ! has_json_tool; then
     exit 77
   fi
-  local real_nix wrix_bin workspace output endpoints state_root cache_root public_key hook_path wrapper
+  local real_nix wrix_bin workspace output endpoints state_root cache_root public_key hook_path wrapper generation old_wrapper
   real_nix="$(command -v nix)"
   wrix_bin="$(build_wrix)"
   with_fake_tools
@@ -878,6 +979,10 @@ test_host_nix_configures_cache_and_hook() {
   [[ "$(json_get "${wrapper%/*}/../cache-config.json" pending_retention_secs)" == "259200" ]] || { fail "stored snapshot lost repository retention policy"; return 1; }
   assert_contains "endpoint metadata" "$endpoints" "$cache_root" || return 1
 
+  old_wrapper="$wrapper"
+  generation="$state_root/host-nix-roots/generations/$(basename "${wrapper%/bin/*}")"
+  [[ "$(readlink "$generation/wrapper")" == "${wrapper%/bin/*}" ]] \
+    || { fail "original generation has no GC root"; return 1; }
   (
     cd "$workspace"
     WRIX_SERVICE_BIN="$wrix_bin" \
@@ -886,11 +991,17 @@ test_host_nix_configures_cache_and_hook() {
       WRIX_BASH_BIN=/nix/store/cccccccccccccccccccccccccccccccc-fixture-bash/bin/bash \
       bash "$REPO_ROOT/lib/services/host-nix-config.sh"
   )
-  [[ "$(readlink "$state_root/host-nix-roots/hook")" == /nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-fixture-hook ]] \
+  wrapper="$(readlink "$state_root/host-nix-roots/wrapper")/bin/wrix-cache-post-build-hook"
+  [[ "$wrapper" != "$old_wrapper" && -x "$old_wrapper" ]] \
+    || { fail "overlapping activation replaced the old wrapper"; return 1; }
+  [[ "$(readlink "$generation/wrapper")" == "${old_wrapper%/bin/*}" ]] \
+    || { fail "overlapping activation displaced the old GC root"; return 1; }
+  generation="$state_root/host-nix-roots/generations/$(basename "${wrapper%/bin/*}")"
+  [[ "$(readlink "$generation/hook")" == /nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-fixture-hook ]] \
     || { fail "hook runtime has no GC root"; return 1; }
-  [[ "$(readlink "$state_root/host-nix-roots/publisher")" == /nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-fixture-publisher ]] \
+  [[ "$(readlink "$generation/publisher")" == /nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-fixture-publisher ]] \
     || { fail "publisher runtime has no GC root"; return 1; }
-  [[ "$(readlink "$state_root/host-nix-roots/bash")" == /nix/store/cccccccccccccccccccccccccccccccc-fixture-bash ]] \
+  [[ "$(readlink "$generation/bash")" == /nix/store/cccccccccccccccccccccccccccccccc-fixture-bash ]] \
     || { fail "hook interpreter has no GC root"; return 1; }
 }
 
@@ -1008,6 +1119,7 @@ test_host_trust_validation_resolves_repository_and_environment_overrides() {
 }
 
 ALL_TESTS=(
+  test_host_nix_hook_generations_survive_gc
   test_host_cache_opt_out_preserves_existing_nix_config
   test_host_trust_validation_resolves_repository_and_environment_overrides
   test_mkdevshell_nix_cache

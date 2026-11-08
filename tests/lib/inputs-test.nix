@@ -48,6 +48,7 @@ let
     system = pkgs.stdenv.hostPlatform.system;
     linuxPkgs = throw "inventory evaluated image packages";
     focusBinary = throw "inventory evaluated an opaque runtime";
+    hostCachePolicy = throw "inventory evaluated the host cache policy runtime";
     src = ../..;
   };
   loom = import ../loom.nix {

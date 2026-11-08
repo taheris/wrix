@@ -3,6 +3,7 @@
   system,
   linuxPkgs,
   focusBinary,
+  hostCachePolicy,
   src ? ../..,
 }:
 
@@ -48,7 +49,7 @@ let
     (import ./profiles.nix { inherit pkgs system; })
     (import ./sandbox.nix { inherit pkgs system; })
     (import ./security.nix { inherit pkgs system; })
-    (import ./services.nix { inherit pkgs system; })
+    (import ./services.nix { inherit pkgs hostCachePolicy; })
     (import ./tmux.nix { inherit pkgs system; })
   ];
   registry = builtins.foldl' (acc: next: acc // next) { } domainRegistries;
