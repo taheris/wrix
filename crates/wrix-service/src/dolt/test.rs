@@ -549,6 +549,39 @@ fn native_source_cutover_keeps_writer_lock_and_resumes_after_checkpoint_rename()
 }
 
 #[test]
+fn source_busy_lock_precedes_mutable_tree_validation_without_bypassing_it() -> TestResult {
+    let fixture = Fixture::new()?;
+    let authorization = fixture
+        .controller
+        .authorize(&fixture.namespace, Permission::Sql)?;
+    let manager = fixture.manager(&authorization, Branch::parse("beads")?)?;
+    let lock = fs::File::options()
+        .read(true)
+        .write(true)
+        .open(fixture.source.join(".dolt/noms/LOCK"))?;
+    fs2::FileExt::try_lock_exclusive(&lock)?;
+    let external = fixture.root.path().join("outside-source");
+    fs::write(&external, "must not traverse this link")?;
+    std::os::unix::fs::symlink(&external, fixture.source.join(".dolt/mutable-link"))?;
+    assert!(matches!(
+        manager.prepare_source(&fixture.source),
+        Err(Error::SourceBusy { .. })
+    ));
+    assert!(fixture.source.is_dir());
+    assert!(!manager.root.join("source.json").exists());
+    assert!(!manager.root.join("source-checkpoint").exists());
+    fs2::FileExt::unlock(&lock)?;
+    assert!(matches!(
+        manager.prepare_source(&fixture.source),
+        Err(Error::UnsafePath)
+    ));
+    assert!(fixture.source.is_dir());
+    assert!(!manager.root.join("source.json").exists());
+    assert!(!manager.root.join("source-checkpoint").exists());
+    Ok(())
+}
+
+#[test]
 fn native_source_with_active_writer_is_rejected_before_journal_or_rename() -> TestResult {
     let fixture = Fixture::new()?;
     let authorization = fixture
@@ -586,10 +619,12 @@ fn native_source_with_active_writer_is_rejected_before_journal_or_rename() -> Te
         assert!(writer.0.try_wait()?.is_none() && Instant::now() < deadline);
         thread::sleep(Duration::from_millis(20));
     }
-    assert!(matches!(
-        manager.prepare_source(&fixture.source),
-        Err(Error::SourceBusy { .. })
-    ));
+    let prepared = manager.prepare_source(&fixture.source);
+    assert!(
+        matches!(&prepared, Err(Error::SourceBusy { .. })),
+        "active native writer did not fence source preparation: {prepared:?}; writer log: {}",
+        fs::read_to_string(fixture.root.path().join("writer.log"))?
+    );
     assert!(fixture.source.join(".dolt/noms/LOCK").is_file());
     assert!(!manager.root.join("source.json").exists());
     assert!(!manager.data.join("registration-backup").exists());
