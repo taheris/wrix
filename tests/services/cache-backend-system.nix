@@ -65,6 +65,7 @@ pkgs.testers.runNixOSTest {
         'WRIX_TEST_CONTROLLER_BINDING="$(${pkgs.coreutils}/bin/readlink "${wrix.rustPackage.testFixtures}/controller-binding")" '
         'WRIX_TEST_SCCACHE="$(${pkgs.coreutils}/bin/readlink "${wrix.rustPackage.testFixtures}/compiler")" '
         'WRIX_TEST_SQL_CLIENT="$(${pkgs.coreutils}/bin/readlink "${wrix.rustPackage.testFixtures}/sql-client")" '
+        'WRIX_TEST_FIXTURE_RUNTIME="$(${pkgs.coreutils}/bin/readlink "${wrix.rustPackage.testFixtures}/fixture-runtime")" '
         "WRIX_REAL_BD_BIN=${pkgs.beads}/bin/bd "
         "WRIX_TEST_ISOLATED_STORE_SCRIPT=${../cache/isolated-store.sh} "
         "WRIX_TEST_RUNTIME_LAYOUT_SCRIPT=${../cache/runtime-layout.sh} "
