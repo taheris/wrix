@@ -13,6 +13,8 @@ mod maintenance;
 mod native_backend;
 #[path = "common/native_celler.rs"]
 mod native_celler;
+#[path = "service/native_public_cli.rs"]
+mod native_public_cli;
 #[path = "common/peer_runtime.rs"]
 mod peer_runtime;
 #[path = "common/service_binding.rs"]
@@ -47,6 +49,11 @@ const APPLE_RUNTIME: &str = concat!(
     ignore = "requires Linux user, mount and network namespaces"
 )]
 fn public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql() -> TestResult {
+    if let Some(root) = std::env::var_os("WRIX_TEST_PUBLIC_CLI_DRIVER_ROOT") {
+        let binary = std::env::var_os("WRIX_TEST_PUBLIC_CLI_DRIVER_BINARY")
+            .ok_or("missing private public CLI fixture binary")?;
+        return native_public_cli::run(&PathBuf::from(root), &PathBuf::from(binary));
+    }
     // Emulation changes the fixture watchdog, not production readiness deadlines.
     let (fixture_deadline, script_deadline) =
         if std::env::var("WRIX_TEST_EMULATED_NATIVE_SYSTEM").is_ok_and(|value| value == "1") {
@@ -171,13 +178,17 @@ fn public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql() -
             env!("CARGO_MANIFEST_DIR"),
             "/tests/fixtures/host-command.sh"
         ))
-        .arg("python3")
-        .arg(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/native-cli-shared.py"
-        ))
-        .arg(root.path())
-        .arg(env!("CARGO_BIN_EXE_wrix"))
+        .arg(std::env::current_exe()?)
+        .args([
+            "--exact",
+            "public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql",
+            "--nocapture",
+        ])
+        .env("WRIX_TEST_PUBLIC_CLI_DRIVER_ROOT", root.path())
+        .env(
+            "WRIX_TEST_PUBLIC_CLI_DRIVER_BINARY",
+            env!("CARGO_BIN_EXE_wrix"),
+        )
         .env("WRIX_SHARED_BINARY", shared)
         .env("WRIX_SHARED_FIXTURE", root.path())
         .env("HOME", root.path().join("home"))
