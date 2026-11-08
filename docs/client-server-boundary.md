@@ -69,6 +69,11 @@ observations were 51.78 s for separate evaluations, 54.31 s for batching alone,
 and 42.32 s with the shared import; these are not controlled benchmark results.
 No landing checks or approval requirements are removed.
 
+The two client checks also have registered `test-ci` apps with declared inputs,
+not just raw derivations. A lightweight flake check validates every spec's
+`test-ci` check annotation against the actual app registry, including negative
+controls, so missing registrations fail before expensive gate dispatch.
+
 ## Bounded measurements
 
 One dependency-cold shell build, one warm client source edit and one server-only

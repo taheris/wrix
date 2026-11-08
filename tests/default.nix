@@ -314,6 +314,7 @@ let
     // {
       celler-consumer-runtime = import ./services/celler-runtime.nix { inherit pkgs wrix; };
       inherit (ciChecks) client-server-dependency-boundary;
+      ci-annotation-registration = import ./verify/ci-registry.nix { inherit pkgs ciApps; };
       devshell-cli-selection = devshellCliSelection;
       builder-vmnet-route = builderRouteTest;
       cargo-target-handoff = import ./services/cargo-target-handoff.nix {
@@ -528,6 +529,32 @@ let
       (mkDefinedCiApp testPlaywrightMandatoryFlags "test-playwright-mandatory-flags")
       (mkDefinedCiApp testPlaywrightUserOptionsConfig "test-playwright-user-options-config")
       (mkCiApp testBeadsLiveSystem "test-beads-live-system")
+      (mkDefinedCiApp {
+        package = writeShellScriptBin "test-client-package-boundary" ''
+          set -euo pipefail
+          test -e ${ciChecks.client-package-boundary}
+        '';
+        inputs = inputDefinition.nix [
+          "/Cargo.toml"
+          "/Cargo.lock"
+          "/crates/"
+          "/lib/"
+          "/tests/services/"
+        ];
+      } "test-client-package-boundary")
+      (mkDefinedCiApp {
+        package = writeShellScriptBin "test-client-server-dependency-boundary" ''
+          set -euo pipefail
+          test -e ${ciChecks.client-server-dependency-boundary}
+        '';
+        inputs = inputDefinition.nix [
+          "/Cargo.toml"
+          "/Cargo.lock"
+          "/crates/"
+          "/lib/"
+          "/tests/services/"
+        ];
+      } "test-client-server-dependency-boundary")
       (mkCiApp (writeShellScriptBin "test-cache-celler-packaging" ''
         set -euo pipefail
         test -e ${ciChecks.cache-celler-packaging}
