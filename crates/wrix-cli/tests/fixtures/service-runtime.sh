@@ -79,9 +79,11 @@ case "${1:-} ${2:-}" in
         printf 'unsupported fixture: Apple image lookup requires a stored reference\n' >&2
         exit 64
       fi
-      printf '[{"id":"%s","digest":"%s","labels":{"wrix.nix.private":"%s"}}]\n' "${WRIX_TEST_IMAGE_ID:-$WRIX_TEST_DIGEST}" "${WRIX_TEST_CONTENT_DIGEST:-$WRIX_TEST_DIGEST}" "${WRIX_TEST_PRIVATE_NIX_VERSION:-1}"
+      printf '[{"id":"%s","digest":"%s","labels":{"wrix.nix.private":"%s","wrix.runtime.environment":"%s"}}]\n' "${WRIX_TEST_IMAGE_ID:-$WRIX_TEST_DIGEST}" "${WRIX_TEST_CONTENT_DIGEST:-$WRIX_TEST_DIGEST}" "${WRIX_TEST_PRIVATE_NIX_VERSION:-1}" "${WRIX_TEST_RUNTIME_ENV_VERSION-1}"
     elif [[ "${4:-}" == '{{ index .Config.Labels "wrix.nix.private" }}' ]]; then
       printf '%s\n' "${WRIX_TEST_PRIVATE_NIX_VERSION:-1}"
+    elif [[ "${4:-}" == '{{ index .Config.Labels "wrix.runtime.environment" }}' ]]; then
+      printf '%s\n' "${WRIX_TEST_RUNTIME_ENV_VERSION-1}"
     elif [[ "${4:-}" == '{{.Id}}' ]]; then
       printf '%s\n' "${WRIX_TEST_IMAGE_ID:-$WRIX_TEST_DIGEST}"
     else

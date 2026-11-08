@@ -8,6 +8,9 @@ trap 'rm -rf "$TEST_TMP"' EXIT
 
 # Exercise real firewall and capability tools in a disposable user/network namespace.
 # Only image paths are remapped; no host firewall or workspace is modified.
+# The native protocol owner supplies the environment-delivery boundary. These
+# cases begin after that step and still execute real firewall/capability tools.
+export WRIX_NETWORK_ENVIRONMENT_READY=1
 if [[ "$(uname -s)" != Linux ]]; then
   printf 'SKIP: Linux user/network namespaces required\n' >&2
   exit 77

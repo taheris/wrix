@@ -10,6 +10,8 @@ use std::{
 use serde_json::{Value, json};
 use wrix_sandbox::command::{self, Command};
 
+use crate::runtime_environment;
+
 pub type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
 pub struct ChildSpec {
@@ -21,6 +23,11 @@ pub struct ChildSpec {
 }
 
 pub struct ChildRun {
+    #[allow(
+        dead_code,
+        reason = "The tool-cache target shares this runner but asserts mount arguments, not guest environment delivery."
+    )]
+    pub guest_environment: BTreeMap<String, String>,
     pub stdout: String,
     pub stderr: String,
     pub success: bool,
@@ -114,8 +121,10 @@ pub fn run_child(
         .env_remove("WRIX_REQUIRED_SECRET_TEST_VALUE")
         .env_remove("TMUX");
     let argv = root.join("argv");
-    if argv.exists() {
-        fs::remove_file(&argv)?;
+    for path in [&argv, &root.join("argv.environment")] {
+        if path.try_exists()? {
+            fs::remove_file(path)?;
+        }
     }
     if spec.capture_runtime {
         let bin = root.join("capture-bin");
@@ -166,6 +175,11 @@ pub fn run_child(
     }
 
     Ok(ChildRun {
+        guest_environment: if argv.exists() {
+            runtime_environment::read(&root.join("argv.environment"))?
+        } else {
+            BTreeMap::new()
+        },
         stdout: if spec.capture_runtime && argv.exists() {
             String::from_utf8(fs::read(argv)?)?.replace('\0', "\n")
         } else {

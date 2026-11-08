@@ -11,6 +11,8 @@ let
     "/network-ready.sh"
     "/shared-nix-client.sh"
     "/run/wrix/nix-pool"
+    "/run/wrix/runtime-environment"
+    "/usr/local/libexec/wrix-runtime-env"
     "/run/wrix/nix-client"
     "/run/wrix/apple-nix-bridge"
     "/tool-cache.sh"

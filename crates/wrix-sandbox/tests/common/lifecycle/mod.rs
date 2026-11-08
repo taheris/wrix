@@ -15,6 +15,8 @@ use std::{
 use serde_json::json;
 use wrix_sandbox::image::Runtime;
 
+use crate::runtime_environment;
+
 pub type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
 const PROCESS_TIMEOUT: Duration = Duration::from_secs(10);
@@ -160,9 +162,9 @@ impl Fixture {
             usize::from(stdio)
         );
         assert_eq!(
-            options
+            runtime_environment::read_pairs(&self.root.path().join("argv.environment"))?
                 .iter()
-                .filter(|arg| arg.as_str() == "WRIX_STDIO=1")
+                .filter(|(name, value)| name == "WRIX_STDIO" && value == "1")
                 .count(),
             usize::from(stdio)
         );

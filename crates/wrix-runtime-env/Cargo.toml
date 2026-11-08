@@ -1,0 +1,15 @@
+[package]
+name = "wrix-runtime-env"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+displaydoc.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

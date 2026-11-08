@@ -48,6 +48,7 @@ let
     system = pkgs.stdenv.hostPlatform.system;
     linuxPkgs = throw "inventory evaluated image packages";
     focusBinary = throw "inventory evaluated an opaque runtime";
+    runtimeEnvironmentTests = throw "inventory evaluated native protocol tests";
     src = ../..;
   };
   loom = import ../loom.nix {

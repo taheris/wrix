@@ -1,4 +1,6 @@
 mod common;
+#[path = "common/runtime_environment.rs"]
+mod runtime_environment;
 
 use std::{fs, path::PathBuf};
 
@@ -64,8 +66,11 @@ fn profile_config_agent_cannot_be_overridden_by_env() -> TestResult {
 
     assert!(run.success, "{}", run.stderr);
     assert!(run.stderr.is_empty(), "{}", run.stderr);
-    assert!(run.stdout.contains("WRIX_AGENT=direct"));
-    assert!(!run.stdout.contains("WRIX_AGENT=pi"));
+    assert_eq!(
+        run.guest_environment.get("WRIX_AGENT").map(String::as_str),
+        Some("direct")
+    );
+    assert!(!run.stdout.contains("WRIX_AGENT="));
 
     Ok(())
 }

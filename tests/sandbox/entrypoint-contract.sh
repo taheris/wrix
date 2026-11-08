@@ -5,6 +5,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 TEST_TMP="$(mktemp -d -t wrix-entrypoint-contract.XXXXXX)"
 unset WRIX_DIR_MOUNTS WRIX_FILE_MOUNTS
+# These fixtures own the entrypoint boundary after private environment delivery.
+# The independent native protocol owner executes the real decoder and mount.
+export WRIX_NETWORK_ENVIRONMENT_READY=1
 AUDIT_CLOCK_BARRIERS=()
 AUDIT_CLOCK_PIDS=()
 

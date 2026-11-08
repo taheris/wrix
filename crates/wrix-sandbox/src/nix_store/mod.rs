@@ -118,12 +118,6 @@ impl Delivery {
             argument.push(":ro");
             command.arg("-v").arg(argument);
         }
-        if !self.apple {
-            command.arg("-e").arg(format!(
-                "WRIX_NETWORK_LOCAL_ENDPOINTS={}",
-                self.local_endpoint()
-            ));
-        }
     }
 }
 /// Re-observe native export identity and fixed configuration, not historical job readiness.

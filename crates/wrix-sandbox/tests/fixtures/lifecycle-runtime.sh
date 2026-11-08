@@ -23,9 +23,11 @@ case "${1:-} ${2:-}" in
     ;;
   'image inspect')
     if [[ "$runtime" == container ]]; then
-      printf '[{"id":"%s","digest":"%s","labels":{"wrix.nix.private":"%s"}}]\n' "${WRIX_TEST_DIGEST:?}" "$WRIX_TEST_DIGEST" "${WRIX_TEST_PRIVATE_NIX_VERSION:-1}"
+      printf '[{"id":"%s","digest":"%s","labels":{"wrix.nix.private":"%s","wrix.runtime.environment":"%s"}}]\n' "${WRIX_TEST_DIGEST:?}" "$WRIX_TEST_DIGEST" "${WRIX_TEST_PRIVATE_NIX_VERSION:-1}" "${WRIX_TEST_RUNTIME_ENV_VERSION-1}"
     elif [[ "${4:-}" == '{{ index .Config.Labels "wrix.nix.private" }}' ]]; then
       printf '%s\n' "${WRIX_TEST_PRIVATE_NIX_VERSION:-1}"
+    elif [[ "${4:-}" == '{{ index .Config.Labels "wrix.runtime.environment" }}' ]]; then
+      printf '%s\n' "${WRIX_TEST_RUNTIME_ENV_VERSION-1}"
     else
       printf '%s\n' "${WRIX_TEST_DIGEST:?}"
     fi
@@ -39,6 +41,11 @@ case "${1:-} ${2:-}" in
   'image tag') [[ "${3:-}" == "${WRIX_TEST_DIGEST:?}" ]] ;;
   'run --rm' | 'service start')
     printf '%s\0' "$@" >"${WRIX_TEST_ARGV:?}"
+    for arg in "$@"; do
+      if [[ "$arg" == *:/run/wrix/runtime-environment:ro ]]; then
+        cp "${arg%:/run/wrix/runtime-environment:ro}/environment" "$WRIX_TEST_ARGV.environment"
+      fi
+    done
     exec 3<>"/dev/tcp/127.0.0.1/${WRIX_TEST_CONTROL_PORT:?}"
     printf '%s\n' "ready $runtime" >&3
     while IFS= read -r -t "${WRIX_TEST_CONTROL_TIMEOUT:-15}" request <&3; do

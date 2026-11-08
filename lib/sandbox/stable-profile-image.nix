@@ -19,6 +19,7 @@ let
   inherit (imageBuilderPkgs) dockerTools;
 
   notifyClient = import ../notify/client.nix { inherit pkgs; };
+  runtimeEnvironment = import ./runtime-environment.nix { inherit pkgs; };
   prekHooksBundle = import ../prek/bundle.nix { inherit pkgs; };
   prekWrappers = import ../prek/wrappers.nix { inherit pkgs; };
 
@@ -55,6 +56,7 @@ let
   # NOT the `coreEnv` wrapper itself (which it does not — see lowerTiersContents).
   # No agent binary lives here — claude-code rides the agent tier above.
   coreEnvPaths = [
+    runtimeEnvironment.package
     notifyClient
     prekWrappers.prePushChecks
   ]

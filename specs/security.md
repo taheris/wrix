@@ -281,6 +281,22 @@ The environment surface is split into static defaults and runtime secrets:
   omitted, while an absent required source fails before container startup.
   Dry-run output redacts known and declared secret values.
 
+Managed environment values cross the host runtime boundary through a fresh,
+private, read-only data mount, never `-e KEY=value` runtime arguments. A
+versioned, bounded binary payload preserves empty and multiline values without
+shell evaluation. Only the image-pinned guest decoder applies the overlay to its
+fixed startup target; guest variables do not add or override the host runtime
+command's selected environment. Existing bootstrap-sensitive name and
+protected-mount guards remain in force. An image lacking the matching delivery
+version fails before staging, with no argv fallback.
+
+The carrier is a host-private `0700` directory with a `0600` regular payload,
+retained for the launch's foreground lifetime and normally removed afterward.
+Abrupt host/launcher failure may leave private staging data; Wrix does not infer
+safe retirement from a missing PID. This transport does not hide the resulting
+guest process environment from the agent, encrypt local staging storage, revoke
+credentials, or conceal values deliberately placed in ordinary agent arguments.
+
 The second delivery channel is **isolated persistent credential storage**. For
 Pi, `WRIX_PI_AUTH_FILE` selects the host auth file, otherwise
 `~/.pi/agent/auth.json` is used. Interactive `wrix run` initializes an empty
@@ -336,8 +352,8 @@ Acceptable because:
   no second principal, so the only processes that can read `/proc` are ones the
   agent itself started.
 - The credential is already present in the operator's environment,
-  `SpawnConfig`, or an on-host auth file; passing it through adds no new
-  host-side exposure.
+  `SpawnConfig`, or an on-host auth file. Private environment delivery does not
+  add its value to the host container-runtime argument list.
 - Credentials may be session-scoped tokens, OAuth material, or long-lived
   provider API keys. Wrix treats all such credentials as opaque: the launcher
   neither inspects nor enforces their lifetime, and sandbox exit does not revoke
@@ -346,16 +362,18 @@ Acceptable because:
   provider controls: least-privilege scopes, spending budgets, rate limits,
   rotation, and prompt revocation after suspected exposure.
 
-A secrets-file mount (`/run/secrets/oauth_token`) would prevent `/proc/environ`
-exposure but adds complexity for marginal benefit against the stated threat
-model. wrix does not model providers or keys itself — provider/model defaults
-and the agent's own credential resolution are the agent's concern. Wrix
-validates only runtime-secret environment names and required/optional policy,
-not provider semantics or key formats. Pi gets image-baked non-secret
-`settings.json` defaults and a runtime `auth.json` mount; its project session
-persistence uses an explicit `sessionDir`, not a broad import of `~/.pi/agent`.
-Claude gets its settings surface. Wrix only delivers the secret into the
-container.
+A provider-consumed secrets file (`/run/secrets/oauth_token`) rather than a
+guest environment value would avoid `/proc/environ` exposure but adds complexity
+for marginal benefit against the stated threat model. The private transport
+carrier above is decoded into the guest environment, not consumed as a provider
+credential-file API. wrix does not model providers or keys itself —
+provider/model defaults and the agent's own credential resolution are the
+agent's concern. Wrix validates only runtime-secret environment names and
+required/optional policy, not provider semantics or key formats. Pi gets
+image-baked non-secret `settings.json` defaults and a runtime `auth.json` mount;
+its project session persistence uses an explicit `sessionDir`, not a broad
+import of `~/.pi/agent`. Claude gets its settings surface. Wrix only delivers
+the secret into the container.
 
 ### Network Exfil Baseline
 
@@ -586,6 +604,13 @@ section is a reference index only.
   the host environment and reports its name/availability without exposing its
   value in either rendering or diagnostics.
   [test](../crates/wrix-cli/tests/preflight.rs::dry_run_redacts_custom_runtime_secrets)
+- Managed environment delivery preserves empty/multiline values, uses a private
+  read-only payload and fixed guest target, and does not expose the value in
+  actual host runtime argv or replace its selected host environment.
+  [system](verify:security.runtime-environment-native)
+- Incompatible environment-delivery versions fail before staging or runtime
+  startup, with no secret-valued argv fallback.
+  [test](../crates/wrix-cli/tests/sandbox_launch.rs::incompatible_environment_delivery_has_no_argv_fallback_or_staged_secret)
 - A missing `"required"` runtime-secret source fails before the container starts
   [test](../crates/wrix-sandbox/tests/launch.rs::required_runtime_secret_fails_before_container_start)
 - `profile.env`, `profile.hostEnv`, `mkSandbox.env`, and agent-settings env

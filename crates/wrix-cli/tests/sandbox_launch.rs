@@ -1,5 +1,7 @@
 #[path = "../../wrix-sandbox/tests/common/lifecycle/mod.rs"]
 mod lifecycle;
+#[path = "../../wrix-sandbox/tests/common/runtime_environment.rs"]
+mod runtime_environment;
 
 use std::{fs, path::PathBuf, process::Command};
 
@@ -165,6 +167,29 @@ fn incompatible_image_is_rejected_before_container_start() -> TestResult {
 }
 
 #[test]
+fn incompatible_environment_delivery_has_no_argv_fallback_or_staged_secret() -> TestResult {
+    for version in ["", "0", "2", "unknown"] {
+        let fixture = Fixture::new(None)?;
+        let output = fixture
+            .capture_runtime()?
+            .arg(&fixture.workspace)
+            .arg("true")
+            .env("WRIX_TEST_RUNTIME_ENV_VERSION", version)
+            .env("OPENAI_API_KEY", "synthetic-refused-secret")
+            .output()?;
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8(output.stderr)?
+                .contains("image does not implement private environment delivery v1")
+        );
+        assert!(!fixture.root.path().join("argv").exists());
+        assert!(!fixture.root.path().join("argv.environment").exists());
+        assert!(!fixture.root.path().join("cache/wrix/mounts").exists());
+    }
+    Ok(())
+}
+
+#[test]
 fn spawn_waits_for_container_completion() -> TestResult {
     for stdio in [false, true] {
         for exit_code in [0, 37] {
@@ -259,17 +284,14 @@ fn runtime_mcp_selection_reaches_entrypoint() -> TestResult {
                 }
             }
             let argv = fixture.launched_argv(command, &environment)?;
-            let forwarded: Vec<_> = argv
-                .iter()
-                .filter(|arg| arg.starts_with("WRIX_MCP="))
-                .collect();
-            assert_eq!(
-                forwarded,
-                selection
-                    .map(|value| format!("WRIX_MCP={value}"))
-                    .iter()
-                    .collect::<Vec<_>>()
+            let delivered = runtime_environment::read(&fixture.root().join("argv.environment"))?;
+            assert_eq!(delivered.get("WRIX_MCP").map(String::as_str), selection);
+            assert!(
+                !delivered
+                    .keys()
+                    .any(|name| name.starts_with("WRIX_MCP_TMUX_"))
             );
+            assert!(!argv.iter().any(|arg| arg.starts_with("WRIX_MCP=")));
             assert!(!argv.iter().any(|arg| arg.starts_with("WRIX_MCP_TMUX_")));
         }
     }

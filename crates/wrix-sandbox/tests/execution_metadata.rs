@@ -1,5 +1,7 @@
 #[path = "common/lifecycle/mod.rs"]
 mod lifecycle;
+#[path = "common/runtime_environment.rs"]
+mod runtime_environment;
 
 use std::{
     env, fs, io,

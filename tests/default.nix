@@ -208,6 +208,7 @@ let
       src
       ;
     focusBinary = wrix.rustPackage.focusNotification;
+    runtimeEnvironmentTests = wrix.rustPackage.cacheBackendTests;
   };
 
   systemTests = optionalAttrs pkgs.stdenv.hostPlatform.isLinux {

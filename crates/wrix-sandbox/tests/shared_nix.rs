@@ -1,4 +1,6 @@
 mod common;
+#[path = "common/runtime_environment.rs"]
+mod runtime_environment;
 
 use common::{ChildSpec, ProfileFixture, TestResult};
 use serde_json::{Value, json};

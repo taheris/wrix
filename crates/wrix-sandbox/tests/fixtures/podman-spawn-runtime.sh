@@ -23,7 +23,7 @@ case "${1:-}" in
     case "$format" in
       '{{.Id}}') printf 'sha256:%064d\n' 0 ;;
       '{{.Digest}}') printf 'sha256:%064d\n' 0 ;;
-      '{{ index .Config.Labels "wrix.nix.private" }}') printf '1\n' ;;
+      '{{ index .Config.Labels "wrix.nix.private" }}' | '{{ index .Config.Labels "wrix.runtime.environment" }}') printf '1\n' ;;
       *) printf 'true\n' ;;
     esac
     ;;
@@ -40,12 +40,16 @@ case "${1:-}" in
           if [[ "$volume" == *:/run/wrix/spawn-config.json:ro ]]; then
             config_host="${volume%:/run/wrix/spawn-config.json:ro}"
             : >"$state/read-only-mount"
+          elif [[ "$volume" == *:/run/wrix/runtime-environment:ro ]]; then
+            exec 4<"${volume%:/run/wrix/runtime-environment:ro}/environment"
+            IFS= read -r -d '' magic <&4
+            [[ "$magic" == wrix-runtime-env-v1 ]]
+            while IFS= read -r -d '' name <&4; do
+              IFS= read -r -d '' value <&4
+              [[ "$name" != WRIX_SPAWN_CONFIG ]] || config_env="$value"
+            done
+            exec 4<&-
           fi
-          shift 2
-          ;;
-        -e)
-          pair="${2:?}"
-          [[ "$pair" != WRIX_SPAWN_CONFIG=* ]] || config_env="${pair#WRIX_SPAWN_CONFIG=}"
           shift 2
           ;;
         *) shift ;;
