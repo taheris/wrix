@@ -66,6 +66,9 @@ keep it current when specs land or retire.
 | [services](../specs/services.md)             | `crates/wrix-service/`, `crates/wrix-service-server/`                                | wx-fvr1x | Host-user control, shared service roles and draining updates             |
 | [tmux](../specs/tmux.md)                     | [`lib/sandbox/profiles.nix`](../lib/sandbox/profiles.nix)                            | wx-4f3g  | Native tmux CLI debugging and caller-owned session lifecycle             |
 
+[Beads archive recovery](beads-archive-recovery.md) records lossless file-remote
+repacking without deleting database history or bypassing GitHub limits.
+
 [Celler ownership recovery](celler-recovery.md) describes explicit recovery of
 an absent or stopped selected cache owner without resetting persistent data.
 
