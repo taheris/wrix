@@ -21,6 +21,8 @@ pub enum Error {
     Encoding(#[from] serde_json::Error),
     /// host controller package paths must be absolute normalized Nix store paths
     Package,
+    /// pinned host tooling output does not match its retained derivation; refuse preparation without changing services
+    Provenance,
     /// user supervision is unavailable; configure a systemd user manager or a launchd GUI session: {0}
     Supervisor(String),
     /// host controller unit conflicts with existing user supervision; stop and reconcile the existing controller before retrying: {0}
@@ -29,6 +31,8 @@ pub enum Error {
     Root(String),
     /// controller lifecycle directory must be canonical and private
     PrivateRoot,
+    /// pinned host controller tooling is not prepared; run `wrix service prepare` explicitly before starting services
+    Unprepared,
     /// this platform has no supported host-user supervisor
     Unsupported,
 }
@@ -39,6 +43,15 @@ pub struct Package {
     controller: PathBuf,
     runtime: PathBuf,
     image: PathBuf,
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    preparation: Option<Preparation>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+struct Preparation {
+    controller_derivation: PathBuf,
+    runtime_derivation: PathBuf,
+    management: PathBuf,
 }
 
 #[derive(Deserialize)]
@@ -47,6 +60,12 @@ struct Wire {
     controller: PathBuf,
     runtime: PathBuf,
     image: PathBuf,
+    #[serde(default)]
+    controller_derivation: Option<PathBuf>,
+    #[serde(default)]
+    runtime_derivation: Option<PathBuf>,
+    #[serde(default)]
+    management: Option<PathBuf>,
 }
 
 impl<'de> Deserialize<'de> for Package {
@@ -71,8 +90,39 @@ impl Package {
             controller: wire.controller,
             runtime: wire.runtime,
             image: wire.image,
+            preparation: match (
+                wire.controller_derivation,
+                wire.runtime_derivation,
+                wire.management,
+            ) {
+                (None, None, None) => None,
+                (Some(controller_derivation), Some(runtime_derivation), Some(management)) => {
+                    Some(Preparation {
+                        controller_derivation,
+                        runtime_derivation,
+                        management,
+                    })
+                }
+                _ => return Err(Error::Package),
+            },
         };
-        for path in [&package.controller, &package.runtime, &package.image] {
+        let mut paths = vec![&package.controller, &package.runtime, &package.image];
+        if let Some(preparation) = &package.preparation {
+            for derivation in [
+                &preparation.controller_derivation,
+                &preparation.runtime_derivation,
+            ] {
+                if derivation
+                    .extension()
+                    .is_none_or(|extension| extension != "drv")
+                {
+                    return Err(Error::Package);
+                }
+                paths.push(derivation);
+            }
+            paths.push(&preparation.management);
+        }
+        for path in paths {
             if !path.starts_with("/nix/store")
                 || path.components().count() != 4
                 || path.components().any(|part| {
@@ -93,6 +143,35 @@ impl Package {
             return Err(Error::Package);
         }
         Ok(package)
+    }
+
+    fn management(&self) -> &Path {
+        self.preparation
+            .as_ref()
+            .map_or(&self.runtime, |preparation| &preparation.management)
+    }
+
+    /// Check local availability without realizing tooling or contacting supervision.
+    pub fn check_prepared(&self) -> Result<(), Error> {
+        self.require_prepared(&Native::for_package(Platform::current()?, 0, self))
+    }
+
+    fn require_prepared(&self, native: &Native) -> Result<(), Error> {
+        if self.preparation.is_some() {
+            let output = Command::new(&native.nix_store)
+                .arg("--check-validity")
+                .args([&self.controller, &self.runtime])
+                .output()?;
+            if !output.status.success() {
+                return Err(Error::Unprepared);
+            }
+        }
+        Ok(())
+    }
+
+    /// Separate prepared consumer candidates without retiring another pin's roots.
+    pub fn preparation_root(&self, parent: &Path) -> Result<PathBuf, Error> {
+        Ok(parent.join(self.controller.file_name().ok_or(Error::Package)?))
     }
 
     pub fn executable(&self) -> PathBuf {
@@ -150,10 +229,10 @@ impl Native {
             platform,
             uid,
             match platform {
-                Platform::Linux => package.runtime.join("bin/systemctl"),
-                Platform::Darwin => package.runtime.join("bin/launchctl"),
+                Platform::Linux => package.management().join("bin/systemctl"),
+                Platform::Darwin => package.management().join("bin/launchctl"),
             },
-            package.runtime.join("bin/nix-store"),
+            package.management().join("bin/nix-store"),
         )
     }
 
@@ -226,7 +305,55 @@ impl Native {
             return Err(Error::PrivateRoot);
         }
         self.check()?;
-        self.pin(&root.join("maintenance-roots"), package)
+        let roots = root.join("maintenance-roots");
+        self.prepare(&roots, package)?;
+        self.pin(&roots, package)
+    }
+
+    /// Realize only the package-bound derivations, retaining their outputs before use.
+    pub fn prepare(&self, root: &Path, package: &Package) -> Result<(), Error> {
+        if let Some(preparation) = &package.preparation {
+            let artifacts = [
+                (
+                    "controller",
+                    &package.controller,
+                    &preparation.controller_derivation,
+                ),
+                ("runtime", &package.runtime, &preparation.runtime_derivation),
+            ];
+            for (_, path, derivation) in artifacts {
+                let output = Command::new(&self.nix_store)
+                    .args(["--query", "--outputs"])
+                    .arg(derivation)
+                    .output()?;
+                if !output.status.success()
+                    || String::from_utf8_lossy(&output.stdout)
+                        .lines()
+                        .collect::<Vec<_>>()
+                        != [path.to_string_lossy().as_ref()]
+                {
+                    return Err(Error::Provenance);
+                }
+            }
+            fs::create_dir_all(root)?;
+            for (name, _, derivation) in artifacts {
+                let status = Command::new(&self.nix_store)
+                    .arg("--realise")
+                    .arg(derivation)
+                    .arg("--add-root")
+                    .arg(root.join(name))
+                    .arg("--indirect")
+                    .status()?;
+                if !status.success() {
+                    return Err(Error::Root(format!(
+                        "{} exited with {status}",
+                        derivation.display()
+                    )));
+                }
+            }
+            return Ok(());
+        }
+        self.pin(root, package)
     }
 
     fn pin(&self, root: &Path, package: &Package) -> Result<(), Error> {
@@ -555,10 +682,12 @@ impl Lifecycle {
         native.check()?;
         match Package::load(&self.root.join("package.json")) {
             Ok(recorded) => {
+                recorded.require_prepared(native)?;
                 native.verify_owned(&self.root, &recorded)?;
                 Ok(Some(recorded))
             }
             Err(Error::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
+                candidate.require_prepared(native)?;
                 if native.verify_owned(&self.root, candidate)? {
                     return Err(Error::UnitConflict(
                         "an existing unit has no retained package identity".into(),
@@ -580,6 +709,7 @@ impl Lifecycle {
             Err(Error::Io(error)) if error.kind() == io::ErrorKind::NotFound => candidate.clone(),
             Err(error) => return Err(error),
         };
+        package.require_prepared(native)?;
         native.pin(&self.root.join("roots"), &package)?;
         let mut record = tempfile::NamedTempFile::new_in(&self.root)?;
         record.write_all(&serde_json::to_vec(&package)?)?;
@@ -611,7 +741,9 @@ impl Lifecycle {
             }
             Err(error) => return Err(error),
         };
-        native.pin(&self.root.join("maintenance-roots"), candidate)?;
+        let roots = self.root.join("maintenance-roots");
+        native.prepare(&roots, candidate)?;
+        native.pin(&roots, candidate)?;
         if native.verify_owned(&self.root, &previous)? {
             self.stop(native)?;
         }

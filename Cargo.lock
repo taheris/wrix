@@ -3522,6 +3522,7 @@ dependencies = [
  "wrix-core",
  "wrix-sandbox",
  "wrix-service",
+ "wrix-service-server",
  "wrix-state",
 ]
 
@@ -3621,6 +3622,36 @@ dependencies = [
  "getrandom 0.4.3",
  "libc",
  "nix",
+ "reqwest",
+ "rustix",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "sha2 0.10.9",
+ "socket2",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "wrix-cache",
+ "wrix-cli",
+ "wrix-core",
+ "wrix-sandbox",
+ "wrix-state",
+]
+
+[[package]]
+name = "wrix-service-server"
+version = "0.1.0"
+dependencies = [
+ "attic",
+ "base64 0.22.1",
+ "bytes",
+ "displaydoc",
+ "fs2",
+ "libc",
+ "nix",
  "rama-core",
  "rama-http",
  "rama-http-core",
@@ -3642,6 +3673,7 @@ dependencies = [
  "wrix-cli",
  "wrix-core",
  "wrix-sandbox",
+ "wrix-service",
  "wrix-state",
 ]
 

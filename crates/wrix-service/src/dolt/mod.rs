@@ -1029,7 +1029,7 @@ pub(crate) fn check_directory(path: &Path) -> Result<(), Error> {
     Ok(())
 }
 
-pub(crate) fn private_directory(path: &Path) -> Result<(), Error> {
+pub fn private_directory(path: &Path) -> Result<(), Error> {
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
     if !path.is_absolute()
         || path.components().any(|component| {

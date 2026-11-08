@@ -38,8 +38,12 @@ Nix adapter preserves the existing raw/compressed stream interface, tag
 overrides, inherited Env overlay and Docker history comments. Custom-pipeline
 children reference parent OCI layouts, not parent archives: the packaged test
 successfully emits a child whose declared archive parent is an always-failing
-fixture. The default planner still uses its original inherited-layer budget;
-that compatibility path can realize a parent archive for counting metadata.
+fixture, including with the default layer planner. The default planner retains
+its inherited-layer budget using the genuine parent OCI index and manifest,
+without realizing the parent archive. Manifest bytes are checked against the
+index's SHA-256 descriptor; malformed digests, altered bytes and exhausted
+budgets fail closed. The upstream archive-counting fallback remains available
+for non-native dockerTools callers.
 
 Native failure controls cover early/late producers, consumer write/finalization
 errors, and a real executable blocked on a kernel pipe before its reader closes.

@@ -53,7 +53,8 @@ crates/
 ├── wrix-sandbox/        # Rust host orchestration for container launch
 ├── wrix-image-tools/    # Native image metadata hashing and configuration-root resolution
 ├── wrix-verify-tools/   # Native verifier policy, registry and source-selector audits
-├── wrix-service/        # Host-user service lifecycle, workspace namespaces, compiler contexts
+├── wrix-service/        # Shared protocol, authority, lifecycle and client primitives
+├── wrix-service-server/ # Private controller/backend entrypoints and Rama serving engines
 ├── wrix-cache/          # Celler integration, selected host publication, and hook support
 └── wrix-beads/          # Passive workspace information and explicit beads synchronization
 
@@ -120,6 +121,19 @@ selects only supported runtime/source combinations. Image-store APIs carry
 digest-presence checks, retagging and explicit cleanup. Text rendering stays at
 subprocess, logging and serialization boundaries. Filesystem availability,
 container state and network readiness remain runtime checks.
+
+## Client/server Compilation
+
+The ordinary consumer client does not compile the server crate or Rama. Shared
+protocol/authority/lifecycle primitives remain in `wrix-service`; private
+entrypoints and traffic engines are owned by `wrix-service-server` with
+unconditional dependencies, not security-disabling Cargo features. Existing
+implementation and verifier source paths are retained through explicit server
+module/target registration. Full verification still compiles and runs both
+packages and every existing integration target. The selected production client
+uses a server-excluding source projection and dependency cache; full checks
+retain the complete source/dependency graph. See
+[the boundary and measurements](client-server-boundary.md).
 
 ## Sandbox Launcher
 

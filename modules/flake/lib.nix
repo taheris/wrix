@@ -28,6 +28,7 @@
           deriveProfile
           mkDevShell
           mkProfileImages
+          mkProfileCatalogue
           mkSandbox
           prePushChecks
           prekHooks

@@ -126,14 +126,14 @@ impl Program {
     }
 }
 
-pub(crate) struct AppleNetworkObservation {
-    pub(crate) network: Vec<u8>,
-    pub(crate) interfaces: Vec<u8>,
-    pub(crate) release: Vec<u8>,
+pub struct AppleNetworkObservation {
+    pub network: Vec<u8>,
+    pub interfaces: Vec<u8>,
+    pub release: Vec<u8>,
 }
 
 impl Tools {
-    pub(crate) fn apple_network(&self) -> Result<AppleNetworkObservation, Error> {
+    pub fn apple_network(&self) -> Result<AppleNetworkObservation, Error> {
         if !cfg!(all(target_os = "macos", target_arch = "aarch64")) {
             return Err(Error::Unsupported);
         }
@@ -148,9 +148,7 @@ impl Tools {
         })
     }
 
-    pub(crate) fn for_package(
-        package: &crate::control::supervision::Package,
-    ) -> Result<Self, Error> {
+    pub fn for_package(package: &crate::control::supervision::Package) -> Result<Self, Error> {
         let system = if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
             Host::X86Linux
         } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {

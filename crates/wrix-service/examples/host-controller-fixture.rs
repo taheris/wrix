@@ -1,6 +1,6 @@
 //! Native controller fixture for host-local clients, independent of vmnet availability.
 use std::{num::NonZeroUsize, path::PathBuf};
-use wrix_service::control::{Controller, serving::Host};
+use wrix_service_server::control::{Controller, serving::Host};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

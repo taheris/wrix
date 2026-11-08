@@ -8,6 +8,7 @@
 
 let
   inherit (builtins) concatStringsSep;
+  inherit (pkgs) gitMinimal;
   inherit (pkgs.lib) makeBinPath optionals;
 
   exampleCrates = builtins.filter (name: builtins.pathExists (../../crates + "/${name}/examples")) (
@@ -66,6 +67,33 @@ let
   };
 
   workspace = rustProfile.buildPackage workspaceArgs;
+  clientCargoArgs = concatStringsSep " " [
+    "--package wrix-cli --package wrix-cache --package wrix-notify"
+    "--bin wrix --bin wrix-git-sign --bin wrix-focus-notification"
+    "--bin wrix-cache-hook --bin wrix-cache-publish --bin wrix-host-cache-policy"
+  ];
+  clientCargoArtifacts = workspace.cargoArtifacts.overrideAttrs {
+    pname = "wrix-client-deps";
+    doCheck = false;
+    buildPhase = ''
+      runHook preBuild
+      cargo --version
+      cargoWithProfile build --locked ${clientCargoArgs}
+      runHook postBuild
+    '';
+  };
+  clientWorkspace = rustProfile.buildPackage (
+    workspaceArgs
+    // {
+      cargoArtifacts = clientCargoArtifacts;
+      cargoExtraArgs = clientCargoArgs;
+      srcFilter = import ./rust-client-source-filter.nix {
+        inherit (pkgs) lib;
+        inherit (rustProfile.craneLib) filterCargoSources;
+        root = ../..;
+      };
+    }
+  );
   compileOnlyWorkspace = rustProfile.buildPackage (
     (import ./rust-compile-only-source.nix workspaceArgs)
     // {
@@ -76,7 +104,7 @@ let
     workspaceArgs
     // {
       inherit (workspace) cargoArtifacts;
-      cargoExtraArgs = "--package wrix-cli --package wrix-service --bin wrix-service-supervisor --bin wrix-shared-service --bin wrix-egress-gateway --bin wrix-nix-pool-owner";
+      cargoExtraArgs = "--package wrix-cli --package wrix-service-server --bin wrix-service-supervisor --bin wrix-shared-service --bin wrix-egress-gateway --bin wrix-nix-pool-owner";
     }
   );
 
@@ -109,7 +137,7 @@ let
       workspace.bin
       pkgs.nix
       pkgs.skopeo
-      pkgs.git
+      gitMinimal
       pkgs.openssl
       pkgs.openssh
     ]
@@ -132,7 +160,9 @@ let
   poolHostTools = pkgs.writeText "wrix-nix-pool-host-tools.json" (
     builtins.toJSON {
       version = 1;
-      root = toString controllerRuntime;
+      root = builtins.appendContext (builtins.unsafeDiscardStringContext (toString controllerRuntime)) (
+        builtins.getContext (builtins.unsafeDiscardOutputDependency controllerRuntime.drvPath)
+      );
       system = pkgs.stdenv.hostPlatform.system;
     }
   );
@@ -146,6 +176,7 @@ let
 
         mkdir -p "$out/bin"
         makeWrapper "${workspace.bin}/bin/wrix-host-controller" "$out/bin/wrix-host-controller" \
+          --set WRIX_CONTROLLER_MANAGEMENT "${controllerManagement}" \
           --run 'export WRIX_HOST_RUNTIME_PATH="''${WRIX_HOST_RUNTIME_PATH:-$PATH}"' \
           --prefix PATH : "${controllerRuntime}/bin" ${
             if nixPoolImage == null then
@@ -154,8 +185,21 @@ let
               ''--set WRIX_NIX_POOL_PACKAGE_BINDING "${poolBinding}" --set WRIX_NIX_POOL_HOST_TOOLS "${poolHostTools}"''
           }
       '';
+  controllerManagement = pkgs.symlinkJoin {
+    name = "wrix-controller-management";
+    paths = [
+      pkgs.nix
+    ]
+    ++ optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.systemd ]
+    ++ optionals pkgs.stdenv.hostPlatform.isDarwin [
+      (pkgs.writeShellScriptBin "launchctl" ''
+        exec /bin/launchctl "$@"
+      '')
+    ];
+  };
   controllerBinding = import ./control-binding.nix {
     inherit pkgs;
+    management = controllerManagement;
     controller = controllerPackage;
     runtime = controllerRuntime;
     image = serviceImage;
@@ -174,7 +218,7 @@ let
       ":"
       "${makeBinPath [
         pkgs.coreutils
-        pkgs.git
+        gitMinimal
         pkgs.dolt
         pkgs.openssl
       ]}"
@@ -238,13 +282,13 @@ let
       builtins.replaceStrings
         [ "cargoWithProfile build" ]
         [
-          "cargoWithProfile build -p wrix-service --example host-controller-fixture --example wrix-native-fixtures"
+          "cargoWithProfile build -p wrix-service-server --example host-controller-fixture --example wrix-native-fixtures"
         ]
         old.buildPhase;
     doCheck = true;
     checkPhase = ''
       runHook preCheck
-      cargoWithProfile test --offline --locked -p wrix-service --example wrix-native-fixtures
+      cargoWithProfile test --offline --locked -p wrix-service-server --example wrix-native-fixtures
       test ! -e ${workspace.bin}/bin/wrix-native-fixtures
       test ! -e ${workspace.bin}/bin/host-controller-fixture
       runHook postCheck
@@ -285,9 +329,9 @@ let
         mkdir -p "$out/bin"
         ${
           if runtime == [ ] then
-            ''ln -s "${workspace.bin}/bin/${name}" "$out/bin/${name}"''
+            ''ln -s "${clientWorkspace.bin}/bin/${name}" "$out/bin/${name}"''
           else
-            ''makeWrapper "${workspace.bin}/bin/${name}" "$out/bin/${name}" --prefix PATH : "${makeBinPath runtime}"''
+            ''makeWrapper "${clientWorkspace.bin}/bin/${name}" "$out/bin/${name}" --prefix PATH : "${makeBinPath runtime}"''
         }
       '';
 
@@ -300,10 +344,10 @@ let
       }
       ''
         mkdir -p "$out/bin"
-        makeWrapper "${workspace.bin}/bin/${name}" "$out/bin/${name}" \
+        makeWrapper "${clientWorkspace.bin}/bin/${name}" "$out/bin/${name}" \
           --run 'export WRIX_HOST_RUNTIME_PATH="''${WRIX_HOST_RUNTIME_PATH:-$PATH}"' \
           --set WRIX_INVOKED_BIN "$out/bin/${name}" ${concatStringsSep " " wrapperArgs}
-        ln -s "${workspace.bin}/bin/wrix-git-sign" "$out/bin/wrix-git-sign"
+        ln -s "${clientWorkspace.bin}/bin/wrix-git-sign" "$out/bin/wrix-git-sign"
         ln -s "${prekRunner}/bin/wrix-prek" "$out/bin/wrix-prek"
       '';
 
@@ -364,7 +408,7 @@ in
         cargo test --offline --locked --no-run -p wrix-cache --test "$target" \
           ''${CARGO_PROFILE:+--profile "$CARGO_PROFILE"} --message-format json >> compiled-tests.json
       done
-      cargo test --offline --locked --no-run -p wrix-service --test celler_auth \
+      cargo test --offline --locked --no-run -p wrix-service-server --test celler_auth \
         ''${CARGO_PROFILE:+--profile "$CARGO_PROFILE"} --message-format json >> compiled-tests.json
       for target in service_lifecycle workspace_admission; do
         cargo test --offline --locked --no-run -p wrix-cli --test "$target" \
@@ -407,6 +451,8 @@ in
   testFixtures = fixtures.bundle;
   testFixtureEnvironment = fixtures.environment;
   package = workspace.bin;
+  clientPackage = clientWorkspace.bin;
+  inherit clientCargoArtifacts;
   runtimePackage = runtimeWorkspace.bin;
   wrix = wrixPackage;
   binding = serviceBinding;
@@ -437,7 +483,7 @@ in
   hostCachePolicy = mkBinaryPackage "wrix-host-cache-policy" [ ];
   cacheHook = mkBinaryPackage "wrix-cache-hook" [ ];
   cachePublish = mkBinaryPackage "wrix-cache-publish" [
-    pkgs.git
+    gitMinimal
     pkgs.nix
   ];
 }

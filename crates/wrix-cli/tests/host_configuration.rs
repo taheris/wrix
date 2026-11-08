@@ -105,6 +105,64 @@ impl Fixture {
 }
 
 #[test]
+fn unprepared_host_tooling_refuses_run_and_spawn_before_launch_effects() -> TestResult {
+    let nix_store = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|directory| directory.join("nix-store"))
+        .find(|path| path.is_file())
+        .ok_or("nix-store is required for the host-tooling admission fixture")?
+        .canonicalize()?;
+    let management = nix_store
+        .parent()
+        .and_then(std::path::Path::parent)
+        .ok_or("nix-store has no package root")?;
+    for mode in ["run", "spawn"] {
+        let fixture = Fixture::new()?;
+        fs::create_dir_all(fixture.root.path().join("home"))?;
+        let mut profile: Value = serde_json::from_slice(&fs::read(&fixture.profile)?)?;
+        profile["services"]["nix_cache"]["enable"] = json!(true);
+        fs::write(&fixture.profile, serde_json::to_vec(&profile)?)?;
+        let binding = fixture.root.path().join("controller.json");
+        fs::write(
+            &binding,
+            serde_json::to_vec(&json!({
+                "controller": "/nix/store/00000000000000000000000000000000-unprepared-controller",
+                "runtime": "/nix/store/00000000000000000000000000000000-unprepared-runtime",
+                "image": "/nix/store/00000000000000000000000000000000-unprepared-image.drv",
+                "controller_derivation": "/nix/store/00000000000000000000000000000000-unprepared-controller.drv",
+                "runtime_derivation": "/nix/store/00000000000000000000000000000000-unprepared-runtime.drv",
+                "management": management,
+            }))?,
+        )?;
+        let mut command = fixture.command();
+        fixture.launch(&mut command, mode);
+        fixture.runtime(&mut command)?;
+        let output = command
+            .env(PROJECT_PROFILE_CONFIG, &fixture.profile)
+            .env("WRIX_CONTROLLER_PACKAGE_BINDING", binding)
+            .output()?;
+        assert!(!output.status.success());
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(error.contains("wrix service prepare"), "{mode}: {error}");
+        assert!(!fixture.workspace.join(".wrix/log").exists());
+        assert!(
+            !fixture
+                .root
+                .path()
+                .join("home/Library/Application Support/wrix/control")
+                .exists()
+        );
+        assert!(
+            !fixture
+                .root
+                .path()
+                .join("home/.local/state/wrix/control")
+                .exists()
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn packaged_consumer_shell_replaces_stale_client_before_launch_dispatch() -> TestResult {
     let packaged = common::prek::packaged_wrix()?;
     let hook = common::prek::devshell_hook()?;

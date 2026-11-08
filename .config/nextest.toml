@@ -16,7 +16,7 @@ max-threads = 1
 # ports are advisory, so a parallel allocator can take them during restart.
 # In particular, ephemeral-port I/O/backpressure tests must not hold this group.
 [[profile.default.overrides]]
-filter = "package(wrix-service) & ((binary(wrix_service) & test(control::)) | binary(deployment_endpoints) | binary(host_service) | (binary(host_control) & (test(private_controller_process_is_singleton_and_resumes_after_clean_stop) | test(controller_host_))))"
+filter = "(package(wrix-service) | package(wrix-service-server)) & (((binary(wrix_service) | binary(wrix_service_server)) & test(control::)) | binary(deployment_endpoints) | binary(host_service) | (binary(host_control) & (test(private_controller_process_is_singleton_and_resumes_after_clean_stop) | test(controller_host_))))"
 test-group = "deployment-role-ports"
 
 # These controller fixtures preseed disjoint, process-reserved role leases.
@@ -34,7 +34,7 @@ test-group = "independent-controller-fixtures"
 max-threads = 1
 
 [[profile.default.overrides]]
-filter = "(package(wrix-service) & binary(shared_startup)) | (package(wrix-cli) & binary(service_lifecycle) & test(public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql))"
+filter = "((package(wrix-service) | package(wrix-service-server)) & binary(shared_startup)) | (package(wrix-cli) & binary(service_lifecycle) & test(public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql))"
 test-group = "native-shared-fixtures"
 
 [scripts.setup.isolated-host-roots]
@@ -48,5 +48,5 @@ setup = "isolated-host-roots"
 command = ["bash", "tests/prepare-native-fixtures.sh"]
 
 [[profile.default.scripts]]
-filter = "(package(wrix-cli) & (binary(service_cache) | binary(service_lifecycle) | binary(beads_push) | binary(host_configuration) | binary(init_config) | binary(init_idempotency) | binary(init_prek) | binary(prek_bundle_build) | binary(prek_runtime) | (binary(workspace_admission) & test(hardening::consolidation)))) | (package(wrix-cache) & (binary(celler_backend) | binary(host_signed_exclusion))) | (package(wrix-service) & (binary(celler_auth) | binary(shared_startup) | binary(host_control) | (binary(wrix_service) & test(lifecycle::migration::test::))))"
+filter = "(package(wrix-cli) & (binary(service_cache) | binary(service_lifecycle) | binary(beads_push) | binary(host_configuration) | binary(init_config) | binary(init_idempotency) | binary(init_prek) | binary(prek_bundle_build) | binary(prek_runtime) | (binary(workspace_admission) & test(hardening::consolidation)))) | (package(wrix-cache) & (binary(celler_backend) | binary(host_signed_exclusion))) | ((package(wrix-service) | package(wrix-service-server)) & (binary(celler_auth) | binary(shared_startup) | binary(host_control) | (binary(wrix_service) & test(lifecycle::migration::test::))))"
 setup = "packaging-fixtures"

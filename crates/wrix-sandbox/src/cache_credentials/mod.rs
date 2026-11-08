@@ -25,6 +25,8 @@ const MAX_BEARER: usize = 16 * 1024;
 pub enum Error {
     /// host cache credential issuance is unavailable; provide a compatible host wrix and reconcile host authorization/controller state
     Unavailable,
+    /// host controller prerequisite failed: {0}
+    Prerequisite(#[source] io::Error),
     /// host cache credential is malformed
     Credential,
     /// host cache credential has already expired

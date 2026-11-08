@@ -3,6 +3,7 @@
 mod supervision;
 
 use std::{net::SocketAddr, num::NonZeroUsize, time::Duration};
+use wrix_service_server as wrix_service;
 
 #[test]
 fn supervision_preserves_stop_intent_and_active_closures() {

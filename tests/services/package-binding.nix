@@ -73,6 +73,14 @@ let
     }
   ];
   guest = import ../../lib/services/rust.nix { inherit pkgs rustProfile; };
+  unpreparedHost = import ../../lib/services/rust.nix {
+    pkgs = pkgs // {
+      container = pkgs.runCommand "forbidden-eager-container" { } "exit 99";
+    };
+    inherit rustProfile;
+    serviceImage = image;
+    nixPoolImage = image;
+  };
   actualBinding = wrix.rustPackage.binding;
   metadata = import ../../lib/services/binding.nix {
     pkgs = pkgs // {
@@ -90,7 +98,23 @@ let
     inherit image;
   };
   controllerContext = builtins.getContext controllerMetadata;
+  preparedMetadata = import ../../lib/services/control-binding.nix {
+    pkgs = pkgs // {
+      writeText = _: text: text;
+    };
+    controller = host.controllerPackage;
+    runtime = host.controllerRuntime;
+    management = binary;
+    inherit image;
+  };
+  preparedContext = builtins.getContext preparedMetadata;
 in
+assert
+  preparedContext.${unsafeDiscardStringContext host.controllerPackage.drvPath} == { path = true; };
+assert
+  preparedContext.${unsafeDiscardStringContext host.controllerRuntime.drvPath} == { path = true; };
+assert preparedContext.${unsafeDiscardStringContext binary.drvPath} == { outputs = [ "out" ]; };
+assert builtins.length (builtins.attrNames preparedContext) == 4;
 assert controllerContext.${unsafeDiscardStringContext source.drvPath} == { path = true; };
 assert builtins.length (builtins.attrNames controllerContext) == 3;
 assert resourcePolicy null == null;
@@ -113,6 +137,15 @@ pkgs.runCommand "host-service-package-binding"
   }
   ''
     set -euo pipefail
+    jq -n '{version:4, derivations:{"shell.drv":{inputs:{drvs:{"hash-container-1.5.0.drv":{outputs:[]}}}}, "hash-container-1.5.0.drv":{inputs:{drvs:{}}}}}' > recipe.json
+    jq --arg root shell.drv -f ${../client-boundary/graph.jq} recipe.json
+    jq '.derivations["shell.drv"].inputs.drvs["hash-container-1.5.0.drv"].outputs = ["out"]' recipe.json > eager.json
+    if jq --arg root shell.drv -f ${../client-boundary/graph.jq} eager.json > unexpected 2> rejected; then
+      echo 'dependency audit accepted an eager Container output' >&2
+      exit 1
+    fi
+    grep -F 'consumer demands Container/Swift outputs' rejected
+    test "$(${unpreparedHost.wrix}/bin/wrix)" = '${unpreparedHost.binding}'
     test "$(${host.wrix}/bin/wrix)" = '${host.binding}'
     test "$(WRIX_INVOKED_BIN=stale ${host.wrix}/bin/wrix invoked)" = '${host.wrix}/bin/wrix'
     test "$(${guest.wrix}/bin/wrix invoked)" = '${guest.wrix}/bin/wrix'
@@ -126,9 +159,10 @@ pkgs.runCommand "host-service-package-binding"
       '${host.binding}'
     test "$(${sizedHost.wrix}/bin/wrix)" = '${sizedHost.binding}'
     jq -e '.schema == 2 and .resources == {cpus:4,memory_mib:4096}' '${sizedHost.binding}'
-    jq -e --arg controller '${host.controllerPackage}' \
+    jq -e --arg controller '${unsafeDiscardStringContext (toString host.controllerPackage)}' \
+      --arg recipe '${unsafeDiscardOutputDependency host.controllerPackage.drvPath}' \
       --arg image '${unsafeDiscardOutputDependency source.drvPath}' \
-      '.controller == $controller and .image == $image and (.runtime | startswith("/nix/store/"))' \
+      '.controller == $controller and .controller_derivation == $recipe and .image == $image and (.runtime | startswith("/nix/store/"))' \
       '${host.controllerBinding}'
     test -e '${unsafeDiscardOutputDependency source.drvPath}'
     test -e '${unsafeDiscardOutputDependency digest.drvPath}'

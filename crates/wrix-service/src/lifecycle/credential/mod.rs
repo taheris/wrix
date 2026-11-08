@@ -27,10 +27,20 @@ struct Source {
 
 impl Factory for Host {
     fn admit(&self) -> Result<(), Error> {
-        Capability::discover().map_err(|_| Error::Unavailable)?;
-        Package::from_env()
-            .map(|_| ())
-            .map_err(|_| Error::Unavailable)
+        let host = Capability::discover().map_err(|_| Error::Unavailable)?;
+        let invoked = Package::from_env().map_err(|_| Error::Unavailable)?;
+        let selected = match Package::load(&host.roots().state().join("control/package.json")) {
+            Ok(package) => package,
+            Err(crate::control::supervision::Error::Io(error))
+                if error.kind() == io::ErrorKind::NotFound =>
+            {
+                invoked
+            }
+            Err(error) => return Err(Error::Prerequisite(io::Error::other(error))),
+        };
+        selected
+            .check_prepared()
+            .map_err(|error| Error::Prerequisite(io::Error::other(error)))
     }
 
     fn open(&self, selection: &Selection) -> Result<Box<dyn Issuer>, Error> {

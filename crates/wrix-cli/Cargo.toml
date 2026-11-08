@@ -25,6 +25,7 @@ wrix-service = { workspace = true }
 wrix-state = { workspace = true }
 
 [dev-dependencies]
+wrix-service-server = { workspace = true }
 tokio = { workspace = true }
 fs2 = { workspace = true }
 rusqlite = { workspace = true }

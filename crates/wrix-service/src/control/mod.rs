@@ -8,12 +8,10 @@ mod endpoint;
 pub(crate) use endpoint::{
     needs_repair as endpoints_need_repair, repair as repair_retained_endpoints,
 };
-pub mod gateway;
 mod pool;
 pub use pool::Status as PoolPreparation;
 pub(crate) mod maintenance;
 mod registration;
-pub mod serving;
 pub mod supervision;
 
 #[cfg(test)]
@@ -556,7 +554,6 @@ pub struct Controller {
     assignments: assignment::Store,
     cache_issuer: Option<PathBuf>,
     pool_jobs: pool::Queue,
-    pub(crate) gateway: tokio::sync::RwLock<Option<std::sync::Arc<gateway::Issuer>>>,
 }
 
 impl Controller {
@@ -613,7 +610,6 @@ impl Controller {
             assignments,
             cache_issuer: None,
             pool_jobs: pool::Queue::default(),
-            gateway: tokio::sync::RwLock::new(None),
         };
         controller.pool_jobs.recover_startup(&controller);
         Ok(controller)
@@ -627,7 +623,7 @@ impl Controller {
         Ok(())
     }
 
-    pub(crate) fn authority_root(&self) -> Result<PathBuf, Error> {
+    pub fn authority_root(&self) -> Result<PathBuf, Error> {
         self.listener
             .local_addr()?
             .as_pathname()
@@ -662,6 +658,16 @@ impl Controller {
     /// Callers must retain the listeners in their supervised front door for this controller's lifetime.
     pub async fn bind_role_listeners(&self) -> Result<crate::route::Listeners, Error> {
         self.endpoints.bind().await
+    }
+
+    /// Bound role ports describe publication, not native readiness.
+    pub fn bound_role_ports(&self) -> Result<Option<[std::num::NonZeroU16; 5]>, Error> {
+        self.endpoints.bound_ports()
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn publish_guest_address(&self, address: std::net::Ipv4Addr) -> Result<(), Error> {
+        self.endpoints.publish_guest(address)
     }
 
     /// Accept one bounded authenticated request; callers retain supervision of the serving loop.

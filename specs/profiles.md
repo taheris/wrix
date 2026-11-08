@@ -513,6 +513,34 @@ Bundled `packages.profile-images` covers the built-in Pi images. External flakes
 use the same data-only helper for custom profiles and explicit consumer direct
 runners; there is no redundant `profile-images-pi` manifest.
 
+### Lightweight Profile Catalogue
+
+`mkProfileCatalogue` accepts a profile → agent → `mkSandbox.image` matrix and
+returns schema-1 JSON `{ schema, profiles }`. Each entry contains `ref`,
+`source_kind` and `realization = { path, derivation }`. The latter pair binds
+one immutable, single-entry manifest in the existing `mkProfileImages` format.
+`catalogue.provisions.<profile>.<agent>` exposes that manifest derivation for
+explicit Nix provisioning. `capabilities.profileCatalogue == 1` advertises this
+producer interface, not host/runtime readiness.
+
+Building or copying the catalogue retains recipes without realizing images,
+configurations or another Wrix executable. Sources and configurations are pinned
+derivations; invalid/mismatched agent keys, unsupported source kinds, missing
+configuration and output-bearing catalogue metadata are rejected. Selected
+provisioning retains normal image/configuration output contexts, so a real GC
+root on the selected manifest retains its payload closure. A change to one entry
+invalidates its catalogue metadata and manifest, without invalidating unrelated
+selected manifests. Acceptance: [Catalogue Acceptance](#catalogue-acceptance).
+
+A consumer explicitly selects an entry, checks its bound derivation output,
+realizes that recipe through trusted Nix with a GC root, and parses the
+resulting manifest before launch. Catalogue metadata is not a materialized
+ProfileConfig or a substitute for image, agent, native capability, runtime and
+authenticated controller checks. Catalogue support does not alter
+`mkProfileImages` or make legacy manifest consumers lazy. Consumer migration and
+admission requirements are described in
+[Profile Catalogue Integration](../docs/profile-catalogue.md).
+
 ## Flake Outputs
 
 Acceptance: [Manifest and Output Acceptance](#manifest-and-output-acceptance).
@@ -728,7 +756,21 @@ without introducing a reciprocal flake dependency.
   [check](verify:profiles.rust-build-package-workspace-edit-skips-cargo-artifacts)
 - Repository integration-test edits invalidate the Rust check derivations but
   preserve the packaged launcher and Cargo dependency artifacts; production
-  source edits still invalidate the launcher
+  client-reachable source edits still invalidate the launcher
+  [check](verify:profiles.repository-integration-source-isolation)
+- The compiled output used by consumer client/helper packages contains exactly
+  the six client-side executables; controller, backend, image and verifier
+  executables remain in independently selected outputs.
+  [check](test-ci:test-client-package-boundary)
+- The client has a normal-target dependency artifact; independent full
+  verification retains workspace dependency checks, test compilation and
+  Nextest. [check](verify:profiles.repository-integration-source-isolation)
+- The client normal/build dependency graph excludes `wrix-service-server` and
+  Rama. The server retains unconditional Rama dependencies and explicit
+  registration of every existing integration target.
+  [check](test-ci:test-client-server-dependency-boundary)
+- Server-only source edits preserve the compiled client while client source
+  edits invalidate it.
   [check](verify:profiles.repository-integration-source-isolation)
 - Editing a file in `extraSrcs` invalidates `clippy` and `nextest` but does
   **not** invalidate `bin` or `cargoArtifacts`
@@ -743,6 +785,17 @@ without introducing a reciprocal flake dependency.
 - Platform container entrypoints contain no rustup bootstrap logic; the Rust
   toolchain is image-built
   [check](verify:profiles.sandbox-entrypoints-no-rustup)
+
+### Catalogue Acceptance
+
+- The schema-1 catalogue retains recipes without demanding image/configuration
+  outputs, rejects malformed or output-bearing entries, and exposes exact
+  per-entry manifests with independent invalidation.
+  [check](test-ci:test-profile-catalogue)
+- Signed-cache realization into an empty isolated store materializes and roots
+  only the selected manifest/image/configuration; selected payloads survive GC
+  and the other eight entries remain absent.
+  [system](test-ci:test-profile-catalogue-realization)
 
 ### Project Handoff Acceptance
 
