@@ -234,9 +234,11 @@ test_screenshot_returns_png() {
 }
 
 test_setup_failure_cleans_http_server() {
-    local python_bin
-    python_bin=$(playwright_find_python) || return 1
-    "$python_bin" "${SCRIPT_DIR}/screenshot-cleanup-test.py"
+    local tools
+    tools=$(playwright_build_mode cleanup-tools) || return 1
+    WRIX_TEST_SCREENSHOT_SCRIPT="${SCRIPT_DIR}/screenshot-test.sh" \
+        "$tools/bin/screenshot-cleanup-tests" --ignored --exact \
+        setup_failure_terminates_and_reaps_http_child
 }
 
 main() {

@@ -146,6 +146,7 @@ let
         cc -shared -fPIC deny-network.c -ldl -o "$out/lib/libwrix-deny-network.so"
   '';
   outputs = {
+    cleanup-tools = import ./cleanup-tools.nix { inherit pkgs; };
     config-path = configPath;
     config-realizer = configRealizer;
     server-args-json = builtins.toJSON serverConfig.args;
