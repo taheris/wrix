@@ -54,6 +54,21 @@ Evidence:
   and host-service binding checks passed. Nextest resource/setup filters cover
   both package owners after the move.
 
+## Landing verifier
+
+The repository source-isolation probe canonicalizes its copied fixture before
+passing paths to Nix, including when temporary-directory ancestors are symlinks
+on Darwin. Its regression test enters through a symlinked parent and still
+checks preserved executable bits, links and the untouched original.
+
+All four source variants are prepared before evaluation. A single Nix process
+shares the unchanged nixpkgs import, while each variant retains its own complete
+flake and every existing invalidation assertion. This avoids both repeated
+imports and cached reads of a fixture mutated during evaluation. Bounded local
+observations were 51.78 s for separate evaluations, 54.31 s for batching alone,
+and 42.32 s with the shared import; these are not controlled benchmark results.
+No landing checks or approval requirements are removed.
+
 ## Bounded measurements
 
 One dependency-cold shell build, one warm client source edit and one server-only
