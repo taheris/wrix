@@ -16,7 +16,9 @@ verification, worktree access, local transport push and clone. Existing CLI and
 hook acceptance remains required; changing the dependency is not a substitute
 for running those suites.
 
-An aarch64-darwin comparison of actual built Wrix closures measured:
+An aarch64-darwin comparison of actual built Wrix closures, based on the native
+migration checkpoint before the subsequently published client/server and
+recipe-only tooling boundaries, measured:
 
 | Closure             |     NAR bytes |
 | ------------------- | ------------: |
@@ -27,7 +29,9 @@ An aarch64-darwin comparison of actual built Wrix closures measured:
 The previous Git dependency pulled Python, which retained Apple's SDK and LLVM
 libraries. Removing that runtime edge eliminates about 61% of this closure.
 These are serialized closure sizes, not unique physical disk savings or a claim
-that compiler-dependent verification no longer needs an SDK.
+that compiler-dependent verification no longer needs an SDK. The final combined
+client/server/catalogue candidate needs a fresh closure measurement; the table
+must not be presented as that newer candidate's complete push footprint.
 
 ## Build cache and allocation
 
