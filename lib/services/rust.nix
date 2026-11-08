@@ -132,7 +132,9 @@ let
   poolHostTools = pkgs.writeText "wrix-nix-pool-host-tools.json" (
     builtins.toJSON {
       version = 1;
-      root = toString controllerRuntime;
+      root = builtins.appendContext (builtins.unsafeDiscardStringContext (toString controllerRuntime)) (
+        builtins.getContext (builtins.unsafeDiscardOutputDependency controllerRuntime.drvPath)
+      );
       system = pkgs.stdenv.hostPlatform.system;
     }
   );
@@ -146,6 +148,7 @@ let
 
         mkdir -p "$out/bin"
         makeWrapper "${workspace.bin}/bin/wrix-host-controller" "$out/bin/wrix-host-controller" \
+          --set WRIX_CONTROLLER_MANAGEMENT "${controllerManagement}" \
           --run 'export WRIX_HOST_RUNTIME_PATH="''${WRIX_HOST_RUNTIME_PATH:-$PATH}"' \
           --prefix PATH : "${controllerRuntime}/bin" ${
             if nixPoolImage == null then
@@ -154,8 +157,21 @@ let
               ''--set WRIX_NIX_POOL_PACKAGE_BINDING "${poolBinding}" --set WRIX_NIX_POOL_HOST_TOOLS "${poolHostTools}"''
           }
       '';
+  controllerManagement = pkgs.symlinkJoin {
+    name = "wrix-controller-management";
+    paths = [
+      pkgs.nix
+    ]
+    ++ optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.systemd ]
+    ++ optionals pkgs.stdenv.hostPlatform.isDarwin [
+      (pkgs.writeShellScriptBin "launchctl" ''
+        exec /bin/launchctl "$@"
+      '')
+    ];
+  };
   controllerBinding = import ./control-binding.nix {
     inherit pkgs;
+    management = controllerManagement;
     controller = controllerPackage;
     runtime = controllerRuntime;
     image = serviceImage;

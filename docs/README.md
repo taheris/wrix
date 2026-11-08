@@ -10,9 +10,11 @@ Use `sandbox.devShell { }` for the consumer-pinned Wrix client and its
 The host supplies its container engine; shared-controller compatibility is
 checked, and upgrades remain explicit. Outside consumer shells, Home Manager,
 nix-darwin, `nix profile add` and temporary Nix provision remain supported; see
-[CLI Setup](../specs/cli.md#host-cli-and-project-configuration). Pure
-images/configuration remain available for programmatic `spawn`; configured
-sandbox runners are not compatibility entry points.
+[CLI Setup](../specs/cli.md#host-cli-and-project-configuration).
+[Client/runtime boundaries](client-runtime-boundary.md) describes explicit
+`wrix service prepare`, bounded consumer fixtures and the separate Loom image
+catalogue fan-out. Pure images/configuration remain available for programmatic
+`spawn`; configured sandbox runners are not compatibility entry points.
 
 [Claude stdio clients](claude-stdio.md) describes the explicit
 permission-protocol opt-in through `SpawnConfig.agent_args` and its

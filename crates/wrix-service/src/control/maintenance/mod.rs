@@ -4,6 +4,26 @@ use std::{fs, io, os::unix::fs::MetadataExt, time::Duration};
 
 use super::{Client, Error, Operation, Reply, VERSION, recover_registry, supervision};
 
+/// Prepare pinned tooling without starting, replacing or reconfiguring shared services.
+pub fn prepare() -> Result<(), Error> {
+    let host = wrix_state::host::Host::discover().map_err(io::Error::other)?;
+    let package = supervision::Package::from_env().map_err(io::Error::other)?;
+    let root = package
+        .preparation_root(&host.roots().state().join("prepared-controller"))
+        .map_err(io::Error::other)?;
+    wrix_core::private_directory::prepare_with_parents(&root).map_err(io::Error::other)?;
+    let _guard = supervision::Lifecycle::lock(&root).map_err(io::Error::other)?;
+    let native = supervision::Native::for_package(
+        supervision::Platform::current().map_err(io::Error::other)?,
+        fs::metadata(&root)?.uid(),
+        &package,
+    );
+    native
+        .prepare(&root.join("roots"), &package)
+        .map_err(io::Error::other)?;
+    Ok(())
+}
+
 pub fn repair(host: &wrix_state::host::Host) -> Result<(), Error> {
     let root = host.roots().state().join("control");
     if !root.join("package.json").try_exists()? {

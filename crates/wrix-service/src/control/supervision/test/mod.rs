@@ -1,3 +1,5 @@
+mod preparation;
+
 use super::*;
 use std::os::unix::fs::PermissionsExt;
 
@@ -17,6 +19,7 @@ fn package(name: &str) -> Package {
         controller: format!("/nix/store/{name}-controller").into(),
         runtime: format!("/nix/store/{name}-runtime").into(),
         image: format!("/nix/store/{name}-image.drv").into(),
+        preparation: None,
     }
 }
 
