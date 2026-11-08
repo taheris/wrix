@@ -530,8 +530,7 @@ configuration and output-bearing catalogue metadata are rejected. Selected
 provisioning retains normal image/configuration output contexts, so a real GC
 root on the selected manifest retains its payload closure. A change to one entry
 invalidates its catalogue metadata and manifest, without invalidating unrelated
-selected manifests. [check](test-ci:profile-catalogue)
-[system](test-ci:test-profile-catalogue-realization)
+selected manifests. Acceptance: [Catalogue Acceptance](#catalogue-acceptance).
 
 A consumer explicitly selects an entry, checks its bound derivation output,
 realizes that recipe through trusted Nix with a GC root, and parses the
@@ -541,8 +540,6 @@ authenticated controller checks. Catalogue support does not alter
 `mkProfileImages` or make legacy manifest consumers lazy. Consumer migration and
 admission requirements are described in
 [Profile Catalogue Integration](../docs/profile-catalogue.md).
-[check](test-ci:profile-catalogue)
-[system](test-ci:test-profile-catalogue-realization)
 
 ## Flake Outputs
 
@@ -788,6 +785,17 @@ without introducing a reciprocal flake dependency.
 - Platform container entrypoints contain no rustup bootstrap logic; the Rust
   toolchain is image-built
   [check](verify:profiles.sandbox-entrypoints-no-rustup)
+
+### Catalogue Acceptance
+
+- The schema-1 catalogue retains recipes without demanding image/configuration
+  outputs, rejects malformed or output-bearing entries, and exposes exact
+  per-entry manifests with independent invalidation.
+  [check](test-ci:test-profile-catalogue)
+- Signed-cache realization into an empty isolated store materializes and roots
+  only the selected manifest/image/configuration; selected payloads survive GC
+  and the other eight entries remain absent.
+  [system](test-ci:test-profile-catalogue-realization)
 
 ### Project Handoff Acceptance
 

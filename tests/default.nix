@@ -518,6 +518,19 @@ let
       (mkDefinedCiApp linuxBuilderChecks.sourceKindLoadTransportTest "test-linux-builder-source-kind-load-transport")
       (mkCiApp testProfilesBuildPackage "test-profiles-build-package")
       (mkCiApp testProfileImagesManifestShape "test-profile-images-manifest-shape")
+      (mkDefinedCiApp {
+        package = writeShellScriptBin "test-profile-catalogue" ''
+          set -euo pipefail
+          test -e ${ciChecks.profile-catalogue}
+        '';
+        inputs = inputDefinition.nix [
+          "/Cargo.toml"
+          "/Cargo.lock"
+          "/crates/"
+          "/lib/"
+          "/tests/profiles/"
+        ];
+      } "test-profile-catalogue")
       (mkCiApp (pkgs.writeShellApplication {
         name = "test-profile-catalogue-realization";
         runtimeInputs = [
