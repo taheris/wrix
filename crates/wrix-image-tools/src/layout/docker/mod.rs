@@ -57,6 +57,57 @@ pub fn stream(
     tag: Option<&str>,
     output: &mut impl Write,
 ) -> Result<(), Error> {
+    segment(layout, conf, parent, tag, true, output)
+}
+
+pub fn tail(
+    layout: &Path,
+    conf: &Path,
+    parent: Option<&Path>,
+    output: &mut impl Write,
+) -> Result<(), Error> {
+    segment(layout, conf, parent, None, false, output)
+}
+
+pub fn layer_entry(
+    layout: &Path,
+    conf: &Path,
+    digest: &str,
+    output: &mut impl Write,
+) -> Result<(), Error> {
+    let conf: Configuration = serde_json::from_slice(&fs::read(conf)?)?;
+    let digest: Digest = digest.to_owned().try_into()?;
+    let manifest: Value = serde_json::from_slice(&fs::read(layout.join("wrix/manifest.json"))?)?;
+    let layer = manifest["layers"]
+        .as_array()
+        .ok_or(Error::Metadata)?
+        .iter()
+        .find(|layer| layer["digest"].as_str() == Some(digest.reference().as_str()))
+        .ok_or(Error::Metadata)?;
+    let size = layer["size"].as_u64().ok_or(Error::Metadata)?;
+    let source = layout.join("blobs/sha256").join(&digest.0);
+    let metadata = fs::metadata(&source)?;
+    if !metadata.is_file() || metadata.len() != size {
+        return Err(Error::Metadata);
+    }
+    archive::append_blob(
+        output,
+        &format!("{}/layer.tar", digest.0),
+        &source,
+        size,
+        timestamp(&conf.mtime)?.timestamp_micros() / 1_000_000,
+    )?;
+    Ok(())
+}
+
+fn segment(
+    layout: &Path,
+    conf: &Path,
+    parent: Option<&Path>,
+    tag: Option<&str>,
+    include_layers: bool,
+    output: &mut impl Write,
+) -> Result<(), Error> {
     let conf: Configuration = serde_json::from_slice(&fs::read(conf)?)?;
     let mtime = timestamp(&conf.mtime)?.timestamp_micros() / 1_000_000;
     let manifest: Value = serde_json::from_slice(&fs::read(layout.join("wrix/manifest.json"))?)?;
@@ -98,7 +149,22 @@ pub fn stream(
             return Err(Error::Metadata);
         }
         let name = format!("{}/layer.tar", digest.0);
-        archive::append_blob(&mut output, &name, &source, size, mtime)?;
+        if include_layers {
+            archive::append_blob(&mut output, &name, &source, size, mtime)?;
+        } else {
+            // Digest-derived ASCII names fit a single POSIX header. Account for
+            // the already-emitted cached entries when padding the final tail.
+            let blocks = size.checked_add(511).ok_or(Error::Metadata)? / 512;
+            output.size = output
+                .size
+                .checked_add(
+                    blocks
+                        .checked_mul(512)
+                        .and_then(|size| size.checked_add(512))
+                        .ok_or(Error::Metadata)?,
+                )
+                .ok_or(Error::Metadata)?;
+        }
         names.push(name);
     }
     archive::append_bytes(&mut output, &config_name, &bytes, mtime)?;

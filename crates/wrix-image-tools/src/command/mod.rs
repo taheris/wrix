@@ -24,6 +24,16 @@ pub enum Error {
 
 enum Command {
     ConfigDigest,
+    DockerLayerEntry {
+        layout: PathBuf,
+        conf: PathBuf,
+        digest: String,
+    },
+    DockerTail {
+        layout: PathBuf,
+        conf: PathBuf,
+        parent: Option<PathBuf>,
+    },
     OciLayout(layout::Options),
     DockerArchive {
         layout: PathBuf,
@@ -89,6 +99,27 @@ impl Command {
         match args.as_slice() {
             [name] if name == "config-digest" => Ok(Self::ConfigDigest),
             [name, args @ ..] if name == "docker-stream" => Self::docker_stream(args),
+            [name, layout, conf, digest] if name == "docker-layer-entry" => {
+                Ok(Self::DockerLayerEntry {
+                    layout: layout.into(),
+                    conf: conf.into(),
+                    digest: digest.to_str().ok_or(Error::Usage)?.to_owned(),
+                })
+            }
+            [name, layout, conf] if name == "docker-tail" => Ok(Self::DockerTail {
+                layout: layout.into(),
+                conf: conf.into(),
+                parent: None,
+            }),
+            [name, layout, conf, flag, parent]
+                if name == "docker-tail" && flag == "--from-layout" =>
+            {
+                Ok(Self::DockerTail {
+                    layout: layout.into(),
+                    conf: conf.into(),
+                    parent: Some(parent.into()),
+                })
+            }
             [name, layout, conf] if name == "docker-archive" => Ok(Self::DockerArchive {
                 layout: layout.into(),
                 conf: conf.into(),
@@ -121,6 +152,16 @@ impl Command {
 
 pub fn run(args: impl IntoIterator<Item = OsString>) -> Result<(), Error> {
     match Command::parse(args)? {
+        Command::DockerLayerEntry {
+            layout: source,
+            conf,
+            digest,
+        } => layout::docker::layer_entry(&source, &conf, &digest, &mut io::stdout().lock())?,
+        Command::DockerTail {
+            layout: source,
+            conf,
+            parent,
+        } => layout::docker::tail(&source, &conf, parent.as_deref(), &mut io::stdout().lock())?,
         Command::OciLayout(options) => layout::build(&options)?,
         Command::DockerStream { conf, tag } => {
             layout::docker::configured(&conf, tag.as_deref(), &mut io::stdout().lock())?;

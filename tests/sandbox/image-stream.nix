@@ -19,7 +19,7 @@ let
       exit 99
     '')
     // {
-      inherit (compressed) ociLayout;
+      inherit (compressed) ociLayout gzipParts;
     };
   childPayload = pkgs.writeTextDir "share/image-stream-child" "child fixture\n";
   child = stream.dockerTools.buildLayeredImage (
@@ -43,6 +43,7 @@ let
       );
     }
   );
+  changedTime = child.override { mtime = "1970-01-01T00:00:02Z"; };
   unit = tools;
 in
 assert compressed.stream.streamScript == raw.streamScript;
@@ -60,6 +61,7 @@ pkgs.runCommandLocal "docker-image-stream"
           compressed
           overridden
           child
+          changedTime
           ;
       };
     };
@@ -78,6 +80,13 @@ pkgs.runCommandLocal "docker-image-stream"
     grep -F '${raw.streamScript}' ${raw} > /dev/null
     ${raw} > expected.tar
     gzip -cd ${compressed} | cmp expected.tar -
+    while IFS= read -r digest; do
+      test -L ${child.gzipParts}/"$digest.gz"
+      test "$(readlink ${child.gzipParts}/"$digest.gz")" = "${compressed.gzipParts}/$digest.gz"
+      test ! -L ${changedTime.gzipParts}/"$digest.gz"
+    done < ${compressed.gzipParts}/order
+    ${changedTime.stream} > changed-time.tar
+    gzip -cd ${changedTime} | cmp changed-time.tar -
     export HOME="$TMPDIR"
     skopeo --tmpdir "$TMPDIR" --insecure-policy copy --quiet docker-archive:expected.tar oci:"$TMPDIR/converted":test
     config="$(skopeo --tmpdir "$TMPDIR" inspect --raw oci:"$TMPDIR/converted":test | jq -r '.config.digest')"

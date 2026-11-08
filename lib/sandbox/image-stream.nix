@@ -12,6 +12,7 @@ let
   baseDockerTools = import ./docker-tools.nix { inherit pkgs; };
   imageTools = import ./image-tools.nix { pkgs = pkgs.buildPackages; };
   mkOciLayout = import ./oci-layout.nix { inherit pkgs; };
+  mkGzipParts = import ./docker-gzip-parts.nix { inherit pkgs imageTools; };
   program = pkgs.writeShellScript "wrix-image-stream" ''
     set -euo pipefail
     exec ${getBin imageTools}/bin/wrix-image-tools docker-stream "$@"
@@ -63,6 +64,11 @@ let
         configuration = conf;
         storeConfiguration = conf;
       };
+      gzipParts = mkGzipParts {
+        layout = ociLayout;
+        inherit conf;
+        parentParts = if parentImage == null then null else parentImage.gzipParts or null;
+      };
       streamConf =
         pkgs.runCommandLocal "wrix-native-stream-source.json" { nativeBuildInputs = [ pkgs.jq ]; }
           ''
@@ -79,7 +85,7 @@ let
         makeWrapper ${program} "$out" --add-flags ${streamConf}
       '';
       passthru = (previous.passthru or { }) // {
-        inherit conf ociLayout;
+        inherit conf ociLayout gzipParts;
         inherit (conf) imageTag;
         streamScript = program;
       };
@@ -97,15 +103,28 @@ in
         stream = nativeStream args image.stream;
       in
       image.overrideAttrs (previous: {
-        buildCommand = ''
-          set -euo pipefail
-          ${replaceStream image.stream stream previous.buildCommand}
-        '';
+        buildCommand =
+          if args ? compressor then
+            ''
+              set -euo pipefail
+              ${replaceStream image.stream stream previous.buildCommand}
+            ''
+          else
+            ''
+              set -euo pipefail
+              while IFS= read -r digest; do
+                cat ${stream.gzipParts}/"$digest.gz"
+              done < ${stream.gzipParts}/order > "$out"
+              ${imageTools}/bin/wrix-image-tools docker-tail ${stream.ociLayout} ${stream.conf} \
+                ${optionalString ((args.fromImage or null) != null) "--from-layout ${args.fromImage.ociLayout}"} \
+                | ${pkgs.pigz}/bin/pigz -n -p "$NIX_BUILD_CORES" >> "$out"
+            '';
         passthru = (previous.passthru or { }) // {
           inherit stream;
           inherit (stream)
             conf
             ociLayout
+            gzipParts
             streamScript
             imageTag
             ;

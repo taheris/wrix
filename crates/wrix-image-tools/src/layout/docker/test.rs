@@ -23,6 +23,29 @@ fn extract(archive: &Path, member: &str) -> Vec<u8> {
 }
 
 #[test]
+fn cached_entries_and_final_tail_reconstruct_the_exact_archive_across_padding_boundaries()
+-> TestResult {
+    for size in [0, 1, 511, 512, 513, 10239] {
+        let fixture = Fixture::new();
+        let contents = fixture.contents("package");
+        fs::write(contents.join("variable"), vec![b'x'; size])?;
+        let conf = fixture.conf("base", &contents, &["BASE=1"]);
+        let layout = fixture.build(&conf, "layout", &[])?;
+        let mut expected = Vec::new();
+        stream(&layout, &conf, None, None, &mut expected)?;
+        let mut actual = Vec::new();
+        let manifest = Fixture::manifest(&layout);
+        for layer in manifest["layers"].as_array().unwrap() {
+            let digest = Digest::prefixed(layer["digest"].as_str().unwrap())?;
+            layer_entry(&layout, &conf, &digest.0, &mut actual)?;
+        }
+        tail(&layout, &conf, None, &mut actual)?;
+        assert_eq!(actual, expected, "size={size}");
+    }
+    Ok(())
+}
+
+#[test]
 fn archive_export_preserves_cached_layer_bytes_checksums_and_reproducibility() -> TestResult {
     let fixture = Fixture::new();
     let contents = fixture.contents("package");
