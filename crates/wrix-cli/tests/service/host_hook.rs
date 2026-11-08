@@ -147,7 +147,7 @@ fn host_publication_hook_activation_preserves_host_trust_and_retains_both_genera
         .join("isolated-store")
         .join(first_store.strip_prefix("/")?);
     let snapshot: Value = serde_json::from_slice(&fs::read(physical.join("cache-config.json"))?)?;
-    assert_eq!(snapshot["pending_retention_secs"], 259200);
+    assert_eq!(snapshot["pending_retention_secs"], 259_200);
     fs::write(
         host.fixture.workspace.join("wrix.toml"),
         "cache.pending_ttl = \"4d\"\n",
@@ -379,8 +379,10 @@ fn host_publication_hook_wrapper_delivers_exact_arguments_snapshot_and_private_h
         gid.stdout.trim(),
     ];
     assert_eq!(arguments[3..9], expected.map(OsString::from));
-    let pairs: BTreeMap<_, _> = arguments[3..]
-        .chunks_exact(2)
+    let (argument_pairs, remainder) = arguments[3..].as_chunks::<2>();
+    assert_eq!(remainder, &[] as &[OsString]);
+    let pairs: BTreeMap<_, _> = argument_pairs
+        .iter()
         .map(|pair| (pair[0].to_string_lossy().into_owned(), pair[1].clone()))
         .collect();
     assert_eq!(
