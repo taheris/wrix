@@ -1,0 +1,12 @@
+#[path = "../../wrix-service/src/lifecycle/compiler/server.rs"]
+pub mod compiler;
+#[path = "../../wrix-service/src/control/server.rs"]
+pub mod control;
+pub mod deployment;
+pub mod dolt;
+#[path = "../../wrix-service/src/gateway/server.rs"]
+pub mod gateway;
+pub mod lifecycle;
+pub mod nix_store;
+#[path = "../../wrix-service/src/route/server.rs"]
+pub mod route;

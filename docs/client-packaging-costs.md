@@ -9,16 +9,18 @@ build selecting only these six binaries:
 - `wrix-cache-hook`, `wrix-cache-publish`, `wrix-host-cache-policy`
 
 The complete workspace package still supplies controller preparation, native
-fixtures and verification. Its dependency artifact is shared with the client,
-Clippy and Nextest; its all-target check, dependency test compilation and actual
-Nextest execution remain intact. No Cargo features, runtime/network checks or
-security tests were disabled. Production/test source isolation is unchanged.
+fixtures and verification. The initial packaging change shared its dependency
+artifact with the client, Clippy and Nextest. The later
+[client/server split](client-server-boundary.md) gives the client a
+normal-target cache and server-excluding source projection. Full all-target
+checks, dependency test compilation and actual Nextest execution remain intact.
+No Cargo features, runtime/network checks or security tests were disabled.
 
 `tests/services/client-package.nix` builds the real selected output, checks its
 exact executable inventory and executes the CLI.
 `tests/services/rust-source.nix` checks that the client and full verifiers
-retain the same dependency artifact, that full dependency checks and Nextest
-remain enabled, and that fixture edits remain scoped to verification. The
+retain independent dependency artifacts, that full dependency checks and Nextest
+remain enabled, and that fixture/server edits remain scoped appropriately. The
 existing native
 `packaged_consumer_shell_replaces_stale_client_before_launch_dispatch` test also
 passed against the newly packaged client and its evaluated shell hook, covering
@@ -43,9 +45,9 @@ shell closure or its allocated disk use.
 The build-only dependency experiment produced 243,948,240 NAR bytes in newly
 built outputs, but did not improve observed wall time. That override was
 **rejected**, rather than describing fewer Cargo commands as a speedup. The
-retained implementation shares the existing full dependency artifact instead of
-creating a separate production cache and duplicating dependency work during
-verification.
+initial retained implementation shared the existing full dependency artifact.
+That decision preceded the actual library split; the new normal-target cache
+excludes the server graph rather than merely changing Cargo commands.
 
 The earlier 99 s was not shell-hook latency: build logs show about 23 s of Cargo
 checking, 29 s of dependency builds, 1 s of test compilation and 25 s compiling
@@ -53,28 +55,26 @@ workspace sources, with the rest in Nix/Crane staging and artifact handling. The
 check-format artifacts are useful to the independent verification builds;
 removing their construction from one path did not establish a net improvement.
 
-## Remaining high-value work
+## Independent boundaries
 
-1. **Real client/server library separation.** `wrix-cli` depends on
-   `wrix-service`, whose library includes Rama gateway/routing and compiler
-   server code. Selecting fewer binaries does not stop those libraries from
-   compiling. Split protocol/client/lifecycle types from host controller/server
-   implementation, preserving authenticated admission and exact runtime
-   behavior. Track this independently as `wx-smyu7`; shrinking a wrapper or
-   silently excluding server/security tests is not this refactor.
-2. **Selected image catalogue provisioning.** Loom currently retains all nine
+The [client/server library split](client-server-boundary.md) now removes Rama
+from the client normal graph without removing server/security verification. Its
+bounded cold observation is lower; warm client-edit time is not demonstrably
+better. The following costs remain independent.
+
+1. **Selected image catalogue provisioning.** Loom currently retains all nine
    profile/runtime image outputs in its manifest. The Wrix catalogue producer
    (`wx-3qkwi`) and Loom migration (`wx-j8xzf`) address that independent
    fan-out. It is a larger shell dependency boundary than a few redundant
    executable links. The current immutable project configuration can itself
    retain its selected image/digest; do not remove that context without a
    resolver.
-3. **Measure evaluation/activation separately.** The minimal fixture uses an
-   explicit input override and has no committed downstream lock. The 7.85 s
-   observation includes lock/evaluation and shell-environment setup overhead; it
-   is not production Loom/direnv latency. A locked real consumer and its actual
-   hooks need their own bounded trace (`wx-2gag2`), without starting/upgrading
-   shared services merely to benchmark them.
+2. **Evaluation/activation.** The minimal fixture uses an explicit input
+   override and has no committed downstream lock. The 7.85 s observation
+   includes lock/evaluation and shell-environment setup overhead; it is not
+   production Loom/direnv latency. A locked real consumer and its actual hooks
+   need their own bounded trace (`wx-2gag2`), without starting/upgrading shared
+   services merely to benchmark them.
 
 No broad image matrix was built for these measurements. The implementation does
-not claim an established cold-shell wall-time reduction.
+not establish a controlled empty-store or real-Loom shell speedup.

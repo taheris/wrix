@@ -71,11 +71,26 @@ let
     "--bin wrix --bin wrix-git-sign --bin wrix-focus-notification"
     "--bin wrix-cache-hook --bin wrix-cache-publish --bin wrix-host-cache-policy"
   ];
+  clientCargoArtifacts = workspace.cargoArtifacts.overrideAttrs {
+    pname = "wrix-client-deps";
+    doCheck = false;
+    buildPhase = ''
+      runHook preBuild
+      cargo --version
+      cargoWithProfile build --locked ${clientCargoArgs}
+      runHook postBuild
+    '';
+  };
   clientWorkspace = rustProfile.buildPackage (
     workspaceArgs
     // {
-      inherit (workspace) cargoArtifacts;
+      cargoArtifacts = clientCargoArtifacts;
       cargoExtraArgs = clientCargoArgs;
+      srcFilter = import ./rust-client-source-filter.nix {
+        inherit (pkgs) lib;
+        inherit (rustProfile.craneLib) filterCargoSources;
+        root = ../..;
+      };
     }
   );
   compileOnlyWorkspace = rustProfile.buildPackage (
@@ -88,7 +103,7 @@ let
     workspaceArgs
     // {
       inherit (workspace) cargoArtifacts;
-      cargoExtraArgs = "--package wrix-cli --package wrix-service --bin wrix-service-supervisor --bin wrix-shared-service --bin wrix-egress-gateway --bin wrix-nix-pool-owner";
+      cargoExtraArgs = "--package wrix-cli --package wrix-service-server --bin wrix-service-supervisor --bin wrix-shared-service --bin wrix-egress-gateway --bin wrix-nix-pool-owner";
     }
   );
 
@@ -266,13 +281,13 @@ let
       builtins.replaceStrings
         [ "cargoWithProfile build" ]
         [
-          "cargoWithProfile build -p wrix-service --example host-controller-fixture --example wrix-native-fixtures"
+          "cargoWithProfile build -p wrix-service-server --example host-controller-fixture --example wrix-native-fixtures"
         ]
         old.buildPhase;
     doCheck = true;
     checkPhase = ''
       runHook preCheck
-      cargoWithProfile test --offline --locked -p wrix-service --example wrix-native-fixtures
+      cargoWithProfile test --offline --locked -p wrix-service-server --example wrix-native-fixtures
       test ! -e ${workspace.bin}/bin/wrix-native-fixtures
       test ! -e ${workspace.bin}/bin/host-controller-fixture
       runHook postCheck
@@ -392,7 +407,7 @@ in
         cargo test --offline --locked --no-run -p wrix-cache --test "$target" \
           ''${CARGO_PROFILE:+--profile "$CARGO_PROFILE"} --message-format json >> compiled-tests.json
       done
-      cargo test --offline --locked --no-run -p wrix-service --test celler_auth \
+      cargo test --offline --locked --no-run -p wrix-service-server --test celler_auth \
         ''${CARGO_PROFILE:+--profile "$CARGO_PROFILE"} --message-format json >> compiled-tests.json
       for target in service_lifecycle workspace_admission; do
         cargo test --offline --locked --no-run -p wrix-cli --test "$target" \
@@ -434,6 +449,7 @@ in
   testFixtureEnvironment = fixtures.environment;
   package = workspace.bin;
   clientPackage = clientWorkspace.bin;
+  inherit clientCargoArtifacts;
   runtimePackage = runtimeWorkspace.bin;
   wrix = wrixPackage;
   binding = serviceBinding;

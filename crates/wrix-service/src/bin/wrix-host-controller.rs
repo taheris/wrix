@@ -2,6 +2,7 @@
 
 use std::{num::NonZeroUsize, path::PathBuf, process::ExitCode};
 use wrix_service::control::{Controller, serving::Host};
+use wrix_service_server as wrix_service;
 
 const CONNECTION_CAPACITY: NonZeroUsize = NonZeroUsize::MIN.saturating_add(1023);
 

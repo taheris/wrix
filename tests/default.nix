@@ -253,6 +253,7 @@ let
       devshell-cli-selection = devshellCliSelection;
       host-service-package-binding = import ./services/package-binding.nix { inherit pkgs wrix; };
       client-package-boundary = import ./services/client-package.nix { inherit pkgs wrix; };
+      client-server-dependency-boundary = import ./services/client-graph.nix { inherit pkgs wrix; };
       shared-nix-host-binding = import ./store/pool-binding.nix { inherit pkgs wrix; };
       docker-image-stream = dockerImageStreamCheck;
       layer-planner-differential = layerPlannerChecks.differential;
@@ -312,6 +313,7 @@ let
     }
     // {
       celler-consumer-runtime = import ./services/celler-runtime.nix { inherit pkgs wrix; };
+      inherit (ciChecks) client-server-dependency-boundary;
       devshell-cli-selection = devshellCliSelection;
       builder-vmnet-route = builderRouteTest;
       cargo-target-handoff = import ./services/cargo-target-handoff.nix {
@@ -656,6 +658,7 @@ let
           profile-config-parser-agreement
           host-service-package-binding
           client-package-boundary
+          client-server-dependency-boundary
           cache-celler-packaging
           shared-nix-host-binding
           docker-image-stream

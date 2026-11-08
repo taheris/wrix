@@ -34,6 +34,9 @@ capability discovery, Loom integration and fresh-image verification boundaries.
 checked resource projections, conservative scope, and measured worker costs.
 [Client packaging costs](client-packaging-costs.md) separates Rust build,
 artifact size and shell activation measurements, including rejected experiments.
+[Client/server compilation](client-server-boundary.md) documents the independent
+server crate, preserved native target inventory and bounded
+dependency/source-edit measurements.
 
 ## Specs
 
@@ -56,7 +59,7 @@ keep it current when specs land or retire.
 | [sandbox](../specs/sandbox.md)               | [`lib/sandbox/default.nix`](../lib/sandbox/default.nix)                              | wx-fzop9 | Container isolation, launch preflight and explicit image GC              |
 | [security](../specs/security.md)             | [`crates/wrix-sandbox/`](../crates/wrix-sandbox/), [`lib/sandbox/`](../lib/sandbox/) | wx-1dhkm | Explicit credential grants, network isolation, and execution evidence    |
 | [workspaces](../specs/workspaces.md)         | `crates/wrix-state/`, `crates/wrix-core/`                                            | wx-23x0i | Explicit host workspace admission and native control metadata            |
-| [services](../specs/services.md)             | `crates/wrix-service/`                                                               | wx-fvr1x | Host-user control, shared service roles and draining updates             |
+| [services](../specs/services.md)             | `crates/wrix-service/`, `crates/wrix-service-server/`                                | wx-fvr1x | Host-user control, shared service roles and draining updates             |
 | [tmux](../specs/tmux.md)                     | [`lib/sandbox/profiles.nix`](../lib/sandbox/profiles.nix)                            | wx-4f3g  | Native tmux CLI debugging and caller-owned session lifecycle             |
 
 [Celler ownership recovery](celler-recovery.md) describes explicit recovery of

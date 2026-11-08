@@ -93,6 +93,20 @@ let
         inherit root;
       };
     };
+  clientFiltered =
+    root:
+    cleanSourceWith {
+      name = "wrix-client-source-probe";
+      src = root;
+      filter = import ../../lib/services/rust-client-source-filter.nix {
+        inherit (pkgs) lib;
+        inherit (craneLib) filterCargoSources;
+        inherit root;
+      };
+    };
+  clientA = clientFiltered ./source-fixture/role-a;
+  clientB = clientFiltered ./source-fixture/role-b;
+  clientC = clientFiltered ./source-fixture/role-c;
   original = filtered ./source-fixture/a;
   fixturesChanged = filtered ./source-fixture/b;
   productionChanged = filtered ./source-fixture/c;
@@ -169,12 +183,21 @@ assert rustPackage.cargoArtifacts.doCheck;
 assert rustPackage.nextest.doCheck;
 assert rustPackage.clippy.cargoArtifacts == rustPackage.cargoArtifacts;
 assert rustPackage.nextest.cargoArtifacts == rustPackage.cargoArtifacts;
-assert rustPackage.clientPackage.cargoArtifacts == rustPackage.cargoArtifacts;
+assert rustPackage.clientPackage.cargoArtifacts == rustPackage.clientCargoArtifacts;
+assert rustPackage.clientCargoArtifacts != rustPackage.cargoArtifacts;
+assert toString clientA == toString clientB;
+assert toString clientA != toString clientC;
+assert !(builtins.pathExists (clientA + "/crates/wrix-service/src/gateway/server.rs"));
 assert hasInfix "cargoWithProfile check" rustPackage.cargoArtifacts.buildPhase;
 assert hasInfix "--all-targets" rustPackage.cargoArtifacts.buildPhase;
 assert hasInfix "cargoWithProfile test" rustPackage.cargoArtifacts.checkPhase;
 assert hasInfix "--bin wrix-git-sign" rustPackage.clientPackage.buildPhase;
-assert toString rustPackage.clientPackage.src == toString rustPackage.package.src;
+assert toString rustPackage.clientPackage.src != toString rustPackage.package.src;
+assert
+  !(builtins.pathExists (
+    rustPackage.clientPackage.src + "/crates/wrix-service/src/gateway/server.rs"
+  ));
+assert builtins.pathExists (rustPackage.package.src + "/crates/wrix-service/src/gateway/server.rs");
 assert hasInfix
   (builtins.unsafeDiscardStringContext "${rustPackage.package}/bin/wrix-host-controller")
   rustPackage.controllerPackage.buildCommand;

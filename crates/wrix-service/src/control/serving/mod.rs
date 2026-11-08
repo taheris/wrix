@@ -18,16 +18,13 @@ fn guest(controller: &Controller, front_door: FrontDoor) -> Result<FrontDoor, Er
         .map_err(std::io::Error::other)?;
     let observation = apple::discover(&tools)?;
     let ports = controller
-        .endpoints
-        .bound_ports()?
+        .bound_role_ports()?
         .ok_or(Error::InvalidEndpoints)?;
     let listeners = observation.bind(ports)?;
     if apple::discover(&tools)? != observation {
         return Err(Error::InvalidEndpoints);
     }
-    controller
-        .endpoints
-        .publish_guest(observation.address().gateway())?;
+    controller.publish_guest_address(observation.address().gateway())?;
     Ok(front_door.with_guest(listeners, observation.address()))
 }
 
@@ -64,7 +61,10 @@ impl Host {
     ) -> Result<Self, Error> {
         let front_door = async {
             let listeners = controller.bind_role_listeners().await?;
-            Ok::<_, Error>(FrontDoor::new(listeners, capacity)?)
+            Ok::<_, Error>(FrontDoor::new(
+                crate::route::Listeners::from_core(listeners),
+                capacity,
+            )?)
         }
         .await;
         match front_door {

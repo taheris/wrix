@@ -1,7 +1,7 @@
 //! Private native gateway child inside a managed core-service generation.
 
 use std::{io::Write, process::ExitCode};
-use wrix_service::gateway::{Error, bootstrap};
+use wrix_service_server::gateway::{Error, bootstrap};
 
 enum Action {
     Serve,
