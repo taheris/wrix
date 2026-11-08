@@ -329,13 +329,7 @@ let
       layer-planner-native = layerPlannerChecks.native;
       image-assembly-native = sandboxImageChecks.imageAssemblyNativeCheck;
       image-verifier-realization = sandboxImageChecks.metadataRealizationCheck;
-      oci-layout-builder = pkgs.runCommandLocal "oci-layout-builder" { } ''
-        set -euo pipefail
-        export PYTHONDONTWRITEBYTECODE=1
-        export WRIX_OCI_BUILDER=${../lib/sandbox/make-oci-layout.py}
-        ${pkgs.python3}/bin/python3 ${./sandbox/test_oci_layout.py}
-        touch "$out"
-      '';
+      oci-layout-builder = import ./sandbox/oci-layout.nix { inherit pkgs; };
       execution-fixtures =
         pkgs.runCommandLocal "execution-fixture-conformance"
           {
