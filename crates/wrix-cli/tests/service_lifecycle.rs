@@ -119,6 +119,10 @@ fn public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql() -
             Err(error) => return Err(error.into()),
         }
     }
+    fs::write(
+        root.path().join(".native-public-cli-driver"),
+        b"wrix-native-public-cli-v1\n",
+    )?;
     let bin = root.path().join("bin");
     fs::create_dir(&bin)?;
     for name in ["podman", "container"] {

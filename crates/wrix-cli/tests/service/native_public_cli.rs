@@ -128,7 +128,11 @@ impl Driver {
         }
         Ok(Self {
             root: root.to_owned(),
-            state: root.join("state/wrix"),
+            state: root.join(if cfg!(target_os = "macos") {
+                "home/Library/Application Support/wrix"
+            } else {
+                "state/wrix"
+            }),
             wrix: wrix.to_owned(),
             environment,
         })
@@ -149,13 +153,18 @@ impl Driver {
             .envs(extra.iter().copied())
             .kill_on_drop(true);
         let output = tokio::time::timeout(Duration::from_secs(120), command.output()).await??;
-        if success {
+        if success && !output.status.success() {
+            let log = self.root.join("service.log");
+            let service = if log.exists() {
+                fs::read_to_string(log)?
+            } else {
+                String::new()
+            };
             assert!(
                 output.status.success(),
-                "{args:?}\n{}\n{}\n{}",
+                "{args:?}\n{}\n{}\n{service}",
                 stdout(&output),
                 String::from_utf8_lossy(&output.stderr),
-                fs::read_to_string(self.root.join("service.log")).unwrap_or_default()
             );
         }
         Ok(output)
@@ -754,7 +763,20 @@ async fn driver_preserves_failed_command_output_without_claiming_success() -> Te
     Ok(())
 }
 
+#[test]
+fn public_driver_refuses_unmarked_roots_before_creating_state() -> TestResult {
+    let root = tempfile::tempdir()?;
+    assert!(run(root.path(), Path::new("/unused-private-wrix")).is_err());
+    assert_eq!(fs::read_dir(root.path())?.count(), 0);
+    Ok(())
+}
+
 pub fn run(root: &Path, wrix: &Path) -> TestResult {
+    if fs::read(root.join(".native-public-cli-driver"))? != b"wrix-native-public-cli-v1\n"
+        || fs::metadata(root)?.permissions().mode() & 0o077 != 0
+    {
+        return Err("public CLI driver requires its owned private fixture root".into());
+    }
     let _cleanup = RuntimeCleanup(root.to_owned());
     let driver = Driver::new(root, wrix)?;
     tokio::runtime::Builder::new_current_thread()
