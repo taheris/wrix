@@ -165,6 +165,19 @@ assert receiptProbe.nextest.doCheck;
 assert !rustPackage.clippy.doInstallCargoArtifacts;
 assert !rustPackage.nextest.doInstallCargoArtifacts;
 assert rustPackage.cargoArtifacts.doInstallCargoArtifacts;
+assert rustPackage.cargoArtifacts.doCheck;
+assert rustPackage.nextest.doCheck;
+assert rustPackage.clippy.cargoArtifacts == rustPackage.cargoArtifacts;
+assert rustPackage.nextest.cargoArtifacts == rustPackage.cargoArtifacts;
+assert rustPackage.clientPackage.cargoArtifacts == rustPackage.cargoArtifacts;
+assert hasInfix "cargoWithProfile check" rustPackage.cargoArtifacts.buildPhase;
+assert hasInfix "--all-targets" rustPackage.cargoArtifacts.buildPhase;
+assert hasInfix "cargoWithProfile test" rustPackage.cargoArtifacts.checkPhase;
+assert hasInfix "--bin wrix-git-sign" rustPackage.clientPackage.buildPhase;
+assert toString rustPackage.clientPackage.src == toString rustPackage.package.src;
+assert hasInfix
+  (builtins.unsafeDiscardStringContext "${rustPackage.package}/bin/wrix-host-controller")
+  rustPackage.controllerPackage.buildCommand;
 assert rustPackage.cacheBackendTests.cargoArtifacts == rustPackage.cargoArtifacts;
 assert rustPackage.clippy.src == rustPackage.nextest.src;
 assert toString rustPackage.runtimePackage.src == toString rustPackage.package.src;

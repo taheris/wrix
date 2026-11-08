@@ -32,6 +32,8 @@ capability discovery, Loom integration and fresh-image verification boundaries.
 
 [Verifier input discovery and measurements](verifier-inputs.md) describes
 checked resource projections, conservative scope, and measured worker costs.
+[Client packaging costs](client-packaging-costs.md) separates Rust build,
+artifact size and shell activation measurements, including rejected experiments.
 
 ## Specs
 

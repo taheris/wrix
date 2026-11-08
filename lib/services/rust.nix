@@ -66,6 +66,18 @@ let
   };
 
   workspace = rustProfile.buildPackage workspaceArgs;
+  clientCargoArgs = concatStringsSep " " [
+    "--package wrix-cli --package wrix-cache --package wrix-notify"
+    "--bin wrix --bin wrix-git-sign --bin wrix-focus-notification"
+    "--bin wrix-cache-hook --bin wrix-cache-publish --bin wrix-host-cache-policy"
+  ];
+  clientWorkspace = rustProfile.buildPackage (
+    workspaceArgs
+    // {
+      inherit (workspace) cargoArtifacts;
+      cargoExtraArgs = clientCargoArgs;
+    }
+  );
   compileOnlyWorkspace = rustProfile.buildPackage (
     (import ./rust-compile-only-source.nix workspaceArgs)
     // {
@@ -301,9 +313,9 @@ let
         mkdir -p "$out/bin"
         ${
           if runtime == [ ] then
-            ''ln -s "${workspace.bin}/bin/${name}" "$out/bin/${name}"''
+            ''ln -s "${clientWorkspace.bin}/bin/${name}" "$out/bin/${name}"''
           else
-            ''makeWrapper "${workspace.bin}/bin/${name}" "$out/bin/${name}" --prefix PATH : "${makeBinPath runtime}"''
+            ''makeWrapper "${clientWorkspace.bin}/bin/${name}" "$out/bin/${name}" --prefix PATH : "${makeBinPath runtime}"''
         }
       '';
 
@@ -316,10 +328,10 @@ let
       }
       ''
         mkdir -p "$out/bin"
-        makeWrapper "${workspace.bin}/bin/${name}" "$out/bin/${name}" \
+        makeWrapper "${clientWorkspace.bin}/bin/${name}" "$out/bin/${name}" \
           --run 'export WRIX_HOST_RUNTIME_PATH="''${WRIX_HOST_RUNTIME_PATH:-$PATH}"' \
           --set WRIX_INVOKED_BIN "$out/bin/${name}" ${concatStringsSep " " wrapperArgs}
-        ln -s "${workspace.bin}/bin/wrix-git-sign" "$out/bin/wrix-git-sign"
+        ln -s "${clientWorkspace.bin}/bin/wrix-git-sign" "$out/bin/wrix-git-sign"
         ln -s "${prekRunner}/bin/wrix-prek" "$out/bin/wrix-prek"
       '';
 
@@ -421,6 +433,7 @@ in
   testFixtures = fixtures.bundle;
   testFixtureEnvironment = fixtures.environment;
   package = workspace.bin;
+  clientPackage = clientWorkspace.bin;
   runtimePackage = runtimeWorkspace.bin;
   wrix = wrixPackage;
   binding = serviceBinding;

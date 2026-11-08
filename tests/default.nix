@@ -252,6 +252,7 @@ let
       profile-config-parser-agreement = profileConfigParserAgreement;
       devshell-cli-selection = devshellCliSelection;
       host-service-package-binding = import ./services/package-binding.nix { inherit pkgs wrix; };
+      client-package-boundary = import ./services/client-package.nix { inherit pkgs wrix; };
       shared-nix-host-binding = import ./store/pool-binding.nix { inherit pkgs wrix; };
       docker-image-stream = dockerImageStreamCheck;
       layer-planner-differential = layerPlannerChecks.differential;
@@ -654,6 +655,7 @@ let
           wrix-rust-nextest
           profile-config-parser-agreement
           host-service-package-binding
+          client-package-boundary
           cache-celler-packaging
           shared-nix-host-binding
           docker-image-stream

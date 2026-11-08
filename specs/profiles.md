@@ -730,6 +730,12 @@ without introducing a reciprocal flake dependency.
   preserve the packaged launcher and Cargo dependency artifacts; production
   source edits still invalidate the launcher
   [check](verify:profiles.repository-integration-source-isolation)
+- The compiled output used by consumer client/helper packages contains exactly
+  the six client-side executables; controller, backend, image and verifier
+  executables remain in independently selected outputs. Client and full
+  verification builds share dependency artifacts without disabling workspace
+  dependency checks or Nextest. [check](test-ci:client-package-boundary)
+  [check](verify:profiles.repository-integration-source-isolation)
 - Editing a file in `extraSrcs` invalidates `clippy` and `nextest` but does
   **not** invalidate `bin` or `cargoArtifacts`
   [check](verify:profiles.rust-build-package-extra-srcs-scoped-to-checks)
