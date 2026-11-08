@@ -1118,18 +1118,20 @@ test_host_trust_validation_resolves_repository_and_environment_overrides() {
   assert_contains "restored validation" "$(<"$TEST_TMP/policy-trust.err")" "host Nix does not honor project cache substituter"
 }
 
+test_native_host_publication_hook_boundary() {
+  cd "$REPO_ROOT"
+  cargo nextest run --offline --locked -p wrix-cli --test service_cache \
+    -E 'test(host_publication_hook_)'
+}
+
 ALL_TESTS=(
   test_host_nix_hook_generations_survive_gc
-  test_host_cache_opt_out_preserves_existing_nix_config
-  test_host_trust_validation_resolves_repository_and_environment_overrides
+  test_native_host_publication_hook_boundary
   test_mkdevshell_nix_cache
   test_mkdevshell_beads_workspace_does_not_run_raw_dolt
   test_mkdevshell_loom_internal_worktree_uses_repo_service
   test_fake_nix_config_show_matches_real_nix
   test_runtime_image_inspection_and_tagging_are_stateful
-  test_host_nix_configures_cache_and_hook
-  test_host_nix_config_fails_when_trusted_setting_ignored
-  test_host_nix_config_rejects_non_wrix_hook
 )
 
 run_all() {

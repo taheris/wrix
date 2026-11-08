@@ -30,3 +30,15 @@ collects the older generation. Concurrent identical preparations reuse one
 wrapper output, and an injected import failure is propagated with temporary
 sources cleaned up. The test never runs GC on the host store or replays
 production maintenance.
+
+Seven native CLI tests additionally run the actual shell against privately
+supervised native controller/Celler fixtures and a private Nix store. They
+exercise two real activations, immutable policy snapshots, exact executed
+wrapper arguments and private HOME/XDG values, conflicting operator hooks, cache
+opt-out, ignored required settings, repository/environment precedence, and
+rejection of shared substitution/key trust even with validation disabled. These
+check the current host-publication-only contract rather than expecting host
+trust in the shared service. Their names begin with `host_publication_hook_`;
+the same system owner explicitly runs them through Nextest. The remaining shell
+controls compare fake Nix observations with real Nix and exercise stateful
+external image inspection/tagging.

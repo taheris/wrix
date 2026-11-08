@@ -3,6 +3,8 @@ mod celler;
 mod common;
 #[path = "common/controller.rs"]
 mod controller;
+#[path = "service/host_hook.rs"]
+mod host_hook;
 #[path = "common/network.rs"]
 mod network;
 #[path = "common/service_binding.rs"]
