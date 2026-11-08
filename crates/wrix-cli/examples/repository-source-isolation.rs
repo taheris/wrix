@@ -7,7 +7,7 @@ use std::{
     process::{Command, Output},
 };
 
-use serde_json::{Value, json};
+use serde_json::Value;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 type Derivations = BTreeMap<String, String>;
@@ -55,6 +55,12 @@ fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
+fn snapshot(source: &Path, destination: &Path) -> Result<PathBuf> {
+    copy_tree(source, destination)?;
+    // Nix path literals cannot traverse symlinked temporary-directory ancestors.
+    Ok(destination.canonicalize()?)
+}
+
 fn append(path: &Path, text: &str) -> Result<()> {
     let mut permissions = fs::metadata(path)?.permissions();
     permissions.set_mode(permissions.mode() | 0o200);
@@ -64,19 +70,24 @@ fn append(path: &Path, text: &str) -> Result<()> {
     Ok(())
 }
 
-fn nix(root: &Path, git_env: &[String], args: &[&str], source: Option<&Path>) -> Result<Value> {
+fn nix(root: &Path, git_env: &[String], args: &[&str], sources: Option<&str>) -> Result<Value> {
     let mut command = Command::new("nix");
     command.current_dir(root).args(args);
     for name in git_env {
         command.env_remove(name);
     }
-    if let Some(source) = source {
-        command.env("WRIX_SOURCE_PROBE", source);
+    if let Some(sources) = sources {
+        command.env("WRIX_SOURCE_PROBES", sources);
     }
     Ok(serde_json::from_slice(&execute(&mut command)?.stdout)?)
 }
 
-fn derivations(root: &Path, git_env: &[String], source: &Path) -> Result<Derivations> {
+fn derivations(
+    root: &Path,
+    git_env: &[String],
+    sources: &BTreeMap<&str, PathBuf>,
+) -> Result<BTreeMap<String, Derivations>> {
+    let sources = serde_json::to_string(sources)?;
     let value = nix(
         root,
         git_env,
@@ -87,10 +98,12 @@ fn derivations(root: &Path, git_env: &[String], source: &Path) -> Result<Derivat
             "--expr",
             r#"
       let
-        source = builtins.getEnv "WRIX_SOURCE_PROBE";
-        flake = builtins.getFlake ("path:" + source);
+        sources = builtins.fromJSON (builtins.getEnv "WRIX_SOURCE_PROBES");
+        reference = builtins.getFlake ("path:" + sources.original);
         system = builtins.currentSystem;
-        pkgs = import flake.inputs.nixpkgs { inherit system; config.allowUnfree = true; };
+        pkgs = import reference.inputs.nixpkgs { inherit system; config.allowUnfree = true; };
+        derive = source: let
+        flake = builtins.getFlake ("path:" + source);
         rust = import (source + "/lib/services/rust.nix") {
           inherit pkgs;
           rustProfile = flake.legacyPackages.${system}.lib.profiles.rust;
@@ -102,10 +115,11 @@ fn derivations(root: &Path, git_env: &[String], source: &Path) -> Result<Derivat
         nextest = flake.legacyPackages.${system}.ciChecks.wrix-rust-nextest.drvPath;
         dependencies = rust.cargoArtifacts.drvPath;
         backend = rust.cacheBackendTests.drvPath;
-      }
+      };
+      in builtins.mapAttrs (_: derive) sources
     "#,
         ],
-        Some(source),
+        Some(&sources),
     )?;
     Ok(serde_json::from_value(value)?)
 }
@@ -147,32 +161,63 @@ fn run(root: &Path) -> Result<Value> {
         ],
         None,
     )?;
-    let snapshot = metadata["path"].as_str().ok_or("missing source snapshot")?;
+    let original_source = metadata["path"].as_str().ok_or("missing source snapshot")?;
     let temporary = tempfile::tempdir()?;
-    let source = temporary.path().join("source");
-    copy_tree(Path::new(snapshot), &source)?;
-    let original = derivations(&root, &git_env, &source)?;
-    append(
-        &source.join(".config/nextest.toml"),
-        "\n# Source-isolation probe.\n",
-    )?;
-    let configuration = derivations(&root, &git_env, &source)?;
-    compare(&original, &configuration, Change::Configuration)?;
-    append(
-        &source.join("crates/wrix-cli/tests/arguments.rs"),
-        "\n// Source-isolation probe.\n",
-    )?;
-    let integration = derivations(&root, &git_env, &source)?;
-    compare(&configuration, &integration, Change::Integration)?;
-    append(
-        &source.join("crates/wrix-cli/src/main.rs"),
-        "\n// Source-isolation probe.\n",
-    )?;
-    let production = derivations(&root, &git_env, &source)?;
-    compare(&integration, &production, Change::Production)?;
-    Ok(
-        json!({"original": original, "configuration_edit": configuration, "integration_edit": integration, "production_edit": production}),
-    )
+    let mut previous = PathBuf::from(original_source);
+    let mut sources = BTreeMap::new();
+    for (name, edit) in [
+        ("original", None),
+        (
+            "configuration_edit",
+            Some((".config/nextest.toml", "\n# Source-isolation probe.\n")),
+        ),
+        (
+            "integration_edit",
+            Some((
+                "crates/wrix-cli/tests/arguments.rs",
+                "\n// Source-isolation probe.\n",
+            )),
+        ),
+        (
+            "production_edit",
+            Some((
+                "crates/wrix-cli/src/main.rs",
+                "\n// Source-isolation probe.\n",
+            )),
+        ),
+    ] {
+        let parent = temporary.path().join(name);
+        fs::create_dir(&parent)?;
+        let source = snapshot(&previous, &parent.join("source"))?;
+        if let Some((path, text)) = edit {
+            append(&source.join(path), text)?;
+        }
+        sources.insert(name, source.clone());
+        previous = source;
+    }
+    // Freeze every variant before sharing one evaluator; cached reads must never
+    // conceal a subsequent source mutation.
+    let reports = derivations(&root, &git_env, &sources)?;
+    for (before, after, change) in [
+        ("original", "configuration_edit", Change::Configuration),
+        (
+            "configuration_edit",
+            "integration_edit",
+            Change::Integration,
+        ),
+        ("integration_edit", "production_edit", Change::Production),
+    ] {
+        compare(
+            reports
+                .get(before)
+                .ok_or_else(|| format!("missing {before}"))?,
+            reports
+                .get(after)
+                .ok_or_else(|| format!("missing {after}"))?,
+            change,
+        )?;
+    }
+    Ok(serde_json::to_value(reports)?)
 }
 
 fn main() -> Result<()> {
@@ -245,8 +290,10 @@ mod tests {
         fs::write(original.join("program"), "data").unwrap();
         fs::set_permissions(original.join("program"), fs::Permissions::from_mode(0o555)).unwrap();
         symlink("program", original.join("link")).unwrap();
-        let copy = root.path().join("copy");
-        copy_tree(&original, &copy).unwrap();
+        let alias = root.path().join("alias");
+        symlink(root.path().canonicalize().unwrap(), &alias).unwrap();
+        let copy = snapshot(&original, &alias.join("copy")).unwrap();
+        assert_eq!(copy, root.path().canonicalize().unwrap().join("copy"));
         assert_eq!(
             fs::read_link(copy.join("link")).unwrap(),
             Path::new("program")

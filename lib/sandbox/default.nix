@@ -555,7 +555,12 @@ in
     ;
   inherit (imageRustCli) nixPoolOwner;
   inherit (manifest) mkProfileImages;
+  mkProfileCatalogue = import ./catalogue.nix {
+    inherit pkgs;
+    inherit (manifest) mkProfileImages;
+  };
   capabilities = {
+    profileCatalogue = 1;
     privateNix = privateNix.version;
     sharedNix = sharedNix.version;
   };

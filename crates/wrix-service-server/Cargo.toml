@@ -1,0 +1,147 @@
+[package]
+name = "wrix-service-server"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+autobins = false
+autotests = false
+autoexamples = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+base64 = { workspace = true }
+bytes = { workspace = true }
+displaydoc = { workspace = true }
+fs2 = { workspace = true }
+libc = { workspace = true }
+rustix = { workspace = true }
+rama-core = { workspace = true }
+rama-http = { workspace = true }
+rama-http-core = { workspace = true }
+rama-net = { workspace = true }
+rama-tcp = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+socket2 = { workspace = true }
+serde_yaml_ng = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+wrix-cache = { workspace = true }
+wrix-core = { workspace = true }
+wrix-service = { workspace = true }
+wrix-state = { workspace = true }
+wrix-sandbox = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+nix = { workspace = true }
+
+[dev-dependencies]
+nix = { workspace = true, features = ["fs"] }
+attic = { workspace = true }
+reqwest = { workspace = true }
+wrix-cli = { workspace = true }
+
+[[bin]]
+name = "wrix-host-controller"
+path = "../wrix-service/src/bin/wrix-host-controller.rs"
+
+[[bin]]
+name = "wrix-egress-gateway"
+path = "../wrix-service/src/bin/wrix-egress-gateway.rs"
+
+[[bin]]
+name = "wrix-shared-service"
+path = "../wrix-service/src/bin/wrix-shared-service.rs"
+
+[[bin]]
+name = "wrix-nix-pool-owner"
+path = "../wrix-service/src/bin/wrix-nix-pool-owner.rs"
+
+[[bin]]
+name = "wrix-nix-worker-broker"
+path = "../wrix-service/src/bin/wrix-nix-worker-broker.rs"
+
+[[example]]
+name = "host-controller-fixture"
+path = "../wrix-service/examples/host-controller-fixture.rs"
+
+[[example]]
+name = "wrix-native-fixtures"
+path = "../wrix-service/examples/wrix-native-fixtures.rs"
+
+[[test]]
+name = "backend_compiler_drain"
+path = "../wrix-service/tests/backend_compiler_drain.rs"
+
+[[test]]
+name = "backend_drain"
+path = "../wrix-service/tests/backend_drain.rs"
+
+[[test]]
+name = "bd_wrapper"
+path = "../wrix-service/tests/bd_wrapper.rs"
+
+[[test]]
+name = "celler_auth"
+path = "../wrix-service/tests/celler_auth.rs"
+
+[[test]]
+name = "deployment_endpoints"
+path = "../wrix-service/tests/deployment_endpoints.rs"
+
+[[test]]
+name = "deployment_identity"
+path = "../wrix-service/tests/deployment_identity.rs"
+
+[[test]]
+name = "deployment_lifecycle"
+path = "../wrix-service/tests/deployment_lifecycle.rs"
+
+[[test]]
+name = "deployment_selection"
+path = "../wrix-service/tests/deployment_selection.rs"
+
+[[test]]
+name = "gateway_native"
+path = "../wrix-service/tests/gateway_native.rs"
+
+[[test]]
+name = "generation_handoff"
+path = "../wrix-service/tests/generation_handoff.rs"
+
+[[test]]
+name = "host_control"
+path = "../wrix-service/tests/host_control.rs"
+
+[[test]]
+name = "host_service"
+path = "../wrix-service/tests/host_service.rs"
+
+[[test]]
+name = "lifecycle"
+path = "../wrix-service/tests/lifecycle.rs"
+
+[[test]]
+name = "nix_pool"
+path = "../wrix-service/tests/nix_pool.rs"
+
+[[test]]
+name = "nix_store_gc"
+path = "../wrix-service/tests/nix_store_gc.rs"
+
+[[test]]
+name = "recovery_message"
+path = "../wrix-service/tests/recovery_message.rs"
+
+[[test]]
+name = "shared_startup"
+path = "../wrix-service/tests/shared_startup.rs"
+
+[lints]
+workspace = true

@@ -10,9 +10,13 @@ Use `sandbox.devShell { }` for the consumer-pinned Wrix client and its
 The host supplies its container engine; shared-controller compatibility is
 checked, and upgrades remain explicit. Outside consumer shells, Home Manager,
 nix-darwin, `nix profile add` and temporary Nix provision remain supported; see
-[CLI Setup](../specs/cli.md#host-cli-and-project-configuration). Pure
-images/configuration remain available for programmatic `spawn`; configured
-sandbox runners are not compatibility entry points.
+[CLI Setup](../specs/cli.md#host-cli-and-project-configuration).
+[Client/runtime boundaries](client-runtime-boundary.md) describes explicit
+`wrix service prepare`, bounded consumer fixtures and the separate Loom image
+catalogue fan-out. Pure images/configuration remain available for programmatic
+`spawn`; configured sandbox runners are not compatibility entry points.
+[Profile Catalogue Integration](profile-catalogue.md) describes the separate
+lightweight catalogue API, selected provisioning and remaining Loom migration.
 
 [Claude stdio clients](claude-stdio.md) describes the explicit
 permission-protocol opt-in through `SpawnConfig.agent_args` and its
@@ -30,6 +34,11 @@ capability discovery, Loom integration and fresh-image verification boundaries.
 
 [Verifier input discovery and measurements](verifier-inputs.md) describes
 checked resource projections, conservative scope, and measured worker costs.
+[Client packaging costs](client-packaging-costs.md) separates Rust build,
+artifact size and shell activation measurements, including rejected experiments.
+[Client/server compilation](client-server-boundary.md) documents the independent
+server crate, preserved native target inventory and bounded
+dependency/source-edit measurements.
 
 ## Specs
 
@@ -52,7 +61,7 @@ keep it current when specs land or retire.
 | [sandbox](../specs/sandbox.md)               | [`lib/sandbox/default.nix`](../lib/sandbox/default.nix)                              | wx-fzop9 | Container isolation, launch preflight and explicit image GC              |
 | [security](../specs/security.md)             | [`crates/wrix-sandbox/`](../crates/wrix-sandbox/), [`lib/sandbox/`](../lib/sandbox/) | wx-1dhkm | Explicit credential grants, network isolation, and execution evidence    |
 | [workspaces](../specs/workspaces.md)         | `crates/wrix-state/`, `crates/wrix-core/`                                            | wx-23x0i | Explicit host workspace admission and native control metadata            |
-| [services](../specs/services.md)             | `crates/wrix-service/`                                                               | wx-fvr1x | Host-user control, shared service roles and draining updates             |
+| [services](../specs/services.md)             | `crates/wrix-service/`, `crates/wrix-service-server/`                                | wx-fvr1x | Host-user control, shared service roles and draining updates             |
 | [tmux](../specs/tmux.md)                     | [`lib/sandbox/profiles.nix`](../lib/sandbox/profiles.nix)                            | wx-4f3g  | Native tmux CLI debugging and caller-owned session lifecycle             |
 
 [Celler ownership recovery](celler-recovery.md) describes explicit recovery of
@@ -92,6 +101,7 @@ optional, consumer-provided OmniWM CLI integration and desktop shortcuts.
 | **prek**                          | Rust-based pre-commit framework (drop-in replacement for pre-commit)                                                                                                              |
 | **project Nix cache**             | Celler-backed authorized read set of canonical repository-private and approved common public-dependency views; archives may be physically shared and age-evicted                  |
 | **profile**                       | Pre-configured set of packages and environment variables                                                                                                                          |
+| **profile catalogue**             | Versioned profile/agent metadata retaining recipes for explicit single-entry image/configuration provisioning, not realized image paths                                           |
 | **ProfileConfig**                 | Immutable Nix-generated JSON config consumed by the Rust `wrix` launcher                                                                                                          |
 | **sandbox**                       | Isolated container environment for running Pi, Claude, or a consumer-supplied agent runner                                                                                        |
 | **host controller**               | Host-user Wrix control service owning stable role routing, private management/issuance and generation lifecycle outside replaceable containers; not an agent supervisor           |

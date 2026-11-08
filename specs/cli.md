@@ -74,6 +74,14 @@ maintenance action. Controller lifetime/maintenance follows
 `wrix service update` uses the invoked package's service-image binding under
 [Generation Handoff](services.md#generation-handoff).
 
+`wrix service prepare` realizes the invoked package's pinned host controller and
+runtime tooling with GC retention, without starting services, upgrading a
+running deployment or changing host policy. Ordinary commands do not provision
+that tooling; run/spawn refuse missing selected prerequisites before launch
+effects and name the explicit preparation action.
+[test](../crates/wrix-cli/tests/host_configuration.rs::unprepared_host_tooling_refuses_run_and_spawn_before_launch_effects)
+[test](../crates/wrix-service/src/control/supervision/test/preparation.rs::explicit_preparation_realizes_pinned_recipes_with_indirect_roots_without_supervision)
+
 `wrix service capabilities` is a passive compatibility query. It prints
 `shared-services-v1` without workspace discovery, runtime inspection or state
 creation. This broad feature marker is not versioned client/controller admission

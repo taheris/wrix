@@ -254,6 +254,9 @@ let
       profile-config-parser-agreement = profileConfigParserAgreement;
       devshell-cli-selection = devshellCliSelection;
       host-service-package-binding = import ./services/package-binding.nix { inherit pkgs wrix; };
+      client-package-boundary = import ./services/client-package.nix { inherit pkgs wrix; };
+      client-server-dependency-boundary = import ./services/client-graph.nix { inherit pkgs wrix; };
+      profile-catalogue = import ./profiles/catalogue.nix { inherit pkgs wrix linuxPkgs; };
       shared-nix-host-binding = import ./store/pool-binding.nix { inherit pkgs wrix; };
       docker-image-stream = dockerImageStreamCheck;
       layer-planner-differential = layerPlannerChecks.differential;
@@ -313,6 +316,8 @@ let
     }
     // {
       celler-consumer-runtime = import ./services/celler-runtime.nix { inherit pkgs wrix; };
+      inherit (ciChecks) client-server-dependency-boundary;
+      ci-annotation-registration = import ./verify/ci-registry.nix { inherit pkgs ciApps; };
       devshell-cli-selection = devshellCliSelection;
       builder-vmnet-route = builderRouteTest;
       cargo-target-handoff = import ./services/cargo-target-handoff.nix {
@@ -509,6 +514,33 @@ let
       (mkDefinedCiApp linuxBuilderChecks.sourceKindLoadTransportTest "test-linux-builder-source-kind-load-transport")
       (mkCiApp testProfilesBuildPackage "test-profiles-build-package")
       (mkCiApp testProfileImagesManifestShape "test-profile-images-manifest-shape")
+      (mkDefinedCiApp {
+        package = writeShellScriptBin "test-profile-catalogue" ''
+          set -euo pipefail
+          test -e ${ciChecks.profile-catalogue}
+        '';
+        inputs = inputDefinition.nix [
+          "/Cargo.toml"
+          "/Cargo.lock"
+          "/crates/"
+          "/lib/"
+          "/tests/profiles/"
+        ];
+      } "test-profile-catalogue")
+      (mkCiApp (pkgs.writeShellApplication {
+        name = "test-profile-catalogue-realization";
+        runtimeInputs = [
+          pkgs.nix
+          pkgs.jq
+          pkgs.coreutils
+          pkgs.diffutils
+          pkgs.gnugrep
+        ];
+        text = ''
+          exec ${pkgs.bash}/bin/bash ${./profiles/catalogue-realization.sh} \
+            ${ciChecks.profile-catalogue.catalogue} rust direct
+        '';
+      }) "test-profile-catalogue-realization")
       (mkCiApp testProfileConfigImageSourceKind "test-profile-config-image-source-kind")
       (mkCiApp testProfileConfigWrapper "test-profile-config-wrapper")
       (mkCiApp testProfileConfigParserAgreement "test-profile-config-parser-agreement")
@@ -521,6 +553,32 @@ let
       (mkDefinedCiApp testPlaywrightMandatoryFlags "test-playwright-mandatory-flags")
       (mkDefinedCiApp testPlaywrightUserOptionsConfig "test-playwright-user-options-config")
       (mkCiApp testBeadsLiveSystem "test-beads-live-system")
+      (mkDefinedCiApp {
+        package = writeShellScriptBin "test-client-package-boundary" ''
+          set -euo pipefail
+          test -e ${ciChecks.client-package-boundary}
+        '';
+        inputs = inputDefinition.nix [
+          "/Cargo.toml"
+          "/Cargo.lock"
+          "/crates/"
+          "/lib/"
+          "/tests/services/"
+        ];
+      } "test-client-package-boundary")
+      (mkDefinedCiApp {
+        package = writeShellScriptBin "test-client-server-dependency-boundary" ''
+          set -euo pipefail
+          test -e ${ciChecks.client-server-dependency-boundary}
+        '';
+        inputs = inputDefinition.nix [
+          "/Cargo.toml"
+          "/Cargo.lock"
+          "/crates/"
+          "/lib/"
+          "/tests/services/"
+        ];
+      } "test-client-server-dependency-boundary")
       (mkCiApp (writeShellScriptBin "test-cache-celler-packaging" ''
         set -euo pipefail
         test -e ${ciChecks.cache-celler-packaging}
@@ -650,6 +708,9 @@ let
           wrix-rust-nextest
           profile-config-parser-agreement
           host-service-package-binding
+          client-package-boundary
+          client-server-dependency-boundary
+          profile-catalogue
           cache-celler-packaging
           shared-nix-host-binding
           docker-image-stream

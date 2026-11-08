@@ -67,7 +67,7 @@ impl Entry {
 
     async fn run(self) -> Result<(), Error> {
         match self {
-            Self::Gateway => wrix_service::lifecycle::generation::serve_gateway()
+            Self::Gateway => wrix_service_server::gateway::serve_gateway()
                 .await
                 .map_err(|error| Error::Io(std::io::Error::other(error))),
             Self::PlannedStop => compiler::plan_stop(),
@@ -86,7 +86,9 @@ impl Entry {
                 &wrix_service::lifecycle::drain::dispatch(role, command)
                     .map_err(std::io::Error::other)?,
             ),
-            Self::Run { data, transport } => compiler::run(&data, transport).await,
+            Self::Run { data, transport } => {
+                wrix_service_server::compiler::run(&data, transport).await
+            }
         }
     }
 }

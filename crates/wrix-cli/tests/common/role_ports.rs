@@ -153,8 +153,8 @@ mod test {
         let before: serde_json::Value =
             serde_json::from_slice(&fs::read(authority.join("role-endpoints.json")).unwrap())
                 .unwrap();
-        let controller = wrix_service::control::Controller::bind(&authority).unwrap();
-        let _host = wrix_service::control::serving::Host::bind_loopback(
+        let controller = wrix_service_server::control::Controller::bind(&authority).unwrap();
+        let _host = wrix_service_server::control::serving::Host::bind_loopback(
             controller,
             std::num::NonZeroUsize::new(8).unwrap(),
         )

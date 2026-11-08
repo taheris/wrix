@@ -246,7 +246,7 @@ async fn start_gateway(
     let data = tokio::net::TcpListener::bind(data).await?;
     let management_listener = tokio::net::TcpListener::bind(management).await?;
     let (stop, stopped) = tokio::sync::oneshot::channel();
-    let task = tokio::spawn(wrix_service::gateway::run(
+    let task = tokio::spawn(wrix_service_server::gateway::run(
         data,
         management_listener,
         key,

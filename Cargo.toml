@@ -9,6 +9,7 @@ members = [
   "crates/wrix-runtime-env",
   "crates/wrix-sandbox",
   "crates/wrix-service",
+  "crates/wrix-service-server",
   "crates/wrix-state",
   "crates/wrix-verify-tools",
 ]
@@ -67,6 +68,7 @@ wrix-notify = { path = "crates/wrix-notify" }
 wrix-runtime-env = { path = "crates/wrix-runtime-env" }
 wrix-sandbox = { path = "crates/wrix-sandbox" }
 wrix-service = { path = "crates/wrix-service" }
+wrix-service-server = { path = "crates/wrix-service-server" }
 wrix-state = { path = "crates/wrix-state" }
 
 [workspace.lints.rust]

@@ -70,6 +70,15 @@ from Celler archives and compiler-cache data. Acceptance:
 
 ### Host Control Service
 
+The consumer library `wrix-service` retains the shared protocol, authority,
+registration and lifecycle primitives. `wrix-service-server` owns the private
+process entrypoints, Rama gateway/forwarding engines and compiler serving. This
+is a compilation boundary, not an alternative security feature set; wire
+formats, authority checks and readiness remain the same. Full native targets
+remain registered independently of the narrower client build; see
+[Profile Acceptance](profiles.md#success-criteria) and
+[Client/server compilation](../docs/client-server-boundary.md).
+
 Acceptance: [Host Control Acceptance](#host-control-acceptance).
 
 One small host-user Wrix controller outside replaceable service containers owns
@@ -142,6 +151,18 @@ Concurrent start is serialized; explicit host stop prevents supervisor-driven
 resurrection. Information, preflight and GC never bootstrap or repair it. Active
 controller/image/runtime closures remain Nix-GC-reachable, without required root
 installation or a particular profile path.
+
+Consumer client/dev-shell closures retain host tooling recipes rather than
+requiring their outputs. `wrix service prepare` explicitly realizes the pinned
+controller/runtime recipes with indirect GC roots, without starting or upgrading
+services or changing host policy. Ordinary startup refuses unprepared tooling
+and identifies that command; explicit controller repair/update retain their
+preparation paths. Recorded compatible deployments continue using their retained
+package, not an unprepared newer consumer candidate.
+[test](../crates/wrix-service/src/control/supervision/test/preparation.rs::ordinary_start_refuses_unprepared_tooling_without_realization_or_selection)
+[test](../crates/wrix-service/src/control/supervision/test/preparation.rs::preflight_uses_retained_package_without_preparing_a_new_consumer_candidate)
+[test](../crates/wrix-service/src/control/supervision/test/preparation.rs::explicit_preparation_checks_all_provenance_before_realization)
+[test](../crates/wrix-service/src/control/supervision/test/preparation.rs::explicit_preparation_realizes_pinned_recipes_with_indirect_roots_without_supervision)
 
 Clients admit the versioned private control interface and required capabilities
 before effects. Package installation does not replace an active controller.

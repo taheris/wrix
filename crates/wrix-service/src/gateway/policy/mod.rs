@@ -113,7 +113,7 @@ impl From<Policy> for Vec<Rule> {
 
 /// IPv6 is denied, matching the worker's current IPv6 default-drop contract.
 #[derive(Clone)]
-pub(super) struct Baseline(Vec<(u32, u32)>);
+pub struct Baseline(Vec<(u32, u32)>);
 impl Baseline {
     pub fn load() -> Result<Self, Error> {
         let source = include_str!("../../../../../lib/sandbox/network-bootstrap.sh");

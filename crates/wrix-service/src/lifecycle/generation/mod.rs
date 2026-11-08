@@ -15,7 +15,7 @@ use std::{
     fs::{self, File},
     io,
     net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener},
-    num::{NonZeroU16, NonZeroU64, NonZeroUsize},
+    num::{NonZeroU16, NonZeroU64},
     os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -46,7 +46,7 @@ impl From<Name> for String {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Gateway {
+pub struct Gateway {
     generation: Generation,
     runtime: RuntimeKind,
     name: Name,
@@ -56,7 +56,7 @@ pub(crate) struct Gateway {
     key: Secret,
 }
 impl Gateway {
-    pub(crate) fn client(&self) -> Client {
+    pub fn client(&self) -> Client {
         Client::new(
             SocketAddr::V4(SocketAddrV4::new(
                 Ipv4Addr::LOCALHOST,
@@ -65,10 +65,10 @@ impl Gateway {
             self.key.clone(),
         )
     }
-    pub(crate) const fn generation(&self) -> Generation {
+    pub const fn generation(&self) -> Generation {
         self.generation
     }
-    pub(crate) async fn ready(&self) -> Result<()> {
+    pub async fn ready(&self) -> Result<()> {
         let client = self.client();
         client
             .verify(SocketAddr::V4(SocketAddrV4::new(
@@ -171,7 +171,7 @@ impl Gateway {
         }
         Ok(Some(receipt))
     }
-    pub(crate) fn record_eligible(&self, authority: &Path) -> Result<()> {
+    pub fn record_eligible(&self, authority: &Path) -> Result<()> {
         super::deployment::publish(
             authority,
             &self.retirement_file(),
@@ -183,7 +183,7 @@ impl Gateway {
             },
         )
     }
-    pub(crate) fn record_removed(&self, authority: &Path) -> Result<()> {
+    pub fn record_removed(&self, authority: &Path) -> Result<()> {
         if self.retirement(authority)?.is_none()
             || self.runtime()?.status(&self.name.0)? != RuntimeStatus::Missing
         {
@@ -200,11 +200,11 @@ impl Gateway {
             },
         )
     }
-    pub(crate) fn eligible_stopped(&self, authority: &Path) -> Result<bool> {
+    pub fn eligible_stopped(&self, authority: &Path) -> Result<bool> {
         Ok(self.retirement(authority)?.is_some()
             && self.runtime()?.status(&self.name.0)? != RuntimeStatus::Running)
     }
-    pub(crate) fn removed(&self, authority: &Path) -> Result<bool> {
+    pub fn removed(&self, authority: &Path) -> Result<bool> {
         if self.retirement(authority)?.is_some()
             && self.runtime()?.status(&self.name.0)? == RuntimeStatus::Missing
         {
@@ -213,7 +213,7 @@ impl Gateway {
         }
         Ok(false)
     }
-    pub(crate) fn retire(&self, deployment: &Id) -> Result<()> {
+    pub fn retire(&self, deployment: &Id) -> Result<()> {
         let runtime = self.runtime()?;
         let status = runtime.status(&self.name.0)?;
         if status == RuntimeStatus::Missing {
@@ -285,7 +285,7 @@ struct Backend {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Plan {
+pub struct Plan {
     version: u16,
     deployment: Id,
     gateway: Gateway,
@@ -295,7 +295,7 @@ pub(crate) struct Plan {
     preparing: Option<Gateway>,
 }
 impl Plan {
-    pub(crate) fn load(authority: &Path) -> Result<Option<Self>> {
+    pub fn load(authority: &Path) -> Result<Option<Self>> {
         let Some(bytes) = super::deployment::document(authority, PLAN)? else {
             return Ok(None);
         };
@@ -322,25 +322,25 @@ impl Plan {
     fn publish(&self, authority: &Path) -> Result<()> {
         super::deployment::publish(authority, PLAN, self)
     }
-    pub(crate) const fn deployment(&self) -> &Id {
+    pub const fn deployment(&self) -> &Id {
         &self.deployment
     }
-    pub(crate) const fn gateway(&self) -> &Gateway {
+    pub const fn gateway(&self) -> &Gateway {
         &self.gateway
     }
-    pub(crate) fn obsolete(&self) -> &[Gateway] {
+    pub fn obsolete(&self) -> &[Gateway] {
         &self.obsolete
     }
-    pub(crate) fn same_gateway(&self, other: &Self) -> bool {
+    pub fn same_gateway(&self, other: &Self) -> bool {
         self.gateway == other.gateway
     }
-    pub(crate) fn same_backend(&self, other: &Self) -> bool {
+    pub fn same_backend(&self, other: &Self) -> bool {
         self.backend == other.backend && self.backend_open == other.backend_open
     }
-    pub(crate) const fn backend_open(&self) -> bool {
+    pub const fn backend_open(&self) -> bool {
         self.backend_open
     }
-    pub(crate) fn routes(&self) -> [SocketAddr; 5] {
+    pub fn routes(&self) -> [SocketAddr; 5] {
         [
             self.backend.sql,
             self.backend.cache,
@@ -350,7 +350,7 @@ impl Plan {
         ]
         .map(|port| SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port.get())))
     }
-    pub(crate) fn ready(&self, state: &Path) -> Result<()> {
+    pub fn ready(&self, state: &Path) -> Result<()> {
         self.gateway.verify(&self.deployment)?;
         if !self.backend_open {
             return Ok(());
@@ -423,14 +423,14 @@ impl Plan {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum State {
+pub enum State {
     Activated,
     Draining,
     Failed,
 }
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Status {
+pub struct Status {
     version: u16,
     epoch: [u8; 32],
     gateway: Generation,
@@ -441,12 +441,7 @@ pub(crate) struct Status {
     plan_digest: [u8; 32],
 }
 impl Status {
-    pub(crate) fn publish(
-        authority: &Path,
-        plan: &Plan,
-        state: State,
-        retiring: usize,
-    ) -> Result<()> {
+    pub fn publish(authority: &Path, plan: &Plan, state: State, retiring: usize) -> Result<()> {
         super::deployment::publish(
             authority,
             STATUS,
@@ -757,26 +752,10 @@ fn start_gateway(gateway: &Gateway, deployment: &Id) -> Result<()> {
     gateway.verify(deployment)
 }
 
-/// Native role entry. No host issuer files, worker policies or durable traffic grants are loaded.
-pub async fn serve_gateway() -> Result<()> {
-    let key =
-        Secret::try_from(std::env::var("WRIX_GATEWAY_KEY").map_err(|_| owner::Error::Invalid)?)
-            .map_err(io::Error::other)?;
-    let data = tokio::net::TcpListener::bind((Ipv4Addr::UNSPECIFIED, 3128)).await?;
-    let management = tokio::net::TcpListener::bind((Ipv4Addr::UNSPECIFIED, 3129)).await?;
-    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
-    crate::gateway::run(
-        data,
-        management,
-        key,
-        vec![SocketAddr::from((Ipv4Addr::LOCALHOST, 3129))],
-        NonZeroUsize::MIN.saturating_add(1023),
-        async move {
-            terminate.recv().await;
-        },
-    )
-    .await
-    .map_err(|error| io::Error::other(error).into())
+/// Decode the generation-scoped role credential without binding or starting a server.
+pub fn gateway_secret() -> Result<Secret> {
+    Secret::try_from(std::env::var("WRIX_GATEWAY_KEY").map_err(|_| owner::Error::Invalid)?)
+        .map_err(|error| io::Error::other(error).into())
 }
 
 pub(super) fn ensure(
