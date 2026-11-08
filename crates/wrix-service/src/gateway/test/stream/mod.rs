@@ -1,4 +1,5 @@
 use super::*;
+mod closed;
 
 #[tokio::test]
 async fn large_http_response_streams_with_fixed_client_and_origin_buffers() {
@@ -110,7 +111,10 @@ async fn canonicalized_chunked_framing_cannot_smuggle_unadmitted_next_request() 
     let mut body = [0; 5];
     socket.read_exact(&mut body).await.unwrap();
     assert_eq!(&body, b"hello");
-    let denied = request(&mut socket, &secret, "denied.example", "GET", "/").await;
+    // This assertion already permits EOF after the first framed response. A
+    // reset on an intentionally closed TCP stream is the same terminal event;
+    // retain every received byte so a partial success cannot become empty.
+    let denied = closed::request_or_closed(&mut socket, &secret).await;
     assert!(
         denied.is_empty() || denied.starts_with("HTTP/1.1 403 "),
         "{denied}"
