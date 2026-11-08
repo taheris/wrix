@@ -1,0 +1,77 @@
+{
+  "consumer": "/Users/shaun/src/github.com/taheris/loom/.loom/beads/lm-p6xb",
+  "consumer_head": "114b2e06dafc7a94b8ff4268f01a0033864a6af8",
+  "lock_sha256": "097544ba338e4fab83a167180d577666ee55df506f22118ab5a7d294c34a481c",
+  "dirty": true,
+  "shell": "ci",
+  "notes": [
+    "Real Loom consumer with locked Wrix input; dirty consumer snapshot, not a published Loom revision.",
+    "CI shell chosen because default interactive hook starts shared services; no shared service start or upgrade is permitted for this measurement.",
+    "Existing store/toolchain/vendor/build inputs warm; concurrent verification activity; no controlled speedup claim."
+  ],
+  "phases": [
+    {
+      "phase": "evaluation",
+      "command": [
+        "nix",
+        "eval",
+        "--raw",
+        ".#devShells.aarch64-darwin.ci.drvPath"
+      ],
+      "seconds": 21.048,
+      "exit_code": 0
+    },
+    {
+      "phase": "realization",
+      "command": [
+        "nix",
+        "build",
+        "--no-link",
+        "--json",
+        ".#devShells.aarch64-darwin.ci"
+      ],
+      "seconds": 900.043,
+      "timeout": 900
+    },
+    {
+      "phase": "realization_retry",
+      "seconds": 456.51,
+      "exit_code": 0,
+      "notes": "Ordinary retry after 900-second bounded attempt; retained prior work, not an independent cold run."
+    },
+    {
+      "phase": "environment_generation",
+      "command": [
+        "nix",
+        "print-dev-env",
+        ".#ci"
+      ],
+      "seconds": 2.632,
+      "exit_code": 0
+    },
+    {
+      "phase": "first_activation",
+      "command": [
+        "nix",
+        "develop",
+        ".#ci",
+        "--command",
+        "true"
+      ],
+      "seconds": 7.004,
+      "exit_code": 0
+    },
+    {
+      "phase": "cached_activation",
+      "command": [
+        "nix",
+        "develop",
+        ".#ci",
+        "--command",
+        "true"
+      ],
+      "seconds": 2.044,
+      "exit_code": 0
+    }
+  ]
+}
