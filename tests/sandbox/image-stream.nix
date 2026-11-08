@@ -43,7 +43,26 @@ let
       );
     }
   );
+  defaultChild = stream.dockerTools.buildLayeredImage (
+    args
+    // {
+      name = "wrix-default-stream-child-fixture";
+      fromImage = poisonParent;
+      contents = [ childPayload ];
+      maxLayers = 6;
+    }
+  );
   changedTime = child.override { mtime = "1970-01-01T00:00:02Z"; };
+  budgetPlanner = import ../../lib/sandbox/auto-layer.nix {
+    pkgs = pkgs.buildPackages;
+    planner = tools;
+  };
+  budgetProbe = budgetPlanner {
+    closureRoots = [ ];
+    fromImage = poisonParent;
+    maxLayers = 3;
+  };
+  budgetScript = pkgs.writeShellScript "native-parent-budget-probe" budgetProbe.buildCommand;
   unit = tools;
 in
 assert compressed.stream.streamScript == raw.streamScript;
@@ -61,6 +80,7 @@ pkgs.runCommandLocal "docker-image-stream"
           compressed
           overridden
           child
+          defaultChild
           changedTime
           ;
       };
@@ -72,6 +92,7 @@ pkgs.runCommandLocal "docker-image-stream"
       pkgs.diffutils
       pkgs.skopeo
       pkgs.jq
+      pkgs.gnutar
     ];
   }
   ''
@@ -85,6 +106,42 @@ pkgs.runCommandLocal "docker-image-stream"
       test "$(readlink ${child.gzipParts}/"$digest.gz")" = "${compressed.gzipParts}/$digest.gz"
       test ! -L ${changedTime.gzipParts}/"$digest.gz"
     done < ${compressed.gzipParts}/order
+    if maxLayers=3 parentLayout=${compressed.ociLayout} fromImage= bash ${budgetScript} > budget-output 2> budget-error; then
+      echo 'default planner accepted an exhausted inherited layer budget' >&2
+      exit 1
+    fi
+    grep -F 'At least 1 layer is required' budget-error
+    if maxLayers=3 parentLayout= fromImage=${compressed} bash ${budgetScript} > archive-budget-output 2> archive-budget-error; then
+      echo 'legacy archive planner accepted an exhausted inherited layer budget' >&2
+      exit 1
+    fi
+    grep -F 'At least 1 layer is required' archive-budget-error
+    cp -R ${compressed.ociLayout} "$TMPDIR/bad-parent"
+    chmod u+w "$TMPDIR/bad-parent" "$TMPDIR/bad-parent/index.json"
+    jq '.manifests[0].digest = "sha256:../../forbidden"' "$TMPDIR/bad-parent/index.json" > "$TMPDIR/bad-index.json"
+    mv "$TMPDIR/bad-index.json" "$TMPDIR/bad-parent/index.json"
+    if maxLayers=100 parentLayout="$TMPDIR/bad-parent" fromImage= bash ${budgetScript} > bad-parent-output 2> bad-parent-error; then
+      echo 'default planner accepted an invalid OCI manifest digest' >&2
+      exit 1
+    fi
+    cp -RL ${compressed.ociLayout} "$TMPDIR/changed-parent"
+    parentDigest=$(jq -r '.manifests[0].digest' "$TMPDIR/changed-parent/index.json")
+    parentManifest="$TMPDIR/changed-parent/blobs/sha256/''${parentDigest#sha256:}"
+    chmod u+w "$parentManifest"
+    printf '\n' >> "$parentManifest"
+    if maxLayers=100 parentLayout="$TMPDIR/changed-parent" fromImage= bash ${budgetScript} > changed-parent-output 2> changed-parent-error; then
+      echo 'default planner accepted a manifest whose digest no longer matches' >&2
+      exit 1
+    fi
+    grep -F 'computed checksum did NOT match' changed-parent-error
+    ${defaultChild.stream} > default-child.tar
+    gzip -cd ${defaultChild} | cmp default-child.tar -
+    while IFS= read -r digest; do
+      test -L ${defaultChild.gzipParts}/"$digest.gz"
+      test "$(readlink ${defaultChild.gzipParts}/"$digest.gz")" = "${compressed.gzipParts}/$digest.gz"
+    done < ${compressed.gzipParts}/order
+    test "$(jq '.layers | length' ${defaultChild.ociLayout}/wrix/manifest.json)" -le 6
+    test "$(jq '.layers | length' ${defaultChild.ociLayout}/wrix/manifest.json)" -gt 2
     ${changedTime.stream} > changed-time.tar
     gzip -cd ${changedTime} | cmp changed-time.tar -
     export HOME="$TMPDIR"
@@ -111,5 +168,7 @@ pkgs.runCommandLocal "docker-image-stream"
     fi
     skopeo --tmpdir "$TMPDIR" --insecure-policy copy --quiet docker-archive:${child} oci:"$TMPDIR/child":test
     test "$(skopeo --tmpdir "$TMPDIR" --insecure-policy inspect --raw oci:"$TMPDIR/child":test | jq '.layers | length')" -gt 2
+    skopeo --tmpdir "$TMPDIR" --insecure-policy copy --quiet docker-archive:default-child.tar oci:"$TMPDIR/default-child":test
+    test "$(skopeo --tmpdir "$TMPDIR" --insecure-policy inspect --raw oci:"$TMPDIR/default-child":test | jq '.layers | length')" -le 6
     touch "$out"
   ''

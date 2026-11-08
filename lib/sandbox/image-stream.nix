@@ -33,6 +33,24 @@ let
       builtins.length (lib.splitString bareFrom bareCommand) == 2
     ) "dockerTools compression command changed; review the native stream adapter";
     builtins.appendContext text (remaining // builtins.getContext (toString to));
+  # Upstream's planner/configuration builder needs an immutable parent operand,
+  # not the unused Docker archive. Keep its real OCI identity and explicit
+  # layout metadata; nativeStream removes the upstream archive-only JSON field.
+  plannerArgs =
+    args:
+    if (args.fromImage or null) == null then
+      args
+    else
+      let
+        layout =
+          args.fromImage.ociLayout or (throw "Wrix native image streams require a parent OCI layout");
+      in
+      args
+      // {
+        fromImage = layout // {
+          ociLayout = layout;
+        };
+      };
   nativeStream =
     args: raw:
     let
@@ -43,9 +61,9 @@ let
         else
           parentImage.ociLayout or (throw "Wrix native image streams require a parent OCI layout");
       normalized = raw.override { fromImage = null; };
-      countsArchiveParent = parent != null && (args.layeringPipeline or null) == null;
+      usesDefaultParentBudget = parent != null && (args.layeringPipeline or null) == null;
       conf =
-        if countsArchiveParent then
+        if usesDefaultParentBudget then
           pkgs.runCommandLocal "wrix-native-stream-conf.json"
             {
               nativeBuildInputs = [ pkgs.jq ];
@@ -94,12 +112,12 @@ in
 {
   dockerTools = baseDockerTools // {
     streamLayeredImage = makeOverridable (
-      args: nativeStream args (baseDockerTools.streamLayeredImage args)
+      args: nativeStream args (baseDockerTools.streamLayeredImage (plannerArgs args))
     );
     buildLayeredImage = makeOverridable (
       args:
       let
-        image = baseDockerTools.buildLayeredImage args;
+        image = baseDockerTools.buildLayeredImage (plannerArgs args);
         stream = nativeStream args image.stream;
       in
       image.overrideAttrs (previous: {
