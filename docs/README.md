@@ -36,8 +36,10 @@ capability discovery, Loom integration and fresh-image verification boundaries.
 checked resource projections, conservative scope, and measured worker costs.
 [Client packaging costs](client-packaging-costs.md) separates Rust build,
 artifact size and shell activation measurements, including rejected experiments.
-[Client/server compilation](client-server-boundary.md) documents the independent
-server crate, preserved native target inventory and bounded
+[Locked Loom consumer measurement](locked-consumer-measurement.md) records
+separate evaluation, realization, environment-generation and CI-shell activation
+phases. [Client/server compilation](client-server-boundary.md) documents the
+independent server crate, preserved native target inventory and bounded
 dependency/source-edit measurements.
 
 ## Specs
@@ -63,6 +65,9 @@ keep it current when specs land or retire.
 | [workspaces](../specs/workspaces.md)         | `crates/wrix-state/`, `crates/wrix-core/`                                            | wx-23x0i | Explicit host workspace admission and native control metadata            |
 | [services](../specs/services.md)             | `crates/wrix-service/`, `crates/wrix-service-server/`                                | wx-fvr1x | Host-user control, shared service roles and draining updates             |
 | [tmux](../specs/tmux.md)                     | [`lib/sandbox/profiles.nix`](../lib/sandbox/profiles.nix)                            | wx-4f3g  | Native tmux CLI debugging and caller-owned session lifecycle             |
+
+[Beads archive recovery](beads-archive-recovery.md) records lossless file-remote
+repacking without deleting database history or bypassing GitHub limits.
 
 [Celler ownership recovery](celler-recovery.md) describes explicit recovery of
 an absent or stopped selected cache owner without resetting persistent data.
