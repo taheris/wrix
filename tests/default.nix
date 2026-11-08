@@ -312,6 +312,7 @@ let
           '';
     }
     // {
+      packaged-git-runtime = import ./prek/git-runtime.nix { inherit pkgs; };
       celler-consumer-runtime = import ./services/celler-runtime.nix { inherit pkgs wrix; };
       devshell-cli-selection = devshellCliSelection;
       builder-vmnet-route = builderRouteTest;
