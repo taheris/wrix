@@ -7,26 +7,36 @@
   name,
   fromLayout ? null,
   storeImage ? image,
+  configuration ? null,
+  storeConfiguration ? null,
 }:
 
 let
-  inherit (pkgs) python3 runCommandLocal;
+  inherit (pkgs) runCommandLocal;
+  imageTools = import ./image-tools.nix { pkgs = pkgs.buildPackages; };
   inherit (pkgs.lib) optionalString;
-  inherit (((image.stream or image).override { fromImage = null; })) conf;
-  storeConf = ((storeImage.stream or storeImage).override { fromImage = null; }).conf;
-  storeLayers = runCommandLocal "${name}-store-layers" { nativeBuildInputs = [ python3 ]; } ''
+  conf =
+    if configuration == null then
+      ((image.stream or image).override { fromImage = null; }).conf
+    else
+      configuration;
+  storeConf =
+    if storeConfiguration == null then
+      ((storeImage.stream or storeImage).override { fromImage = null; }).conf
+    else
+      storeConfiguration;
+  storeLayers = runCommandLocal "${name}-store-layers" { } ''
     set -euo pipefail
-    python ${./make-oci-layout.py} ${storeConf} "$out" --store-layers-only
+    ${imageTools}/bin/wrix-image-tools oci-layout ${storeConf} "$out" --store-layers-only
   '';
 in
 runCommandLocal name
   {
-    nativeBuildInputs = [ python3 ];
     passthru = { inherit storeLayers; };
   }
   ''
     set -euo pipefail
-    python ${./make-oci-layout.py} ${conf} "$out" \
+    ${imageTools}/bin/wrix-image-tools oci-layout ${conf} "$out" \
       --store-layers ${storeLayers} \
       ${optionalString (fromLayout != null) "--from-layout ${fromLayout}"}
   ''
