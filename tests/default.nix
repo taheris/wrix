@@ -315,6 +315,7 @@ let
           '';
     }
     // {
+      packaged-git-runtime = import ./prek/git-runtime.nix { inherit pkgs; };
       celler-consumer-runtime = import ./services/celler-runtime.nix { inherit pkgs wrix; };
       inherit (ciChecks) client-server-dependency-boundary;
       ci-annotation-registration = import ./verify/ci-registry.nix { inherit pkgs ciApps; };

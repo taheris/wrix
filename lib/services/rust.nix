@@ -8,6 +8,7 @@
 
 let
   inherit (builtins) concatStringsSep;
+  inherit (pkgs) gitMinimal;
   inherit (pkgs.lib) makeBinPath optionals;
 
   exampleCrates = builtins.filter (name: builtins.pathExists (../../crates + "/${name}/examples")) (
@@ -136,7 +137,7 @@ let
       workspace.bin
       pkgs.nix
       pkgs.skopeo
-      pkgs.git
+      gitMinimal
       pkgs.openssl
       pkgs.openssh
     ]
@@ -217,7 +218,7 @@ let
       ":"
       "${makeBinPath [
         pkgs.coreutils
-        pkgs.git
+        gitMinimal
         pkgs.dolt
         pkgs.openssl
       ]}"
@@ -482,7 +483,7 @@ in
   hostCachePolicy = mkBinaryPackage "wrix-host-cache-policy" [ ];
   cacheHook = mkBinaryPackage "wrix-cache-hook" [ ];
   cachePublish = mkBinaryPackage "wrix-cache-publish" [
-    pkgs.git
+    gitMinimal
     pkgs.nix
   ];
 }

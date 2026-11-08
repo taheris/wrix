@@ -1,9 +1,10 @@
 { pkgs }:
 
 let
+  inherit (pkgs) gitMinimal;
   runtimeInputs = [
     pkgs.prek
-    pkgs.git
+    gitMinimal
     pkgs.coreutils
   ];
 in
@@ -15,7 +16,7 @@ pkgs.writeShellApplication {
     ${builtins.readFile ./binding.sh}
     wrix_prek_check_runtime() {
       local executable
-      for executable in ${pkgs.prek}/bin/prek ${pkgs.git}/bin/git ${pkgs.coreutils}/bin/{cat,dirname,mkdir,rm,uname}; do
+      for executable in ${pkgs.prek}/bin/prek ${gitMinimal}/bin/git ${pkgs.coreutils}/bin/{cat,dirname,mkdir,rm,uname}; do
         [[ -x "$executable" ]] || wrix_prek_fail "packaged hook runtime dependency $executable is missing"
       done
     }
