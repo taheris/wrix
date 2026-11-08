@@ -1,0 +1,56 @@
+{
+  inputs.bash = { url = @BASH@; flake = false; };
+  inputs.coreutils = { url = @COREUTILS@; flake = false; };
+  outputs = { bash, coreutils, ... }: builtins.trace "WRIX-CI-BATCH-QUERY" {
+    legacyPackages.@SYSTEM@.ciApps = let
+      mkRunner = name: text: derivation {
+        inherit name;
+        system = "@SYSTEM@";
+        builder = "${bash}/bin/bash";
+        PATH = "${coreutils}/bin";
+        script = builtins.toFile name (''
+          #!${bash}/bin/bash
+          set -euo pipefail
+          case "$0" in /nix/store/*/bin/${name}) ;; *) exit 24 ;; esac
+        '' + text);
+        args = [ "-c" ''
+          mkdir -p "$out/bin"
+          cp "$script" "$out/bin/${name}"
+          chmod +x "$out/bin/${name}"
+        '' ];
+      };
+      pass = name: mkRunner name ''printf '%s\n' '${name}' >>"$WRIX_TEST_CI_CALLS"'';
+    in {
+      test-linux-builder-sshd-hardening = pass "test-linux-builder-sshd-hardening";
+      test-container-pre-commit = pass "test-container-pre-commit";
+      test-services-devshell-start-independent = pass "test-services-devshell-start-independent";
+      test-linux-builder-image-source-kind = mkRunner "test-linux-builder-image-source-kind" ''
+        printf '%s\n' 'test-linux-builder-image-source-kind' >>"$WRIX_TEST_CI_CALLS"
+        case "$WRIX_TEST_CI_STATUS" in
+          pass) exit 0 ;;
+          fail) echo fixture-failure >&2; exit 23 ;;
+          skip) echo fixture-skip >&2; exit 77 ;;
+          wait) touch "$WRIX_TEST_CI_READY"; while true; do sleep 0.1; done ;;
+        esac
+      '';
+      test-services-limit-mode-cache-endpoint = derivation {
+        name = "@BOUNDARY@-vm-failure";
+        system = "@SYSTEM@";
+        builder = "${bash}/bin/bash";
+        args = [ "-c" "echo BUILD_BOUNDARY >&2; echo vm-runner-build-failure >&2; exit 77" ];
+      };
+      test-security-execution-metadata-lifecycle = derivation {
+        name = "@BOUNDARY@-live-failure";
+        system = "@SYSTEM@";
+        builder = "${bash}/bin/bash";
+        args = [ "-c" "echo BUILD_BOUNDARY >&2; exit 77" ];
+      };
+      test-linux-builder-source-kind-load-transport = derivation {
+        name = "ci-fixture-build-failure";
+        system = "@SYSTEM@";
+        builder = "${bash}/bin/bash";
+        args = [ "-c" "exit 19" ];
+      };
+    };
+  };
+}
