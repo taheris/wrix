@@ -732,16 +732,17 @@ without introducing a reciprocal flake dependency.
   [check](verify:profiles.repository-integration-source-isolation)
 - The compiled output used by consumer client/helper packages contains exactly
   the six client-side executables; controller, backend, image and verifier
-  executables remain in independently selected outputs. The client has a
-  normal-target dependency artifact; independent full verification retains
-  workspace dependency checks, test compilation and Nextest.
+  executables remain in independently selected outputs.
   [check](test-ci:test-client-package-boundary)
-  [check](verify:profiles.repository-integration-source-isolation)
+- The client has a normal-target dependency artifact; independent full
+  verification retains workspace dependency checks, test compilation and
+  Nextest. [check](verify:profiles.repository-integration-source-isolation)
 - The client normal/build dependency graph excludes `wrix-service-server` and
   Rama. The server retains unconditional Rama dependencies and explicit
-  registration of every existing integration target. Server-only source edits
-  preserve the compiled client while client source edits invalidate it.
+  registration of every existing integration target.
   [check](test-ci:test-client-server-dependency-boundary)
+- Server-only source edits preserve the compiled client while client source
+  edits invalidate it.
   [check](verify:profiles.repository-integration-source-isolation)
 - Editing a file in `extraSrcs` invalidates `clippy` and `nextest` but does
   **not** invalidate `bin` or `cargoArtifacts`
