@@ -354,11 +354,11 @@ with_fake_tools() {
 }
 
 test_runtime_image_inspection_and_tagging_are_stateful() {
-  local wrix_bin image digest alias="localhost/wrix-service:fixture-contract"
-  wrix_bin="$(build_wrix)"
+  local image="wrix-service:fixture-source" alias="localhost/wrix-service:fixture-contract"
+  local digest="sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   with_fake_tools
-  digest="$(<"$WRIX_FAKE_RUNTIME_STATE/image-digest")"
-  image="$(tail -n 1 "$WRIX_FAKE_RUNTIME_STATE/images")"
+  printf '%s\n' "$digest" "$image" >"$WRIX_FAKE_RUNTIME_STATE/images"
+  printf '%s\n' "$digest" >"$WRIX_FAKE_RUNTIME_STATE/image-digest"
   "$WRIX_CONTAINER_RUNTIME" image exists "$image"
   [[ "$("$WRIX_CONTAINER_RUNTIME" image inspect --format '{{.Id}}' "$image")" == "$digest" ]]
   if "$WRIX_CONTAINER_RUNTIME" image exists "$alias"; then

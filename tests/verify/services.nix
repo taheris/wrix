@@ -6,10 +6,7 @@ let
   serviceScript = script: function: ''
     run_repo_script ${escapeShellArg "tests/services/${script}.sh"} ${escapeShellArg function}
   '';
-  serviceScriptWithWrix = script: function: ''
-    run_repo_script_with_wrix ${escapeShellArg "tests/services/${script}.sh"} ${escapeShellArg function}
-  '';
-  hostNix = serviceScriptWithWrix "host-nix-config";
+  hostNix = serviceScript "host-nix-config";
 in
 {
   "services.cache-devshell-overrides".script = ''
