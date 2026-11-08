@@ -459,7 +459,9 @@ impl<'a> Manager<'a> {
         } else {
             source
         };
-        check_storage_tree(&current.join(".dolt"))?;
+        // Validate lock ancestors without traversing files a live native writer
+        // may atomically replace during startup or maintenance.
+        check_directory(&current.join(".dolt/noms"))?;
         let mut guards = Vec::new();
         if let Some(parent) = source.parent()
             && parent.join(".dolt/noms/LOCK").exists()
@@ -515,6 +517,9 @@ impl<'a> Manager<'a> {
                 Error::Io(error)
             }
         })?;
+        // The complete tree check still precedes every journal write or rename,
+        // but now runs only after the native writer lock excludes mutation.
+        check_storage_tree(&current.join(".dolt"))?;
         if !checkpoint.exists() {
             if saved.phase != SourcePhase::Moving {
                 return Err(Error::Incomplete);
