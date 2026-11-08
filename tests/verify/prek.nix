@@ -68,7 +68,10 @@ in
     ${pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
       nix build --no-link --no-warn-dirty "$root#checks.${system}.system-test-prerequisites"
     ''}
-    ${pkgs.python3}/bin/python3 "$root/tests/prek/test-ci-batching.py" \
-      "$test_ci_runner" ${escapeShellArg system} ${pkgs.bash} ${pkgs.coreutils} ${../lib/verifier.sh} "$loom/bin/loom"
+    WRIX_TEST_CI_RUNNER="$test_ci_runner" WRIX_TEST_CI_SYSTEM=${escapeShellArg system} \
+      WRIX_TEST_CI_BASH=${pkgs.bash} WRIX_TEST_CI_COREUTILS=${pkgs.coreutils} \
+      WRIX_TEST_VERIFIER_LIBRARY=${../lib/verifier.sh} WRIX_TEST_CI_LOOM="$loom/bin/loom" \
+      cargo nextest run --offline --locked --manifest-path "$root/Cargo.toml" \
+        --package wrix-verify-tools --test ci_batching --run-ignored only --test-threads 4
   '';
 }
