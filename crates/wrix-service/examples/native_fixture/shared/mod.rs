@@ -157,10 +157,14 @@ fn stop(state: &State) -> Result<(), Error> {
 
 fn execute(root: &Path, state: Option<&State>, args: &[String]) -> Result<ExitCode, Error> {
     let mut index = 1;
+    let mut interactive = false;
     let mut environment = BTreeMap::new();
     while let Some(argument) = args.get(index) {
         match argument.as_str() {
-            "-i" => index += 1,
+            "-i" => {
+                interactive = true;
+                index += 1;
+            }
             "-e" => {
                 let (key, value) = args
                     .get(index + 1)
@@ -194,6 +198,11 @@ fn execute(root: &Path, state: Option<&State>, args: &[String]) -> Result<ExitCo
         .args(arguments)
         .envs(environment)
         .current_dir(state.data.as_ref().ok_or(Error::Usage)?)
+        .stdin(if interactive {
+            Stdio::inherit()
+        } else {
+            Stdio::null()
+        })
         .output()?;
     OpenOptions::new()
         .create(true)
@@ -408,6 +417,9 @@ pub(super) fn run(args: &[OsString]) -> Result<ExitCode, Error> {
     }
     Ok(ExitCode::SUCCESS)
 }
+
+#[cfg(test)]
+mod exec_test;
 
 #[cfg(test)]
 mod test {
