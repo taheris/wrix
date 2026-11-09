@@ -47,6 +47,8 @@ let
   verifiers = import ./default.nix {
     inherit pkgs system;
     focusBinary = lib.rustPackage.focusNotification;
+    hostCachePolicy = lib.rustPackage.hostCachePolicy;
+    runtimeEnvironmentTests = lib.rustPackage.cacheBackendTests;
     linuxPkgs = imagePkgs;
   };
   sources = map (path: readFile (root + "/${path}")) [

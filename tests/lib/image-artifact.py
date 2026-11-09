@@ -82,7 +82,10 @@ def prepare_docker(source, output):
         source = snapshot
     source = source.resolve()
     manifest, headers = None, set()
-    with tarfile.open(source, mode="r|*") as archive:
+    # gzip.GzipFile (used by r:*) decodes every concatenated gzip member.
+    # tarfile's r|* decoder stops at the first member and buffers later bytes.
+    # The original archive remains in place; no decompressed copy is staged.
+    with tarfile.open(source, mode="r:*") as archive:
         for info in archive:
             name = normalized(info.name)
             if name in headers:
@@ -90,6 +93,9 @@ def prepare_docker(source, output):
             headers.add(name)
             if name == "manifest.json":
                 manifest = json.loads(read_metadata(archive, info))
+        # The tar terminator may precede the final gzip checksum/trailer.
+        while archive.fileobj.read(1024 * 1024):
+            pass
     if manifest is None or len(manifest) != 1:
         raise ValueError("image inspection requires exactly one Docker manifest")
     manifest = manifest[0]
@@ -100,7 +106,7 @@ def prepare_docker(source, output):
     if config not in headers or config in layers or config == "manifest.json":
         raise ValueError("invalid Docker config member")
     members, sources, digests = {}, {}, {}
-    with tarfile.open(source, mode="r|*") as archive:
+    with tarfile.open(source, mode="r:*") as archive:
         for info in archive:
             name = normalized(info.name)
             if name == config:

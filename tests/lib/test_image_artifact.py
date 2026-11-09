@@ -1,3 +1,4 @@
+import gzip
 import hashlib
 import importlib.util
 import io
@@ -190,7 +191,7 @@ class ImageArtifact(unittest.TestCase):
         # Producers may put the manifest after every layer; do not assume order.
         files["manifest.json"] = json.dumps([{"Config": "original-config.json", "Layers": names}]).encode()
         files.update(extra or {})
-        with tarfile.open(source, mode) as archive:
+        with tarfile.open(source, "w" if mode == "w:multi-gz" else mode) as archive:
             for name, data in files.items():
                 info = tarfile.TarInfo(name)
                 if isinstance(data, tuple):
@@ -199,10 +200,15 @@ class ImageArtifact(unittest.TestCase):
                 else:
                     info.size = len(data)
                     archive.addfile(info, io.BytesIO(data))
+        if mode == "w:multi-gz":
+            raw = source.read_bytes()
+            boundary = 512 + len(self.layer_data[0])
+            source.write_bytes(gzip.compress(raw[:boundary], mtime=0) + gzip.compress(raw[boundary:], mtime=0))
+            self.assertEqual(gzip.decompress(source.read_bytes()), raw)
         return source, names
 
     def test_docker_archives_keep_payloads_in_the_original_source(self):
-        for mode in ("w", "w:gz"):
+        for mode in ("w", "w:gz", "w:multi-gz"):
             with self.subTest(mode=mode):
                 source, names = self.docker_archive(mode)
                 self.image = self.root / ("docker-" + mode.replace(":", "-"))
@@ -225,6 +231,41 @@ class ImageArtifact(unittest.TestCase):
                 self.assertEqual(self.query("exists", "etc/removed").returncode, 1)
                 self.assertEqual(self.query("exists", "opt/hidden/file").returncode, 1)
                 self.assertEqual(self.query("link", "bin/runner").stdout, "/" + STORE + "/bin/runner\n")
+
+    def test_gzip_member_boundaries_can_split_tar_headers_and_payloads(self):
+        source, names = self.docker_archive("w")
+        raw = source.read_bytes()
+        baseline = self.root / "raw-inspection"
+        artifact.prepare(source, baseline)
+        cuts = [0, 1, 511, 529, 512 + len(self.layer_data[0]) - 7, len(raw)]
+        source.write_bytes(b"".join(gzip.compress(raw[start:end], mtime=0) for start, end in zip(cuts, cuts[1:])))
+        compressed = source.read_bytes()
+        self.assertEqual(gzip.decompress(compressed), raw)
+        self.image = self.root / "split-inspection"
+        artifact.prepare(source, self.image)
+        self.layers.write_text("\n".join(names) + "\n")
+        for filename in ("config.json", "manifest.json", "members.json", "layer-digests.json"):
+            self.assertEqual((self.image / filename).read_bytes(), (baseline / filename).read_bytes())
+        output = self.root / "split-marker"
+        self.assertEqual(self.query("extract", "etc/marker-link", output).returncode, 0)
+        self.assertEqual(output.read_text(), "new\n")
+        self.assertEqual(source.read_bytes(), compressed)
+        self.assertLess(sum(path.stat().st_size for path in self.image.iterdir()), 8192)
+        self.assertTrue(all(not (self.image / name).exists() for name in names))
+
+    def test_later_gzip_members_do_not_hide_unsafe_outer_headers(self):
+        source, _ = self.docker_archive("w:multi-gz", extra={"../outside": b"bad"})
+        with self.assertRaisesRegex(ValueError, "unsafe archive member"):
+            artifact.prepare(source, self.root / "unsafe-multi")
+        self.assertFalse((self.root / "outside").exists())
+
+    def test_later_gzip_member_checksum_corruption_is_rejected(self):
+        source, _ = self.docker_archive("w:multi-gz")
+        compressed = bytearray(source.read_bytes())
+        compressed[-8] ^= 1
+        source.write_bytes(compressed)
+        with self.assertRaises(gzip.BadGzipFile):
+            artifact.prepare(source, self.root / "corrupt-multi")
 
     def test_archive_inspection_disk_does_not_grow_with_layer_payload(self):
         self.layer_data = [layer_bytes([("large", "x" * (4 * 1024 * 1024), 0o444)])]
