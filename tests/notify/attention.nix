@@ -22,6 +22,8 @@ let
       (old: {
         preBuild = (old.preBuild or "") + ''
           export NIX_BUILD_CORES=2 CARGO_BUILD_JOBS=2
+          # Preserve file/line diagnostics without embedding the changing sandbox path.
+          export RUSTFLAGS="''${RUSTFLAGS-} --remap-path-prefix=$NIX_BUILD_TOP=/build"
         '';
       });
   desktop = harness.overrideAttrs {
