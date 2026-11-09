@@ -13,11 +13,17 @@ let
     inherit pkgs;
     binary = focusBinary;
   };
-  harness = import ../../lib/util/rust-tool.nix {
-    inherit pkgs;
-    package = "wrix-notify";
-    description = "Native packaged attention acceptance";
-  };
+  harness =
+    (import ../../lib/util/rust-tool.nix {
+      inherit pkgs;
+      package = "wrix-notify";
+      description = "Native packaged attention acceptance";
+    }).overrideAttrs
+      (old: {
+        preBuild = (old.preBuild or "") + ''
+          export NIX_BUILD_CORES=2 CARGO_BUILD_JOBS=2
+        '';
+      });
   desktop = harness.overrideAttrs {
     pname = "notify-desktop-fixture";
     cargoBuildFlags = [
@@ -68,7 +74,7 @@ let
         pkgs.clippy
       ];
       preCheck = ''
-        cargo clippy --offline --locked --release --package wrix-notify --all-targets -- -D warnings
+        cargo clippy --offline --locked --release --jobs 2 --package wrix-notify --all-targets -- -D warnings
       '';
       WRIX_TEST_NIRI_FIXTURE = "${desktop}/bin/niri-fixture";
       WRIX_NATIVE_TEST_BIN = "${nativeWrix}/bin/wrix";

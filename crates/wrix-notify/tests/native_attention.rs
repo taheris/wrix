@@ -1,5 +1,6 @@
 //! Real packaged daemon, host client and native launch attention acceptance.
-#![cfg(all(test, target_os = "linux"))]
+#![cfg(test)]
+#![cfg(target_os = "linux")]
 use std::{
     env, fs,
     io::Write,
@@ -105,8 +106,8 @@ impl Fixture {
         command
     }
 
-    fn desktop(&self, windows: Value) {
-        fs::write(&self.desktop, serde_json::to_vec(&windows).unwrap()).unwrap();
+    fn desktop(&self, windows: &Value) {
+        fs::write(&self.desktop, serde_json::to_vec(windows).unwrap()).unwrap();
     }
 
     fn register(&self, target: &str, window: u32, pid: u32) {
@@ -215,7 +216,7 @@ fn wait_for(timeout: Duration, mut predicate: impl FnMut() -> bool) {
 fn dispatched_notifications_queue_without_focus_and_unrouted_delivery_unchanged() {
     let fixture = Fixture::new();
     let pid = std::process::id();
-    fixture.desktop(json!([
+    fixture.desktop(&json!([
         {"id":1,"pid":pid,"is_focused":false},
         {"id":99,"pid":pid+1,"is_focused":true},
         {"id":2,"pid":pid,"is_focused":false}
@@ -265,7 +266,7 @@ fn dispatched_notifications_queue_without_focus_and_unrouted_delivery_unchanged(
 fn native_launch_host_delivery_and_navigation() {
     let fixture = Fixture::new();
     let pid = std::process::id();
-    fixture.desktop(json!([
+    fixture.desktop(&json!([
         {"id":1,"pid":pid,"is_focused":true},
         {"id":99,"pid":pid+1,"is_focused":false}
     ]));
@@ -338,7 +339,7 @@ fn native_launch_host_delivery_and_navigation() {
     thread::sleep(Duration::from_millis(500));
     assert!(!fixture.capture.exists());
     assert_eq!(fixture.pending(), Vec::<String>::new());
-    fixture.desktop(json!([
+    fixture.desktop(&json!([
         {"id":1,"pid":pid,"is_focused":false},
         {"id":99,"pid":pid+1,"is_focused":true}
     ]));
