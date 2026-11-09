@@ -142,6 +142,10 @@ in
 assert storedRoot "a" != storedRoot "b";
 assert toString storedA.bin.src == toString storedB.bin.src;
 assert storedA.bin.cargoLock == storedB.bin.cargoLock;
+assert storedA.clippy.cargoToml == storedA.bin.cargoToml;
+assert storedA.nextest.cargoToml == storedA.bin.cargoToml;
+assert storedA.cargoArtifacts.cargoToml == storedA.bin.cargoToml;
+assert storedA.bin.cargoToml == storedB.bin.cargoToml;
 assert storedA.bin.drvPath == typedLock.bin.drvPath;
 assert storedA.cargoArtifacts.drvPath == typedLock.cargoArtifacts.drvPath;
 assert storedA.bin.drvPath == storedB.bin.drvPath;
