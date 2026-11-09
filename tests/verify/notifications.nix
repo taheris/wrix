@@ -6,7 +6,12 @@
 }:
 
 let
-  inherit (pkgs.lib) escapeShellArg makeBinPath optionals;
+  inherit (pkgs.lib)
+    escapeShellArg
+    makeBinPath
+    optionalString
+    optionals
+    ;
   inherit (import ../lib/verifier.nix) darwinLive linuxLive live;
   fixture = import ../standalone/notify-fixture.nix { inherit pkgs focusBinary; };
   pi = import ../../lib/sandbox/pi.nix { inherit pkgs; };
@@ -68,13 +73,15 @@ in
   "notifications.attention-navigation".script = ''
     export PATH="${notifyPath}:$PATH"
     nix build --no-link --no-warn-dirty "$(repo_root)#legacyPackages.${system}.ciChecks.wrix-rust-nextest"
-    python3 "$(repo_root)/tests/standalone/test_attention.py"
+    nix build --no-link --no-warn-dirty "$(repo_root)#checks.${system}.notify-desktop-fixture"
+    ${optionalString pkgs.stdenv.hostPlatform.isLinux ''
+      nix build --no-link --no-warn-dirty "$(repo_root)#checks.${system}.notify-native-attention"
+    ''}
   '';
 
   "notifications.native-host" = linuxLive ''
     export PATH="${notifyPath}:$PATH"
-    export WRIX_NATIVE_TEST_BIN="$(build_flake_package wrix)/bin/wrix"
-    python3 "$(repo_root)/tests/standalone/test_attention.py" AttentionTests.test_native_launch_host_delivery_and_navigation
+    nix build --no-link --no-warn-dirty "$(repo_root)#checks.${system}.notify-native-attention"
   '';
 
   "notifications.focus-target-registration".script = ''

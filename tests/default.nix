@@ -277,6 +277,12 @@ let
     };
 
   # README example verification
+  notificationAttention = import ./notify/attention.nix {
+    inherit pkgs;
+    focusBinary = wrix.rustPackage.focusNotification;
+    nativeWrix = wrix.rustPackage.package;
+  };
+
   readmeTest = {
     readme = import ./readme.nix {
       inherit pkgs src system;
@@ -295,6 +301,7 @@ let
     // (import ./sandbox/pi-settings.nix { inherit pkgs wrix; })
     // piMcpTests.checks
     // optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+      notify-native-attention = notificationAttention.attention;
       krun-passt-package-binding = import ./sandbox/krun-runtime.nix { inherit pkgs; };
       native-fixture-cleanup =
         pkgs.runCommandLocal "native-fixture-cleanup"
@@ -315,6 +322,7 @@ let
           '';
     }
     // {
+      notify-desktop-fixture = notificationAttention.desktop;
       packaged-git-runtime = import ./prek/git-runtime.nix { inherit pkgs; };
       celler-consumer-runtime = import ./services/celler-runtime.nix { inherit pkgs wrix; };
       inherit (ciChecks) client-server-dependency-boundary;
