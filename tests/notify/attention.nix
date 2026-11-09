@@ -65,7 +65,11 @@ let
         fixture.daemon
         hostClient
         focus
+        pkgs.clippy
       ];
+      preCheck = ''
+        cargo clippy --offline --locked --release --package wrix-notify --all-targets -- -D warnings
+      '';
       WRIX_TEST_NIRI_FIXTURE = "${desktop}/bin/niri-fixture";
       WRIX_NATIVE_TEST_BIN = "${nativeWrix}/bin/wrix";
       installPhase = ''

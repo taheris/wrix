@@ -27,7 +27,7 @@ impl Drop for OwnedChild {
         }
         if self.daemon && self.child.try_wait().unwrap().is_none() {
             let pid = rustix::process::Pid::from_raw(self.child.id().try_into().unwrap()).unwrap();
-            match rustix::process::kill_process_group(pid, rustix::process::Signal::Term) {
+            match rustix::process::kill_process_group(pid, rustix::process::Signal::TERM) {
                 Ok(()) | Err(rustix::io::Errno::SRCH) => {}
                 Err(error) => panic!("owned daemon termination: {error}"),
             }
@@ -286,7 +286,7 @@ fn native_launch_host_delivery_and_navigation() {
         .is_none()
     {
         let pid = rustix::process::Pid::from_raw(child.id().try_into().unwrap()).unwrap();
-        rustix::process::kill_process_group(pid, rustix::process::Signal::Kill).unwrap();
+        rustix::process::kill_process_group(pid, rustix::process::Signal::KILL).unwrap();
         child.wait().unwrap();
         panic!("host client exceeded original five-second bound");
     }
