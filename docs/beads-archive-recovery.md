@@ -6,40 +6,46 @@ The selected Wrix Beads remote contained a 406,592,026-byte Dolt archive,
 This was a storage-layout problem, not a reason to rewrite issue history or
 weaken the publication guard.
 
-## Lossless Decomposition
+## Lossless, Bounded Compaction
 
-The archive's authenticated chunk index contained 217,543 chunk identities. Its
-metadata identified the 257 source tables that had been conjoined. Of these, 256
-remained available, containing 217,522 distinct chunks. The missing table's 21
-chunks were recovered byte-for-byte from a separately cloned and verified Dolt
-store. A new NBS table retained their original compressed records, lengths,
-hashes and uncompressed-size accounting; its content-addressed name was derived
-from its suffix index. The full resulting chunk identity set exactly matched the
-original archive.
+An initial decomposition retained all 217,543 archive chunk identities and
+passed Dolt clone/fsck. It recovered 21 chunks from a missing parent table and
+retained the original compressed records. However, expanding into hundreds of
+table files crossed Dolt's conjoin threshold: a later normal push generated
+another 407 MB archive. That layout was replaced, not accepted as the final
+repair.
 
-An offline copy replaced only the large archive's table-manifest entry with
-those original tables and the recovered table. Its database root was unchanged.
-A fresh Dolt clone and full `dolt fsck` succeeded, including all 9,934 commit
-objects. Every resulting file was below GitHub's 100 MiB limit. An initial GC
-trial was not used: GC still retained a large table, and pushing that trial
-re-created a 313 MB archive.
+The final offline compaction retained **all 218,044 chunk identities**
+referenced by the newer remote manifest, including unreachable chunks. A GC
+trial supplied most original Snappy records but omitted 276 unreachable chunks.
+Those records were recovered directly from the original archive, including their
+original CRC32C values; they were not discarded. Compressed records, chunk
+hashes and uncompressed-size accounting were preserved in thirteen NBS tables,
+each at most 33,554,371 bytes. A fresh Dolt clone and full `dolt fsck` passed,
+including all 9,948 commit objects and the retained unreachable data.
+
+Keeping the table count bounded avoids the immediate conjoin that defeated the
+first decomposition. The GitHub size guard remains unchanged; future store
+growth still requires ordinary storage maintenance rather than an exception.
 
 ## Concurrency and Recovery
 
 Native synchronization, Git synchronization and the private remote's existing
-writer lock were held in their normal order during final cutover. A first
-cutover correctly aborted when the remote manifest had advanced since the
-snapshot. The successful cutover retained the latest root
-`luurif1nm5gu2b2550uqlb7fr79ofvvm`, all newer table entries, and the complete
-original archive chunk set. It changed only table layout, not logical roots or
-SQL data. Lock inodes, running services, authorization and published Git history
-were not replaced or changed.
+writer lock were held in their normal order during cutover. An earlier attempt
+correctly aborted when the remote advanced during offline preparation. The final
+cutover preserved the latest root `dmj8g4u30a6fpm0os0b6dj5tmtd0m7a4` and its
+newer delta tables, leaving fifteen referenced tables. A fresh storage CAS token
+made readers refresh the changed table layout. Logical roots, SQL data, lock
+inodes, running services, authorization and published Git history were
+unchanged.
 
-The original snapshot and manifests remain under the local recovery directory
-`.loom/recovery/wx-49uod-dolt-archive/`; disposable packing trials and
-verification clones were removed. This recovery snapshot is not a second
+Old table representations were removed only after their complete chunk sets were
+proven redundant with the retained compacted data. Copy-on-write recovery
+snapshots and codec/proof records remain under the local
+`.loom/recovery/wx-49uod-dolt-archive/` recovery area. Disposable packing trials
+and verification clones are cleaned up; the retained snapshot is not a second
 writable database.
 
-Ordinary `wrix beads push` then succeeded, publishing Beads commit
-`0f1453935fe1ae3a11cebea0eafb914a49d0b8b2`. No force push, history deletion,
-GitHub-limit exception or service upgrade was used.
+Ordinary `wrix beads push` succeeded after cutover and again after a new Beads
+metadata update. No force push, database-history deletion, GitHub-limit
+exception or service upgrade was used.
