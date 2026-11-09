@@ -26,6 +26,13 @@ assert builtins.all (check: check.src != package.bin.src) checks;
 assert builtins.readFile manifest == builtins.readFile (source + "/Cargo.toml");
 assert package.cargoArtifacts.cargoToml == manifest;
 assert package.bin.cargoToml == manifest;
+assert builtins.all (check: !(check.drvAttrs ? cargoToml)) (
+  checks
+  ++ [
+    package.bin
+    package.cargoArtifacts
+  ]
+);
 assert builtins.deepSeq metadata true;
 pkgs.runCommand "cargo-canonical-metadata"
   {

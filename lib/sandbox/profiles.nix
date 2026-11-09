@@ -272,7 +272,10 @@ let
         };
       };
 
-      commonArgs = sourceArgs // {
+      crateMetadata = craneLib.crateNameFromCargoToml sourceArgs;
+      commonArgs = builtins.removeAttrs sourceArgs [ "cargoToml" ] // {
+        inherit (crateMetadata) pname version;
+        passthru.cargoToml = sourceArgs.cargoToml;
         cargoVendorDir = craneLib.vendorCargoDeps sourceArgs;
         inherit
           cargoExtraArgs
