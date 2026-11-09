@@ -15,7 +15,7 @@ let
     tryEval
     ;
   flake = getFlake "git+file://${toString root}";
-  inherit (flake.legacyPackages.${system}) lib ciChecks;
+  inherit (flake.legacyPackages.${system}) lib ciChecks verifyScripts;
   pkgs = flake.inputs.nixpkgs.legacyPackages.${system};
   inherit (pkgs.lib) hasInfix;
   linuxSystem = if pkgs.stdenv.hostPlatform.isDarwin then "aarch64-linux" else system;
@@ -44,13 +44,12 @@ let
     };
   };
   transitiveRegistry.package = [ { name = "signal-hook-registry"; } ];
-  verifiers = import ./default.nix {
-    inherit pkgs system;
-    focusBinary = lib.rustPackage.focusNotification;
-    hostCachePolicy = lib.rustPackage.hostCachePolicy;
-    runtimeEnvironmentTests = lib.rustPackage.cacheBackendTests;
-    linuxPkgs = imagePkgs;
-  };
+  nativeVerifiers =
+    scripts:
+    all (
+      target:
+      !(hasInfix "tmux-mcp." target) && target != "verify:profiles.rust-build-package-consumer-boundary"
+    ) (map (name: "verify:${name}") (attrNames scripts));
   sources = map (path: readFile (root + "/${path}")) [
     "lib/default.nix"
     "lib/mcp/default.nix"
@@ -102,8 +101,10 @@ assert all (
     "WRIX_MCP_TMUX_"
   ]
 ) sources;
-assert all (
-  target:
-  !(hasInfix "tmux-mcp." target) && target != "verify:profiles.rust-build-package-consumer-boundary"
-) verifiers.targets;
+assert nativeVerifiers verifyScripts;
+assert nativeVerifiers {
+  "tmux.native-only-surface" = throw "inventory must not force runtime scripts";
+};
+assert !(nativeVerifiers { "tmux-mcp.retired" = null; });
+assert !(nativeVerifiers { "profiles.rust-build-package-consumer-boundary" = null; });
 "PASS: native tmux remains; the retired MCP surface is absent and rejected"
