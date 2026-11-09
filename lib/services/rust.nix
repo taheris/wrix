@@ -33,6 +33,7 @@ let
       "crates/wrix-cache/tests" = ../../crates/wrix-cache/tests;
       "crates/wrix-cli/tests" = ../../crates/wrix-cli/tests;
       "crates/wrix-core/tests" = ../../crates/wrix-core/tests;
+      "crates/wrix-image-tools/tests" = ../../crates/wrix-image-tools/tests;
       "crates/wrix-notify/tests" = ../../crates/wrix-notify/tests;
       "crates/wrix-sandbox/tests" = ../../crates/wrix-sandbox/tests;
       "crates/wrix-service/tests" = ../../crates/wrix-service/tests;

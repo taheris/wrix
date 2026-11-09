@@ -338,6 +338,10 @@ let
         inherit (wrix) rustPackage;
         rustProfile = wrix.profiles.rust;
       };
+      rust-image-tool-fixtures = import ./services/image-tool-fixtures.nix {
+        inherit pkgs;
+        inherit (wrix) rustPackage;
+      };
       rust-source-fixtures = import ./services/rust-source.nix {
         inherit pkgs;
         inherit (wrix) rustPackage;
