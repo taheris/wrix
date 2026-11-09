@@ -338,6 +338,7 @@ let
         inherit (wrix) rustPackage;
         rustProfile = wrix.profiles.rust;
       };
+      host-hook-store-offline = import ./prek/host-hook-store-check.nix { inherit pkgs; };
       rust-image-tool-fixtures = import ./services/image-tool-fixtures.nix {
         inherit pkgs;
         inherit (wrix) rustPackage;

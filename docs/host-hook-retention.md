@@ -38,7 +38,13 @@ wrapper arguments and private HOME/XDG values, conflicting operator hooks, cache
 opt-out, ignored required settings, repository/environment precedence, and
 rejection of shared substitution/key trust even with validation disabled. These
 check the current host-publication-only contract rather than expecting host
-trust in the shared service. Their names begin with `host_publication_hook_`;
-the same system owner explicitly runs them through Nextest. The remaining shell
-controls compare fake Nix observations with real Nix and exercise stateful
-external image inspection/tagging.
+trust in the shared service. Each private test store is seeded with the declared
+Bash closure's exact NAR contents and original Nix registration, then verifies
+those paths. This keeps interpreter retention real without relying on a live
+host store database or network substitution inside the Nix build sandbox. The
+seed operation never loads registration into the host store.
+
+Their names begin with `host_publication_hook_`; the same system owner
+explicitly runs them through Nextest. The remaining shell controls compare fake
+Nix observations with real Nix and exercise stateful external image
+inspection/tagging.

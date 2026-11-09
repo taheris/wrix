@@ -8,6 +8,7 @@ struct Host {
     source: PathBuf,
     policy: PathBuf,
     store: PathBuf,
+    bash: PathBuf,
 }
 
 impl Host {
@@ -37,6 +38,14 @@ impl Host {
             ),
         )?;
         set_mode(&cli, 0o755)?;
+        let store_root = root.join("isolated-store");
+        let initializer = std::env::var_os("WRIX_TEST_HOST_HOOK_STORE_INIT")
+            .ok_or("native host-hook store initializer must be prepared")?;
+        let initialized = run_command(Command::new(initializer).arg(&store_root))?;
+        assert!(initialized.status.success(), "{}", initialized.stderr);
+        assert_eq!(initialized.stdout.lines().count(), 1);
+        let bash = PathBuf::from(initialized.stdout.trim());
+        assert!(bash.is_absolute() && bash.is_file());
         let store = root.join("hook-nix-store");
         fs::write(
             &store,
@@ -47,11 +56,7 @@ impl Host {
                         .to_str()
                         .ok_or("non-Unicode Nix store binary")?
                 ),
-                common::shell_single_quote(
-                    root.join("isolated-store")
-                        .to_str()
-                        .ok_or("non-Unicode store root")?
-                )
+                common::shell_single_quote(store_root.to_str().ok_or("non-Unicode store root")?)
             ),
         )?;
         set_mode(&store, 0o755)?;
@@ -60,6 +65,7 @@ impl Host {
             source,
             policy,
             store,
+            bash,
         })
     }
 
@@ -91,7 +97,7 @@ impl Host {
             .env("WRIX_SERVICE_ALLOW_TEMP_CACHE", "1")
             .env("WRIX_HOST_CACHE_POLICY_BIN", &self.policy)
             .env("WRIX_NIX_STORE_BIN", &self.store)
-            .env("WRIX_BASH_BIN", common::command_path("bash")?)
+            .env("WRIX_BASH_BIN", &self.bash)
             .env("WRIX_CACHE_HOOK_BIN", "/bin/true")
             .env("WRIX_CACHE_PUBLISH_BIN", "/bin/true")
             .env("WRIX_NIX_CACHE_REMINDER", "0")

@@ -22,6 +22,9 @@ let
       import ../../crates/wrix-service/src/lifecycle/drain/native/compiler.nix { inherit pkgs; }
     }/bin/sccache";
     WRIX_TEST_FIXTURE_RUNTIME = "${fixtureRuntime}/bin/wrix-native-fixtures";
+    WRIX_TEST_HOST_HOOK_STORE_INIT = "${
+      import ./host-hook-store.nix { inherit pkgs; }
+    }/bin/wrix-test-host-hook-store-init";
     WRIX_TEST_SQL_CLIENT = pkgs.writeShellScript "native-sql-wire-client" ''
       exec ${fixtureRuntime}/bin/wrix-native-fixtures sql-client "$@"
     '';
@@ -80,6 +83,10 @@ in
       {
         name = "fixture-runtime";
         path = environment.WRIX_TEST_FIXTURE_RUNTIME;
+      }
+      {
+        name = "host-hook-store-init";
+        path = environment.WRIX_TEST_HOST_HOOK_STORE_INIT;
       }
     ]
     ++ optionals (controller != null && serviceImage != null) [
