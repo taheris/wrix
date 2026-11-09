@@ -321,6 +321,10 @@ let
       ci-annotation-registration = import ./verify/ci-registry.nix { inherit pkgs ciApps; };
       devshell-cli-selection = devshellCliSelection;
       builder-vmnet-route = builderRouteTest;
+      cargo-canonical-metadata = import ./services/cargo-metadata.nix {
+        inherit pkgs;
+        rustProfile = wrix.profiles.rust;
+      };
       cargo-target-handoff = import ./services/cargo-target-handoff.nix {
         inherit pkgs;
         inherit (wrix) rustPackage;

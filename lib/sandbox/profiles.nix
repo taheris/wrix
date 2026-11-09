@@ -240,6 +240,7 @@ let
     {
       src,
       cargoLock,
+      cargoToml ? src + "/Cargo.toml",
       extraSrcs ? { },
       cargoArtifacts ? null,
       cargoExtraArgs ? "",
@@ -259,12 +260,20 @@ let
             filter = srcFilter;
           };
 
-      commonArgs = {
+      sourceArgs = {
         src = cleanedSrc;
+        cargoToml = builtins.path {
+          path = cargoToml;
+          name = "Cargo.toml";
+        };
         cargoLock = builtins.path {
           path = cargoLock;
           name = "Cargo.lock";
         };
+      };
+
+      commonArgs = sourceArgs // {
+        cargoVendorDir = craneLib.vendorCargoDeps sourceArgs;
         inherit
           cargoExtraArgs
           buildInputs
