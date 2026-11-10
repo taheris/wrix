@@ -308,12 +308,20 @@ impl Server {
     }
 
     pub fn corrupt_key(&self, namespace: &str) {
-        let status = Command::new("python3")
-            .args(["-c", "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute('update cache set keypair=? where name=?', ('invalid-key',sys.argv[2])); c.commit()"])
-            .arg(&self.database)
-            .arg(namespace)
-            .status().unwrap();
-        assert!(status.success());
+        let mut connection = rusqlite::Connection::open(&self.database).unwrap();
+        connection.busy_timeout(Duration::from_secs(5)).unwrap();
+        let transaction = connection.transaction().unwrap();
+        let changed = transaction
+            .execute(
+                "update cache set keypair=? where name=?",
+                rusqlite::params!["invalid-key", namespace],
+            )
+            .unwrap();
+        assert_eq!(
+            changed, 1,
+            "fixture must corrupt exactly the selected namespace"
+        );
+        transaction.commit().unwrap();
     }
 
     pub async fn get(&self, resource: &str) -> reqwest::Response {

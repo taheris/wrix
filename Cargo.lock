@@ -3550,6 +3550,7 @@ dependencies = [
  "futures",
  "libc",
  "reqwest",
+ "rusqlite",
  "rustix",
  "serde",
  "serde_json",

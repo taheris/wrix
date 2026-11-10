@@ -25,6 +25,7 @@ wrix-core = { workspace = true }
 wrix-state = { workspace = true }
 
 [dev-dependencies]
+rusqlite = { workspace = true }
 toml = { workspace = true }
 
 [[bin]]
