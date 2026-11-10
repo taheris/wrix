@@ -607,19 +607,20 @@ fn native_lease_lifecycle_and_navigation() {
     assert!(registration(&f.directory, &target, f.platform).is_none());
 }
 
-#[test]
-#[ignore = "subprocess fixture explicitly executed by native_lease_process_exit_invalidates_route"]
-fn lease_owner_process() {
-    use std::{io::Write, time::Duration};
+fn lease_owner_process() -> ! {
+    use std::{io::Write, os::fd::AsFd, time::Duration};
 
-    let path = std::env::var_os("WRIX_TEST_NOTIFY_LEASE").unwrap();
-    let lease = fs::File::create(path).unwrap();
+    let lease = fs::File::from(std::io::stdin().as_fd().try_clone_to_owned().unwrap());
+    assert!(
+        lease.metadata().unwrap().is_file(),
+        "lease subprocess requires a regular inherited file"
+    );
     lease.lock().unwrap();
     let mut output = std::io::stdout().lock();
     output.write_all(b"\nwrix-notify-lease-ready\n").unwrap();
     output.flush().unwrap();
     std::thread::sleep(Duration::from_secs(60));
-    drop(lease);
+    panic!("lease subprocess unexpectedly completed without parent interruption");
 }
 
 #[test]
@@ -638,6 +639,9 @@ fn native_lease_process_exit_invalidates_route() {
             self.0.wait().unwrap();
         }
     }
+    if std::env::var_os("WRIX_TEST_NOTIFY_LEASE_OWNER").is_some() {
+        lease_owner_process();
+    }
     let f = Fixture::linux();
     let target = Fixture::target("native-exited");
     let path = f.register(target.as_str(), 1);
@@ -649,12 +653,12 @@ fn native_lease_process_exit_invalidates_route() {
         Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
-                "lease_owner_process",
-                "--ignored",
+                "native_lease_process_exit_invalidates_route",
                 "--nocapture",
                 "--quiet",
             ])
-            .env("WRIX_TEST_NOTIFY_LEASE", lease)
+            .env("WRIX_TEST_NOTIFY_LEASE_OWNER", "1")
+            .stdin(Stdio::from(fs::File::create(lease).unwrap()))
             .stdout(Stdio::piped())
             .spawn()
             .unwrap(),
@@ -675,4 +679,27 @@ fn native_lease_process_exit_invalidates_route() {
     assert!(registration(&f.directory, &target, f.platform).is_none());
     f.focus();
     assert_eq!(f.pending().len(), 0);
+}
+
+#[test]
+fn lease_fixture_rejects_nonfile_standard_input() {
+    use std::process::{Command, Stdio};
+
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "native_lease_process_exit_invalidates_route",
+            "--nocapture",
+            "--quiet",
+        ])
+        .env("WRIX_TEST_NOTIFY_LEASE_OWNER", "1")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(101));
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("lease subprocess requires a regular inherited file")
+    );
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("wrix-notify-lease-ready"));
 }
