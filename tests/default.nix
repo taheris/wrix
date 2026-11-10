@@ -336,6 +336,10 @@ let
         inherit pkgs;
         rustProfile = wrix.profiles.rust;
       };
+      cargo-dummy-source-collection = import ./services/cargo-dummy-references.nix {
+        inherit pkgs;
+        rustProfile = wrix.profiles.rust;
+      };
       cargo-target-handoff = import ./services/cargo-target-handoff.nix {
         inherit pkgs;
         inherit (wrix) rustPackage;
