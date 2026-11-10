@@ -108,6 +108,7 @@ let
       }) referenceCases
     )
   );
+  configurationRootCheck = import ./configuration-roots-check.nix { inherit pkgs; };
   archive = import (resources.sandbox.path + "/image.nix") {
     pkgs = linuxPkgs;
     hostPkgs = pkgs;
@@ -180,9 +181,37 @@ let
           system = "${pkgs.stdenv.hostPlatform.system}";
         }
       ' > cold.json
-      ${pkgs.lib.getBin pkgs.python3}/bin/python3 -c 'import json; assert json.load(open("cold.json")) is True'
+      ${pkgs.jq}/bin/jq -se 'length == 1 and .[0] == true' cold.json >/dev/null
       test -e ${import ./image-tools.nix { inherit pkgs; }}
-      ${pkgs.lib.getBin pkgs.python3}/bin/python3 ${./configuration-roots-native.py} ${referenceResults}
+      checker=${configurationRootCheck}/bin/check-configuration-roots
+      "$checker" ${referenceResults}
+      ${pkgs.jq}/bin/jq 'map(if .root != null then .expected = [] else . end)' ${referenceResults} > wrong-targets.json
+      if "$checker" wrong-targets.json; then
+        echo 'configuration root checker accepted corrupted expectations' >&2
+        exit 1
+      fi
+      mkdir -p "$TMPDIR/not-a-link/share/wrix/image-inputs"
+      touch "$TMPDIR/not-a-link/share/wrix/image-inputs/regular-file"
+      ${pkgs.jq}/bin/jq -n --arg root "$TMPDIR/not-a-link" '[{root:$root,expected:[]}]' > nonlink.json
+      if "$checker" nonlink.json; then
+        echo 'configuration root checker accepted a non-symlink entry' >&2
+        exit 1
+      fi
+      printf '%s\n' '[{"root":null,"expected":["unexpected"]}]' > inconsistent.json
+      if "$checker" inconsistent.json; then
+        echo 'configuration root checker accepted inconsistent null roots' >&2
+        exit 1
+      fi
+      printf '{' > malformed.json
+      if "$checker" malformed.json; then
+        echo 'configuration root checker accepted malformed JSON' >&2
+        exit 1
+      fi
+      printf '%s\n' '[] []' > multiple.json
+      if "$checker" multiple.json; then
+        echo 'configuration root checker accepted multiple JSON documents' >&2
+        exit 1
+      fi
       touch "$out"
     '';
   artifacts =
