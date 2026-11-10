@@ -111,10 +111,13 @@ fixture, and the existing Linux-only native attention boundary. Unrelated
 package integration suites remain in the unchanged canonical workspace Nextest
 baseline; they are not rebuilt merely to iterate on notification acceptance.
 Development uses the owning checks; complete workspace verification remains a
-landing obligation. The canonical workspace Nextest producer is also exported as
-a flake check, so the unchanged `nix flake check` landing hook retains that
-complete baseline. Its CI and flake-check names share one immutable producer,
-not two executions.
+landing obligation. The canonical workspace Nextest producer remains
+`legacyPackages.<system>.ciChecks.wrix-rust-nextest`; the scoped launcher
+producer is `legacyPackages.<system>.ciChecks.notify-launcher-tests`. Both stay
+in the existing heavy CI lane, not ordinary flake checks. The default CI
+entrypoint retains the complete baseline, and targeted attention acceptance
+requests only the scoped launcher producer. Neither changes the normal hook
+commands or the CI-only heavy-check policy.
 
 Notification and verifier development tools opt into package-scoped sources,
 retaining canonical workspace manifests and lock bytes plus the complete

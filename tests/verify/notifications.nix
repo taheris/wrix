@@ -74,7 +74,7 @@ in
     export PATH="${notifyPath}:$PATH"
     nix build --no-link --no-warn-dirty \
       "$(repo_root)#checks.${system}.notify-rust-tests" \
-      "$(repo_root)#checks.${system}.notify-launcher-tests" \
+      "$(repo_root)#legacyPackages.${system}.ciChecks.notify-launcher-tests" \
       "$(repo_root)#checks.${system}.notify-desktop-fixture"
     ${optionalString pkgs.stdenv.hostPlatform.isLinux ''
       nix build --no-link --no-warn-dirty "$(repo_root)#checks.${system}.notify-native-attention"
