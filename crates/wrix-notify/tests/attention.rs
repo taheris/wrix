@@ -608,6 +608,21 @@ fn native_lease_lifecycle_and_navigation() {
 }
 
 #[test]
+#[ignore = "subprocess fixture explicitly executed by native_lease_process_exit_invalidates_route"]
+fn lease_owner_process() {
+    use std::{io::Write, time::Duration};
+
+    let path = std::env::var_os("WRIX_TEST_NOTIFY_LEASE").unwrap();
+    let lease = fs::File::create(path).unwrap();
+    lease.lock().unwrap();
+    let mut output = std::io::stdout().lock();
+    output.write_all(b"\nwrix-notify-lease-ready\n").unwrap();
+    output.flush().unwrap();
+    std::thread::sleep(Duration::from_secs(60));
+    drop(lease);
+}
+
+#[test]
 fn native_lease_process_exit_invalidates_route() {
     use std::{
         io::{BufRead, BufReader},
@@ -630,14 +645,30 @@ fn native_lease_process_exit_invalidates_route() {
         value["leased"] = json!(true);
     });
     let lease = path.with_extension("lease");
-    let mut owner = Owner(Command::new("python3").args(["-c",
-        "import fcntl,sys,time; f=open(sys.argv[1], 'wb'); fcntl.flock(f, fcntl.LOCK_EX); print('ready', flush=True); time.sleep(60)"])
-        .arg(lease).stdout(Stdio::piped()).spawn().unwrap());
+    let mut owner = Owner(
+        Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "lease_owner_process",
+                "--ignored",
+                "--nocapture",
+                "--quiet",
+            ])
+            .env("WRIX_TEST_NOTIFY_LEASE", lease)
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let mut output = BufReader::new(owner.0.stdout.take().unwrap());
     let mut ready = String::new();
-    BufReader::new(owner.0.stdout.take().unwrap())
-        .read_line(&mut ready)
-        .unwrap();
-    assert_eq!(ready.trim(), "ready");
+    for _ in 0..16 {
+        ready.clear();
+        assert_ne!(output.read_line(&mut ready).unwrap(), 0);
+        if ready.trim() == "wrix-notify-lease-ready" {
+            break;
+        }
+    }
+    assert_eq!(ready.trim(), "wrix-notify-lease-ready");
     assert!(registration(&f.directory, &target, f.platform).is_some());
     f.enqueue(target.as_str());
     drop(owner);
