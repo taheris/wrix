@@ -81,7 +81,7 @@ fn missing_daemon_fails_instead_of_claiming_readiness() {
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8(output.stderr).unwrap().contains("Exec"));
-    assert!(output.stdout.is_empty());
+    assert_eq!(output.stdout, [] as [u8; 0]);
 }
 
 #[test]
@@ -102,5 +102,5 @@ fn existing_group_leader_cannot_silently_skip_session_isolation() {
             .unwrap()
             .contains("Session")
     );
-    assert!(output.stdout.is_empty());
+    assert_eq!(output.stdout, [] as [u8; 0]);
 }
