@@ -39,10 +39,7 @@ let
       "wrix-notify"
       "--all-targets"
     ];
-    nativeCheckInputs = [
-      pkgs.tmux
-    ]
-    ++ pkgs.lib.optional pkgs.stdenv.hostPlatform.isLinux pkgs.python3;
+    nativeCheckInputs = [ pkgs.tmux ];
     installPhase = ''
       runHook preInstall
       mkdir -p "$out"
