@@ -94,17 +94,8 @@ async fn private_controller_process_is_singleton_and_resumes_after_clean_stop() 
         }
         let mut competitor = start();
         assert!(!competitor.0.wait().unwrap().success());
-        assert!(
-            std::process::Command::new("python3")
-                .args([
-                    "-c",
-                    "import os,signal,sys; os.kill(int(sys.argv[1]), signal.SIGTERM)",
-                    &owner.0.id().to_string()
-                ])
-                .status()
-                .unwrap()
-                .success()
-        );
+        let pid = rustix::process::Pid::from_raw(i32::try_from(owner.0.id()).unwrap()).unwrap();
+        rustix::process::kill_process(pid, rustix::process::Signal::TERM).unwrap();
         assert!(owner.0.wait().unwrap().success());
         assert!(!root.join("authority/control.sock").exists());
     }
