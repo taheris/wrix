@@ -13,27 +13,9 @@ in
 pkgs.rustPlatform.buildRustPackage {
   pname = package;
   inherit (workspace.workspace.package) version;
-  src = lib.fileset.toSource {
+  src = import ./rust-tool-source.nix {
+    inherit pkgs package extraSources;
     root = ../..;
-    fileset = lib.fileset.unions (
-      [
-        ../../Cargo.toml
-        ../../Cargo.lock
-        ../../clippy.toml
-        # Other members retain their real manifests and target entry points for
-        # Cargo metadata, without adding unrelated implementation source inputs.
-        (lib.fileset.fileFilter (
-          file:
-          builtins.elem file.name [
-            "Cargo.toml"
-            "lib.rs"
-            "main.rs"
-          ]
-        ) ../../crates)
-        (../../crates + "/${package}")
-      ]
-      ++ extraSources
-    );
   };
   cargoLock = {
     lockFile = ../../Cargo.lock;

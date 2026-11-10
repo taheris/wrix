@@ -26,6 +26,28 @@ let
           export RUSTFLAGS="''${RUSTFLAGS-} --remap-path-prefix=$NIX_BUILD_TOP=/build"
         '';
       });
+  rustTests = harness.overrideAttrs {
+    pname = "notify-rust-tests";
+    cargoBuildFlags = [
+      "--package"
+      "wrix-notify"
+      "--all-targets"
+    ];
+    cargoTestFlags = [
+      "--package"
+      "wrix-notify"
+      "--all-targets"
+    ];
+    nativeCheckInputs = [
+      pkgs.python3
+      pkgs.tmux
+    ];
+    installPhase = ''
+      runHook preInstall
+      mkdir -p "$out"
+      runHook postInstall
+    '';
+  };
   desktop = harness.overrideAttrs {
     pname = "notify-desktop-fixture";
     cargoBuildFlags = [
@@ -88,5 +110,5 @@ let
     };
 in
 {
-  inherit desktop attention;
+  inherit desktop attention rustTests;
 }

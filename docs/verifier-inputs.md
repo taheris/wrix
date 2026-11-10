@@ -103,6 +103,25 @@ additional inspection disk by header/config size, not layer payload size; it
 does not eliminate the original Darwin image archives or promise zero image
 builds. Real CLI/service image checks and opaque always-run targets remain.
 
+## Targeted notification iteration
+
+The attention owner runs the complete `wrix-notify` Rust suite, the CLI library
+and `native_notify` integration target, the packaged desktop fixture, and the
+existing Linux-only native attention boundary. Unrelated package integration
+suites remain in the unchanged canonical workspace Nextest baseline; they are
+not rebuilt merely to iterate on notification acceptance. Development uses the
+owning checks; complete workspace verification remains a landing obligation.
+
+Standalone Rust tools retain canonical workspace manifests and lock bytes plus
+the complete selected crate and declared external resources. Unused members have
+empty library entry points for Cargo metadata, not copied implementation files.
+Local Cargo dependencies are rejected rather than silently compiled from those
+scaffolds. `checks.<system>.rust-tool-source` executes Cargo metadata, compares
+all selected files and canonical manifests, rejects leaked unused sources, and
+exercises the local-dependency refusal. Changing this projection changes tool
+producer identities; it is not a claim of unchanged image derivations or zero
+cold landing cost.
+
 ## Rust check storage
 
 Rust lint and test derivations, including the consumed Loom contract checks,

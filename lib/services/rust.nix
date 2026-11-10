@@ -101,6 +101,26 @@ let
       inherit (workspace) cargoArtifacts;
     }
   );
+  notificationWorkspace = rustProfile.buildPackage (
+    workspaceArgs
+    // {
+      inherit (workspace) cargoArtifacts;
+      cargoExtraArgs = "--package wrix-cli --lib --test native_notify";
+      extraSrcs =
+        builtins.removeAttrs workspaceArgs.extraSrcs (
+          [
+            "tests"
+            ".config/nextest.toml"
+            "loom.toml"
+          ]
+          ++ map (name: "crates/${name}/tests") (builtins.attrNames (builtins.readDir ../../crates))
+          ++ builtins.attrNames exampleSources
+        )
+        // {
+          "crates/wrix-cli/tests/native_notify.rs" = ../../crates/wrix-cli/tests/native_notify.rs;
+        };
+    }
+  );
   runtimeWorkspace = rustProfile.buildPackage (
     workspaceArgs
     // {
@@ -386,6 +406,10 @@ in
     }
     // fixtures.environment
   );
+
+  notificationNextest = notificationWorkspace.nextest.overrideAttrs (old: {
+    nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ pkgs.tmux ];
+  });
 
   cacheBackendTests = compileOnlyWorkspace.nextest.overrideAttrs (old: {
     # Crane restores dependencies in postPatch. Select the immutable target
