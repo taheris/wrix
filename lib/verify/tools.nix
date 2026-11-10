@@ -2,6 +2,7 @@
 import ../util/rust-tool.nix {
   inherit pkgs;
   package = "wrix-verify-tools";
+  scopedSource = true;
   description = "Native Wrix verifier policy and registry audits";
   nativeCheckInputs = [
     pkgs.git

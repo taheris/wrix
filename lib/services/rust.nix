@@ -110,13 +110,14 @@ let
         builtins.removeAttrs workspaceArgs.extraSrcs (
           [
             "tests"
-            ".config/nextest.toml"
             "loom.toml"
           ]
           ++ map (name: "crates/${name}/tests") (builtins.attrNames (builtins.readDir ../../crates))
           ++ builtins.attrNames exampleSources
         )
         // {
+          "tests/prepare-isolated-host-roots.sh" = ../../tests/prepare-isolated-host-roots.sh;
+          "tests/prepare-native-fixtures.sh" = ../../tests/prepare-native-fixtures.sh;
           "crates/wrix-cli/tests/native_notify.rs" = ../../crates/wrix-cli/tests/native_notify.rs;
           "crates/wrix-cli/tests/workspace/isolation.rs" = ../../crates/wrix-cli/tests/workspace/isolation.rs;
           "crates/wrix-cli/tests/fixtures/workspace-chroot.sh" =
@@ -126,6 +127,19 @@ let
         };
     }
   );
+  notificationMetadata = import ../util/rust-target-metadata.nix {
+    inherit pkgs;
+    root = ../..;
+    members = builtins.attrNames (builtins.readDir ../../crates);
+    includeProduction = false;
+  };
+  notificationSource = pkgs.runCommand "wrix-notification-source" { } ''
+    set -euo pipefail
+    cp -r ${notificationMetadata}/. "$out"
+    chmod -R u+w "$out"
+    cp -r ${notificationWorkspace.nextest.src}/. "$out"
+    chmod -R u+w "$out"
+  '';
   runtimeWorkspace = rustProfile.buildPackage (
     workspaceArgs
     // {
@@ -413,6 +427,7 @@ in
   );
 
   notificationNextest = notificationWorkspace.nextest.overrideAttrs (old: {
+    src = notificationSource;
     nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ pkgs.tmux ];
   });
 

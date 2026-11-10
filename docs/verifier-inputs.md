@@ -113,15 +113,21 @@ baseline; they are not rebuilt merely to iterate on notification acceptance.
 Development uses the owning checks; complete workspace verification remains a
 landing obligation.
 
-Standalone Rust tools retain canonical workspace manifests and lock bytes plus
-the complete selected crate and declared external resources. Unused members have
-empty library entry points for Cargo metadata, not copied implementation files.
-Local Cargo dependencies are rejected rather than silently compiled from those
-scaffolds. `checks.<system>.rust-tool-source` executes Cargo metadata, compares
-all selected files and canonical manifests, rejects leaked unused sources, and
-exercises the local-dependency refusal. Changing this projection changes tool
-producer identities; it is not a claim of unchanged image derivations or zero
-cold landing cost.
+Notification and verifier development tools opt into package-scoped sources,
+retaining canonical workspace manifests and lock bytes plus the complete
+selected crate and declared external resources. Unselected targets have empty
+entry points for Cargo metadata, never compiled substitutes. The regression
+compares the complete actual target inventory with the canonical workspace.
+Notification launcher checks retain the original Nextest policy and
+host-isolation setup; uncompiled target scaffolds preserve that policy's
+discovery names. Local Cargo dependencies are rejected rather than silently
+compiled from those scaffolds. `checks.<system>.rust-tool-source` executes Cargo
+metadata, compares all selected files and canonical manifests, rejects leaked
+unused sources, and exercises the local-dependency refusal. Production
+image/runtime helpers retain their existing source lane, avoiding unrelated
+image invalidation from a development-harness change. Scoped development tools
+have new producer identities; this is not a claim of zero cold setup or
+whole-push savings.
 
 ## Rust check storage
 

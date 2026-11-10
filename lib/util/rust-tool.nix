@@ -5,6 +5,7 @@
   description,
   extraSources ? [ ],
   nativeCheckInputs ? [ ],
+  scopedSource ? false,
 }:
 let
   inherit (pkgs) lib;
@@ -13,10 +14,33 @@ in
 pkgs.rustPlatform.buildRustPackage {
   pname = package;
   inherit (workspace.workspace.package) version;
-  src = import ./rust-tool-source.nix {
-    inherit pkgs package extraSources;
-    root = ../..;
-  };
+  src =
+    if scopedSource then
+      import ./rust-tool-source.nix {
+        inherit pkgs package extraSources;
+        root = ../..;
+      }
+    else
+      lib.fileset.toSource {
+        root = ../..;
+        fileset = lib.fileset.unions (
+          [
+            ../../Cargo.toml
+            ../../Cargo.lock
+            ../../clippy.toml
+            (lib.fileset.fileFilter (
+              file:
+              builtins.elem file.name [
+                "Cargo.toml"
+                "lib.rs"
+                "main.rs"
+              ]
+            ) ../../crates)
+            (../../crates + "/${package}")
+          ]
+          ++ extraSources
+        );
+      };
   cargoLock = {
     lockFile = ../../Cargo.lock;
     outputHashes = {

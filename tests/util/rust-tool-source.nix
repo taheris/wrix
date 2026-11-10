@@ -25,7 +25,14 @@ pkgs.runCommand "rust-tool-source"
   ''
     set -euo pipefail
     export HOME="$TMPDIR/home"
-    mkdir -p "$HOME"
+    mkdir -p "$HOME" "$TMPDIR/original"
+    cp ${../../Cargo.toml} "$TMPDIR/original/Cargo.toml"
+    cp ${../../Cargo.lock} "$TMPDIR/original/Cargo.lock"
+    cp -r ${../../crates} "$TMPDIR/original/crates"
+    cargo metadata --offline --locked --no-deps --format-version 1 \
+      --manifest-path "$TMPDIR/original/Cargo.toml" > "$TMPDIR/original.json"
+    projection='.packages | map({name, targets: [.targets[] | {name, kind}] | sort_by(.name)}) | sort_by(.name)'
+    jq -S "$projection" "$TMPDIR/original.json" > "$TMPDIR/expected-targets.json"
     for package in wrix-notify wrix-image-tools wrix-verify-tools wrix-runtime-env; do
       case "$package" in
         wrix-notify) source=${source "wrix-notify"} ;;
@@ -36,13 +43,19 @@ pkgs.runCommand "rust-tool-source"
       cargo metadata --offline --locked --no-deps --format-version 1 \
         --manifest-path "$source/Cargo.toml" > "$TMPDIR/metadata.json"
       jq -e --arg package "$package" '.packages | any(.name == $package)' "$TMPDIR/metadata.json"
+      jq -S "$projection" "$TMPDIR/metadata.json" > "$TMPDIR/actual-targets.json"
+      cmp "$TMPDIR/expected-targets.json" "$TMPDIR/actual-targets.json"
       diff -r "${../../crates}/$package" "$source/crates/$package"
       for member in "$source"/crates/*; do
         name="$(basename "$member")"
         cmp "${../../crates}/$name/Cargo.toml" "$member/Cargo.toml"
         if [[ "$name" != "$package" ]]; then
-          test ! -s "$member/src/lib.rs"
-          find "$member" -type f ! -name Cargo.toml ! -path '*/src/lib.rs' > "$TMPDIR/unexpected"
+          find "$member" -type f ! -name Cargo.toml -size +0c > "$TMPDIR/implementations"
+          if [[ -s "$TMPDIR/implementations" ]]; then
+            printf 'Unused member implementation leaked: %s\n' "$member" >&2
+            exit 1
+          fi
+          find "$member" -type f ! -name Cargo.toml ! -name '*.rs' > "$TMPDIR/unexpected"
           test ! -s "$TMPDIR/unexpected"
         fi
       done

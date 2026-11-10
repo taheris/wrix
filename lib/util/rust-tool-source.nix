@@ -6,7 +6,6 @@
   extraSources ? [ ],
 }:
 let
-  inherit (pkgs.lib) concatMapStringsSep escapeShellArg;
   workspace = builtins.fromTOML (builtins.readFile (root + "/Cargo.toml"));
   manifest = builtins.fromTOML (builtins.readFile (root + "/crates/${package}/Cargo.toml"));
   dependencyTables = value: [
@@ -27,6 +26,7 @@ let
   members = builtins.filter (name: name != package) (
     builtins.attrNames (builtins.readDir (root + "/crates"))
   );
+  metadata = import ./rust-target-metadata.nix { inherit pkgs root members; };
   source = pkgs.lib.fileset.toSource {
     inherit root;
     fileset = pkgs.lib.fileset.unions (
@@ -47,8 +47,6 @@ pkgs.runCommand "${package}-source" { } ''
   set -euo pipefail
   cp -r ${source}/. "$out"
   chmod -R u+w "$out"
-  ${concatMapStringsSep "\n" (name: ''
-    mkdir -p "$out"/${escapeShellArg "crates/${name}/src"}
-    touch "$out"/${escapeShellArg "crates/${name}/src/lib.rs"}
-  '') members}
+  cp -r ${metadata}/. "$out"
+  chmod -R u+w "$out"
 ''

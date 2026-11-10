@@ -17,6 +17,7 @@ let
     (import ../../lib/util/rust-tool.nix {
       inherit pkgs;
       package = "wrix-notify";
+      scopedSource = true;
       description = "Native packaged attention acceptance";
     }).overrideAttrs
       (old: {
