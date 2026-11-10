@@ -86,6 +86,7 @@ let
 in
 {
   inherit session;
+  tmux = import ../notify/tmux.nix { inherit pkgs; };
   client = import ../../lib/notify/client.nix {
     inherit pkgs;
     # Host-side tests always provide an explicit TCP endpoint. Fail visibly if

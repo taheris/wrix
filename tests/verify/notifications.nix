@@ -7,6 +7,7 @@
 
 let
   inherit (pkgs.lib)
+    elem
     escapeShellArg
     makeBinPath
     optionalString
@@ -26,7 +27,6 @@ let
   notifyPath = makeBinPath (
     [
       fixture.client
-      fixture.session
       (import ../../lib/notify/client.nix {
         inherit pkgs;
         host = true;
@@ -37,7 +37,6 @@ let
         binary = focusBinary;
       })
       pkgs.netcat
-      pkgs.python3
       pkgs.socat
       pkgs.tmux
     ]
@@ -49,10 +48,28 @@ let
     ]
   );
 
-  notifyTest = function: ''
-    export PATH="${notifyPath}:$PATH"
-    run_repo_script ${escapeShellArg "tests/standalone/notify-test.sh"} ${escapeShellArg function}
-  '';
+  daemonPath = "${fixture.session}/bin:${notifyPath}";
+  notifyTest =
+    function:
+    let
+      path =
+        if
+          elem function [
+            "test_container_transport_darwin"
+            "test_container_transport_linux"
+            "test_daemon_dispatch_latency"
+            "test_focus_override"
+            "test_verbose_logging"
+          ]
+        then
+          daemonPath
+        else
+          notifyPath;
+    in
+    ''
+      export PATH="${path}:$PATH"
+      run_repo_script ${escapeShellArg "tests/standalone/notify-test.sh"} ${escapeShellArg function}
+    '';
 
   nixEval = target: ''
     local root
@@ -88,7 +105,7 @@ in
   '';
 
   "notifications.focus-target-registration".script = ''
-    export PATH="${notifyPath}:$PATH"
+    export PATH="${fixture.tmux}/bin:${daemonPath}:$PATH"
     run_repo_script_with_wrix "tests/standalone/notify-test.sh" "test_focus_target_registration"
     run_repo_script "tests/standalone/notify-test.sh" "test_tmux_target_focus"
   '';
@@ -100,6 +117,7 @@ in
 
   "notifications.pi-focus-routing".script = ''
     ${piTestEnv}
+    export PATH="${fixture.session}/bin:$PATH"
     run_repo_script_with_wrix "tests/standalone/notify-test.sh" "test_pi_focus_routing"
   '';
 

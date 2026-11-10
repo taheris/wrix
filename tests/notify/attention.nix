@@ -109,5 +109,5 @@ let
 in
 {
   inherit desktop attention rustTests;
-  inherit (fixture) session;
+  inherit (fixture) session tmux;
 }

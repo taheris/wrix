@@ -44,6 +44,8 @@ fn terminal_proxy() -> ! {
         .unwrap();
     let request: [String; 2] = serde_json::from_reader((&mut control).take(4097)).unwrap();
     let pty = nix::pty::openpty(None, None).unwrap();
+    rustix::io::fcntl_setfd(&pty.master, rustix::io::FdFlags::CLOEXEC).unwrap();
+    rustix::io::fcntl_setfd(&pty.slave, rustix::io::FdFlags::CLOEXEC).unwrap();
     rustix::fs::fcntl_setfl(&pty.master, rustix::fs::OFlags::NONBLOCK).unwrap();
     let mut master = fs::File::from(pty.master);
     let slave = fs::File::from(pty.slave);

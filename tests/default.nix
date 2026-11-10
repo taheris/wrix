@@ -326,6 +326,7 @@ let
       notify-desktop-fixture = notificationAttention.desktop;
       notify-rust-tests = notificationAttention.rustTests;
       notify-session-fixture = notificationAttention.session;
+      notify-tmux-fixture = notificationAttention.tmux;
       rust-tool-source = import ./util/rust-tool-source.nix { inherit pkgs; };
       packaged-git-runtime = import ./prek/git-runtime.nix { inherit pkgs; };
       celler-consumer-runtime = import ./services/celler-runtime.nix { inherit pkgs wrix; };
