@@ -55,3 +55,44 @@ Upstream six-case Python pipe regressions passed before their replacement.
 This does not establish full cold OCI reuse, physical allocation savings, or
 production/platform acceptance. Those retain their independent emitted-artifact
 and runtime owners.
+
+## Bounded store-key observations
+
+A two-variant audit of source `6c09b60b` used the shipping image factory with
+names `wrix-key-audit-a` and `wrix-key-audit-b`, tag `latest`, `maxLayers = 8`,
+and distinct `wrix.audit.variant` labels. Both used the same
+`writeTextDir "payload" "bounded canonical store key audit\n"` content. The
+audit compared every store blob and `layers.json`, then inspected both real
+Docker archives with Skopeo to verify their distinct labels.
+
+The store-layer producers had different derivation identities but emitted the
+same 10,240-byte tar blob, SHA-256
+`fe021717a5242ce5c79501e17dd7db387013ba3c298bb9583d12915b098a809b`. This
+identifies a bounded store-key reuse opportunity; it does not measure production
+image or planner costs.
+
+- Darwin's two blob paths shared one device/inode with link count three, so
+  those paths did not allocate duplicate file contents.
+- On the approved Linux builder, the two paths had different inodes on device
+  65056, link count one each, and 24 allocated 512-byte blocks each. Read-only
+  FIEMAP inspection reported separate, non-overlapping three-block extents with
+  4,096-byte blocks. Thus this pair occupied 24 KiB of distinct guest-store data
+  extents for identical contents. This is not an APFS host-allocation or
+  whole-image savings measurement.
+
+The original Darwin selected setup realized 17 producers in 16.96 seconds; its
+exact warm invocation took 1.56 seconds. Linux's initial dry run selected a
+22-producer graph, including tool setup, but its archive consumer failed because
+Skopeo defaulted to an unavailable sandbox `/var/tmp`. Passing the existing
+build's `TMPDIR` through Skopeo's `--tmpdir` option retained the real consumer
+and passed in 3.74 seconds, followed by an exact warm invocation in 2.03
+seconds. The successful Linux invocation reused the preceding setup: neither
+timing is a cold whole-image baseline, and the failed setup's 27.12 seconds is
+not a passing performance result.
+
+The extent inspection used `stat -c '%d %i %h %s %b %B'`, `stat -f`, and
+`filefrag -v` against the actual two immutable store blobs; it did not optimize
+or modify the store. Broader planner-key canonicalization, the historical
+original/native comparison, whole-push cold/warm costs, and host-unique physical
+allocation remain unmeasured by this fixture. No production cache-key change
+follows from this small audit alone.
