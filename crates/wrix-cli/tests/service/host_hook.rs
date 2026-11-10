@@ -41,10 +41,10 @@ impl Host {
         let store_root = root.join("isolated-store");
         let initializer = std::env::var_os("WRIX_TEST_HOST_HOOK_STORE_INIT")
             .ok_or("native host-hook store initializer must be prepared")?;
-        let initialized = run_command(Command::new(initializer).arg(&store_root))?;
-        assert!(initialized.status.success(), "{}", initialized.stderr);
-        assert_eq!(initialized.stdout.lines().count(), 1);
-        let bash = PathBuf::from(initialized.stdout.trim());
+        let prepared = run_command(Command::new(initializer).arg(&store_root))?;
+        assert!(prepared.status.success(), "{}", prepared.stderr);
+        assert_eq!(prepared.stdout.lines().count(), 1);
+        let bash = PathBuf::from(prepared.stdout.trim());
         assert!(bash.is_absolute() && bash.is_file());
         let store = root.join("hook-nix-store");
         fs::write(
