@@ -40,9 +40,9 @@ let
       "--all-targets"
     ];
     nativeCheckInputs = [
-      pkgs.python3
       pkgs.tmux
-    ];
+    ]
+    ++ pkgs.lib.optional pkgs.stdenv.hostPlatform.isLinux pkgs.python3;
     installPhase = ''
       runHook preInstall
       mkdir -p "$out"

@@ -326,6 +326,7 @@ let
       notify-rust-tests = notificationAttention.rustTests;
       rust-tool-source = import ./util/rust-tool-source.nix { inherit pkgs; };
       notify-launcher-tests = wrix.rustPackage.notificationNextest;
+      inherit (rustChecks) wrix-rust-nextest;
       packaged-git-runtime = import ./prek/git-runtime.nix { inherit pkgs; };
       celler-consumer-runtime = import ./services/celler-runtime.nix { inherit pkgs wrix; };
       inherit (ciChecks) client-server-dependency-boundary;

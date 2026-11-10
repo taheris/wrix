@@ -111,7 +111,10 @@ fixture, and the existing Linux-only native attention boundary. Unrelated
 package integration suites remain in the unchanged canonical workspace Nextest
 baseline; they are not rebuilt merely to iterate on notification acceptance.
 Development uses the owning checks; complete workspace verification remains a
-landing obligation.
+landing obligation. The canonical workspace Nextest producer is also exported as
+a flake check, so the unchanged `nix flake check` landing hook retains that
+complete baseline. Its CI and flake-check names share one immutable producer,
+not two executions.
 
 Notification and verifier development tools opt into package-scoped sources,
 retaining canonical workspace manifests and lock bytes plus the complete
