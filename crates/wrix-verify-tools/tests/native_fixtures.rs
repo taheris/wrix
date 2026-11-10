@@ -11,7 +11,7 @@ use std::{
     process::{Command, Output},
 };
 
-const MEMBERS: [(&str, &str); 12] = [
+const MEMBERS: [(&str, &str); 13] = [
     ("WRIX_TEST_PREK_HOOKS", "hooks"),
     ("WRIX_TEST_PREK_RUNNER", "runner"),
     ("WRIX_TEST_BROKEN_PREK_RUNNER", "broken-runner"),
@@ -24,6 +24,7 @@ const MEMBERS: [(&str, &str); 12] = [
     ("WRIX_TEST_SQL_CLIENT", "sql-client"),
     ("WRIX_TEST_BD", "beads"),
     ("WRIX_TEST_FIXTURE_RUNTIME", "fixture-runtime"),
+    ("WRIX_TEST_HOST_HOOK_STORE_INIT", "host-hook-store-init"),
 ];
 
 struct Fixture {
@@ -60,6 +61,7 @@ impl Fixture {
                             | "WRIX_TEST_BD"
                             | "WRIX_TEST_SQL_CLIENT"
                             | "WRIX_TEST_FIXTURE_RUNTIME"
+                            | "WRIX_TEST_HOST_HOOK_STORE_INIT"
                     )
                 {
                     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
@@ -248,6 +250,10 @@ fn non_executable_sql_client_is_rejected_before_export() {
 #[test]
 fn non_executable_fixture_runtime_is_rejected_before_export() {
     reject_non_executable("fixture-runtime", "WRIX_TEST_FIXTURE_RUNTIME");
+}
+#[test]
+fn non_executable_host_hook_store_initializer_is_rejected_before_export() {
+    reject_non_executable("host-hook-store-init", "WRIX_TEST_HOST_HOOK_STORE_INIT");
 }
 #[test]
 fn newline_in_an_override_cannot_inject_an_environment_variable() {
