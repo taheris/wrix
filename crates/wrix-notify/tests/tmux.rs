@@ -4,8 +4,10 @@
 use serde_json::{Value, json};
 use std::{
     fs,
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, Read, Write},
+    net::Shutdown,
     num::NonZeroU32,
+    os::{fd::AsFd, unix::net::UnixStream},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{Arc, Mutex},
@@ -20,22 +22,74 @@ use wrix_notify::{
     route::{Platform, Route, Socket, Target},
 };
 
-const TERMINAL: &str = r#"
-import os, pty, select, subprocess, sys
-master, slave = pty.openpty()
-env = dict(os.environ, TERM="xterm")
-env.pop("TMUX", None)
-env.pop("TMUX_PANE", None)
-client = subprocess.Popen(["tmux", "-S", sys.argv[1], "attach-session", "-t", sys.argv[2]],
-                          stdin=slave, stdout=slave, stderr=slave, env=env)
-print(os.getpid(), flush=True)
-while client.poll() is None:
-    if select.select([master], [], [], 0.1)[0]:
-        os.read(master, 4096)
-client.wait(timeout=5)
-os.close(master)
-os.close(slave)
-"#;
+const TERMINAL_MODE: &str = "WRIX_TEST_TMUX_TERMINAL";
+const TERMINAL_CASE: &str = "terminal_fixture_rejects_non_socket_input";
+
+struct Client(Child);
+
+impl Drop for Client {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        self.0.wait().unwrap();
+    }
+}
+
+fn terminal_proxy() -> ! {
+    let mut control = UnixStream::from(std::io::stdin().as_fd().try_clone_to_owned().unwrap());
+    control
+        .peer_addr()
+        .expect("terminal control is not a socket");
+    control
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let request: [String; 2] = serde_json::from_reader((&mut control).take(4097)).unwrap();
+    let pty = nix::pty::openpty(None, None).unwrap();
+    rustix::fs::fcntl_setfl(&pty.master, rustix::fs::OFlags::NONBLOCK).unwrap();
+    let mut master = fs::File::from(pty.master);
+    let slave = fs::File::from(pty.slave);
+    let mut client = Client(
+        Command::new("tmux")
+            .args(["-S", &request[0], "attach-session", "-t", &request[1]])
+            .env("TERM", "xterm")
+            .env_remove("TMUX")
+            .env_remove("TMUX_PANE")
+            .stdin(Stdio::from(slave.try_clone().unwrap()))
+            .stdout(Stdio::from(slave.try_clone().unwrap()))
+            .stderr(Stdio::from(slave.try_clone().unwrap()))
+            .spawn()
+            .unwrap(),
+    );
+    writeln!(control, "{}", std::process::id()).unwrap();
+    let mut buffer = [0; 4096];
+    while client.0.try_wait().unwrap().is_none() {
+        match master.read(&mut buffer) {
+            Ok(0) => panic!("terminal PTY closed before client completion"),
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(100));
+            }
+            Err(error) => panic!("cannot drain terminal PTY: {error}"),
+        }
+    }
+    drop(slave);
+    panic!("terminal fixture completed; child mode cannot pass a semantic test");
+}
+
+#[test]
+fn terminal_fixture_rejects_non_socket_input() {
+    if std::env::var_os(TERMINAL_MODE).is_some() {
+        terminal_proxy();
+    }
+    let result = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", TERMINAL_CASE, "--nocapture"])
+        .env(TERMINAL_MODE, "1")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("terminal control is not a socket"));
+}
 
 struct Terminal {
     socket: Socket,
@@ -73,21 +127,28 @@ impl Terminal {
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
-        let mut proxy = Command::new("python3")
-            .args(["-c", TERMINAL, socket.as_str(), name])
-            .stdout(Stdio::piped())
+        let (mut control, child_control) = UnixStream::pair().unwrap();
+        control
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let proxy = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", TERMINAL_CASE, "--nocapture"])
+            .env(TERMINAL_MODE, "1")
+            .stdin(Stdio::from(std::os::fd::OwnedFd::from(child_control)))
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .spawn()
             .unwrap();
-        let mut line = String::new();
-        BufReader::new(proxy.stdout.take().unwrap())
-            .read_line(&mut line)
-            .unwrap();
-        let pid: NonZeroU32 = line.trim().parse().unwrap();
-        assert_eq!(pid.get(), proxy.id());
         let cleanup = Cleanup {
             socket: socket.clone(),
             proxy,
         };
+        serde_json::to_writer(&mut control, &[socket.as_str(), name]).unwrap();
+        control.shutdown(Shutdown::Write).unwrap();
+        let mut line = String::new();
+        BufReader::new(control).read_line(&mut line).unwrap();
+        let pid: NonZeroU32 = line.trim().parse().unwrap();
+        assert_eq!(pid.get(), cleanup.proxy.id());
         let navigator = Navigator::new(Host, PathBuf::from("/proc"));
         let deadline = Instant::now() + Duration::from_secs(5);
         let client = loop {
