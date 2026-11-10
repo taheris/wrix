@@ -26,6 +26,7 @@ let
   notifyPath = makeBinPath (
     [
       fixture.client
+      fixture.session
       (import ../../lib/notify/client.nix {
         inherit pkgs;
         host = true;

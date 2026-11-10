@@ -1,6 +1,39 @@
 { pkgs, focusBinary }:
 
 let
+  session =
+    (import ../../lib/util/rust-tool.nix {
+      inherit pkgs;
+      package = "wrix-notify";
+      scopedSource = true;
+      description = "Native isolated notification daemon test session";
+    }).overrideAttrs
+      {
+        cargoBuildFlags = [
+          "--package"
+          "wrix-notify"
+          "--example"
+          "notify-session"
+        ];
+        cargoTestFlags = [
+          "--package"
+          "wrix-notify"
+          "--test"
+          "notify_session"
+        ];
+        checkFlags = [ "--ignored" ];
+        nativeCheckInputs = [ pkgs.clippy ];
+        preCheck = ''
+          export WRIX_TEST_NOTIFY_SESSION="$(realpath "$(find target -path '*/release/examples/notify-session' -type f -print -quit)")"
+          export WRIX_TEST_SHELL="${pkgs.bash}/bin/bash"
+          test -x "$WRIX_TEST_NOTIFY_SESSION"
+          cargo clippy --offline --locked --release --jobs 2 --package wrix-notify --all-targets -- -D warnings
+        '';
+        installPhase = ''
+          mkdir -p "$out/bin"
+          install -m755 "$WRIX_TEST_NOTIFY_SESSION" "$out/bin/wrix-notify-test-session"
+        '';
+      };
   bridgeName = if pkgs.stdenv.hostPlatform.isDarwin then "terminal-notifier" else "notify-send";
   bridgeContract =
     if pkgs.stdenv.hostPlatform.isDarwin then
@@ -52,6 +85,7 @@ let
   };
 in
 {
+  inherit session;
   client = import ../../lib/notify/client.nix {
     inherit pkgs;
     # Host-side tests always provide an explicit TCP endpoint. Fail visibly if

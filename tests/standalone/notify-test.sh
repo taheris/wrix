@@ -199,7 +199,7 @@ EOF
 }
 
 start_notify_daemon() {
-  require_command python3
+  require_command wrix-notify-test-session
   local runtime_dir="$1"
   local capture="$2"
   local log_file="$3"
@@ -216,7 +216,7 @@ start_notify_daemon() {
     WRIX_NOTIFY_VERBOSE="$verbose" \
     WRIX_NOTIFY_TEST_DISPATCH_CAPTURE="$capture" \
     WRIX_NOTIFY_TEST_DISPATCH_TIME_CAPTURE="$dispatch_time_capture" \
-    python3 -c 'import os; os.setsid(); os.execvp("wrix-notifyd", ["wrix-notifyd"])' >"$log_file" 2>&1 &
+    wrix-notify-test-session >"$log_file" 2>&1 &
   pid="$!"
   BACKGROUND_PIDS+=("$pid")
   BACKGROUND_GROUPS+=("$pid")
