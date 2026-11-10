@@ -58,19 +58,9 @@ let
   storedB = storedPackage (storedRoot "b") (storedRoot "b" + "/Cargo.lock");
   typedLock = storedPackage (storedRoot "a") (builtins.toPath (storedRoot "a" + "/Cargo.lock"));
   storedC = storedPackage (storedRoot "c") (storedRoot "c" + "/Cargo.lock");
-  notesChanged = pkgs.runCommand "source" { } ''
-    set -euo pipefail
-    cp -r ${storedRoot "a"} "$out"
-    chmod -R u+w "$out"
-    printf 'Unrelated project documentation.\n' > "$out/README.md"
-  '';
+  notesChanged = storedRoot "d";
   storedD = storedPackage notesChanged (notesChanged + "/Cargo.lock");
-  configChanged = pkgs.runCommand "source" { } ''
-    set -euo pipefail
-    cp -r ${storedRoot "a"} "$out"
-    chmod -R u+w "$out"
-    printf '[profile.default]\ntest-threads = 2\n' > "$out/.config/nextest.toml"
-  '';
+  configChanged = storedRoot "e";
   storedE = storedPackage configChanged (configChanged + "/Cargo.lock");
   changedLock = builtins.toFile "Cargo.lock" (
     builtins.readFile ./source-fixture/a/Cargo.lock + "\n# Different lock bytes.\n"
@@ -140,6 +130,8 @@ let
   ];
 in
 assert storedRoot "a" != storedRoot "b";
+assert storedRoot "a" != notesChanged;
+assert builtins.readFile (notesChanged + "/README.md") == "Unrelated project documentation.\n";
 assert toString storedA.bin.src == toString storedB.bin.src;
 assert storedA.bin.cargoLock == storedB.bin.cargoLock;
 assert storedA.clippy.cargoToml == storedA.bin.cargoToml;
@@ -214,6 +206,12 @@ assert hasInfix "--bin wrix-shared-service" rustPackage.runtimePackage.buildPhas
 assert hasInfix "--bin wrix-nix-pool-owner" rustPackage.runtimePackage.buildPhase;
 pkgs.runCommand "test-rust-source-fixtures" { } ''
   set -euo pipefail
+  diff -r --exclude README.md ${storedRoot "a"} ${notesChanged}
+  diff -r --exclude nextest.toml ${storedRoot "a"} ${configChanged}
+  cmp ${storedRoot "a"}/Cargo.toml ${notesChanged}/Cargo.toml
+  cmp ${storedRoot "a"}/Cargo.lock ${notesChanged}/Cargo.lock
+  cmp ${storedRoot "a"}/Cargo.toml ${configChanged}/Cargo.toml
+  cmp ${storedRoot "a"}/Cargo.lock ${configChanged}/Cargo.lock
   [[ "$(${storedA.bin}/bin/source-filter-probe)" == 1 ]]
   [[ "$(${storedC.bin}/bin/source-filter-probe)" == 2 ]]
   cmp ${storedA.bin.cargoLock} ${./source-fixture/a/Cargo.lock}
