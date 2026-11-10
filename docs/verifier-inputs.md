@@ -105,12 +105,13 @@ builds. Real CLI/service image checks and opaque always-run targets remain.
 
 ## Targeted notification iteration
 
-The attention owner runs the complete `wrix-notify` Rust suite, the CLI library
-and `native_notify` integration target, the packaged desktop fixture, and the
-existing Linux-only native attention boundary. Unrelated package integration
-suites remain in the unchanged canonical workspace Nextest baseline; they are
-not rebuilt merely to iterate on notification acceptance. Development uses the
-owning checks; complete workspace verification remains a landing obligation.
+The attention owner runs the complete `wrix-notify` Rust suite, the CLI and
+sandbox libraries, the `native_notify` integration target, the packaged desktop
+fixture, and the existing Linux-only native attention boundary. Unrelated
+package integration suites remain in the unchanged canonical workspace Nextest
+baseline; they are not rebuilt merely to iterate on notification acceptance.
+Development uses the owning checks; complete workspace verification remains a
+landing obligation.
 
 Standalone Rust tools retain canonical workspace manifests and lock bytes plus
 the complete selected crate and declared external resources. Unused members have

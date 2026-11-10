@@ -105,7 +105,7 @@ let
     workspaceArgs
     // {
       inherit (workspace) cargoArtifacts;
-      cargoExtraArgs = "--package wrix-cli --lib --test native_notify";
+      cargoExtraArgs = "--package wrix-cli --package wrix-sandbox --lib --test native_notify";
       extraSrcs =
         builtins.removeAttrs workspaceArgs.extraSrcs (
           [
@@ -118,6 +118,11 @@ let
         )
         // {
           "crates/wrix-cli/tests/native_notify.rs" = ../../crates/wrix-cli/tests/native_notify.rs;
+          "crates/wrix-cli/tests/workspace/isolation.rs" = ../../crates/wrix-cli/tests/workspace/isolation.rs;
+          "crates/wrix-cli/tests/fixtures/workspace-chroot.sh" =
+            ../../crates/wrix-cli/tests/fixtures/workspace-chroot.sh;
+          "crates/wrix-sandbox/tests/fixtures/apple-service-image" =
+            ../../crates/wrix-sandbox/tests/fixtures/apple-service-image;
         };
     }
   );
