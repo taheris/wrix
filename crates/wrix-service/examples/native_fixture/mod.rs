@@ -1,3 +1,5 @@
+#[cfg(target_os = "linux")]
+mod bridge;
 mod inventory;
 mod maintenance;
 mod proxy;
@@ -20,6 +22,9 @@ pub enum Error {
     Sql(#[from] sql::Error),
     /// {0}
     Proxy(#[from] proxy::Error),
+    /// {0}
+    #[cfg(target_os = "linux")]
+    Bridge(#[from] bridge::Error),
 }
 
 pub fn run(args: impl IntoIterator<Item = OsString>) -> Result<ExitCode, Error> {
@@ -28,6 +33,8 @@ pub fn run(args: impl IntoIterator<Item = OsString>) -> Result<ExitCode, Error> 
         return Err(Error::Usage);
     };
     match mode.to_str() {
+        #[cfg(target_os = "linux")]
+        Some("bridge-peer") => Ok(bridge::run(args)?),
         Some("shared-runtime") => Ok(shared::run(args)?),
         Some("inventory") => Ok(inventory::run(args)?),
         Some("maintenance") => Ok(maintenance::run(args)?),

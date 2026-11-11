@@ -4,36 +4,14 @@ use super::*;
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn paused_guest_backpressure_survives_thirty_seconds_and_observer_loss_without_replay() {
+    let fixture = std::env::var_os("WRIX_TEST_FIXTURE_RUNTIME")
+        .expect("native fixture runtime must be prepared");
+    let mut command = std::process::Command::new(fixture);
+    command.arg("bridge-peer");
     let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
         .await
         .unwrap();
     let port = NonZeroU16::new(listener.local_addr().unwrap().port()).unwrap();
-    let mut command = std::process::Command::new("python3");
-    command.args([
-        "-c",
-        r"
-import os, struct, time, fcntl
-fcntl.fcntl(0, 1031, 4096)
-def exact(n):
-    data = b''
-    while len(data) < n:
-        chunk = os.read(0, n-len(data))
-        if not chunk: raise RuntimeError('unexpected transport loss')
-        data += chunk
-    return data
-os.write(1, b'WRIXNB01')
-assert exact(8) == b'WRIXNB01'
-os.write(1, struct.pack('!BII', 1, 1, 0))
-time.sleep(31)
-kind, stream, length = struct.unpack('!BII', exact(9))
-assert (kind, stream, length) == (2, 1, 16384)
-assert exact(length) == b'x' * length
-os.write(1, struct.pack('!BII', 4, 1, 0))
-os.write(1, struct.pack('!BII', 3, 1, 0))
-os.write(1, struct.pack('!BII', 1, 2, 0))
-time.sleep(120)
-",
-    ]);
     let (stop, receiver) = oneshot::channel();
     let (ready, startup) = oneshot::channel();
     let task = tokio::spawn(run(command, port, receiver, ready));
