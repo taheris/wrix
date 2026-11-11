@@ -100,7 +100,13 @@ impl Fixture {
             .truncate(false)
             .read(true)
             .write(true)
-            .open(std::env::temp_dir().join("wrix-shared-native-port.lock"))?;
+            .open(std::env::temp_dir().join("wrix-shared-native-port.lock"))
+            .map_err(|error| {
+                format!(
+                    "private fixture port lock in {:?}: {error}",
+                    std::env::temp_dir()
+                )
+            })?;
         port.lock_exclusive()?;
         let reservation = TcpListener::bind(("127.0.0.1", 3306))?;
         drop(reservation);

@@ -36,6 +36,7 @@ fn bind_target(fixture: &Fixture) -> TestResult<PathBuf> {
 fn target_command(fixture: &Fixture, binding: &Path) -> TestResult<Command> {
     let mut command = fixture.command()?;
     command
+        .env("NO_COLOR", "1")
         .env("WRIX_SERVICE_PACKAGE_BINDING", binding)
         .env("WRIX_TEST_DIGEST", "b".repeat(64))
         .env("WRIX_TEST_UMASK", "022")
@@ -65,6 +66,7 @@ fn target_command(fixture: &Fixture, binding: &Path) -> TestResult<Command> {
 fn resume_command(fixture: &Fixture) -> TestResult<Command> {
     let mut command = fixture.command()?;
     command
+        .env("NO_COLOR", "1")
         .args(["service", "update", "--resume"])
         .env("WRIX_TEST_DIGEST", "b".repeat(64))
         .env(
@@ -189,12 +191,21 @@ fn interrupted_update_resumes_the_checkpoint_produced_by_the_cli() -> TestResult
     // Only the old-version input is seeded. Wrix produces every shutdown,
     // update, ownership, checkpoint, lease archive and activation artifact.
     let mut fixture = Fixture::legacy_shared_cache()?;
+    let runtime = fixture
+        .root
+        .path()
+        .join("bin")
+        .join(if cfg!(target_os = "macos") {
+            "container"
+        } else {
+            "podman"
+        });
+    let original = fs::read_to_string(&runtime)?;
     fs::write(
-        &fixture.runtime,
+        runtime,
         format!(
-            "{}\n{}",
+            "{}\n{original}",
             include_str!("../fixtures/update-resume-runtime.sh"),
-            APPLE_RUNTIME
         ),
     )?;
     fixture
