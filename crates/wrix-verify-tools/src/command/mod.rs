@@ -23,11 +23,19 @@ pub enum Error {
     Shared(#[from] crate::artifact::image::shared::Error),
     /// {0}
     Permissions(#[from] crate::artifact::image::permissions::Error),
+    /// {0}
+    BuilderAccount(#[from] crate::builder_account::Error),
 }
 
 pub fn run(args: impl IntoIterator<Item = OsString>) -> Result<(), Error> {
     let args: Vec<_> = args.into_iter().collect();
     match args.as_slice() {
+        [name, passwd, group, configured, trusted] if name == "builder-build-users" => {
+            let configured = configured.to_str().ok_or(Error::Usage)?;
+            let trusted = trusted.to_str().ok_or(Error::Usage)?;
+            crate::builder_account::run(Path::new(passwd), Path::new(group), configured, trusted)?;
+            Ok(())
+        }
         [name, cases, archive] if name == "private-nix-artifacts" => {
             crate::artifact::image::permissions::profile::inspect(
                 Path::new(cases),
