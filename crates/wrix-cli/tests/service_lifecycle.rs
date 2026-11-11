@@ -104,13 +104,7 @@ fn public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql() -
         .truncate(false)
         .read(true)
         .write(true)
-        .open(std::env::temp_dir().join("wrix-shared-native-port.lock"))
-        .map_err(|error| {
-            format!(
-                "private fixture port lock in {:?}: {error}",
-                std::env::temp_dir()
-            )
-        })?;
+        .open(root.path().join("native-port.lock"))?;
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         match lock.try_lock_exclusive() {

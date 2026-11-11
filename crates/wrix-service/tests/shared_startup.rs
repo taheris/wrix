@@ -95,22 +95,16 @@ impl Fixture {
         Ok(())
     }
     fn new() -> TestResult<Self> {
+        let root = tempfile::Builder::new().prefix("ws-").tempdir_in("/tmp")?;
         let port = fs::File::options()
             .create(true)
             .truncate(false)
             .read(true)
             .write(true)
-            .open(std::env::temp_dir().join("wrix-shared-native-port.lock"))
-            .map_err(|error| {
-                format!(
-                    "private fixture port lock in {:?}: {error}",
-                    std::env::temp_dir()
-                )
-            })?;
+            .open(root.path().join("native-port.lock"))?;
         port.lock_exclusive()?;
         let reservation = TcpListener::bind(("127.0.0.1", 3306))?;
         drop(reservation);
-        let root = tempfile::Builder::new().prefix("ws-").tempdir_in("/tmp")?;
         let bin = root.path().join("bin");
         fs::create_dir(&bin)?;
         fs::create_dir(root.path().join("home"))?;
