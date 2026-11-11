@@ -2,6 +2,38 @@ use super::super::test::{recorded_owner, target as podman_target};
 use super::super::{Connection, LEDGER};
 use super::*;
 
+// Nix's reserved build-user UID is intentionally not a valid pool data owner.
+// Exercise the same real metadata checks under a private mapped identity instead.
+fn fixture_identity(name: &str) -> bool {
+    if !cfg!(target_os = "linux")
+        || bootstrap::ownership::validate(
+            rustix::process::getuid().as_raw(),
+            rustix::process::getgid().as_raw(),
+        )
+        .is_ok()
+    {
+        return true;
+    }
+    let output = std::process::Command::new("unshare")
+        .args(["--user", "--map-root-user"])
+        .arg(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            &format!("nix_store::owner::backend::apple::test::{name}"),
+            "--nocapture",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
+    false
+}
+
 fn fixture() -> (tempfile::TempDir, Owner, Target, Value) {
     let mut wire = podman_target();
     wire["id"] = json!(format!("wrix-nix-{}", "b".repeat(32)));
@@ -44,6 +76,9 @@ fn check(owner: &Owner, target: &Target, config: &Value) -> Result<(), Error> {
 
 #[test]
 fn actual_managed_container_schema_preserves_creation_name_and_birth() {
+    if !fixture_identity("actual_managed_container_schema_preserves_creation_name_and_birth") {
+        return;
+    }
     let (_directory, owner, target, config) = fixture();
     let snapshot: Snapshot = serde_json::from_value(
         json!({"id":target.id.0,"configuration":config,"status":{"state":"running","networks":[]}}),
@@ -75,6 +110,9 @@ fn native_census_accepts_unrelated_apple_names_without_adopting_them() {
 
 #[test]
 fn identity_mount_resource_and_endpoint_drift_are_rejected() {
+    if !fixture_identity("identity_mount_resource_and_endpoint_drift_are_rejected") {
+        return;
+    }
     let (_directory, owner, target, config) = fixture();
     check(&owner, &target, &config).unwrap();
     for (pointer, value) in [

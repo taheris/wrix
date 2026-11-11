@@ -106,7 +106,11 @@ fn cancellation_archives_the_real_intent_from_failed_image_realisation() -> Test
         "elapsed_secs=0",
         "fixture image realisation interrupted",
     ] {
-        assert!(failed.stderr.contains(message), "{}", failed.stderr);
+        assert!(
+            failed.stderr.contains(message),
+            "missing {message:?} in {:?}",
+            failed.stderr
+        );
         assert!(!failed.stdout.contains(message), "{}", failed.stdout);
     }
     assert_eq!(
@@ -292,7 +296,12 @@ fn interrupted_update_resumes_the_checkpoint_produced_by_the_cli() -> TestResult
         "{restarted:?}: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(!output.status.success());
+    assert!(
+        !output.status.success(),
+        "unexpected success: stdout={:?}, stderr={:?}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert_eq!(
         fs::read(&fault)?,
         b"run\n",
