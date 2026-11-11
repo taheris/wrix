@@ -1670,7 +1670,8 @@ async fn native_celler_registration_ignores_legacy_secret_and_rejects_active_key
         .unwrap();
     assert!(
         generated.status.success(),
-        "Nix fixture key generation failed"
+        "Nix fixture key generation failed: {}",
+        String::from_utf8_lossy(&generated.stderr)
     );
     assert_ne!(
         std::fs::read_to_string(legacy.path().join("cache.pub"))
