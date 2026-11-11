@@ -19,6 +19,7 @@ use super::{
 
 pub mod command;
 mod pattern;
+pub mod permissions;
 pub mod shared;
 
 #[cfg(test)]

@@ -21,6 +21,8 @@ pub enum Error {
     Image(#[from] crate::artifact::image::command::Error),
     /// {0}
     Shared(#[from] crate::artifact::image::shared::Error),
+    /// {0}
+    Permissions(#[from] crate::artifact::image::permissions::Error),
 }
 
 pub fn run(args: impl IntoIterator<Item = OsString>) -> Result<(), Error> {
@@ -33,6 +35,20 @@ pub fn run(args: impl IntoIterator<Item = OsString>) -> Result<(), Error> {
             writeln!(
                 io::stdout().lock(),
                 "shared Nix image contracts: PASS ({count} actual artifacts, negative controls)"
+            )?;
+            Ok(())
+        }
+        [name, source] if name == "native-nix-permissions" => {
+            crate::artifact::image::permissions::run(
+                Path::new(source),
+                crate::artifact::image::permissions::Format::Oci,
+            )?;
+            Ok(())
+        }
+        [name, flag, source] if name == "native-nix-permissions" && flag == "--archive" => {
+            crate::artifact::image::permissions::run(
+                Path::new(source),
+                crate::artifact::image::permissions::Format::Archive,
             )?;
             Ok(())
         }
