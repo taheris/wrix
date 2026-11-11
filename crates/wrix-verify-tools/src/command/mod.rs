@@ -25,6 +25,8 @@ pub enum Error {
     Permissions(#[from] crate::artifact::image::permissions::Error),
     /// {0}
     BuilderAccount(#[from] crate::builder_account::Error),
+    /// {0}
+    Payload(#[from] crate::artifact::image::payload::Error),
 }
 
 pub fn run(args: impl IntoIterator<Item = OsString>) -> Result<(), Error> {
@@ -34,6 +36,10 @@ pub fn run(args: impl IntoIterator<Item = OsString>) -> Result<(), Error> {
             let configured = configured.to_str().ok_or(Error::Usage)?;
             let trusted = trusted.to_str().ok_or(Error::Usage)?;
             crate::builder_account::run(Path::new(passwd), Path::new(group), configured, trusted)?;
+            Ok(())
+        }
+        [name, source, expected] if name == "image-payload" => {
+            crate::artifact::image::payload::run(Path::new(source), Path::new(expected))?;
             Ok(())
         }
         [name, cases, archive] if name == "private-nix-artifacts" => {
