@@ -29,6 +29,8 @@ let
       "/crates/**/lib.rs"
       "/crates/**/main.rs"
       "/crates/wrix-image-tools/"
+      "/crates/wrix-verify-tools/"
+      "/lib/verify/"
     ]
     ++ mcp.inputs
     ++ sandboxFixtures.inputs

@@ -17,6 +17,7 @@ let
     concatStringsSep
     elem
     filterAttrs
+    getExe
     mapAttrsToList
     makeBinPath
     optionalString
@@ -30,6 +31,7 @@ let
   ];
 
   resources = import ../lib/image-resources.nix { };
+  verifyTools = import ../../lib/verify/tools.nix { inherit pkgs; };
   sandboxLib = import resources.sandbox.path {
     inherit
       pkgs
@@ -123,15 +125,15 @@ let
 
   inspectionImage =
     image:
-    pkgs.runCommand "wrix-image-inspection" { nativeBuildInputs = [ pkgs.python3 ]; } ''
+    pkgs.runCommand "wrix-image-inspection" { } ''
       set -euo pipefail
-      python ${../lib/image-artifact.py} \
+      ${getExe verifyTools} image-artifact \
         prepare ${if isLinux && image ? ociLayout then image.ociLayout else image.source or image} "$out"
     '';
 
   archiveShellHelpers = ''
     image_query() {
-        ${pkgs.python3}/bin/python ${../lib/image-artifact.py} "$@"
+        ${getExe verifyTools} image-artifact "$@"
     }
 
     unpack_archive() {

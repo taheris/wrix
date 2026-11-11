@@ -15,11 +15,22 @@ pub enum Error {
     Policy(#[from] runner_policy::Error),
     /// {0}
     Fixture(#[from] fixture::Error),
+    /// image query found no matching member
+    NoMember,
+    /// {0}
+    Image(#[from] crate::artifact::image::command::Error),
 }
 
 pub fn run(args: impl IntoIterator<Item = OsString>) -> Result<(), Error> {
     let args: Vec<_> = args.into_iter().collect();
     match args.as_slice() {
+        [name, rest @ ..] if name == "image-artifact" => {
+            if crate::artifact::image::Image::run(rest, &mut io::stdout().lock())? {
+                Ok(())
+            } else {
+                Err(Error::NoMember)
+            }
+        }
         [name, path] if name == "runner-policy" => {
             let mut inventory = String::new();
             io::stdin().lock().read_to_string(&mut inventory)?;

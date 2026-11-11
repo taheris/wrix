@@ -13,6 +13,7 @@ let
     toString
     ;
   resources = import ../lib/image-resources.nix { };
+  verifyTools = import ../../lib/verify/tools.nix { inherit pkgs; };
   coldLib = builtins.path {
     path = pkgs.path + "/lib";
     name = "configuration-nixpkgs-lib";
@@ -126,9 +127,9 @@ let
   };
   inspect =
     image:
-    pkgs.runCommandLocal "shared-nix-image-inspection" { nativeBuildInputs = [ pkgs.python3 ]; } ''
+    pkgs.runCommandLocal "shared-nix-image-inspection" { } ''
       set -euo pipefail
-      python ${../lib/image-artifact.py} prepare ${image.source} "$out"
+      ${pkgs.lib.getExe verifyTools} image-artifact prepare ${image.source} "$out"
     '';
   imageCase = image: {
     inherit (image) source_kind;

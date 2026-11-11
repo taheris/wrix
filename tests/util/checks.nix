@@ -17,6 +17,7 @@ in
       ''
         set -euo pipefail
         python ${../lib}/test_image_artifact.py
+        test -e ${import ../sandbox/image-artifact.nix { inherit pkgs; }}
         touch "$out"
       '';
 
