@@ -43,6 +43,9 @@ let
       "tests" = ../../tests;
       "lib/util/git-ssh-setup.sh" = ../util/git-ssh-setup.sh;
       "lib/sandbox/install-known-hosts.sh" = ../sandbox/install-known-hosts.sh;
+      # Native initializer and OCI installation tests execute these exact resources.
+      "lib/sandbox/initialize-private-nix.sh" = ../sandbox/initialize-private-nix.sh;
+      "lib/sandbox/oci-layout-build.sh" = ../sandbox/oci-layout-build.sh;
       "lib/beads/package.nix" = ../beads/package.nix;
       "lib/services/host-nix-config.sh" = ./host-nix-config.sh;
       "lib/services/nix-pool/bootstrap-process.sh" = ./nix-pool/bootstrap-process.sh;
