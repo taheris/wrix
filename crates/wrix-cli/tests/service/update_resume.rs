@@ -191,8 +191,11 @@ fn interrupted_update_resumes_the_checkpoint_produced_by_the_cli() -> TestResult
     // Only the old-version input is seeded. Wrix produces every shutdown,
     // update, ownership, checkpoint, lease archive and activation artifact.
     let mut fixture = Fixture::legacy_shared_cache()?;
-    for engine in ["container", "podman"] {
-        let runtime = fixture.root.path().join("bin").join(engine);
+    for runtime in [
+        fixture.runtime.clone(),
+        fixture.root.path().join("bin/container"),
+        fixture.root.path().join("bin/podman"),
+    ] {
         let original = fs::read_to_string(&runtime)?;
         fs::write(
             runtime,

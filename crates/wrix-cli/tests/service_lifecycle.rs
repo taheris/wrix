@@ -99,6 +99,7 @@ fn public_cli_shared_native_backend_preserves_namespaces_and_denies_peer_sql() -
     let root = tempfile::Builder::new()
         .prefix("cli-native-")
         .tempdir_in(fs::canonicalize("/tmp")?)?;
+    set_mode(root.path(), 0o700)?;
     let lock = fs::File::options()
         .create(true)
         .truncate(false)
