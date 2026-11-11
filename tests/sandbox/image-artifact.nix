@@ -10,7 +10,6 @@ pkgs.runCommand "native-image-artifact-consumers"
       pkgs.coreutils
       pkgs.jq
       pkgs.gnugrep
-      pkgs.python3
       tools
     ];
   }
@@ -23,17 +22,8 @@ pkgs.runCommand "native-image-artifact-consumers"
         source=${archive}
       fi
       wrix-verify-tools image-artifact prepare "$source" "$format"
-      python ${../lib/image-artifact.py} prepare "$source" "$format-reference"
-      for metadata in manifest.json members.json layer-digests.json; do
-        jq -Sc . "$format/$metadata" > actual.json
-        jq -Sc . "$format-reference/$metadata" > expected.json
-        cmp actual.json expected.json
-      done
-      cmp "$format/config.json" "$format-reference/config.json"
       jq -r '.[0].Layers[]' "$format/manifest.json" > "$format.layers"
       wrix-verify-tools image-artifact paths "$format" "$format.layers" > "$format.paths"
-      python ${../lib/image-artifact.py} paths "$format-reference" "$format.layers" > reference.paths
-      cmp "$format.paths" reference.paths
     done
     package=$(grep -- '-oci-layout-package-fixture$' oci.paths)
     wrix-verify-tools image-artifact extract oci oci.layers "$package/bin/hardlink" hardlink

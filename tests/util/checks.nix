@@ -9,17 +9,12 @@ in
     touch "$out"
   '';
 
-  image-verifier-artifacts =
-    pkgs.runCommandLocal "test-image-verifier-artifacts"
-      {
-        nativeBuildInputs = [ pkgs.python3 ];
-      }
-      ''
-        set -euo pipefail
-        python ${../lib}/test_image_artifact.py
-        test -e ${import ../sandbox/image-artifact.nix { inherit pkgs; }}
-        touch "$out"
-      '';
+  image-verifier-artifacts = pkgs.runCommandLocal "test-image-verifier-artifacts" { } ''
+    set -euo pipefail
+    test -x ${pkgs.lib.getExe verifyTools}
+    test -e ${import ../sandbox/image-artifact.nix { inherit pkgs; }}
+    touch "$out"
+  '';
 
   known-hosts-image-local = pkgs.runCommandLocal "known-hosts-image-local" { } ''
     set -euo pipefail

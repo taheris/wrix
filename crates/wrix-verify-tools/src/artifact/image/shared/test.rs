@@ -141,6 +141,23 @@ impl Fixture {
 }
 
 #[test]
+fn prepared_manifest_rejects_multiple_images_and_config_substitution() {
+    let fixture = Fixture::new();
+    for manifest in [
+        json!([]),
+        json!([{"Config":"config.json","Layers":["layer.tar"]},{"Config":"config.json","Layers":["layer.tar"]}]),
+        json!([{"Config":"../other-config.json","Layers":["layer.tar"]}]),
+    ] {
+        fs::write(
+            fixture.case.artifact.join("manifest.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        assert!(Image::prepared(&fixture.case.artifact).is_err());
+    }
+}
+
+#[test]
 fn real_archive_markers_store_seed_and_readonly_database_agree() {
     let fixture = Fixture::new();
     verify(&fixture.case).unwrap();
