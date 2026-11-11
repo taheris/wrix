@@ -11,6 +11,8 @@ use serde_json::Value;
 
 use super::{Image, archive, bounded, path};
 
+pub mod profile;
+
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
 pub enum Error {
     /// emitted permission inspection failed: {0}

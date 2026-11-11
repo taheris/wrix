@@ -28,6 +28,13 @@ pub enum Error {
 pub fn run(args: impl IntoIterator<Item = OsString>) -> Result<(), Error> {
     let args: Vec<_> = args.into_iter().collect();
     match args.as_slice() {
+        [name, cases, archive] if name == "private-nix-artifacts" => {
+            crate::artifact::image::permissions::profile::inspect(
+                Path::new(cases),
+                Path::new(archive),
+            )?;
+            Ok(())
+        }
         [name, cases, permissions] if name == "shared-nix-image" => {
             use std::io::Write;
             let count =

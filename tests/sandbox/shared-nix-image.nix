@@ -4,15 +4,16 @@
   api,
 }:
 let
+  inherit (pkgs.lib) getExe;
   tools = import ../../lib/verify/tools.nix { inherit pkgs; };
   permissions = pkgs.writeShellScript "check-emitted-nix-permissions" ''
     set -euo pipefail
-    exec ${pkgs.python3}/bin/python3 ${./native-nix-permissions.py} "$@"
+    exec ${getExe tools} native-nix-permissions "$@"
   '';
 in
 pkgs.runCommandLocal "shared-nix-image-contract" { } ''
   set -euo pipefail
   [[ -e ${api} ]]
-  ${pkgs.lib.getExe tools} shared-nix-image ${casesFile} ${permissions}
+  ${getExe tools} shared-nix-image ${casesFile} ${permissions}
   touch "$out"
 ''

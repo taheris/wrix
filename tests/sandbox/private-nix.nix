@@ -5,6 +5,7 @@
   profileSandboxes,
 }:
 let
+  verifyTools = import ../../lib/verify/tools.nix { inherit pkgs; };
   sandbox = wrix.mkSandbox { profile = wrix.profiles.base; };
   factoryImages = map (
     name:
@@ -132,34 +133,9 @@ in
 
   private-nix-image-roots = import ./image-gc-roots.nix { inherit pkgs; };
 
-  private-nix-artifacts =
-    pkgs.runCommand "test-private-nix-artifacts"
-      {
-        nativeBuildInputs = [ pkgs.python3 ];
-      }
-      ''
-        set -euo pipefail
-        python ${./native-nix-permissions.py} --archive ${archive.source}
-        python - ${factoryImagesFile} ${./native-nix-permissions.py} <<'PY'
-        import json
-        import pathlib
-        import subprocess
-        import sys
-        for image in json.loads(pathlib.Path(sys.argv[1]).read_text()):
-            source = (["--archive", image["source"]] if image["sourceKind"] == "docker-archive"
-                      else [image["layout"]])
-            subprocess.run([sys.executable, sys.argv[2], *source], check=True)
-            config = json.loads(pathlib.Path(image["config"]).read_text())
-            digest = pathlib.Path(image["digestFile"]).read_text().strip()
-            assert config["image"]["digest"] == digest
-            assert config["image"]["source"] == image["source"]
-            assert config["profile"]["name"] == image["name"]
-            assert config["agent"]["kind"] == "pi"
-            if config["image"]["source_kind"] == "nix-descriptor":
-                descriptor = json.loads(pathlib.Path(image["source"]).read_text())
-                assert descriptor["digest"] == digest
-                assert descriptor["config"]["labels"]["wrix.nix.private"] == "1"
-        PY
-        touch "$out"
-      '';
+  private-nix-artifacts = pkgs.runCommand "test-private-nix-artifacts" { } ''
+    set -euo pipefail
+    ${pkgs.lib.getExe verifyTools} private-nix-artifacts ${factoryImagesFile} ${archive.source}
+    touch "$out"
+  '';
 }
