@@ -46,6 +46,7 @@ nix = { workspace = true, features = ["fs"] }
 rustix = { workspace = true, features = ["pipe"] }
 attic = { workspace = true }
 reqwest = { workspace = true }
+rusqlite = { workspace = true }
 wrix-cli = { workspace = true }
 
 [[bin]]
