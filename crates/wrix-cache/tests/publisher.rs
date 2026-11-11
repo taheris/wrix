@@ -4,7 +4,7 @@ use std::{
     env, fs,
     fs::OpenOptions,
     io,
-    os::unix::fs::PermissionsExt,
+    os::unix::fs::symlink,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -27,6 +27,12 @@ use wrix_core::path::Workspace;
 mod native;
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
+
+fn install_nix_fixture(path: &Path) {
+    let runtime =
+        env::var_os("WRIX_TEST_FIXTURE_RUNTIME").expect("native fixture runtime must be prepared");
+    symlink(runtime, path).unwrap();
+}
 
 struct Fixture {
     root: tempfile::TempDir,
@@ -76,8 +82,7 @@ impl Fixture {
         )
         .unwrap();
         let nix = root.path().join("nix");
-        fs::write(&nix, NIX_FIXTURE).unwrap();
-        fs::set_permissions(&nix, fs::Permissions::from_mode(0o755)).unwrap();
+        install_nix_fixture(&nix);
         let fixture = Self {
             cache: root.path().join("unused-flat-cache"),
             roots: root.path().join("roots.json"),
@@ -743,8 +748,7 @@ fn status_does_not_report_legacy_workspace_pruning() {
 fn upstream_fixture_models_partial_null_and_failed_queries() {
     let root = tempfile::tempdir().unwrap();
     let nix = root.path().join("nix");
-    fs::write(&nix, NIX_FIXTURE).unwrap();
-    fs::set_permissions(&nix, fs::Permissions::from_mode(0o755)).unwrap();
+    install_nix_fixture(&nix);
     for (mode, success, expected) in [
         ("normal", true, "{\"hit\":{},\"miss\":null}"),
         ("partial", false, "{\"hit\":{},\"miss\":null}"),
@@ -782,8 +786,7 @@ fn upstream_fixture_models_partial_null_and_failed_queries() {
 fn build_fixture_models_native_selected_graph_and_rooted_json_inventory() {
     let root = tempfile::tempdir().unwrap();
     let nix = root.path().join("nix");
-    fs::write(&nix, NIX_FIXTURE).unwrap();
-    fs::set_permissions(&nix, fs::Permissions::from_mode(0o755)).unwrap();
+    install_nix_fixture(&nix);
     let roots = root.path().join("roots.json");
     fs::write(&roots, json!({"roots":[Fixture::root("packages.selected", Path::new("/nix/store/selected")), Fixture::root("packages.unselected", Path::new("/nix/store/unselected"))]}).to_string()).unwrap();
     let mut command = Command::new(&nix);
@@ -824,40 +827,3 @@ fn build_fixture_models_native_selected_graph_and_rooted_json_inventory() {
         Path::new("/nix/store/selected")
     );
 }
-
-const NIX_FIXTURE: &str = r"#!/usr/bin/env python3
-import json, os, pathlib, sys
-args = sys.argv[1:]
-with open(os.environ['WRIX_TEST_NIX_LOG'], 'a') as log:
-    log.write(' '.join(args) + '\n')
-if args == ['config', 'show', 'post-build-hook']:
-    print('/nix/store/fixture/bin/wrix-cache-post-build-hook')
-    sys.exit(0)
-if args[:3] == ['derivation', 'show', '--recursive']:
-    roots = json.load(open(os.environ['WRIX_CACHE_ROOTS_FILE']))['roots']
-    print(json.dumps({root['drv_path']: {'outputs': {'out': {'path': root['out_paths'][0]}}} for root in roots if root['drv_path'] in args[3:]}, separators=(',', ':')))
-    sys.exit(0)
-if args[:3] == ['build', '--json', '--out-link']:
-    if os.environ.get('WRIX_TEST_BUILD_FAIL') == '1':
-        sys.exit(1)
-    assert len(args) > 4
-    roots = json.load(open(os.environ['WRIX_CACHE_ROOTS_FILE']))['roots']
-    built = [root for root in roots if root['installable'] in args[4:]]
-    for index, root in enumerate(built):
-        link = args[3] if index == 0 else args[3] + '-' + str(index)
-        pathlib.Path(link).symlink_to(root['out_paths'][0])
-    print(json.dumps([{'drvPath': root['drv_path'], 'outputs': {'out': root['out_paths'][0]}} for root in built], separators=(',', ':')))
-    sys.exit(0)
-if args[:2] == ['path-info', '--store'] and args[3] == '--json':
-    mode = os.environ['WRIX_TEST_UPSTREAM']
-    if mode == 'unavailable':
-        sys.exit(1)
-    if mode == 'malformed':
-        print('invalid JSON')
-        sys.exit(0)
-    assert mode in ['normal', 'partial']
-    print(json.dumps({path: {} if path == os.environ['WRIX_TEST_UPSTREAM_HIT'] else None for path in args[4:]}, separators=(',', ':')))
-    sys.exit(0 if mode == 'normal' else 1)
-sys.stderr.write('unexpected Nix invocation\n')
-sys.exit(2)
-";

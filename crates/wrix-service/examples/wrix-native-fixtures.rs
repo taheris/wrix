@@ -9,5 +9,12 @@ impl fmt::Debug for Failure {
     }
 }
 fn main() -> Result<ExitCode, Failure> {
-    native_fixture::run(std::env::args_os().skip(1)).map_err(Failure)
+    let mut args = std::env::args_os();
+    let publisher = args.next().is_some_and(|program| {
+        std::path::Path::new(&program)
+            .file_name()
+            .is_some_and(|name| name == "nix")
+    });
+    let mode = publisher.then(|| std::ffi::OsString::from("publisher-nix"));
+    native_fixture::run(mode.into_iter().chain(args)).map_err(Failure)
 }

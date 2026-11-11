@@ -3,6 +3,7 @@ mod bridge;
 mod inventory;
 mod maintenance;
 mod proxy;
+mod publisher;
 mod shared;
 mod sql;
 
@@ -25,6 +26,8 @@ pub enum Error {
     /// {0}
     #[cfg(target_os = "linux")]
     Bridge(#[from] bridge::Error),
+    /// {0}
+    Publisher(#[from] publisher::Error),
 }
 
 pub fn run(args: impl IntoIterator<Item = OsString>) -> Result<ExitCode, Error> {
@@ -36,6 +39,7 @@ pub fn run(args: impl IntoIterator<Item = OsString>) -> Result<ExitCode, Error> 
         #[cfg(target_os = "linux")]
         Some("bridge-peer") => Ok(bridge::run(args)?),
         Some("shared-runtime") => Ok(shared::run(args)?),
+        Some("publisher-nix") => Ok(publisher::run(args)?),
         Some("inventory") => Ok(inventory::run(args)?),
         Some("maintenance") => Ok(maintenance::run(args)?),
         Some("sql-client") => Ok(sql::run(args)?),
