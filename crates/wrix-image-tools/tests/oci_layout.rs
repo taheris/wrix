@@ -1,4 +1,7 @@
 //! Executable producer failures never publish a partial OCI output.
+#[cfg(test)]
+#[path = "oci_layout/install.rs"]
+mod install;
 use std::{fs, os::unix::net::UnixListener, process::Command};
 
 #[test]

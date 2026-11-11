@@ -17,9 +17,16 @@ let
       name = "wrix-oci-layout-fixture";
       created = "1970-01-01T00:00:01Z";
       contents = [ package ];
-      config.Env = [ "SETTING=${value}" ];
+      config = {
+        Env = [ "SETTING=${value}" ];
+        Labels.parent = "kept";
+      };
       extraCommands = ''printf '%s\n' ${lib.escapeShellArg value} > generated-setting'';
     };
+  gcProtection = import ./oci-layout-gc.nix {
+    inherit pkgs tools;
+    configuration = (((raw "first").stream or (raw "first")).override { fromImage = null; }).conf;
+  };
   storeImage = (raw "first").override {
     config = { };
     extraCommands = "";
@@ -34,6 +41,24 @@ let
     image = raw "second";
     inherit storeImage;
   };
+  childImage = (raw "child").override {
+    config.Labels = {
+      parent = "kept";
+      child = "kept";
+    };
+  };
+  childConfiguration = ((childImage.stream or childImage).override { fromImage = null; }).conf;
+  child = layout {
+    name = "wrix-oci-layout-child-fixture";
+    fromLayout = first;
+    image = childImage;
+    storeImage = (raw "child").override {
+      contents = [ ];
+      config = { };
+      extraCommands = "";
+    };
+  };
+  closure = pkgs.closureInfo { rootPaths = [ child ]; };
 in
 assert first.storeLayers.drvPath == second.storeLayers.drvPath;
 pkgs.runCommandLocal "oci-layout-builder"
@@ -50,7 +75,11 @@ pkgs.runCommandLocal "oci-layout-builder"
   }
   ''
     set -euo pipefail
-    for layout in ${first} ${second}; do
+    test -f ${gcProtection}/fixed-manifest.json
+    grep -Fx ${first} ${closure}/store-paths
+    grep -Fx ${first.storeLayers} ${closure}/store-paths
+    grep -Fx ${package} ${closure}/store-paths
+    for layout in ${first} ${second} ${child}; do
       while IFS= read -r descriptor; do
         digest="$(jq -r .digest <<<"$descriptor")"
         size="$(jq -r .size <<<"$descriptor")"
@@ -73,5 +102,11 @@ pkgs.runCommandLocal "oci-layout-builder"
     test "$(jq -r '.layers[-1].digest' ${first}/wrix/manifest.json)" != "$(jq -r '.layers[-1].digest' ${second}/wrix/manifest.json)"
     config="$(cat ${second}/wrix/config-digest)"
     jq -e '.config.Env == ["SETTING=second"]' "${second}/blobs/sha256/''${config#sha256:}"
-    touch "$out"
+    wrix-image-tools oci-layout ${childConfiguration} "$TMPDIR/original-child" \
+      --from-layout ${first} --store-layers ${child.storeLayers}
+    diff -r --no-dereference "$TMPDIR/original-child" ${child}
+    config="$(cat ${child}/wrix/config-digest)"
+    jq -e '.config.Labels == {parent:"kept",child:"kept"}' "${child}/blobs/sha256/''${config#sha256:}"
+    test "${first}/blobs/sha256/''${first#sha256:}" -ef "${child}/blobs/sha256/''${first#sha256:}"
+    printf '%s\n' ${gcProtection} ${first} ${second} ${child} > "$out"
   ''
