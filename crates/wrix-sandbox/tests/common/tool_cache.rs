@@ -14,6 +14,9 @@ use std::{
 
 use super::TestResult;
 
+#[path = "tool_cache/setup.rs"]
+pub mod setup;
+
 pub fn success(command: &mut Command) -> TestResult<Output> {
     let output = command.output()?;
     assert!(

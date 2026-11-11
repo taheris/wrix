@@ -23,5 +23,11 @@ wrix-cache = { workspace = true }
 wrix-state = { workspace = true }
 wrix-notify = { workspace = true }
 
+[dev-dependencies]
+flate2.workspace = true
+rusqlite.workspace = true
+tar.workspace = true
+zip.workspace = true
+
 [lints]
 workspace = true

@@ -363,8 +363,7 @@ fn native_cargo_workers_share_locks_tracking_and_git_data_not_configuration() ->
         success(Process::new("git").current_dir(&dependency).args(args))?;
     }
     let archive = fixture.root.path().join("registrydemo.crate");
-    let checksum = success(Process::new("python3").arg("-c").arg("import tarfile, io, hashlib, sys\nwith tarfile.open(sys.argv[1], 'w:gz') as t:\n for name, data in [('Cargo.toml', b'[package]\\nname = \\\"registrydemo\\\"\\nversion = \\\"0.1.0\\\"\\nedition = \\\"2024\\\"\\n'), ('src/lib.rs', b'pub fn value() -> u32 { 2 }\\n')]:\n  i = tarfile.TarInfo('registrydemo-0.1.0/' + name); i.size = len(data); t.addfile(i, io.BytesIO(data))\nprint(hashlib.sha256(open(sys.argv[1], 'rb').read()).hexdigest())\n").arg(&archive))?;
-    let checksum = String::from_utf8(checksum.stdout)?.trim().to_owned();
+    let checksum = coordination::setup::registry_archive(&archive)?;
     let archive = fs::read(&archive)?;
     let index = serde_json::to_vec(
         &json!({"name":"registrydemo", "vers":"0.1.0", "deps":[], "cksum":checksum, "features":{}, "yanked":false}),
@@ -489,8 +488,7 @@ fn native_cargo_workers_share_locks_tracking_and_git_data_not_configuration() ->
         mutate_blocked,
         "Cargo readers must contend on the pooled native mutation lock"
     );
-    let output = success(Process::new("python3").arg("-c").arg("import sqlite3, sys\nc = sqlite3.connect(sys.argv[1])\nassert c.execute('pragma integrity_check').fetchone()[0] == 'ok'\nassert c.execute('select count(*) from git_db').fetchone()[0] == 1\nassert c.execute('select count(*) from git_checkout').fetchone()[0] >= 1\nassert c.execute('select count(*) from registry_src').fetchone()[0] == 1\nassert c.execute('select count(*) from registry_crate').fetchone()[0] == 1\n").arg(cargo.join(".global-cache")))?;
-    assert_eq!(output.stdout, [] as [u8; 0]);
+    coordination::setup::assert_tracking(&cargo.join(".global-cache"))?;
     assert!(!cargo.join("config.toml").exists());
     assert!(!cargo.join("credentials.toml").exists());
     assert!(!cargo.join("target").exists());
@@ -510,7 +508,7 @@ fn native_uv_workers_concurrently_populate_and_reuse_the_managed_pool() -> TestR
     assert!(fixture.launch(Command::Spawn, None, false)?.success);
     let wheel_name = "cache_demo-1.0-py3-none-any.whl";
     let wheel = fixture.root.path().join(wheel_name);
-    success(Process::new("python3").arg("-c").arg("import zipfile, sys\nwith zipfile.ZipFile(sys.argv[1], 'w') as z:\n z.writestr('cache_demo.py', 'VALUE = 71\\n')\n z.writestr('cache_demo-1.0.dist-info/METADATA', 'Metadata-Version: 2.1\\nName: cache-demo\\nVersion: 1.0\\n')\n z.writestr('cache_demo-1.0.dist-info/WHEEL', 'Wheel-Version: 1.0\\nGenerator: fixture\\nRoot-Is-Purelib: true\\nTag: py3-none-any\\n')\n z.writestr('cache_demo-1.0.dist-info/RECORD', '')\n").arg(&wheel))?;
+    coordination::setup::wheel(&wheel)?;
     let server = HttpFixture::start(BTreeMap::from([
         (
             "/simple/cache-demo/".into(),
