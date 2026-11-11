@@ -19,11 +19,23 @@ pub enum Error {
     NoMember,
     /// {0}
     Image(#[from] crate::artifact::image::command::Error),
+    /// {0}
+    Shared(#[from] crate::artifact::image::shared::Error),
 }
 
 pub fn run(args: impl IntoIterator<Item = OsString>) -> Result<(), Error> {
     let args: Vec<_> = args.into_iter().collect();
     match args.as_slice() {
+        [name, cases, permissions] if name == "shared-nix-image" => {
+            use std::io::Write;
+            let count =
+                crate::artifact::image::shared::run(Path::new(cases), Path::new(permissions))?;
+            writeln!(
+                io::stdout().lock(),
+                "shared Nix image contracts: PASS ({count} actual artifacts, negative controls)"
+            )?;
+            Ok(())
+        }
         [name, rest @ ..] if name == "image-artifact" => {
             if crate::artifact::image::Image::run(rest, &mut io::stdout().lock())? {
                 Ok(())

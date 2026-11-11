@@ -215,16 +215,12 @@ let
       fi
       touch "$out"
     '';
-  artifacts =
-    pkgs.runCommandLocal "shared-nix-image-contract" { nativeBuildInputs = [ pkgs.python3 ]; }
-      ''
-        set -euo pipefail
-        [[ -e ${api} ]]
-        python ${./shared-nix-image.py} ${casesFile} ${../lib/image-artifact.py} ${./native-nix-permissions.py}
-        touch "$out"
-      '';
+  artifacts = import ./shared-nix-image.nix {
+    inherit pkgs casesFile api;
+  };
 in
 {
+  fixtures = { inherit casesFile; };
   checks.shared-nix-api = api;
   ciApps = [
     {

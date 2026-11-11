@@ -19,6 +19,7 @@ use super::{
 
 pub mod command;
 mod pattern;
+pub mod shared;
 
 #[cfg(test)]
 mod test;
@@ -418,6 +419,27 @@ impl Image {
             .filter(|line| !line.is_empty())
             .map(Text::from_utf8)
             .collect();
+        Self::with_layers(root, layers)
+    }
+
+    pub fn prepared(root: &Path) -> io::Result<Self> {
+        let manifest = metadata_file(&root.join("manifest.json"))?;
+        let [manifest] = manifest.array()? else {
+            return Err(io::Error::other("expected one prepared image manifest"));
+        };
+        if manifest.get("Config")?.text()? != &Text::from_utf8("config.json") {
+            return Err(io::Error::other("invalid prepared config path"));
+        }
+        let layers = manifest
+            .get("Layers")?
+            .array()?
+            .iter()
+            .map(|name| name.text().cloned())
+            .collect::<io::Result<_>>()?;
+        Self::with_layers(root, layers)
+    }
+
+    fn with_layers(root: &Path, layers: Vec<Text>) -> io::Result<Self> {
         let Json::Object(encoded) = read_json(&root.join("members.json"))? else {
             return Err(io::Error::other("invalid members index"));
         };
