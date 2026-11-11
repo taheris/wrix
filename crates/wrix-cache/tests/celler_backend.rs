@@ -1663,6 +1663,11 @@ async fn native_celler_registration_ignores_legacy_secret_and_rejects_active_key
     let key = provision().await.unwrap();
     let legacy = tempfile::tempdir().unwrap();
     let generated = std::process::Command::new("nix-store")
+        .arg("--store")
+        .arg(format!(
+            "local?root={}",
+            legacy.path().join("store").display()
+        ))
         .args(["--generate-binary-cache-key", "legacy-host-signing"])
         .arg(legacy.path().join("cache.secret"))
         .arg(legacy.path().join("cache.pub"))
