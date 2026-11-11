@@ -13,6 +13,7 @@ import ../util/rust-tool.nix {
     ../../tests/loom-nextest-file-targets.sh
     ../../tests/prepare-native-fixtures.sh
     ../../lib/sandbox/install-known-hosts.sh
+    ../../lib/sandbox/initialize-private-nix.sh
     ../../lib/util/git-ssh-setup.sh
     ../../lib/services/nix-pool/bootstrap-process.sh
     ../../tests/fixtures/build-package-fixture/build.rs

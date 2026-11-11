@@ -115,21 +115,11 @@ in
     assert builtins.all (name: rejects { agentSettings.env.${name} = "override"; }) reservedEnv;
     pkgs.runCommand "test-private-nix-api" { } ''touch "$out"'';
 
-  private-nix-state-preservation =
-    pkgs.runCommand "test-private-nix-state-preservation"
-      {
-        nativeBuildInputs = [
-          pkgs.python3
-          pkgs.fakeroot
-          pkgs.bash
-          pkgs.coreutils
-        ];
-      }
-      ''
-        set -euo pipefail
-        fakeroot python ${./test_private_nix_initializer.py} ${../../lib/sandbox/initialize-private-nix.sh}
-        touch "$out"
-      '';
+  private-nix-state-preservation = pkgs.runCommand "test-private-nix-state-preservation" { } ''
+    set -euo pipefail
+    test -e ${import ./private-nix-initializer.nix { inherit pkgs; }}
+    touch "$out"
+  '';
 
   private-nix-image-roots = import ./image-gc-roots.nix { inherit pkgs; };
 
