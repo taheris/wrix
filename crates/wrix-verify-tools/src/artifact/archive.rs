@@ -465,6 +465,9 @@ pub fn scan<R: Read>(
 pub fn index(reader: impl Read) -> io::Result<BTreeMap<Text, Header>> {
     let mut entries = BTreeMap::new();
     scan(reader, |header, _| {
+        if !header.kind.is_ascii() {
+            return Err(io::Error::other("non-ASCII tar entry type"));
+        }
         entries.insert(header.name.normalized()?, header.clone());
         Ok(())
     })?;
@@ -540,6 +543,21 @@ mod test {
         );
         compressed.push(1);
         assert!(index(Gzip::new(BufReader::new(compressed.as_slice()))).is_err());
+    }
+
+    #[test]
+    fn non_ascii_inner_type_is_rejected_like_the_original_metadata_encoder() {
+        let mut data = tar(&[(b"invalid-type", b"body")]);
+        data[156] = 255;
+        data[148..156].fill(b' ');
+        let checksum: u64 = data[..512].iter().map(|byte| u64::from(*byte)).sum();
+        data[148..156].copy_from_slice(format!("{checksum:06o}\0 ").as_bytes());
+        assert!(
+            index(data.as_slice())
+                .unwrap_err()
+                .to_string()
+                .contains("non-ASCII tar entry type")
+        );
     }
 
     #[test]
