@@ -4,13 +4,20 @@ use wrix_core::path::WorkspaceHash;
 
 fn generate(keys: &Path, name: &str) {
     fs::create_dir_all(keys).unwrap();
+    let store = tempfile::tempdir().unwrap();
     let output = Command::new("nix-store")
+        .arg("--store")
+        .arg(format!("local?root={}", store.path().display()))
         .args(["--generate-binary-cache-key", name])
         .arg(keys.join("cache.secret"))
         .arg(keys.join("cache.pub"))
         .output()
         .unwrap();
-    assert!(output.status.success(), "Nix fixture key generation failed");
+    assert!(
+        output.status.success(),
+        "Nix fixture key generation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     for name in ["cache.secret", "cache.pub"] {
         fs::set_permissions(keys.join(name), fs::Permissions::from_mode(0o600)).unwrap();
     }

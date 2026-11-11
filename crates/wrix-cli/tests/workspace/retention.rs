@@ -11,7 +11,10 @@ fn unsupported_flat_cache_prune_preserves_imported_closures_and_keys() {
     let native = legacy_services(&fixture, &key, "checkout-service");
     let keys = native.join("keys");
     fs::create_dir_all(&keys).unwrap();
+    let store = tempfile::tempdir().unwrap();
     let generated = std::process::Command::new("nix-store")
+        .arg("--store")
+        .arg(format!("local?root={}", store.path().display()))
         .arg("--generate-binary-cache-key")
         .arg("fixture")
         .arg(keys.join("cache.secret"))

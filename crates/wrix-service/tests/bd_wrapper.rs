@@ -47,6 +47,11 @@ esac
             serde_json::to_string(&native)?
         );
         let output = Command::new("nix")
+            .arg("--store")
+            .arg(format!(
+                "local?root={}",
+                root.path().join("store").display()
+            ))
             .args(["eval", "--raw", "--impure", "--expr", &expression])
             .output()?;
         assert!(

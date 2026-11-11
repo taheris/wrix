@@ -418,7 +418,10 @@ in
           pkgs.python3
           pkgs.tmux
         ]
-        ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.util-linux ];
+        ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+          pkgs.util-linux
+          pkgs.iproute2
+        ];
       preCheck = preCheck + ''
         HOME="$(mktemp -d)"
         export HOME

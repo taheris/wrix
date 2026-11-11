@@ -183,7 +183,10 @@ printf '%s\n' "$8"
     let native = root.path().join(&state_relative);
     let keys = native.join("keys");
     fs::create_dir(&keys).unwrap();
+    let store = tempfile::tempdir().unwrap();
     let output = Command::new("nix-store")
+        .arg("--store")
+        .arg(format!("local?root={}", store.path().display()))
         .args(["--generate-binary-cache-key", "fixture"])
         .arg(keys.join("cache.secret"))
         .arg(keys.join("cache.pub"))
