@@ -123,9 +123,17 @@ in
 
   private-nix-image-roots = import ./image-gc-roots.nix { inherit pkgs; };
 
-  private-nix-artifacts = pkgs.runCommand "test-private-nix-artifacts" { } ''
-    set -euo pipefail
-    ${pkgs.lib.getExe verifyTools} private-nix-artifacts ${factoryImagesFile} ${archive.source}
-    touch "$out"
-  '';
+  private-nix-artifacts =
+    pkgs.runCommand "test-private-nix-artifacts"
+      {
+        passthru.artifactInputs = {
+          images = factoryImagesFile;
+          compatibilityArchive = archive.source;
+        };
+      }
+      ''
+        set -euo pipefail
+        ${pkgs.lib.getExe verifyTools} private-nix-artifacts ${factoryImagesFile} ${archive.source}
+        touch "$out"
+      '';
 }
