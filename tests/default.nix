@@ -808,8 +808,8 @@ let
         }
 
         prepare_ci_apps() {
-          local app index names
-          local selected=() derivations=()
+          local app index
+          local selected=() derivations=() installables=()
           local -A seen=()
           for app in "$@"; do
             if is_ci_app "$app" && [[ ! -v "seen[$app]" ]]; then
@@ -817,7 +817,7 @@ let
               admit_ci_app "$app"
               if [[ "''${ci_admission_status[$app]}" -eq 0 ]]; then
                 selected+=("$app")
-
+                installables+=(".#legacyPackages.${system}.ciApps.$app")
               fi
             fi
           done
@@ -825,16 +825,20 @@ let
             return 0
           fi
           batch_dir=$(mktemp -d -t wrix-ci-runners.XXXXXX)
-          names=$(printf '%s\n' "''${selected[@]}" | jq -Rsc 'split("\n")[:-1]')
-          if ! WRIX_CI_FLAKE="git+file://$repo_root" WRIX_CI_TARGETS="$names" \
-            ${pkgs.nix}/bin/nix-instantiate --impure --add-root "$batch_dir/derivation" --indirect --expr '
-              let
-                flake = builtins.getFlake (builtins.getEnv "WRIX_CI_FLAKE");
-                apps = flake.legacyPackages.${system}.ciApps;
-              in map (name: builtins.getAttr name apps)
-                (builtins.fromJSON (builtins.getEnv "WRIX_CI_TARGETS"))
-            ' > "$batch_dir/derivations"; then
+          if ! ${pkgs.nix}/bin/nix build --dry-run --json --no-link --no-warn-dirty \
+            "''${installables[@]}" > "$batch_dir/plan.json"; then
             return 0 # Metadata failure retains the original per-app build verdicts.
+          fi
+          if ! jq -e 'type == "array" and all(.[]; (.drvPath | type) == "string")' \
+            "$batch_dir/plan.json" > /dev/null; then
+            return 0 # Unsupported planner output retains individual build diagnostics.
+          fi
+          if ! WRIX_CI_DERIVATIONS="$(jq -c 'map(.drvPath)' "$batch_dir/plan.json")" \
+            ${pkgs.nix}/bin/nix-instantiate --impure --add-root "$batch_dir/derivation" --indirect --expr '
+              map (path: import (builtins.storePath path))
+                (builtins.fromJSON (builtins.getEnv "WRIX_CI_DERIVATIONS"))
+            ' > "$batch_dir/derivations"; then
+            return 0 # Metadata rooting failure retains the individual realization path.
           fi
           mapfile -t derivations < "$batch_dir/derivations"
           if [[ "''${#derivations[@]}" -ne "''${#selected[@]}" ]]; then

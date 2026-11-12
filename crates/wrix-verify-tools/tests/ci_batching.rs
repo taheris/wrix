@@ -27,6 +27,84 @@ fn quoted_executable_fixture_preserves_spaces_and_apostrophes_and_exit_status() 
     assert_eq!(text(&result.stderr), "fixture-error\n");
 }
 
+fn native_suite_command(
+    sandbox: &Sandbox,
+    cargo_status: i32,
+    timeout_status: Option<i32>,
+) -> std::process::Command {
+    let bin = sandbox.root.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    fixture::executable(
+        &bin.join("cargo"),
+        &format!(
+            "#!/usr/bin/env bash\nset -euo pipefail\ntest \"$NEXTEST_EXPERIMENTAL_SETUP_SCRIPTS\" = 1\nprintf '%s\\n' \"$@\" > {}\nexit {cargo_status}\n",
+            quote(sandbox.root.join("cargo-args"))
+        ),
+    );
+    if let Some(status) = timeout_status {
+        fixture::executable(
+            &bin.join("timeout"),
+            &format!(
+                "#!/usr/bin/env bash\nset -euo pipefail\nprintf '%s\\n' \"$@\" > {}\nexit {status}\n",
+                quote(sandbox.root.join("timeout-args"))
+            ),
+        );
+    }
+    let path = sandbox
+        .environment
+        .get(std::ffi::OsStr::new("PATH"))
+        .unwrap();
+    let mut command = sandbox.command("bash");
+    command
+        .arg(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../bin/test-native"))
+        .env(
+            "PATH",
+            format!("{}:{}", bin.display(), path.to_string_lossy()),
+        );
+    command
+}
+
+#[test]
+fn native_suite_runs_all_targets_with_automatic_setup_enabled() {
+    let sandbox = Sandbox::new("native-suite-complete-");
+    let result = capture(&mut native_suite_command(&sandbox, 0, None));
+    assert!(result.status.success(), "{}", combined(&result));
+    assert_eq!(
+        sandbox.read("cargo-args"),
+        "nextest\nrun\n--workspace\n--all-targets\n"
+    );
+    assert!(text(&result.stdout).contains("including compilation and automatic setup"));
+}
+
+#[test]
+fn native_suite_propagates_test_failure_without_reporting_success() {
+    let sandbox = Sandbox::new("native-suite-failure-");
+    let result = capture(&mut native_suite_command(&sandbox, 23, None));
+    assert_eq!(result.status.code(), Some(23), "{}", combined(&result));
+    assert!(!text(&result.stdout).contains("Native suite:"));
+}
+
+#[test]
+fn native_suite_caps_the_entire_command_including_cancellation() {
+    let sandbox = Sandbox::new("native-suite-deadline-");
+    let result = capture(&mut native_suite_command(&sandbox, 0, Some(124)));
+    assert_eq!(result.status.code(), Some(124), "{}", combined(&result));
+    assert_eq!(
+        sandbox.read("timeout-args"),
+        "--signal=TERM\n--kill-after=5s\n595s\ncargo\nnextest\nrun\n--workspace\n--all-targets\n"
+    );
+    assert!(!sandbox.root.join("cargo-args").exists());
+    assert!(!text(&result.stdout).contains("Native suite:"));
+}
+
+#[test]
+fn native_suite_rejects_filters_instead_of_silently_omitting_tests() {
+    let sandbox = Sandbox::new("native-suite-filter-");
+    let result = capture(native_suite_command(&sandbox, 0, None).arg("--filter"));
+    assert_eq!(result.status.code(), Some(64), "{}", combined(&result));
+    assert!(!sandbox.root.join("cargo-args").exists());
+}
+
 const PASS: &str = "test-linux-builder-sshd-hardening";
 const STATUS: &str = "test-linux-builder-image-source-kind";
 const BROKEN: &str = "test-linux-builder-source-kind-load-transport";
@@ -108,6 +186,40 @@ impl Fixture {
                     .map_or_else(String::new, |v| v.to_string_lossy().into_owned())
             ),
         );
+        command
+    }
+    fn lock_inputs(&self) {
+        let lock = capture(self.command("nix").args(["flake", "lock"]));
+        assert!(lock.status.success(), "{}", combined(&lock));
+        for args in [
+            vec!["add", "flake.lock"],
+            vec![
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-qm",
+                "Lock fixture inputs",
+            ],
+        ] {
+            let result = capture(self.command("git").args(args));
+            assert!(result.status.success(), "{}", combined(&result));
+        }
+    }
+    fn cached_command(&self, program: &str) -> std::process::Command {
+        let mut command = self.command(program);
+        let config = command
+            .get_envs()
+            .find_map(|(name, value)| {
+                (name == "NIX_CONFIG").then(|| value.unwrap().to_string_lossy().into_owned())
+            })
+            .unwrap();
+        command.env("NIX_CONFIG", format!("{config}\neval-cache = true\n"));
         command
     }
     fn run_with(
@@ -303,11 +415,44 @@ fn selected_runners_batch_before_independent_execution() {
 }
 #[test]
 #[ignore = "owning test-ci boundary"]
+fn admitted_metadata_reuses_the_locked_flake_evaluation_cache() {
+    let f = Fixture::new();
+    f.lock_inputs();
+    let targets = [PASS, STATUS].map(|app| format!(".#legacyPackages.{}.ciApps.{app}", f.system));
+    let seeded = capture(
+        f.cached_command("nix")
+            .args(["build", "--dry-run", "--json"])
+            .args(&targets),
+    );
+    assert!(seeded.status.success(), "{}", combined(&seeded));
+    assert!(text(&seeded.stderr).contains("WRIX-CI-BATCH-QUERY"));
+    let result = capture(
+        f.cached_command(&input("WRIX_TEST_CI_RUNNER"))
+            .args(["--json", PASS, STATUS])
+            .env("WRIX_TEST_CI_STATUS", "pass")
+            .env("WRIX_TEST_CI_CALLS", f.sandbox.root.join("calls")),
+    );
+    assert!(result.status.success(), "{}", combined(&result));
+    assert!(
+        records(&result.stdout)
+            .iter()
+            .all(|record| record["outcome"] == "passed")
+    );
+    assert!(
+        !text(&result.stderr).contains("WRIX-CI-BATCH-QUERY"),
+        "{}",
+        combined(&result)
+    );
+}
+
+#[test]
+#[ignore = "owning test-ci boundary"]
 fn completed_window_executes_before_later_image_producers_are_materialized() {
     let f = Fixture::new();
+    f.lock_inputs();
     let stream = fs::File::create(f.sandbox.root.join("ordered-output")).unwrap();
     let status = f
-        .command(&input("WRIX_TEST_CI_RUNNER"))
+        .cached_command(&input("WRIX_TEST_CI_RUNNER"))
         .args(["--json", PASS, STATUS, OFFLINE])
         .env("WRIX_TEST_CI_STATUS", "pass")
         .env("WRIX_TEST_CI_CALLS", f.sandbox.root.join("calls"))
@@ -330,7 +475,9 @@ fn completed_window_executes_before_later_image_producers_are_materialized() {
         .unwrap();
     let next_producer = diagnostic
         .lines()
-        .position(|line| line.contains(&format!("-{OFFLINE}.drv")))
+        .position(|line| {
+            line.starts_with("building '") && line.contains(&format!("-{OFFLINE}.drv"))
+        })
         .unwrap();
     assert!(execution < next_producer, "{diagnostic}");
     assert_eq!(diagnostic.matches("trace: WRIX-CI-BATCH-QUERY").count(), 1);

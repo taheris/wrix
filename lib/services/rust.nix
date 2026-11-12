@@ -39,6 +39,7 @@ let
       "crates/wrix-service/tests" = ../../crates/wrix-service/tests;
       "crates/wrix-verify-tools/tests" = ../../crates/wrix-verify-tools/tests;
       ".config/nextest.toml" = ../../.config/nextest.toml;
+      "bin/test-native" = ../../bin/test-native;
       "loom.toml" = ../../loom.toml;
       "tests" = ../../tests;
       "lib/util/git-ssh-setup.sh" = ../util/git-ssh-setup.sh;
@@ -113,6 +114,7 @@ let
         builtins.removeAttrs workspaceArgs.extraSrcs (
           [
             "tests"
+            "bin/test-native"
             "loom.toml"
           ]
           ++ map (name: "crates/${name}/tests") (builtins.attrNames (builtins.readDir ../../crates))

@@ -9,6 +9,7 @@ import ../util/rust-tool.nix {
     pkgs.jq
   ];
   extraSources = [
+    ../../bin/test-native
     ../../loom.toml
     ../../tests/loom-nextest-file-targets.sh
     ../../tests/prepare-native-fixtures.sh

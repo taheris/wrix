@@ -4,6 +4,19 @@ Push verification retains its existing assertions, signatures, source
 projections, platform requirements and deadlines. Reductions must distinguish
 runtime closure, build inputs, temporary allocation and native execution time.
 
+## Normal developer suite
+
+Run `bin/test-native` for the complete workspace and all native targets. It
+includes Cargo compilation and Nextest's automatic fixture setup in its measured
+wall time, fails the five-minute acceptance budget even if tests pass, and has a
+ten-minute hard stop including cancellation. It accepts no test filters. Setup
+and test failures retain their nonzero exit status.
+
+Packaging, image and platform acceptance remain required separately at the end
+of a batch. Their costs are not native-suite timing, and an unfinished
+publication gate is not a successful test result. Verification commands must be
+diagnosed at the ten-minute boundary rather than retried with longer timeouts.
+
 ## Internal Git runtime
 
 Wrix's packaged command, controller tools and cache publisher use nixpkgs' Git
@@ -38,14 +51,16 @@ must not be presented as that newer candidate's complete push footprint.
 
 ## Build cache and allocation
 
-The CI app driver instantiates admitted targets once and retains their
-derivation metadata separately from realized outputs. It builds and executes at
-most two selected app packages at a time, then releases that window's temporary
-output roots. Ordered per-target verdicts, duplicate invocations, capability
-admission, individual build failures and interruption cleanup retain their
-existing behavior. This bounds simultaneously retained build inputs; it does not
-omit image checks or claim that the complete cold image matrix finishes in five
-minutes.
+The CI app driver plans admitted targets once through Nix's locked-flake
+evaluation cache and retains existing derivation metadata separately from
+realized outputs. Rooting metadata imports only the planned store derivations,
+not the whole flake through an impure `builtins.getFlake` call. It builds and
+executes at most two selected app packages at a time, then releases that
+window's temporary output roots. Ordered per-target verdicts, duplicate
+invocations, capability admission, individual build failures and interruption
+cleanup retain their existing behavior. This bounds simultaneously retained
+build inputs; it does not omit image checks or claim that the complete cold
+image matrix finishes in five minutes.
 
 A successful dependency build is not necessarily a retained dependency cache:
 normal result roots do not automatically retain build-time-only Cargo artifacts.

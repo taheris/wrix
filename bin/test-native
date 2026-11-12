@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+SECONDS=0
+
+if [[ "$#" -ne 0 ]]; then
+  printf 'Usage: bin/test-native\n' >&2
+  exit 64
+fi
+if ! command -v timeout >/dev/null; then
+  printf 'test-native: GNU coreutils timeout is required; enter the project devshell.\n' >&2
+  exit 127
+fi
+root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$root"
+export NEXTEST_EXPERIMENTAL_SETUP_SCRIPTS=1
+
+if timeout --signal=TERM --kill-after=5s 595s cargo nextest run --workspace --all-targets; then
+  elapsed="$SECONDS"
+  printf 'Native suite: %ss including compilation and automatic setup (limit: 300s).\n' "$elapsed"
+  if [[ "$elapsed" -ge 300 ]]; then
+    printf 'test-native: suite exceeded the five-minute acceptance budget.\n' >&2
+    exit 1
+  fi
+else
+  status="$?"
+  printf 'test-native: failed after %ss (exit %s; ten-minute hard stop includes cancellation).\n' "$SECONDS" "$status" >&2
+  exit "$status"
+fi
