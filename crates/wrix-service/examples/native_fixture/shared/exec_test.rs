@@ -33,7 +33,7 @@ fn check_stdin(interactive: bool, test: &str) {
     fs::write(
         &backend,
         format!(
-            "#!/usr/bin/env bash\nset -euo pipefail\ncat > stdin\nprintf '%s\\n' '{REPLY}'\nprintf '%s\\n' '{DIAGNOSTIC}' >&2\nexit 17\n"
+            "#!/usr/bin/env bash\nset -euo pipefail\nprintf '%s\\n%s' \"$NIX_BUILD_TOP\" \"$NIX_ENFORCE_PURITY\" > build-context\ncat > stdin\nprintf '%s\\n' '{REPLY}'\nprintf '%s\\n' '{DIAGNOSTIC}' >&2\nexit 17\n"
         ),
     )
     .unwrap();
@@ -64,6 +64,8 @@ fn check_stdin(interactive: bool, test: &str) {
         .args(["--exact", test, "--nocapture"])
         .env(ROOT, root.path())
         .env("WRIX_SHARED_FIXTURE", root.path())
+        .env("NIX_BUILD_TOP", "/outer-derivation")
+        .env("NIX_ENFORCE_PURITY", "1")
         .env("PATH", path)
         .stdin(stdin)
         .stdout(Stdio::piped())
@@ -78,6 +80,10 @@ fn check_stdin(interactive: bool, test: &str) {
     assert_eq!(
         fs::read(root.path().join("stdin")).unwrap(),
         if interactive { payload } else { Vec::new() }
+    );
+    assert_eq!(
+        fs::read_to_string(root.path().join("build-context")).unwrap(),
+        "/run/wrix/compiler/execution\n1"
     );
     assert!(String::from_utf8(output.stdout).unwrap().contains(REPLY));
     assert!(

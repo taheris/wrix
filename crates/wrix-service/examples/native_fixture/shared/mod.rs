@@ -195,7 +195,8 @@ fn execute(root: &Path, state: Option<&State>, args: &[String]) -> Result<ExitCo
     } else {
         OsString::from(program)
     };
-    let output = Command::new("nsenter")
+    let mut command = Command::new("nsenter");
+    command
         .args([
             "--mount",
             "--target",
@@ -210,8 +211,9 @@ fn execute(root: &Path, state: Option<&State>, args: &[String]) -> Result<ExitCo
             Stdio::inherit()
         } else {
             Stdio::null()
-        })
-        .output()?;
+        });
+    compiler_build_context(&mut command);
+    let output = command.output()?;
     OpenOptions::new()
         .create(true)
         .append(true)
