@@ -1,10 +1,12 @@
 { pkgs }:
 
 let
-  inherit (pkgs) gitMinimal;
+  # Darwin's minimal Git HTTPS helper stalls pinned fetchGit metadata queries.
+  # Keep the minimal Linux runtime, but use the working packaged host transport.
+  gitRuntime = if pkgs.stdenv.isDarwin then pkgs.git else pkgs.gitMinimal;
   runtimeInputs = [
     pkgs.prek
-    gitMinimal
+    gitRuntime
     pkgs.coreutils
   ];
 in
@@ -16,7 +18,7 @@ pkgs.writeShellApplication {
     ${builtins.readFile ./binding.sh}
     wrix_prek_check_runtime() {
       local executable
-      for executable in ${pkgs.prek}/bin/prek ${gitMinimal}/bin/git ${pkgs.coreutils}/bin/{cat,dirname,mkdir,rm,uname}; do
+      for executable in ${pkgs.prek}/bin/prek ${gitRuntime}/bin/git ${pkgs.coreutils}/bin/{cat,dirname,mkdir,rm,uname}; do
         [[ -x "$executable" ]] || wrix_prek_fail "packaged hook runtime dependency $executable is missing"
       done
     }
