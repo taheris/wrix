@@ -122,12 +122,13 @@ The CI app driver plans admitted targets once through Nix's locked-flake
 evaluation cache and retains existing derivation metadata separately from
 realized outputs. Rooting metadata imports only the planned store derivations,
 not the whole flake through an impure `builtins.getFlake` call. It builds and
-executes at most two selected app packages at a time, then releases that
-window's temporary output roots. Ordered per-target verdicts, duplicate
-invocations, capability admission, individual build failures and interruption
-cleanup retain their existing behavior. This bounds simultaneously retained
-build inputs; it does not omit image checks or claim that the complete cold
-image matrix finishes in five minutes.
+executes one selected app package at a time, then releases that window's
+temporary output root. A completed check no longer holds image inputs while an
+unrelated large producer in the same build invocation is still running. Ordered
+per-target verdicts, duplicate invocations, capability admission, individual
+build failures and interruption cleanup retain their existing behavior. This
+bounds simultaneously retained build inputs; it does not omit image checks or
+claim that the complete cold image matrix finishes in five minutes.
 
 Hermetic artifact checks execute their unchanged assertions in source-bound Nix
 check derivations. Their CI launchers retain only the genuine successful check

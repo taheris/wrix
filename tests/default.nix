@@ -798,7 +798,6 @@ let
 
         batch_dir=""
         declare -A ci_runners=() ci_derivations=() ci_admission_status=() ci_admission_records=()
-        ci_selected=()
         trap 'if [[ -n "$batch_dir" ]]; then rm -rf "$batch_dir"; fi' EXIT
         trap 'exit 130' INT
         trap 'exit 143' TERM
@@ -853,56 +852,43 @@ let
           if [[ "''${#derivations[@]}" -ne "''${#selected[@]}" ]]; then
             return 0 # Ambiguous metadata retains the individual realization path.
           fi
-          ci_selected=("''${selected[@]}")
           for index in "''${!selected[@]}"; do
             ci_derivations["''${selected[$index]}"]="$(${coreutils}/bin/readlink -f "''${derivations[$index]}")"
           done
         }
 
         prepare_ci_window() {
-          local app="$1" candidate runner link result started=0
-          local selected=() installables=() links=()
+          local app="$1" runner link result
+          local links=()
           if [[ -v "ci_runners[$app]" || ! -v "ci_derivations[$app]" ]]; then
             return 0
           fi
           ci_runners=()
           rm -f "$batch_dir"/runner*
-          for candidate in "''${ci_selected[@]}"; do
-            if [[ "$candidate" == "$app" ]]; then started=1; fi
-            if [[ "$started" -eq 1 ]]; then
-              selected+=("$candidate")
-              installables+=("''${ci_derivations[$candidate]}^*")
-              if [[ "''${#selected[@]}" -eq 2 ]]; then break; fi
-            fi
-          done
-          if ! ${pkgs.nix}/bin/nix build --no-warn-dirty --out-link "$batch_dir/runner" "''${installables[@]}"; then
+          if ! ${pkgs.nix}/bin/nix build --no-warn-dirty --out-link "$batch_dir/runner" "''${ci_derivations[$app]}^*"; then
             return 0 # Preserve independent failure verdicts through per-app fallback builds.
           fi
           links=("$batch_dir"/runner*)
-          for candidate in "''${selected[@]}"; do
-            runner=""
-            for link in "''${links[@]}"; do
-              if [[ -x "$link/bin/$candidate" ]]; then
-                if [[ -n "$runner" ]]; then
-                  ci_runners=()
-                  return 0 # Ambiguous executable identities retain individual builds.
-                fi
-                runner="$link"
+          runner=""
+          for link in "''${links[@]}"; do
+            if [[ -x "$link/bin/$app" ]]; then
+              if [[ -n "$runner" ]]; then
+                return 0 # Ambiguous executable identities retain individual builds.
               fi
-            done
-            if [[ -z "$runner" ]]; then
-              ci_runners=()
-              return 0 # Missing executables retain the existing failure behavior.
-            fi
-            ci_runners["$candidate"]="$(${coreutils}/bin/readlink "$runner")"
-            if [[ -f "$runner/nix-support/verification-result" ]]; then
-              IFS= read -r result < "$runner/nix-support/verification-result"
-              if ! ${pkgs.nix}/bin/nix-store --add-root "$batch_dir/checked-$candidate" --indirect --realise "$result" > /dev/null; then
-                ci_runners=()
-                return 0 # Keep independent build/verdict behavior if cache rooting fails.
-              fi
+              runner="$link"
             fi
           done
+          if [[ -z "$runner" ]]; then
+            return 0 # Missing executables retain the existing failure behavior.
+          fi
+          ci_runners["$app"]="$(${coreutils}/bin/readlink "$runner")"
+          if [[ -f "$runner/nix-support/verification-result" ]]; then
+            IFS= read -r result < "$runner/nix-support/verification-result"
+            if ! ${pkgs.nix}/bin/nix-store --add-root "$batch_dir/checked-$app" --indirect --realise "$result" > /dev/null; then
+              ci_runners=()
+              return 0 # Keep independent build/verdict behavior if cache rooting fails.
+            fi
+          fi
         }
 
         resolve_ci_app() {
