@@ -3,7 +3,7 @@
 let
   # Darwin's minimal Git HTTPS helper stalls pinned fetchGit metadata queries.
   # Keep the minimal Linux runtime, but use the working packaged host transport.
-  gitRuntime = if pkgs.stdenv.isDarwin then pkgs.git else pkgs.gitMinimal;
+  gitRuntime = if pkgs.stdenv.hostPlatform.isDarwin then pkgs.git else pkgs.gitMinimal;
   runtimeInputs = [
     pkgs.prek
     gitRuntime

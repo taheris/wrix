@@ -6,10 +6,13 @@ runtime closure, build inputs, temporary allocation and native execution time.
 
 ## Internal Git runtime
 
-Wrix's packaged command, controller tools, cache publisher and prek runner use
-nixpkgs' Git Minimal for their core Git operations. Workspace profiles and
-explicitly selected Python packages are unchanged. Compiler/check dependencies
-are not removed or hidden.
+Wrix's packaged command, controller tools and cache publisher use nixpkgs' Git
+Minimal for their core Git operations. The Linux prek runner also uses Git
+Minimal. The Darwin prek runner uses full packaged Git: real HTTPS HEAD queries
+for the pinned Celler source stalled with the minimal transport, while the full
+transport completed. Hook entries, signatures and certificate verification
+remain unchanged. Workspace profiles and explicitly selected Python packages are
+unchanged. Compiler/check dependencies are not removed or hidden.
 
 The packaged-runner conformance check performs real SSH-signed commits and tags,
 verification, worktree access, local transport push and clone. Existing CLI and
