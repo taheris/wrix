@@ -3003,14 +3003,27 @@ let
   metadataRealizationCheck =
     let
       sources =
-        map (entry: toString entry.image.source) (builtins.attrValues sourceKindMatrix)
-        ++ map (image: toString image.source) (builtins.attrValues prekSurfaceImageMatrix);
-      referencesImage =
-        text:
-        builtins.any (
-          source: builtins.intersectAttrs (builtins.getContext source) (builtins.getContext text) != { }
-        ) sources;
+        map (entry: entry.image.source) (builtins.attrValues sourceKindMatrix)
+        ++ map (image: image.source) (builtins.attrValues prekSurfaceImageMatrix);
+      referencesImage = metadata.referencesImage sources;
+      sourceFixture = builtins.toFile "image-context-source" "image";
+      unrelatedFixture = builtins.toFile "image-context-unrelated" "other";
+      lazyProducer = pkgs.runCommand "unrelated-image-context" { } (
+        throw "unrelated producer was instantiated"
+      );
+      namedProducer = pkgs.runCommand "matching-image-context" { } ''touch "$out"'';
+      sameNameOtherProducer = pkgs.runCommand "matching-image-context" { } ''mkdir "$out"'';
     in
+    assert
+      !metadata.referencesImage [ (throw "context-free metadata forced an image producer") ] "metadata";
+    assert metadata.referencesImage [ sourceFixture ] sourceFixture;
+    assert !metadata.referencesImage [ sourceFixture ] unrelatedFixture;
+    assert !metadata.referencesImage [ lazyProducer ] unrelatedFixture;
+    assert metadata.referencesImage [ namedProducer ] (toString namedProducer);
+    assert metadata.referencesImage [ (namedProducer // { name = "display-name-only"; }) ] (
+      toString namedProducer
+    );
+    assert !metadata.referencesImage [ namedProducer ] (toString sameNameOtherProducer);
     assert referencesImage (toString defaultImage.source);
     assert !referencesImage wrixImagesSourceKindTest.text;
     assert !referencesImage wrixImageLabelsTest.text;
