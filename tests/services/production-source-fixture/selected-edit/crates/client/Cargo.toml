@@ -1,0 +1,10 @@
+[package]
+name = "client"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+shared_dep.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+target_alias = { path = "../target-helper", package = "target-helper" }

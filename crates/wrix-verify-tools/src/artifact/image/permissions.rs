@@ -92,21 +92,17 @@ fn final_layer(image: &Image) -> Result<Box<dyn Read>, Error> {
         .layers
         .last()
         .ok_or(Error::Contract("image has no final layer"))?;
-    let (mut reader, offset, size): (Box<dyn Read>, _, _) =
-        if let Some((source, locations)) = &image.source {
-            let &(offset, size) = locations
-                .get(last)
-                .ok_or(Error::Contract("final archive layer location missing"))?;
-            (archive::open(source)?, offset, size)
-        } else {
-            let file = File::open(image.root.join(path(last)?))?;
-            let size = file.metadata()?.len();
-            (Box::new(file), 0, size)
-        };
-    require(
-        archive::drain(&mut (&mut reader).take(offset))? == offset,
-        "truncated outer archive",
-    )?;
+    let (reader, size): (Box<dyn Read>, _) = if let Some(source) = &image.source {
+        let &(offset, size) = source
+            .locations
+            .get(last)
+            .ok_or(Error::Contract("final archive layer location missing"))?;
+        (Box::new(image.archive_at(&source.path, offset)?), size)
+    } else {
+        let file = File::open(image.root.join(path(last)?))?;
+        let size = file.metadata()?.len();
+        (Box::new(file), size)
+    };
     Ok(Box::new(reader.take(size)))
 }
 

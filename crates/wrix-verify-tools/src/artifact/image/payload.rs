@@ -1,5 +1,5 @@
 //! Verify exactly one retained payload occurrence across every emitted layer.
-use super::{Image, Text, archive, bounded, path};
+use super::{Image, Text, bounded, path};
 use std::{
     fs::File,
     io::{self, Read},
@@ -22,20 +22,17 @@ fn normalized(bytes: &[u8]) -> &[u8] {
     &bytes[start..]
 }
 fn reader(image: &Image, layer: &Text) -> Result<Box<dyn Read>, Error> {
-    let (mut reader, offset, size): (Box<dyn Read>, _, _) =
-        if let Some((source, locations)) = &image.source {
-            let &(offset, size) = locations
-                .get(layer)
-                .ok_or(Error::Contract("archive layer location missing"))?;
-            (archive::open(source)?, offset, size)
-        } else {
-            let file = File::open(image.root.join(path(layer)?))?;
-            let size = file.metadata()?.len();
-            (Box::new(file), 0, size)
-        };
-    if archive::drain(&mut (&mut reader).take(offset))? != offset {
-        return Err(Error::Contract("truncated outer archive"));
-    }
+    let (reader, size): (Box<dyn Read>, _) = if let Some(source) = &image.source {
+        let &(offset, size) = source
+            .locations
+            .get(layer)
+            .ok_or(Error::Contract("archive layer location missing"))?;
+        (Box::new(image.archive_at(&source.path, offset)?), size)
+    } else {
+        let file = File::open(image.root.join(path(layer)?))?;
+        let size = file.metadata()?.len();
+        (Box::new(file), size)
+    };
     Ok(Box::new(reader.take(size)))
 }
 

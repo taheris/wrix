@@ -17,7 +17,7 @@ pkgs.runCommandLocal "wrix-docker-gzip-parts"
     set -euo pipefail
     mkdir -p "$out"
     jq -er .mtime ${conf} > "$out/mtime"
-    printf '%s\n' '${pkgs.pigz}/bin/pigz -n' > "$out/compressor"
+    printf '%s\n' '${pkgs.pigz}/bin/pigz -1 -n' > "$out/compressor"
     reusable=0
     ${pkgs.lib.optionalString (parentParts != null) ''
       if cmp -s "$out/mtime" ${parentParts}/mtime && \
@@ -40,7 +40,7 @@ pkgs.runCommandLocal "wrix-docker-gzip-parts"
           ''
       }
       ${imageTools}/bin/wrix-image-tools docker-layer-entry ${layout} ${conf} "$digest" \
-        | ${pkgs.pigz}/bin/pigz -n -p "$NIX_BUILD_CORES" > "$out/$digest.gz"
+        | ${pkgs.pigz}/bin/pigz -1 -n -p "$NIX_BUILD_CORES" > "$out/$digest.gz"
     done < layers
     cp layers "$out/order"
   ''

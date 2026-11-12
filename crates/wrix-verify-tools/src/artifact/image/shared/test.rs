@@ -129,7 +129,7 @@ impl Fixture {
         let (_, header) = image.lookup(&Text::from_utf8(name)).unwrap().unwrap();
         assert_eq!(bytes.len() as u64, header.size);
         let image_source = image.source.as_ref().unwrap();
-        let base = image_source.1[&image.layers[0]].0;
+        let base = image_source.locations[&image.layers[0]].0;
         let mut file = fs::OpenOptions::new()
             .write(true)
             .open(&self.case.source)

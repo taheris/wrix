@@ -1,9 +1,10 @@
 //! Bounded sequential tar indexing and validated multi-member gzip transport.
 
 use std::collections::BTreeMap;
-use std::fs::File;
-use std::io::{self, BufRead, BufReader, Read};
-use std::path::Path;
+use std::io::{self, Read};
+
+mod input;
+pub use input::{Checkpoint, MAX_GZIP_CHECKPOINTS, open, open_at};
 
 use super::text::Text;
 
@@ -22,73 +23,6 @@ pub struct Header {
 impl Header {
     pub const fn regular(&self) -> bool {
         matches!(self.kind, 0 | b'0' | b'7' | b'S')
-    }
-}
-
-enum GzipState<R> {
-    Member(flate2::bufread::GzDecoder<R>),
-    Complete,
-    Failed,
-}
-
-struct Gzip<R> {
-    state: GzipState<R>,
-}
-
-impl<R: BufRead> Gzip<R> {
-    fn new(reader: R) -> Self {
-        Self {
-            state: GzipState::Member(flate2::bufread::GzDecoder::new(reader)),
-        }
-    }
-}
-
-impl<R: BufRead> Read for Gzip<R> {
-    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
-        if bytes.is_empty() {
-            return Ok(0);
-        }
-        loop {
-            match std::mem::replace(&mut self.state, GzipState::Failed) {
-                GzipState::Complete => {
-                    self.state = GzipState::Complete;
-                    return Ok(0);
-                }
-                GzipState::Failed => {
-                    return Err(io::Error::other("gzip transport previously failed"));
-                }
-                GzipState::Member(mut decoder) => {
-                    let count = decoder.read(bytes)?;
-                    if count != 0 {
-                        self.state = GzipState::Member(decoder);
-                        return Ok(count);
-                    }
-                    let mut reader = decoder.into_inner();
-                    loop {
-                        let buffered = reader.fill_buf()?;
-                        if buffered.is_empty() {
-                            self.state = GzipState::Complete;
-                            return Ok(0);
-                        }
-                        let zeros = buffered.iter().take_while(|byte| **byte == 0).count();
-                        reader.consume(zeros);
-                        if zeros == 0 {
-                            break;
-                        }
-                    }
-                    self.state = GzipState::Member(flate2::bufread::GzDecoder::new(reader));
-                }
-            }
-        }
-    }
-}
-
-pub fn open(path: &Path) -> io::Result<Box<dyn Read>> {
-    let mut source = BufReader::new(File::open(path)?);
-    if source.fill_buf()?.starts_with(&[0x1f, 0x8b]) {
-        Ok(Box::new(Gzip::new(source)))
-    } else {
-        Ok(Box::new(source))
     }
 }
 
@@ -479,6 +413,10 @@ mod test {
     use super::*;
     use std::io::Write;
 
+    fn gzip(bytes: &[u8]) -> impl Read + '_ {
+        input::Gzip::new(std::io::Cursor::new(bytes), 0).unwrap()
+    }
+
     pub fn tar(entries: &[(&[u8], &[u8])]) -> Vec<u8> {
         let mut builder = tar::Builder::new(Vec::new());
         for (name, content) in entries {
@@ -513,15 +451,10 @@ mod test {
             encoder.write_all(chunk).unwrap();
             compressed.extend(encoder.finish().unwrap());
         }
-        assert_eq!(
-            index(Gzip::new(BufReader::new(compressed.as_slice())))
-                .unwrap()
-                .len(),
-            1
-        );
+        assert_eq!(index(gzip(&compressed)).unwrap().len(), 1);
         let end = compressed.len();
         compressed[end - 8] ^= 1;
-        assert!(index(Gzip::new(BufReader::new(compressed.as_slice()))).is_err());
+        assert!(index(gzip(&compressed)).is_err());
     }
 
     #[test]
@@ -535,14 +468,9 @@ mod test {
             compressed.extend(encoder.finish().unwrap());
             compressed.extend_from_slice(&[0; 17]);
         }
-        assert_eq!(
-            index(Gzip::new(BufReader::new(compressed.as_slice())))
-                .unwrap()
-                .len(),
-            1
-        );
+        assert_eq!(index(gzip(&compressed)).unwrap().len(), 1);
         compressed.push(1);
-        assert!(index(Gzip::new(BufReader::new(compressed.as_slice()))).is_err());
+        assert!(index(gzip(&compressed)).is_err());
     }
 
     #[test]

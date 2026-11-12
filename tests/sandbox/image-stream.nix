@@ -2,6 +2,7 @@
 let
   stream = import ../../lib/sandbox/image-stream.nix { inherit pkgs; };
   tools = import ../../lib/sandbox/image-tools.nix { inherit pkgs; };
+  reader = import ../../lib/verify/tools.nix { inherit pkgs; };
   payload = pkgs.writeTextDir "share/image-stream-payload" "streaming image fixture\n";
   args = {
     name = "wrix-stream-fixture";
@@ -53,6 +54,23 @@ let
     }
   );
   changedTime = child.override { mtime = "1970-01-01T00:00:02Z"; };
+  legacyParts = pkgs.runCommand "legacy-compressor-parts" { } ''
+    mkdir -p "$out"
+    cp ${compressed.gzipParts}/mtime "$out/mtime"
+    printf '%s\n' '${pkgs.pigz}/bin/pigz -n' > "$out/compressor"
+    while IFS= read -r digest; do
+      printf 'forbidden legacy cached member\n' > "$out/$digest.gz"
+    done < ${compressed.gzipParts}/order
+  '';
+  changedRecipe = child.override {
+    fromImage = poisonParent // {
+      gzipParts = legacyParts;
+    };
+  };
+  uncompressed = compressed.override { compressor = "none"; };
+  corruptCompressed = pkgs.runCommand "truncated-image-gzip" { } ''
+    head -c -1 ${compressed} > "$out"
+  '';
   budgetPlanner = import ../../lib/sandbox/auto-layer.nix {
     pkgs = pkgs.buildPackages;
     planner = tools;
@@ -82,6 +100,8 @@ pkgs.runCommandLocal "docker-image-stream"
           child
           defaultChild
           changedTime
+          changedRecipe
+          uncompressed
           ;
       };
     };
@@ -101,10 +121,21 @@ pkgs.runCommandLocal "docker-image-stream"
     grep -F '${raw.streamScript}' ${raw} > /dev/null
     ${raw} > expected.tar
     gzip -cd ${compressed} | cmp expected.tar -
+    cmp ${uncompressed} expected.tar
+    ${pkgs.lib.getExe reader} image-artifact prepare ${compressed} "$TMPDIR/immutable-inspection"
+    jq -e --arg source ${compressed} '.source_identity.immutable_nix_store == $source' \
+      "$TMPDIR/immutable-inspection/archive.json"
+    if ${pkgs.lib.getExe reader} image-artifact prepare ${corruptCompressed} "$TMPDIR/corrupt-inspection"; then
+      echo 'immutable source bypassed full gzip validation' >&2
+      exit 1
+    fi
+    IFS= read -r compressor < ${compressed.gzipParts}/compressor
+    [[ "$compressor" == '${pkgs.pigz}/bin/pigz -1 -n' ]]
     while IFS= read -r digest; do
       test -L ${child.gzipParts}/"$digest.gz"
       test "$(readlink ${child.gzipParts}/"$digest.gz")" = "${compressed.gzipParts}/$digest.gz"
       test ! -L ${changedTime.gzipParts}/"$digest.gz"
+      test ! -L ${changedRecipe.gzipParts}/"$digest.gz"
     done < ${compressed.gzipParts}/order
     if maxLayers=3 parentLayout=${compressed.ociLayout} fromImage= bash ${budgetScript} > budget-output 2> budget-error; then
       echo 'default planner accepted an exhausted inherited layer budget' >&2
@@ -144,6 +175,8 @@ pkgs.runCommandLocal "docker-image-stream"
     test "$(jq '.layers | length' ${defaultChild.ociLayout}/wrix/manifest.json)" -gt 2
     ${changedTime.stream} > changed-time.tar
     gzip -cd ${changedTime} | cmp changed-time.tar -
+    ${changedRecipe.stream} > changed-recipe.tar
+    gzip -cd ${changedRecipe} | cmp changed-recipe.tar -
     export HOME="$TMPDIR"
     skopeo --tmpdir "$TMPDIR" --insecure-policy copy --quiet docker-archive:expected.tar oci:"$TMPDIR/converted":test
     config="$(skopeo --tmpdir "$TMPDIR" inspect --raw oci:"$TMPDIR/converted":test | jq -r '.config.digest')"

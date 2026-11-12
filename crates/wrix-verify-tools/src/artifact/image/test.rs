@@ -202,6 +202,111 @@ impl Fixture {
     }
 }
 
+fn segmented_image(fixture: &Fixture, name: &str) -> (Image, Vec<u8>, usize) {
+    let raw = fixture.docker(&[]);
+    let headers = archive::index(raw.as_slice()).unwrap();
+    let split = usize::try_from(headers[&Text::from_utf8("layer-1")].offset).unwrap();
+    let mut compressed = gzip(&raw[..split]);
+    let boundary = compressed.len();
+    compressed.extend(gzip(&raw[split..]));
+    (
+        fixture.docker_image(&compressed, name).unwrap(),
+        compressed,
+        boundary,
+    )
+}
+
+#[test]
+fn gzip_restart_index_roundtrips_in_the_compact_prepared_image() {
+    let fixture = Fixture::new();
+    let (image, _, _) = segmented_image(&fixture, "indexed");
+    assert_eq!(image.source.as_ref().unwrap().checkpoints.len(), 2);
+    let loaded = Image::prepared(&image.root).unwrap();
+    assert_eq!(loaded.source.as_ref().unwrap().checkpoints.len(), 2);
+    let output = fixture.temp.path().join("indexed-output");
+    assert!(
+        loaded
+            .extract(&Text::from_utf8("etc/marker"), &output)
+            .unwrap()
+    );
+    assert_eq!(fs::read(output).unwrap(), b"new\n");
+    assert!(!image.root.join("archive.tar").exists());
+}
+
+#[test]
+fn restart_source_identity_depends_only_on_compressed_bytes_not_host_metadata() {
+    let fixture = Fixture::new();
+    let (first, bytes, _) = segmented_image(&fixture, "first-identity");
+    let second = fixture.docker_image(&bytes, "second-identity").unwrap();
+    let expected = text(&format!("sha256:{:x}", Sha256::digest(&bytes)));
+    assert_eq!(
+        first.source.as_ref().unwrap().identity.as_ref(),
+        Some(&expected)
+    );
+    assert_eq!(
+        second.source.as_ref().unwrap().identity.as_ref(),
+        Some(&expected)
+    );
+}
+
+#[test]
+fn changed_archive_identity_falls_back_to_full_prefix_crc_validation() {
+    let fixture = Fixture::new();
+    let (image, mut compressed, boundary) = segmented_image(&fixture, "changed-prefix");
+    compressed[boundary - 8] ^= 1;
+    fs::write(&image.source.as_ref().unwrap().path, compressed).unwrap();
+    let loaded = Image::prepared(&image.root).unwrap();
+    assert!(
+        loaded
+            .extract(
+                &Text::from_utf8("etc/marker"),
+                &fixture.temp.path().join("invalid-output")
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn legacy_prepared_images_remain_extractable_without_restart_metadata() {
+    let fixture = Fixture::new();
+    let (image, _, _) = segmented_image(&fixture, "legacy-index");
+    let path = image.root.join("archive.json");
+    let Json::Object(mut record) = read_json(&path).unwrap() else {
+        panic!("archive object")
+    };
+    record.remove(&Text::from_utf8("gzip_members"));
+    record.remove(&Text::from_utf8("source_identity"));
+    write_json(&path, &Json::Object(record)).unwrap();
+    let loaded = Image::prepared(&image.root).unwrap();
+    assert_eq!(loaded.source.as_ref().unwrap().checkpoints, []);
+    let output = fixture.temp.path().join("legacy-output");
+    assert!(
+        loaded
+            .extract(&Text::from_utf8("etc/marker"), &output)
+            .unwrap()
+    );
+    assert_eq!(fs::read(output).unwrap(), b"new\n");
+}
+
+#[test]
+fn unordered_restart_offsets_are_rejected_before_payload_extraction() {
+    let fixture = Fixture::new();
+    let (image, _, _) = segmented_image(&fixture, "unordered-index");
+    let path = image.root.join("archive.json");
+    let Json::Object(mut record) = read_json(&path).unwrap() else {
+        panic!("archive object")
+    };
+    record.insert(
+        Text::from_utf8("gzip_members"),
+        Json::Array(vec![
+            object([("compressed", number(0)), ("uncompressed", number(0))]),
+            object([("compressed", number(0)), ("uncompressed", number(512))]),
+        ]),
+    );
+    write_json(&path, &Json::Object(record)).unwrap();
+    assert!(Image::prepared(&image.root).is_err());
+}
+
 fn gzip(data: &[u8]) -> Vec<u8> {
     let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
     encoder.write_all(data).unwrap();

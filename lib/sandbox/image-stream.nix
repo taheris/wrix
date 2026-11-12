@@ -135,7 +135,7 @@ in
               done < ${stream.gzipParts}/order > "$out"
               ${imageTools}/bin/wrix-image-tools docker-tail ${stream.ociLayout} ${stream.conf} \
                 ${optionalString ((args.fromImage or null) != null) "--from-layout ${args.fromImage.ociLayout}"} \
-                | ${pkgs.pigz}/bin/pigz -n -p "$NIX_BUILD_CORES" >> "$out"
+                | ${pkgs.pigz}/bin/pigz -1 -n -p "$NIX_BUILD_CORES" >> "$out"
             '';
         passthru = (previous.passthru or { }) // {
           inherit stream;

@@ -5,7 +5,7 @@ use std::fs::{self, File};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::os::unix::{
     ffi::OsStrExt,
-    fs::{PermissionsExt, symlink},
+    fs::{MetadataExt, PermissionsExt, symlink},
 };
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -27,7 +27,96 @@ pub mod shared;
 mod test;
 
 type Members = BTreeMap<Text, Header>;
-type ArchiveSource = (PathBuf, BTreeMap<Text, (u64, u64)>);
+#[derive(Debug)]
+struct ArchiveSource {
+    path: PathBuf,
+    locations: BTreeMap<Text, (u64, u64)>,
+    checkpoints: Vec<archive::Checkpoint>,
+    identity: Option<Json>,
+}
+
+fn immutable_store_file(path: &Path) -> io::Result<bool> {
+    let Ok(relative) = path.strip_prefix("/nix/store") else {
+        return Ok(false);
+    };
+    let Some(std::path::Component::Normal(first)) = relative.components().next() else {
+        return Ok(false);
+    };
+    let Some((hash, name)) = first.to_str().and_then(|name| name.split_once('-')) else {
+        return Ok(false);
+    };
+    if hash.len() != 32
+        || name.is_empty()
+        || !hash
+            .bytes()
+            .all(|byte| b"0123456789abcdfghijklmnpqrsvwxyz".contains(&byte))
+    {
+        return Ok(false);
+    }
+    let mut entry = PathBuf::from("/nix/store");
+    let store = entry.metadata()?;
+    if store.uid() != 0 || (store.mode() & 0o022 != 0 && store.mode() & 0o1000 == 0) {
+        return Ok(false);
+    }
+    for component in relative.components() {
+        if !matches!(component, std::path::Component::Normal(_)) {
+            return Ok(false);
+        }
+        entry.push(component);
+        let metadata = entry.symlink_metadata()?;
+        if metadata.uid() != 0 || metadata.mode() & 0o222 != 0 {
+            return Ok(false);
+        }
+    }
+    Ok(path.metadata()?.is_file())
+}
+
+fn source_identity(path: &Path) -> io::Result<Json> {
+    if immutable_store_file(path)? {
+        return Ok(object([(
+            "immutable_nix_store",
+            Json::String(path_text(path)),
+        )]));
+    }
+    let mut reader = HashReader {
+        reader: File::open(path)?,
+        hash: Sha256::new(),
+    };
+    archive::drain(&mut reader)?;
+    Ok(text(&format!("sha256:{:x}", reader.hash.finalize())))
+}
+
+fn checkpoints(value: &Json) -> io::Result<Vec<archive::Checkpoint>> {
+    let Json::Object(record) = value else {
+        return Err(io::Error::other("invalid archive index"));
+    };
+    let Some(points) = record.get(&Text::from_utf8("gzip_members")) else {
+        return Ok(Vec::new());
+    };
+    let points = points.array()?;
+    if points.len() > archive::MAX_GZIP_CHECKPOINTS {
+        return Err(io::Error::other("oversized gzip restart index"));
+    }
+    let points = points
+        .iter()
+        .map(|point| {
+            Ok(archive::Checkpoint {
+                compressed: point.get("compressed")?.integer()?,
+                uncompressed: point.get("uncompressed")?.integer()?,
+            })
+        })
+        .collect::<io::Result<Vec<_>>>()?;
+    if points
+        .first()
+        .is_some_and(|point| point.compressed != 0 || point.uncompressed != 0)
+        || points.windows(2).any(|pair| {
+            pair[0].compressed >= pair[1].compressed || pair[0].uncompressed > pair[1].uncompressed
+        })
+    {
+        return Err(io::Error::other("invalid gzip restart index"));
+    }
+    Ok(points)
+}
 
 fn object(values: impl IntoIterator<Item = (&'static str, Json)>) -> Json {
     Json::Object(
@@ -317,7 +406,13 @@ impl Image {
             return Err(io::Error::other("invalid Docker config member"));
         }
         let mut locations = BTreeMap::new();
-        archive::scan(archive::open(&source)?, |header, payload| {
+        let mut transport = archive::open(&source)?;
+        let identity = if transport.checkpoints().is_empty() {
+            None
+        } else {
+            Some(source_identity(&source)?)
+        };
+        archive::scan(&mut transport, |header, payload| {
             let name = header.name.normalized()?;
             if name == config {
                 if !header.regular() {
@@ -349,7 +444,17 @@ impl Image {
         if self.members.keys().collect::<BTreeSet<_>>() != layers.iter().collect() {
             return Err(io::Error::other("missing Docker image layer"));
         }
-        self.source = Some((source, locations));
+        if let Some(expected) = &identity
+            && source_identity(&source)? != *expected
+        {
+            return Err(io::Error::other("archive changed during preparation"));
+        }
+        self.source = Some(ArchiveSource {
+            path: source,
+            locations,
+            checkpoints: transport.checkpoints().to_vec(),
+            identity,
+        });
         Ok(())
     }
 
@@ -387,15 +492,35 @@ impl Image {
             &self.root.join("layer-digests.json"),
             &Json::Object(self.digests.clone()),
         )?;
-        if let Some((source, locations)) = &self.source {
+        if let Some(source) = &self.source {
             write_json(
                 &self.root.join("archive.json"),
                 &object([
-                    ("source", Json::String(path_text(source))),
+                    ("source", Json::String(path_text(&source.path))),
+                    (
+                        "source_identity",
+                        source.identity.clone().unwrap_or(Json::Null),
+                    ),
+                    (
+                        "gzip_members",
+                        Json::Array(
+                            source
+                                .checkpoints
+                                .iter()
+                                .map(|point| {
+                                    object([
+                                        ("compressed", number(point.compressed)),
+                                        ("uncompressed", number(point.uncompressed)),
+                                    ])
+                                })
+                                .collect(),
+                        ),
+                    ),
                     (
                         "layers",
                         Json::Object(
-                            locations
+                            source
+                                .locations
                                 .iter()
                                 .map(|(layer, &(offset, size))| {
                                     (
@@ -467,9 +592,14 @@ impl Image {
             let Json::Object(locations) = value.get("layers")? else {
                 return Err(io::Error::other("invalid layer locations"));
             };
-            Some((
-                path(value.get("source")?.text()?)?,
-                locations
+            let Json::Object(record) = &value else {
+                return Err(io::Error::other("invalid archive index"));
+            };
+            Some(ArchiveSource {
+                path: path(value.get("source")?.text()?)?,
+                checkpoints: checkpoints(&value)?,
+                identity: record.get(&Text::from_utf8("source_identity")).cloned(),
+                locations: locations
                     .iter()
                     .map(|(layer, location)| {
                         Ok((
@@ -481,7 +611,7 @@ impl Image {
                         ))
                     })
                     .collect::<io::Result<_>>()?,
-            ))
+            })
         } else {
             None
         };
@@ -552,6 +682,21 @@ impl Image {
         Ok(None)
     }
 
+    fn archive_at(&self, source: &Path, offset: u64) -> io::Result<impl Read + use<>> {
+        let points = if let Some(index) = &self.source {
+            if !index.checkpoints.is_empty()
+                && index.identity.as_ref() == Some(&source_identity(source)?)
+            {
+                index.checkpoints.as_slice()
+            } else {
+                &[] // Changed or legacy sources retain full sequential gzip validation.
+            }
+        } else {
+            &[]
+        };
+        archive::open_at(source, offset, points)
+    }
+
     pub fn extract(&self, raw: &Text, output: &Path) -> io::Result<bool> {
         let Some((layer, mut header)) = self.lookup(raw)? else {
             return Ok(false);
@@ -592,12 +737,13 @@ impl Image {
         } else {
             header.size
         };
-        let (source, offset, bound) = if let Some((source, locations)) = &self.source {
-            let &(base, size) = locations
+        let (source, offset, bound) = if let Some(source) = &self.source {
+            let &(base, size) = source
+                .locations
                 .get(layer)
                 .ok_or_else(|| io::Error::other("missing Docker layer location"))?;
             (
-                source.clone(),
+                source.path.clone(),
                 base.checked_add(header.offset_data)
                     .ok_or_else(|| io::Error::other("archive offset overflow"))?,
                 size,
@@ -614,10 +760,7 @@ impl Image {
         {
             return Err(io::Error::other("member exceeds layer bounds"));
         }
-        let mut reader = archive::open(&source)?;
-        if archive::drain(&mut (&mut reader).take(offset))? != offset {
-            return Err(io::Error::other("truncated archive before member"));
-        }
+        let mut reader = self.archive_at(&source, offset)?;
         let mut destination = File::create(output)?;
         if let Some(map) = &header.sparse {
             for &(start, size) in map {

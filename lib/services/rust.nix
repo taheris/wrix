@@ -72,8 +72,24 @@ let
   };
 
   workspace = rustProfile.buildPackage workspaceArgs;
+  productionSource =
+    packages: filter:
+    import ./rust-production-source.nix {
+      inherit pkgs packages filter;
+      root = ../..;
+    };
+  clientPackages = [
+    "wrix-cli"
+    "wrix-cache"
+    "wrix-notify"
+  ];
+  clientFilter = import ./rust-client-source-filter.nix {
+    inherit (pkgs) lib;
+    inherit (rustProfile.craneLib) filterCargoSources;
+    root = ../..;
+  };
   clientCargoArgs = concatStringsSep " " [
-    "--package wrix-cli --package wrix-cache --package wrix-notify"
+    (concatStringsSep " " (map (name: "--package ${name}") clientPackages))
     "--bin wrix --bin wrix-git-sign --bin wrix-focus-notification"
     "--bin wrix-cache-hook --bin wrix-cache-publish --bin wrix-host-cache-policy"
   ];
@@ -92,11 +108,8 @@ let
     // {
       cargoArtifacts = clientCargoArtifacts;
       cargoExtraArgs = clientCargoArgs;
-      srcFilter = import ./rust-client-source-filter.nix {
-        inherit (pkgs) lib;
-        inherit (rustProfile.craneLib) filterCargoSources;
-        root = ../..;
-      };
+      srcFilter = clientFilter;
+      productionSrc = productionSource clientPackages clientFilter;
     }
   );
   compileOnlyWorkspace = rustProfile.buildPackage (
@@ -149,7 +162,23 @@ let
     workspaceArgs
     // {
       inherit (workspace) cargoArtifacts;
+      productionSrc = productionSource [ "wrix-cli" "wrix-service-server" ] workspaceArgs.srcFilter;
       cargoExtraArgs = "--package wrix-cli --package wrix-service-server --bin wrix-service-supervisor --bin wrix-shared-service --bin wrix-egress-gateway --bin wrix-nix-pool-owner";
+    }
+  );
+  controllerPackages = builtins.filter (
+    name:
+    !(builtins.elem name [
+      "wrix-image-tools"
+      "wrix-verify-tools"
+    ])
+  ) (builtins.attrNames (builtins.readDir ../../crates));
+  controllerWorkspace = rustProfile.buildPackage (
+    workspaceArgs
+    // {
+      inherit (workspace) cargoArtifacts;
+      productionSrc = productionSource controllerPackages workspaceArgs.srcFilter;
+      cargoExtraArgs = concatStringsSep " " (map (name: "--package ${name}") controllerPackages);
     }
   );
 
@@ -179,7 +208,7 @@ let
   controllerRuntime = pkgs.symlinkJoin {
     name = "wrix-controller-runtime";
     paths = [
-      workspace.bin
+      controllerWorkspace.bin
       pkgs.nix
       pkgs.skopeo
       gitMinimal
@@ -220,7 +249,7 @@ let
         set -euo pipefail
 
         mkdir -p "$out/bin"
-        makeWrapper "${workspace.bin}/bin/wrix-host-controller" "$out/bin/wrix-host-controller" \
+        makeWrapper "${controllerWorkspace.bin}/bin/wrix-host-controller" "$out/bin/wrix-host-controller" \
           --set WRIX_CONTROLLER_MANAGEMENT "${controllerManagement}" \
           --run 'export WRIX_HOST_RUNTIME_PATH="''${WRIX_HOST_RUNTIME_PATH:-$PATH}"' \
           --prefix PATH : "${controllerRuntime}/bin" ${
@@ -312,9 +341,10 @@ let
   };
 
   fixtureSource = pkgs.runCommand "wrix-fixture-source" { } ''
-    cp -r ${workspace.bin.src} "$out"
+    cp -r ${controllerWorkspace.bin.src} "$out"
     chmod -R u+w "$out"
-    cp -r ${../../crates/wrix-service/examples} "$out/crates/wrix-service/examples"
+    mkdir -p "$out/crates/wrix-service/examples"
+    cp -r ${../../crates/wrix-service/examples}/. "$out/crates/wrix-service/examples/"
   '';
 
   fixtureExamples = workspace.bin.overrideAttrs (old: {
@@ -334,8 +364,6 @@ let
     checkPhase = ''
       runHook preCheck
       cargoWithProfile test --offline --locked -p wrix-service-server --example wrix-native-fixtures
-      test ! -e ${workspace.bin}/bin/wrix-native-fixtures
-      test ! -e ${workspace.bin}/bin/host-controller-fixture
       runHook postCheck
     '';
     installPhase = ''
@@ -347,6 +375,15 @@ let
       mainProgram = "wrix-native-fixtures";
     };
   });
+
+  fixtureIsolation = pkgs.runCommand "native-fixture-production-isolation" { } ''
+    set -euo pipefail
+    for package in ${workspace.bin} ${clientWorkspace.bin} ${runtimeWorkspace.bin} ${controllerWorkspace.bin}; do
+      test ! -e "$package/bin/wrix-native-fixtures"
+      test ! -e "$package/bin/host-controller-fixture"
+    done
+    touch "$out"
+  '';
 
   fixtures = import ../../tests/prek/native-fixtures.nix {
     inherit pkgs;
@@ -494,10 +531,12 @@ in
     '';
   });
 
+  inherit fixtureIsolation;
   testFixtures = fixtures.bundle;
   testFixtureEnvironment = fixtures.environment;
   package = workspace.bin;
   clientPackage = clientWorkspace.bin;
+  controllerImplementation = controllerWorkspace.bin;
   inherit clientCargoArtifacts;
   runtimePackage = runtimeWorkspace.bin;
   wrix = wrixPackage;

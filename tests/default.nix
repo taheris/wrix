@@ -352,6 +352,11 @@ let
         inherit pkgs;
         inherit (wrix) rustPackage;
       };
+      native-fixture-production-isolation = wrix.rustPackage.fixtureIsolation;
+      rust-production-source = import ./services/production-source.nix {
+        inherit pkgs wrix;
+        rustProfile = wrix.profiles.rust;
+      };
       rust-source-fixtures = import ./services/rust-source.nix {
         inherit pkgs;
         inherit (wrix) rustPackage;

@@ -49,6 +49,58 @@ that compiler-dependent verification no longer needs an SDK. The final combined
 client/server/catalogue candidate needs a fresh closure measurement; the table
 must not be presented as that newer candidate's complete push footprint.
 
+## Production source isolation
+
+Client, service and controller binaries consume the normal/build
+local-dependency closure of their selected packages, including optional and
+target-specific edges. Unselected implementations become empty Cargo target
+entrypoints; the original manifests, lock and complete target inventory remain
+intact. Controller runtime tools no longer pull the standalone image/verifier
+tools into their implementation package. The full workspace package remains
+available unchanged.
+
+Clippy and Nextest retain the full sources and fixture overlays. Source-owning
+checks compare complete production derivation keys across unused implementation
+and fixture edits, check that selected/dependency edits invalidate those keys,
+execute aliased workspace/build dependencies, and compare the real workspace's
+Cargo target inventory for every production projection. This prevents verifier
+implementation edits from rebuilding clients, service images and their dependent
+image tiers.
+
+Automatic native-fixture compilation uses the same implementation projection.
+The original production-package fixture-exclusion assertions run in the required
+`native-fixture-production-isolation` Nix check, covering the foundation,
+client, service and controller packages. They no longer force a separate
+full-workspace production build merely to start the native suite; packaged
+example unit tests remain enabled during fixture construction.
+
+## Archive work
+
+The default cached Docker gzip members and archive tail use deterministic
+`pigz -1 -n`. Explicit caller-selected compressors remain unchanged. A member is
+reused only when its timestamp and complete compressor recipe match; the owner
+check supplies invalid legacy-recipe members and verifies that they are rebuilt.
+Decompressed archives remain byte-identical to the native stream.
+
+A bounded two-core comparison on the same 5,566,197,760-byte emitted Rust store
+tar measured default compression at 59.10s / 1,523,160,354 bytes and level one
+at 19.36s / 1,692,817,188 bytes: 3.05 times faster compression, with 11.1%
+larger gzip output. These are compressor-stage measurements, not whole-push or
+physical allocation savings.
+
+Prepared artifact indexes retain bounded gzip-member restart points. Raw tar
+queries seek directly; gzip queries restart at the nearest validated member
+instead of decompressing every parent tier. Preparation still validates the
+entire transport, including all gzip trailers and tar headers. Restart metadata
+is bound either to a matching full-source SHA-256 or to an immutable store file:
+the source and each store-entry component are root-owned and read-only, under a
+root-owned store with protected directory entries. Mutable source changes fall
+back to sequential validation, and legacy indexes remain readable. No inode or
+host timestamps enter the persisted index. On the same emitted Rust archive,
+extracting the retained store-roots file measured 12.24s before and 1.06s with
+restart indexing, with byte-identical output. Preparation remained approximately
+40s; this is a query improvement, not a claim that preparation became free.
+
 ## Build cache and allocation
 
 The CI app driver plans admitted targets once through Nix's locked-flake

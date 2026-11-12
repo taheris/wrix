@@ -242,6 +242,7 @@ let
       cargoLock,
       cargoToml ? src + "/Cargo.toml",
       extraSrcs ? { },
+      productionSrc ? null,
       cargoArtifacts ? null,
       cargoExtraArgs ? "",
       buildInputs ? [ ],
@@ -323,6 +324,7 @@ let
       bin = craneLib.buildPackage (
         commonArgs
         // {
+          src = if productionSrc == null then cleanedSrc else productionSrc;
           cargoArtifacts = resolvedCargoArtifacts;
           doCheck = false;
         }
