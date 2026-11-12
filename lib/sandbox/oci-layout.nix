@@ -27,7 +27,7 @@ let
       storeConfiguration;
   storeLayers = runCommandLocal "${name}-store-layers" { } ''
     set -euo pipefail
-    bash ${./oci-layout-build.sh} ${imageTools}/bin/wrix-image-tools ${storeConf} --store-layers-only
+    bash ${./oci-layout-reserved-output.sh} ${imageTools}/bin/wrix-image-tools ${storeConf} --store-layers-only
   '';
 in
 runCommandLocal name
@@ -36,7 +36,7 @@ runCommandLocal name
   }
   ''
     set -euo pipefail
-    bash ${./oci-layout-build.sh} ${imageTools}/bin/wrix-image-tools ${conf} \
+    bash ${./oci-layout-reserved-output.sh} ${imageTools}/bin/wrix-image-tools ${conf} \
       --store-layers ${storeLayers} \
       ${optionalString (fromLayout != null) "--from-layout ${fromLayout}"}
   ''

@@ -101,6 +101,21 @@ extracting the retained store-roots file measured 12.24s before and 1.06s with
 restart indexing, with byte-identical output. Preparation remained approximately
 40s; this is a query improvement, not a claim that preparation became free.
 
+## Nix output staging
+
+OCI Nix builders stage inside their reserved output root and rename the
+completed contents on the same filesystem. Nix protects that active build output
+from GC; the builder removes its owned output on failure. This avoids the
+temporary copy and cross-volume move of multi-gigabyte store tars through
+`NIX_BUILD_TOP`. Standalone unreserved destinations retain the separate
+private-build-directory wrapper and its original/fixed private-GC controls. The
+generic Rust atomic writer is unchanged.
+
+Both-platform Nix owners exercise the reserved-output entrypoint,
+same-filesystem staging, existing/dangling destination refusal, early/late
+failure cleanup, and unchanged emitted layouts. No unregistered top-level store
+staging directory or additional GC root is created.
+
 ## Build cache and allocation
 
 The CI app driver plans admitted targets once through Nix's locked-flake

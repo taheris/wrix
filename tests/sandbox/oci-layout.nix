@@ -27,6 +27,10 @@ let
     inherit pkgs tools;
     configuration = (((raw "first").stream or (raw "first")).override { fromImage = null; }).conf;
   };
+  reservedOutput = import ./oci-layout-reserved.nix {
+    inherit pkgs tools;
+    configuration = (((raw "first").stream or (raw "first")).override { fromImage = null; }).conf;
+  };
   storeImage = (raw "first").override {
     config = { };
     extraCommands = "";
@@ -75,6 +79,7 @@ pkgs.runCommandLocal "oci-layout-builder"
   }
   ''
     set -euo pipefail
+    test -s ${reservedOutput}/layers.json
     test -f ${gcProtection}/fixed-manifest.json
     grep -Fx ${first} ${closure}/store-paths
     grep -Fx ${first.storeLayers} ${closure}/store-paths
