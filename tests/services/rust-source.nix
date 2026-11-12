@@ -189,23 +189,23 @@ assert hasInfix "--all-targets" rustPackage.cargoArtifacts.buildPhase;
 assert hasInfix "cargoWithProfile test" rustPackage.cargoArtifacts.checkPhase;
 assert hasInfix "--bin wrix-git-sign" rustPackage.clientPackage.buildPhase;
 assert toString rustPackage.clientPackage.src != toString rustPackage.package.src;
-assert
-  !(builtins.pathExists (
-    rustPackage.clientPackage.src + "/crates/wrix-service/src/gateway/server.rs"
-  ));
 assert builtins.pathExists (rustPackage.package.src + "/crates/wrix-service/src/gateway/server.rs");
 assert hasInfix
-  (builtins.unsafeDiscardStringContext "${rustPackage.package}/bin/wrix-host-controller")
+  (builtins.unsafeDiscardStringContext "${rustPackage.controllerImplementation}/bin/wrix-host-controller")
   rustPackage.controllerPackage.buildCommand;
 assert rustPackage.cacheBackendTests.cargoArtifacts == rustPackage.cargoArtifacts;
 assert rustPackage.clippy.src == rustPackage.nextest.src;
-assert toString rustPackage.runtimePackage.src == toString rustPackage.package.src;
+assert toString rustPackage.runtimePackage.src != toString rustPackage.package.src;
+assert toString rustPackage.controllerImplementation.src != toString rustPackage.package.src;
 assert hasInfix "--bin wrix-service-supervisor" rustPackage.runtimePackage.buildPhase;
 assert hasInfix "--bin wrix-egress-gateway" rustPackage.runtimePackage.buildPhase;
 assert hasInfix "--bin wrix-shared-service" rustPackage.runtimePackage.buildPhase;
 assert hasInfix "--bin wrix-nix-pool-owner" rustPackage.runtimePackage.buildPhase;
 pkgs.runCommand "test-rust-source-fixtures" { } ''
   set -euo pipefail
+  [[ ! -e ${rustPackage.clientPackage.src}/crates/wrix-service/src/gateway/server.rs ]]
+  [[ -f ${rustPackage.runtimePackage.src}/crates/wrix-service/src/gateway/server.rs ]]
+  [[ -f ${rustPackage.controllerImplementation.src}/crates/wrix-service/src/gateway/server.rs ]]
   diff -r --exclude README.md ${storedRoot "a"} ${notesChanged}
   diff -r --exclude nextest.toml ${storedRoot "a"} ${configChanged}
   cmp ${storedRoot "a"}/Cargo.toml ${notesChanged}/Cargo.toml
