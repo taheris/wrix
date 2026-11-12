@@ -454,21 +454,14 @@ in
       mkdir -p "$out/source"
       tar --exclude='./target' -cf - . | tar -xf - -C "$out/source"
       cd "$out/source"
-      : > compiled-tests.json
-      for target in celler_backend host_publication_only host_signed_exclusion; do
-        cargo test --offline --locked --no-run -p wrix-cache --test "$target" \
-          ''${CARGO_PROFILE:+--profile "$CARGO_PROFILE"} --message-format json >> compiled-tests.json
-      done
-      cargo test --offline --locked --no-run -p wrix-service-server --test celler_auth \
-        ''${CARGO_PROFILE:+--profile "$CARGO_PROFILE"} --message-format json >> compiled-tests.json
-      for target in service_lifecycle workspace_admission; do
-        cargo test --offline --locked --no-run -p wrix-cli --test "$target" \
-          ''${CARGO_PROFILE:+--profile "$CARGO_PROFILE"} --message-format json >> compiled-tests.json
-      done
-      for target in execution_lifetime runtime_environment; do
-        cargo test --offline --locked --no-run -p wrix-sandbox --test "$target" \
-          ''${CARGO_PROFILE:+--profile "$CARGO_PROFILE"} --message-format json >> compiled-tests.json
-      done
+      # Resolve features once for the complete batch. Separate package/target
+      # invocations repeatedly recompile shared dependencies with different features.
+      cargo test --offline --locked --no-run \
+        -p wrix-cache -p wrix-service-server -p wrix-cli -p wrix-sandbox \
+        --test celler_backend --test host_publication_only --test host_signed_exclusion \
+        --test celler_auth --test service_lifecycle --test workspace_admission \
+        --test execution_lifetime --test runtime_environment \
+        ''${CARGO_PROFILE:+--profile "$CARGO_PROFILE"} --message-format json > compiled-tests.json
       runHook postBuild
     '';
     installPhase = ''
