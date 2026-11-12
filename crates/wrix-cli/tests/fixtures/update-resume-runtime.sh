@@ -2,7 +2,7 @@
 # jq variables must not expand in the shell.
 # shellcheck disable=SC2016
 set -euo pipefail
-if [[ "${1:-}" == run && -f "${WRIX_TEST_FAIL_BACKEND_START:-}" ]]; then
+if [[ ( "${1:-}" == run || "${1:-}" == create ) && -f "${WRIX_TEST_FAIL_BACKEND_START:-}" ]]; then
   args=("$@")
   for ((i=0; i+1<${#args[@]}; i++)); do
     if [[ "${args[i]}" == --name && "${args[i+1]}" == "${WRIX_TEST_SERVICE_NAME:?}" ]]; then

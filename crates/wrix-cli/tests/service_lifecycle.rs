@@ -37,6 +37,51 @@ use fs2::FileExt;
 use serde_json::{Value, json};
 use wrix_sandbox::command::Command as LaunchCommand;
 
+#[test]
+fn backend_start_fault_covers_run_and_create_without_affecting_peers() -> TestResult {
+    for operation in ["run", "create"] {
+        for selected in [true, false] {
+            let root = tempfile::tempdir()?;
+            let fault = root.path().join("fault");
+            fs::write(&fault, b"")?;
+            let script = root.path().join("runtime");
+            fs::write(
+                &script,
+                format!(
+                    "{}\nprintf 'runtime reached\\n'\n",
+                    include_str!("fixtures/update-resume-runtime.sh")
+                ),
+            )?;
+            let output = Command::new("bash")
+                .arg(&script)
+                .args([operation, "--name", if selected { "owned" } else { "peer" }])
+                .env("WRIX_TEST_SERVICE_NAME", "owned")
+                .env("WRIX_TEST_FAIL_BACKEND_START", &fault)
+                .output()?;
+            assert_eq!(
+                output.status.code(),
+                Some(if selected { 75 } else { 0 }),
+                "{operation}, selected={selected}: {output:?}"
+            );
+            assert_eq!(
+                fs::read(&fault)?,
+                if selected { b"run\n".as_slice() } else { b"" },
+                "{operation}, selected={selected}"
+            );
+            assert_eq!(
+                output.stdout,
+                if selected {
+                    b"".as_slice()
+                } else {
+                    b"runtime reached\n"
+                },
+                "{operation}, selected={selected}"
+            );
+        }
+    }
+    Ok(())
+}
+
 const APPLE_RUNTIME: &str = concat!(
     include_str!("fixtures/shared-readiness.sh"),
     "\n",
