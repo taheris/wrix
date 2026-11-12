@@ -84,6 +84,13 @@ fn control(args: &[&str]) -> Result<(), Error> {
     )
 }
 
+fn compiler_build_context(command: &mut Command) {
+    // The private service namespace builds here, not in the outer derivation's
+    // build directory. Keep the linker's purity guard enabled and scoped to the
+    // actual compiler execution tree rather than disabling it for /run outputs.
+    command.env("NIX_BUILD_TOP", "/run/wrix/compiler/execution");
+}
+
 fn launch(root: &Path, data: &Path, transport: &str, boot: Option<&str>) -> Result<u32, Error> {
     let log = OpenOptions::new()
         .create(true)
@@ -97,6 +104,7 @@ fn launch(root: &Path, data: &Path, transport: &str, boot: Option<&str>) -> Resu
         .env("SCCACHE_LOG", "error")
         .env("SCCACHE_ERROR_LOG", root.join("compiler.log"))
         .stdin(Stdio::null()).stdout(log.try_clone()?).stderr(log);
+    compiler_build_context(&mut command);
     if let Some(boot) = boot {
         command.env("WRIX_BACKEND_BOOT", boot);
     }
@@ -424,6 +432,22 @@ mod exec_test;
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn compiler_build_context_preserves_purity_and_uses_private_execution_tree() {
+        let mut command = Command::new("bash");
+        command
+            .args([
+                "-c",
+                "set -euo pipefail; [[ $NIX_ENFORCE_PURITY == 1 ]]; printf '%s' \"$NIX_BUILD_TOP\"",
+            ])
+            .env("NIX_ENFORCE_PURITY", "1")
+            .env("NIX_BUILD_TOP", "/outer-derivation");
+        compiler_build_context(&mut command);
+        let output = command.output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(output.stdout, b"/run/wrix/compiler/execution");
+    }
 
     #[test]
     fn native_inspection_preserves_running_state_image_labels_and_missing_errors() {
