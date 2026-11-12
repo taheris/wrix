@@ -485,6 +485,32 @@ fn completed_window_executes_before_later_image_producers_are_materialized() {
 
 #[test]
 #[ignore = "owning test-ci boundary"]
+fn checked_results_survive_window_rotation_and_are_removed_on_exit() {
+    let f = Fixture::new();
+    let parent = f.sandbox.root.join("batch-parent");
+    fs::create_dir(&parent).unwrap();
+    let result = capture(
+        f.command(&input("WRIX_TEST_CI_RUNNER"))
+            .args(["--json", PASS, STATUS, OFFLINE])
+            .env("TMPDIR", &parent)
+            .env("WRIX_TEST_CI_BATCH_PARENT", &parent)
+            .env(
+                "WRIX_TEST_CI_RESULT_ROOTS",
+                f.sandbox.root.join("result-roots"),
+            )
+            .env("WRIX_TEST_CI_STATUS", "pass")
+            .env("WRIX_TEST_CI_CALLS", f.sandbox.root.join("calls")),
+    );
+    assert!(result.status.success(), "{}", combined(&result));
+    let roots = f.sandbox.read("result-roots");
+    assert!(roots.contains(&format!("checked-{PASS}")));
+    for root in roots.lines() {
+        assert!(!std::path::Path::new(root).exists());
+    }
+}
+
+#[test]
+#[ignore = "owning test-ci boundary"]
 fn fixture_execution_is_independent_of_caller_git_context() {
     let f = Fixture::new();
     let (r, v, c) = f.run_with(&[PASS, STATUS], "pass", true);

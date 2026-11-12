@@ -352,6 +352,7 @@ let
         inherit pkgs;
         inherit (wrix) rustPackage;
       };
+      checked-artifact-app = import ./prek/checked-artifact-app.nix { inherit pkgs; };
       native-fixture-production-isolation = wrix.rustPackage.fixtureIsolation;
       rust-production-source = import ./services/production-source.nix {
         inherit pkgs wrix;
@@ -422,6 +423,9 @@ let
       inherit package;
       inherit (sandboxImageChecks) inputs;
     } executable;
+  checkedArtifactApp = import ./lib/checked-artifact-app.nix { inherit pkgs; };
+  mkArtifactCiApp =
+    package: executable: mkImageCiApp (checkedArtifactApp { inherit package executable; }) executable;
   mkRuntimeImageCiApp =
     package: executable:
     mkDefinedCiApp {
@@ -510,37 +514,37 @@ let
       (mkImageCiApp sandboxImageChecks.linuxImageArchivelessSourceTest "test-linux-image-archiveless-source")
       (mkImageCiApp sandboxImageChecks.imageDigestNoTarTest "test-image-digest-no-tar")
       (mkImageCiApp sandboxImageChecks.imageTierGraphTest "test-image-tier-graph")
-      (mkImageCiApp sandboxImageChecks.imageNixConfigTest "test-image-nix-config")
-      (mkImageCiApp sandboxImageChecks.imageCaCertificatesTest "test-image-ca-certificates")
-      (mkImageCiApp sandboxImageChecks.imageEntrypointCommandTest "test-image-entrypoint-command")
-      (mkImageCiApp sandboxImageChecks.imageAgentMarkerTest "test-image-agent-marker")
-      (mkImageCiApp sandboxImageChecks.profilePackagesBundledTest "test-profile-packages-bundled")
-      (mkImageCiApp sandboxImageChecks.imageTierMembershipTest "test-image-tier-membership")
+      (mkArtifactCiApp sandboxImageChecks.imageNixConfigTest "test-image-nix-config")
+      (mkArtifactCiApp sandboxImageChecks.imageCaCertificatesTest "test-image-ca-certificates")
+      (mkArtifactCiApp sandboxImageChecks.imageEntrypointCommandTest "test-image-entrypoint-command")
+      (mkArtifactCiApp sandboxImageChecks.imageAgentMarkerTest "test-image-agent-marker")
+      (mkArtifactCiApp sandboxImageChecks.profilePackagesBundledTest "test-profile-packages-bundled")
+      (mkArtifactCiApp sandboxImageChecks.imageTierMembershipTest "test-image-tier-membership")
       (mkRuntimeImageCiApp sandboxImageChecks.wrixImagesSourceKindTest "test-wrix-images-source-kind")
       (mkRuntimeImageCiApp sandboxImageChecks.wrixImagesSourceArtifactsTest "test-wrix-images-source-artifacts")
       (mkRuntimeImageCiApp sandboxImageChecks.wrixImageLabelsTest "test-wrix-image-labels")
       (mkRuntimeImageCiApp sandboxImageChecks.wrixImageLabelArtifactsTest "test-wrix-image-label-artifacts")
       (mkImageCiApp sandboxImageChecks.agentDeclaredDirectRunnerTest "test-agent-declared-direct-runner")
-      (mkImageCiApp sandboxImageChecks.agentConsumerRuntimeClosuresTest "test-agent-consumer-runtime-closures")
-      (mkImageCiApp sandboxImageChecks.agentClaudeRuntimeTest "test-agent-claude-runtime")
+      (mkArtifactCiApp sandboxImageChecks.agentConsumerRuntimeClosuresTest "test-agent-consumer-runtime-closures")
+      (mkArtifactCiApp sandboxImageChecks.agentClaudeRuntimeTest "test-agent-claude-runtime")
       (mkImageCiApp sandboxImageChecks.claudeRuntimeNoopTest "test-claude-runtime-noop")
       (mkImageCiApp sandboxImageChecks.prekHooksClosureTest "test-prek-hooks-closure")
-      (mkImageCiApp sandboxImageChecks.prekHooksArtifactsTest "test-prek-hooks-artifacts")
-      (mkImageCiApp sandboxImageChecks.baseImageUniversalTest "test-base-image-universal")
-      (mkImageCiApp sandboxImageChecks.entrypointResolverBaseTest "test-entrypoint-resolver-base")
+      (mkArtifactCiApp sandboxImageChecks.prekHooksArtifactsTest "test-prek-hooks-artifacts")
+      (mkArtifactCiApp sandboxImageChecks.baseImageUniversalTest "test-base-image-universal")
+      (mkArtifactCiApp sandboxImageChecks.entrypointResolverBaseTest "test-entrypoint-resolver-base")
       (mkImageCiApp sandboxImageChecks.baseImageHashStableTest "test-base-image-hash-stable")
       (mkImageCiApp sandboxImageChecks.stableProfileHashStableTest "test-stable-profile-hash-stable")
-      (mkImageCiApp sandboxImageChecks.stableProfileMembershipTest "test-stable-profile-membership")
-      (mkImageCiApp sandboxImageChecks.pinnedToolchainStableTest "test-pinned-toolchain-stable-tier")
-      (mkImageCiApp sandboxImageChecks.downstreamChangeLeafOnlyTest "test-downstream-change-leaf-only")
+      (mkArtifactCiApp sandboxImageChecks.stableProfileMembershipTest "test-stable-profile-membership")
+      (mkArtifactCiApp sandboxImageChecks.pinnedToolchainStableTest "test-pinned-toolchain-stable-tier")
+      (mkArtifactCiApp sandboxImageChecks.downstreamChangeLeafOnlyTest "test-downstream-change-leaf-only")
       (mkImageCiApp sandboxImageChecks.archivelessGeneratedChangeTest "test-archiveless-generated-change")
-      (mkImageCiApp sandboxImageChecks.agentTierIsolatedTest "test-agent-tier-isolated")
-      (mkImageCiApp sandboxImageChecks.agentExclusiveTest "test-agent-exclusive")
-      (mkImageCiApp sandboxImageChecks.agentPkgThreadedTest "test-agent-pkg-threaded")
+      (mkArtifactCiApp sandboxImageChecks.agentTierIsolatedTest "test-agent-tier-isolated")
+      (mkArtifactCiApp sandboxImageChecks.agentExclusiveTest "test-agent-exclusive")
+      (mkArtifactCiApp sandboxImageChecks.agentPkgThreadedTest "test-agent-pkg-threaded")
       (mkImageCiApp sandboxImageChecks.iterationCostBoundedTest "test-iteration-cost-bounded")
       (mkImageCiApp sandboxImageChecks.customisationLayerBoundedTest "test-customisation-layer-bounded")
-      (mkImageCiApp sandboxImageChecks.imageNixDbConsistentTest "test-image-nix-db-consistent")
-      (mkImageCiApp sandboxImageChecks.imageNixDbNoDanglingTest "test-image-nix-db-no-dangling")
+      (mkArtifactCiApp sandboxImageChecks.imageNixDbConsistentTest "test-image-nix-db-consistent")
+      (mkArtifactCiApp sandboxImageChecks.imageNixDbNoDanglingTest "test-image-nix-db-no-dangling")
       (mkDefinedCiApp linuxBuilderChecks.sshdHardeningTest "test-linux-builder-sshd-hardening")
       (mkDefinedCiApp linuxBuilderChecks.imageSourceKindTest "test-linux-builder-image-source-kind")
       (mkDefinedCiApp linuxBuilderChecks.sourceKindLoadTransportTest "test-linux-builder-source-kind-load-transport")
@@ -856,7 +860,7 @@ let
         }
 
         prepare_ci_window() {
-          local app="$1" candidate runner link started=0
+          local app="$1" candidate runner link result started=0
           local selected=() installables=() links=()
           if [[ -v "ci_runners[$app]" || ! -v "ci_derivations[$app]" ]]; then
             return 0
@@ -891,6 +895,13 @@ let
               return 0 # Missing executables retain the existing failure behavior.
             fi
             ci_runners["$candidate"]="$(${coreutils}/bin/readlink "$runner")"
+            if [[ -f "$runner/nix-support/verification-result" ]]; then
+              IFS= read -r result < "$runner/nix-support/verification-result"
+              if ! ${pkgs.nix}/bin/nix-store --add-root "$batch_dir/checked-$candidate" --indirect --realise "$result" > /dev/null; then
+                ci_runners=()
+                return 0 # Keep independent build/verdict behavior if cache rooting fails.
+              fi
+            fi
           done
         }
 

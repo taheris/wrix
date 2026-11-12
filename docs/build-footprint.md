@@ -129,6 +129,20 @@ cleanup retain their existing behavior. This bounds simultaneously retained
 build inputs; it does not omit image checks or claim that the complete cold
 image matrix finishes in five minutes.
 
+Hermetic artifact checks execute their unchanged assertions in source-bound Nix
+check derivations. Their CI launchers retain only the genuine successful check
+output, not the image runner's multi-gigabyte closure. Runtime, host-state and
+store-query checks keep their live runners; capability admission remains live
+and precedes any build. Changes to an artifact, checker or input produce a new
+check derivation, and failed checks cannot produce a passing launcher.
+
+During a batch, completed check-result roots survive window rotation without
+retaining old image inputs. Normal exit and interruption remove those temporary
+roots. Constructor conformance checks exercise actual success/failure, input
+invalidation and closure separation; the native batching owner verifies
+retention and cleanup. This is ordinary Nix check caching, not an admission
+receipt.
+
 A successful dependency build is not necessarily a retained dependency cache:
 normal result roots do not automatically retain build-time-only Cargo artifacts.
 Keep the selected verification's actual dependency artifact rooted while the
