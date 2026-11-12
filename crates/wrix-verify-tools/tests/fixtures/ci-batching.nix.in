@@ -4,7 +4,7 @@
   outputs = { bash, coreutils, ... }: builtins.trace "WRIX-CI-BATCH-QUERY" {
     legacyPackages.@SYSTEM@.ciApps = let
       mkRunner = name: text: derivation {
-        inherit name;
+        name = "@BOUNDARY@-${name}";
         system = "@SYSTEM@";
         builder = "${bash}/bin/bash";
         PATH = "${coreutils}/bin";

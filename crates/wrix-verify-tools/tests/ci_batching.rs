@@ -303,6 +303,41 @@ fn selected_runners_batch_before_independent_execution() {
 }
 #[test]
 #[ignore = "owning test-ci boundary"]
+fn completed_window_executes_before_later_image_producers_are_materialized() {
+    let f = Fixture::new();
+    let stream = fs::File::create(f.sandbox.root.join("ordered-output")).unwrap();
+    let status = f
+        .command(&input("WRIX_TEST_CI_RUNNER"))
+        .args(["--json", PASS, STATUS, OFFLINE])
+        .env("WRIX_TEST_CI_STATUS", "pass")
+        .env("WRIX_TEST_CI_CALLS", f.sandbox.root.join("calls"))
+        .stdout(Stdio::from(stream.try_clone().unwrap()))
+        .stderr(Stdio::from(stream))
+        .status()
+        .unwrap();
+    let diagnostic = f.sandbox.read("ordered-output");
+    assert!(status.success(), "{diagnostic}");
+    assert_eq!(
+        f.sandbox.read("calls"),
+        format!("{PASS}\n{STATUS}\n{OFFLINE}\n")
+    );
+    let execution = diagnostic
+        .lines()
+        .position(|line| {
+            serde_json::from_str::<Value>(line)
+                .is_ok_and(|verdict| verdict["target"] == STATUS && verdict["outcome"] == "passed")
+        })
+        .unwrap();
+    let next_producer = diagnostic
+        .lines()
+        .position(|line| line.contains(&format!("-{OFFLINE}.drv")))
+        .unwrap();
+    assert!(execution < next_producer, "{diagnostic}");
+    assert_eq!(diagnostic.matches("trace: WRIX-CI-BATCH-QUERY").count(), 1);
+}
+
+#[test]
+#[ignore = "owning test-ci boundary"]
 fn fixture_execution_is_independent_of_caller_git_context() {
     let f = Fixture::new();
     let (r, v, c) = f.run_with(&[PASS, STATUS], "pass", true);
@@ -333,7 +368,7 @@ fn script_failure_keeps_other_app_verdicts() {
 fn unreported_exit_77_retains_skip_without_policy_authorization() {
     let f = Fixture::new();
     let (r, v, _) = f.run(&[PASS, STATUS], "skip");
-    assert_eq!(r.status.code(), Some(77));
+    assert_eq!(r.status.code(), Some(77), "{}", combined(&r));
     assert_eq!(v[0]["outcome"], "passed");
     assert_eq!(v[1]["pass"], false);
     assert_eq!(v[1]["skipped"], true);
@@ -550,7 +585,8 @@ fn terminated_batch_removes_its_temporary_gc_roots() {
         .unwrap();
     let ready = tmp.path().join("ready");
     let stdout = tempfile::tempfile().unwrap();
-    let stderr = tempfile::tempfile().unwrap();
+    let stderr_path = tmp.path().join("stderr");
+    let stderr = fs::File::create(&stderr_path).unwrap();
     let mut command = f.command(&input("WRIX_TEST_CI_RUNNER"));
     command
         .args(["--json", PASS, STATUS])
@@ -582,7 +618,11 @@ fn terminated_batch_removes_its_temporary_gc_roots() {
         })
         .collect::<Vec<PathBuf>>();
     assert_eq!(roots.len(), 1);
-    assert!(roots[0].join("runner").is_symlink());
+    assert!(
+        roots[0].join("runner").is_symlink(),
+        "{}",
+        fs::read_to_string(&stderr_path).unwrap()
+    );
     kill_process_group(
         Pid::from_raw(i32::try_from(child.0.id()).unwrap()).unwrap(),
         Signal::TERM,

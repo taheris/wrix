@@ -788,7 +788,8 @@ let
         fi
 
         batch_dir=""
-        declare -A ci_runners=() ci_admission_status=() ci_admission_records=()
+        declare -A ci_runners=() ci_derivations=() ci_admission_status=() ci_admission_records=()
+        ci_selected=()
         trap 'if [[ -n "$batch_dir" ]]; then rm -rf "$batch_dir"; fi' EXIT
         trap 'exit 130' INT
         trap 'exit 143' TERM
@@ -807,8 +808,8 @@ let
         }
 
         prepare_ci_apps() {
-          local app runner index
-          local selected=() installables=() links=()
+          local app index names
+          local selected=() derivations=()
           local -A seen=()
           for app in "$@"; do
             if is_ci_app "$app" && [[ ! -v "seen[$app]" ]]; then
@@ -816,7 +817,7 @@ let
               admit_ci_app "$app"
               if [[ "''${ci_admission_status[$app]}" -eq 0 ]]; then
                 selected+=("$app")
-                installables+=(".#legacyPackages.${system}.ciApps.$app")
+
               fi
             fi
           done
@@ -824,24 +825,63 @@ let
             return 0
           fi
           batch_dir=$(mktemp -d -t wrix-ci-runners.XXXXXX)
+          names=$(printf '%s\n' "''${selected[@]}" | jq -Rsc 'split("\n")[:-1]')
+          if ! WRIX_CI_FLAKE="git+file://$repo_root" WRIX_CI_TARGETS="$names" \
+            ${pkgs.nix}/bin/nix-instantiate --impure --add-root "$batch_dir/derivation" --indirect --expr '
+              let
+                flake = builtins.getFlake (builtins.getEnv "WRIX_CI_FLAKE");
+                apps = flake.legacyPackages.${system}.ciApps;
+              in map (name: builtins.getAttr name apps)
+                (builtins.fromJSON (builtins.getEnv "WRIX_CI_TARGETS"))
+            ' > "$batch_dir/derivations"; then
+            return 0 # Metadata failure retains the original per-app build verdicts.
+          fi
+          mapfile -t derivations < "$batch_dir/derivations"
+          if [[ "''${#derivations[@]}" -ne "''${#selected[@]}" ]]; then
+            return 0 # Ambiguous metadata retains the individual realization path.
+          fi
+          ci_selected=("''${selected[@]}")
+          for index in "''${!selected[@]}"; do
+            ci_derivations["''${selected[$index]}"]="$(${coreutils}/bin/readlink -f "''${derivations[$index]}")"
+          done
+        }
+
+        prepare_ci_window() {
+          local app="$1" candidate runner link started=0
+          local selected=() installables=() links=()
+          if [[ -v "ci_runners[$app]" || ! -v "ci_derivations[$app]" ]]; then
+            return 0
+          fi
+          ci_runners=()
+          rm -f "$batch_dir"/runner*
+          for candidate in "''${ci_selected[@]}"; do
+            if [[ "$candidate" == "$app" ]]; then started=1; fi
+            if [[ "$started" -eq 1 ]]; then
+              selected+=("$candidate")
+              installables+=("''${ci_derivations[$candidate]}^*")
+              if [[ "''${#selected[@]}" -eq 2 ]]; then break; fi
+            fi
+          done
           if ! ${pkgs.nix}/bin/nix build --no-warn-dirty --out-link "$batch_dir/runner" "''${installables[@]}"; then
-            return 0 # Preserve per-app build verdicts through isolated fallback builds.
+            return 0 # Preserve independent failure verdicts through per-app fallback builds.
           fi
           links=("$batch_dir"/runner*)
-          if [[ "''${#links[@]}" -ne "''${#selected[@]}" ]]; then
-            return 0 # Ambiguous aliases or multiple outputs retain the existing individual path.
-          fi
-          for index in "''${!selected[@]}"; do
-            app="''${selected[$index]}"
-            runner="$batch_dir/runner"
-            if [[ "$index" -ne 0 ]]; then
-              runner="$runner-$index"
-            fi
-            if [[ ! -x "$runner/bin/$app" ]]; then
+          for candidate in "''${selected[@]}"; do
+            runner=""
+            for link in "''${links[@]}"; do
+              if [[ -x "$link/bin/$candidate" ]]; then
+                if [[ -n "$runner" ]]; then
+                  ci_runners=()
+                  return 0 # Ambiguous executable identities retain individual builds.
+                fi
+                runner="$link"
+              fi
+            done
+            if [[ -z "$runner" ]]; then
               ci_runners=()
-              return 0 # Missing executables retain the existing per-app failure behavior.
+              return 0 # Missing executables retain the existing failure behavior.
             fi
-            ci_runners["$app"]="$(${coreutils}/bin/readlink "$runner")"
+            ci_runners["$candidate"]="$(${coreutils}/bin/readlink "$runner")"
           done
         }
 
@@ -897,6 +937,7 @@ let
               continue
             fi
 
+            prepare_ci_window "$app"
             if run_ci_json_app "$app"; then
               continue
             else

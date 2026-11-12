@@ -38,6 +38,15 @@ must not be presented as that newer candidate's complete push footprint.
 
 ## Build cache and allocation
 
+The CI app driver instantiates admitted targets once and retains their
+derivation metadata separately from realized outputs. It builds and executes at
+most two selected app packages at a time, then releases that window's temporary
+output roots. Ordered per-target verdicts, duplicate invocations, capability
+admission, individual build failures and interruption cleanup retain their
+existing behavior. This bounds simultaneously retained build inputs; it does not
+omit image checks or claim that the complete cold image matrix finishes in five
+minutes.
+
 A successful dependency build is not necessarily a retained dependency cache:
 normal result roots do not automatically retain build-time-only Cargo artifacts.
 Keep the selected verification's actual dependency artifact rooted while the
