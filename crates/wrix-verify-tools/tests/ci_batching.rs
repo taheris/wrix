@@ -655,7 +655,7 @@ fn vm_prerequisite_precedes_execution_with_matching_metadata() {
         }
     );
     let mut execution = vm_requirements();
-    execution["platform"] = f.system.clone().into();
+    execution["platform"] = f.system.into();
     for v in v {
         assert_eq!(v["execution"], execution);
         assert_eq!(

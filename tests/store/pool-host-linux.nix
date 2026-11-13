@@ -6,6 +6,8 @@
 }:
 
 let
+  nativeTools = import ../../lib/verify/native-test.nix { inherit pkgs; };
+  cleanup = import ../lib/native-cleanup.nix { inherit pkgs; };
   unsigned = pkgs.writeText "wrix-worker-unsigned-input" "unsigned worker import control\n";
   workflow = pkgs.writeText "wrix-installed-worker.nix" ''
     let
@@ -138,8 +140,8 @@ pkgs.writeShellApplication {
     test -f ${wrix.nixPoolImage.digest}
     export WRIX_TEST_POOL_CLEANUP_TOOLS
     WRIX_TEST_POOL_CLEANUP_TOOLS=$(${pkgs.jq}/bin/jq -er '.root + "/bin"' ${wrix.rustPackage.poolHostTools})
-    export WRIX_TEST_POOL_CLEANUP_SCRIPT=${./cleanup-native-fixtures.py}
-    export WRIX_TEST_POOL_PYTHON=${pkgs.python3}/bin/python3
+    export WRIX_TEST_POOL_CLEANUP=${cleanup}
+    export WRIX_TEST_FIXTURE_RUNTIME=${wrix.rustPackage.testFixtureEnvironment.WRIX_TEST_FIXTURE_RUNTIME}
     export WRIX_NIX_POOL_PACKAGE_BINDING=${wrix.rustPackage.poolBinding}
     export WRIX_NIX_POOL_HOST_TOOLS=${wrix.rustPackage.poolHostTools}
     export WRIX_TEST_POOL_UNSIGNED=${unsigned}
@@ -149,14 +151,14 @@ pkgs.writeShellApplication {
     export WRIX_TEST_POOL_CONTROLLER=${wrix.rustPackage.controllerPackage}/bin/wrix-host-controller
     export WRIX_TEST_POOL_CONTROLLER_BINDING=${wrix.rustPackage.controllerBinding}
     ${pkgs.lib.optionalString (!interrupt) ''
-      ${pkgs.bash}/bin/bash ${./run-native-test.sh} \
+      ${pkgs.bash}/bin/bash ${../../crates/wrix-native-test/tests/fixtures/run-native-test.sh} \
         ${wrix.rustPackage.cacheBackendTests}/bin/workspace-admission-tests \
         --ignored --exact \
         nix_store::admission::native_host_owner_survives_controller_loss_collects_and_resumes_recorded_software \
         --nocapture
     ''}
     native_test=(
-      ${pkgs.bash}/bin/bash ${./run-native-test.sh}
+      ${pkgs.bash}/bin/bash ${../../crates/wrix-native-test/tests/fixtures/run-native-test.sh}
       ${wrix.rustPackage.cacheBackendTests}/bin/workspace-admission-tests
       --ignored --exact
       ${
@@ -170,9 +172,8 @@ pkgs.writeShellApplication {
     ${
       if interrupt then
         ''
-          exec ${pkgs.python3}/bin/python3 ${./interrupt-native-test.py} "$@" \
+          exec ${nativeTools}/bin/wrix-native-test native-interruption "$@" \
             --source-revision ${pkgs.lib.escapeShellArg sourceRevision} \
-            --cleanup "$WRIX_TEST_POOL_CLEANUP_SCRIPT" \
             --tools "$WRIX_TEST_POOL_CLEANUP_TOOLS" -- "''${native_test[@]}"
         ''
       else

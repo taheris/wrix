@@ -6,6 +6,7 @@ members = [
   "crates/wrix-core",
   "crates/wrix-image-tools",
   "crates/wrix-notify",
+  "crates/wrix-native-test",
   "crates/wrix-runtime-env",
   "crates/wrix-sandbox",
   "crates/wrix-service",
@@ -73,6 +74,7 @@ wrix-runtime-env = { path = "crates/wrix-runtime-env" }
 wrix-sandbox = { path = "crates/wrix-sandbox" }
 wrix-service = { path = "crates/wrix-service" }
 wrix-service-server = { path = "crates/wrix-service-server" }
+wrix-native-test = { path = "crates/wrix-native-test" }
 wrix-state = { path = "crates/wrix-state" }
 
 # Keep file/line backtraces without duplicating full type debug information in

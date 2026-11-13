@@ -222,6 +222,8 @@ fn run_case(platform: Platform, name: &str, case: fn(Platform, &Path), retain: b
     }
     for variable in [
         "WRIX_TEST_POOL_PYTHON",
+        "WRIX_TEST_FIXTURE_RUNTIME",
+        "WRIX_TEST_POOL_CLEANUP",
         "WRIX_TEST_POOL_PUBLIC_CLI",
         "WRIX_TEST_POOL_PUBLIC_RUN",
         "WRIX_TEST_POOL_NEXT_PROFILE",

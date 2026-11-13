@@ -48,6 +48,7 @@ attic = { workspace = true }
 reqwest = { workspace = true }
 rusqlite = { workspace = true }
 wrix-cli = { workspace = true }
+wrix-native-test = { workspace = true }
 
 [[bin]]
 name = "wrix-host-controller"

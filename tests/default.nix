@@ -309,23 +309,11 @@ let
     // optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
       notify-native-attention = notificationAttention.attention;
       krun-passt-package-binding = import ./sandbox/krun-runtime.nix { inherit pkgs; };
-      native-fixture-cleanup =
-        pkgs.runCommandLocal "native-fixture-cleanup"
-          {
-            nativeBuildInputs = [
-              pkgs.python3
-              pkgs.bash
-              pkgs.git
-            ];
-          }
-          ''
-            set -euo pipefail
-            export PYTHONDONTWRITEBYTECODE=1
-            ${pkgs.python3}/bin/python3 ${./store}/test_cleanup_native_fixtures.py
-            ${pkgs.python3}/bin/python3 ${./store}/test_interrupt_native_test.py
-            test -x ${pkgs.lib.getExe (import ../lib/verify/tools.nix { inherit pkgs; })}
-            touch "$out"
-          '';
+      native-fixture-cleanup = pkgs.runCommandLocal "native-fixture-cleanup" { } ''
+        set -euo pipefail
+        test -x ${pkgs.lib.getExe (import ../lib/verify/native-test.nix { inherit pkgs; })}
+        touch "$out"
+      '';
     }
     // {
       notify-desktop-fixture = notificationAttention.desktop;

@@ -205,7 +205,8 @@ let
       ${optionalString (!isDarwin) ''
         export WRIX_TEST_POOL_CLEANUP_TOOLS
         WRIX_TEST_POOL_CLEANUP_TOOLS=$(${pkgs.jq}/bin/jq -er '.root + "/bin"' ${wrix.rustPackage.poolHostTools})
-        export WRIX_TEST_POOL_CLEANUP_SCRIPT=${./cleanup-native-fixtures.py}
+        export WRIX_TEST_POOL_CLEANUP=${import ../lib/native-cleanup.nix { inherit pkgs; }}
+        export WRIX_TEST_FIXTURE_RUNTIME=${wrix.rustPackage.testFixtureEnvironment.WRIX_TEST_FIXTURE_RUNTIME}
         export WRIX_TEST_POOL_PYTHON=${pkgs.python3}/bin/python3
       ''}
       export WRIX_NIX_POOL_PACKAGE_BINDING=${poolBinding}
@@ -238,11 +239,19 @@ let
           pkgs.python3
         ]
       }:"$PATH"
-      ${optionalString (!isDarwin) "${pkgs.bash}/bin/bash ${./run-native-test.sh}"} \
+      ${
+        optionalString (
+          !isDarwin
+        ) "${pkgs.bash}/bin/bash ${../../crates/wrix-native-test/tests/fixtures/run-native-test.sh}"
+      } \
         ${wrix.rustPackage.cacheBackendTests}/bin/workspace-admission-tests \
         --ignored --exact "nix_store::admission::request::native::platform::${test}" --nocapture
       ${optionalString (fault != null) ''
-        exec ${optionalString (!isDarwin) "${pkgs.bash}/bin/bash ${./run-native-test.sh}"} \
+        exec ${
+          optionalString (
+            !isDarwin
+          ) "${pkgs.bash}/bin/bash ${../../crates/wrix-native-test/tests/fixtures/run-native-test.sh}"
+        } \
           ${wrix.rustPackage.cacheBackendTests}/bin/workspace-admission-tests \
           --ignored --exact "nix_store::admission::request::native::platform::fault::${fault}" --nocapture
       ''}

@@ -91,6 +91,7 @@
       legacyPackages.testApps = test.testAppDerivations;
       legacyPackages.testFixtures.execution = test.executionSandbox;
       legacyPackages.testFixtures.native = wrix.rustPackage.testFixtures;
+      legacyPackages.testFixtures.nativeTools = import ../../lib/verify/native-test.nix { inherit pkgs; };
       legacyPackages.testFixtures.environment = wrix.rustPackage.testFixtureEnvironment;
     };
 }

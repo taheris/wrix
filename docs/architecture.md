@@ -49,6 +49,7 @@ crates/
 ├── wrix-core/           # Shared Rust types: paths, workspace descriptions, config schemas, errors
 ├── wrix-state/          # Host control metadata, workspace admission and checked scope
 ├── wrix-notify/         # Host attention queue, focus checks, and terminal navigation
+├── wrix-native-test/    # Disposable native test cleanup, interruption and runtime stubs
 ├── wrix-cli/            # Human-facing `wrix` binary: run, spawn, service, beads
 ├── wrix-sandbox/        # Rust host orchestration for container launch
 ├── wrix-image-tools/    # Native image metadata hashing and configuration-root resolution
@@ -130,9 +131,11 @@ entrypoints and traffic engines are owned by `wrix-service-server` with
 unconditional dependencies, not security-disabling Cargo features. Existing
 implementation and verifier source paths are retained through explicit server
 module/target registration. Full verification still compiles and runs both
-packages and every existing integration target. The selected production client
-uses a server-excluding source projection and dependency cache; full checks
-retain the complete source/dependency graph. See
+packages and every existing integration target. Disposable native test tools
+remain workspace test targets but are excluded from production foundation,
+client, controller and runtime outputs. The selected production client uses a
+server-excluding source projection and dependency cache; full checks retain the
+complete source/dependency graph. See
 [the boundary and measurements](client-server-boundary.md).
 
 ## Sandbox Launcher

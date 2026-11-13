@@ -471,7 +471,8 @@ After stopping native test runs, remove legacy retained test resources from the
 host, as the same user who ran the tests:
 
 ```bash
-python3 tests/store/cleanup-native-fixtures.py --discover --remove-files
+nix run .#legacyPackages.x86_64-linux.testFixtures.nativeTools -- \
+  native-fixture-cleanup --discover --remove-files
 ```
 
 Discovery is restricted to owned legacy `/tmp/.tmp*` fixtures identified by Wrix
@@ -484,9 +485,13 @@ teardown retains diagnostic files; it does not reclaim the fixture's backing
 disks. A refusal reports the retained path and error instead of treating a
 missing cleanup capability as success.
 
-Portable conformance and parent-guard regressions run in the ordinary checks.
-Successful mocked runtime teardown is not native Podman/FUSE acceptance; run the
-host-owner verifier on a suitable Linux host for that boundary.
+Rust conformance and parent-guard regressions run in the ordinary checks. The
+Rust interruption runner keeps the original namespace observer and unreaped
+session leader until independent post-teardown inventory completes. Its private
+runtime fixture models only external process/Podman observations; no generated
+Python adapter or production fixture command is involved. Successful mocked
+runtime teardown is not native Podman/FUSE acceptance; run the host-owner
+verifier on a suitable Linux host for that boundary.
 
 ## Linux service-VM export
 

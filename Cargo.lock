@@ -3646,6 +3646,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "wrix-native-test"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "displaydoc",
+ "getrandom 0.4.3",
+ "rustix",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "wrix-notify"
 version = "0.1.0"
 dependencies = [
@@ -3762,6 +3778,7 @@ dependencies = [
  "wrix-cache",
  "wrix-cli",
  "wrix-core",
+ "wrix-native-test",
  "wrix-sandbox",
  "wrix-service",
  "wrix-state",

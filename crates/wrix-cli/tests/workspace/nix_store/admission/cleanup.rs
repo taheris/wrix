@@ -6,7 +6,7 @@ pub(super) struct NativeFixture {
     fixture: Fixture,
     finished: bool,
     registry_entry: Option<PathBuf>,
-    python: std::ffi::OsString,
+    runtime: std::ffi::OsString,
 }
 
 impl NativeFixture {
@@ -23,12 +23,13 @@ impl NativeFixture {
             fs::write(&entry, fixture.root.path().as_os_str().as_encoded_bytes()).unwrap();
             entry
         });
-        let python = std::env::var_os("WRIX_TEST_POOL_PYTHON").unwrap_or_else(|| "python3".into());
+        let runtime = std::env::var_os("WRIX_TEST_FIXTURE_RUNTIME")
+            .expect("native fixture setup must provide its packaged runtime");
         Self {
             fixture,
             finished: false,
             registry_entry,
-            python,
+            runtime,
         }
     }
 
@@ -36,12 +37,8 @@ impl NativeFixture {
         let mut command = Command::new("timeout");
         command
             .args(["--kill-after=5s", "120s"])
-            .arg(&self.python)
-            .arg("-c")
-            .arg(include_str!(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../tests/store/cleanup-native-fixtures.py"
-            )))
+            .arg(&self.runtime)
+            .arg("native-cleanup")
             .arg(self.fixture.root.path());
         if remove_files {
             command.arg("--remove-files");
@@ -121,8 +118,10 @@ fn failed_native_probe_terminates_its_helper_process_group() {
         sync::mpsc,
         time::Duration,
     };
-    let mut command = Command::new("python3");
-    command.args(["-c", "import subprocess,sys,time; subprocess.Popen([sys.executable,'-c','import time; time.sleep(4)']); print('ready',flush=True); time.sleep(60)"]);
+    let mut command = Command::new(
+        std::env::var_os("WRIX_TEST_FIXTURE_RUNTIME").expect("native fixture runtime"),
+    );
+    command.args(["interruption-runtime", "pipe-probe"]);
     command.stdout(Stdio::piped()).process_group(0);
     let mut running = super::Running(command.spawn().unwrap());
     let mut output = BufReader::new(running.0.stdout.take().unwrap());
@@ -156,7 +155,7 @@ fn failed_parent_cleanup_retains_the_fixture_instead_of_hiding_live_resources() 
         root,
         isolated: false,
     });
-    fixture.python = path.join("missing-cleanup-interpreter").into_os_string();
+    fixture.runtime = path.join("missing-cleanup-runtime").into_os_string();
     let result = std::panic::catch_unwind(|| fixture.finish());
     assert!(result.is_err());
     assert!(path.join(".wrix-native-test-fixture").is_file());

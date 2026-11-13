@@ -38,6 +38,7 @@ let
       "crates/wrix-sandbox/tests" = ../../crates/wrix-sandbox/tests;
       "crates/wrix-service/tests" = ../../crates/wrix-service/tests;
       "crates/wrix-verify-tools/tests" = ../../crates/wrix-verify-tools/tests;
+      "crates/wrix-native-test/tests" = ../../crates/wrix-native-test/tests;
       ".config/nextest.toml" = ../../.config/nextest.toml;
       "bin/test-native" = ../../bin/test-native;
       "loom.toml" = ../../loom.toml;
@@ -71,7 +72,19 @@ let
     };
   };
 
-  workspace = rustProfile.buildPackage workspaceArgs;
+  verifiedWorkspace = rustProfile.buildPackage workspaceArgs;
+  workspace = verifiedWorkspace // {
+    bin = verifiedWorkspace.bin.overrideAttrs (old: {
+      buildPhase =
+        assert pkgs.lib.assertMsg (
+          builtins.length (pkgs.lib.splitString "cargoWithProfile build" old.buildPhase) == 2
+        ) "Crane production build command changed; review native test-tool exclusion";
+        builtins.replaceStrings
+          [ "cargoWithProfile build" ]
+          [ "cargoWithProfile build --workspace --exclude wrix-native-test" ]
+          old.buildPhase;
+    });
+  };
   productionSource =
     packages: filter:
     import ./rust-production-source.nix {
@@ -345,9 +358,10 @@ let
     chmod -R u+w "$out"
     mkdir -p "$out/crates/wrix-service/examples"
     cp -r ${../../crates/wrix-service/examples}/. "$out/crates/wrix-service/examples/"
+    cp -r ${../../crates/wrix-native-test/src}/. "$out/crates/wrix-native-test/src/"
   '';
 
-  fixtureExamples = workspace.bin.overrideAttrs (old: {
+  fixtureExamples = verifiedWorkspace.bin.overrideAttrs (old: {
     pname = "wrix-test-examples";
     src = fixtureSource;
     buildPhase =
@@ -381,6 +395,8 @@ let
     for package in ${workspace.bin} ${clientWorkspace.bin} ${runtimeWorkspace.bin} ${controllerWorkspace.bin}; do
       test ! -e "$package/bin/wrix-native-fixtures"
       test ! -e "$package/bin/host-controller-fixture"
+      test ! -e "$package/bin/wrix-native-test"
+      test ! -e "$package/bin/wrix-interruption-fixture"
     done
     touch "$out"
   '';

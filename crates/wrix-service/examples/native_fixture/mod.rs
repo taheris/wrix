@@ -16,6 +16,10 @@ pub enum Error {
     /// {0}
     Inventory(#[from] inventory::Error),
     /// {0}
+    Interruption(#[from] wrix_native_test::native_fixture::runtime::Error),
+    /// {0}
+    Cleanup(#[from] wrix_native_test::native_fixture::cleanup::Error),
+    /// {0}
     Maintenance(#[from] maintenance::Error),
     /// {0}
     Shared(#[from] shared::Error),
@@ -41,6 +45,11 @@ pub fn run(args: impl IntoIterator<Item = OsString>) -> Result<ExitCode, Error> 
         Some("shared-runtime") => Ok(shared::run(args)?),
         Some("publisher-nix") => Ok(publisher::run(args)?),
         Some("inventory") => Ok(inventory::run(args)?),
+        Some("interruption-runtime") => Ok(wrix_native_test::native_fixture::runtime::run(args)?),
+        Some("native-cleanup") => {
+            wrix_native_test::native_fixture::cleanup::entry::run(args)?;
+            Ok(ExitCode::SUCCESS)
+        }
         Some("maintenance") => Ok(maintenance::run(args)?),
         Some("sql-client") => Ok(sql::run(args)?),
         Some("shared-cli") => Ok(proxy::shared_cli(args)?),
