@@ -357,6 +357,7 @@ let
         inherit pkgs;
         inherit (wrix) rustPackage;
       };
+      verification-inventory-cache = import ./prek/verification-inventory-cache.nix { inherit pkgs; };
       heavy-derivation-graph = import ./prek/heavy-derivation-graph.nix { inherit pkgs; };
       verify-evaluation-cache = import ./prek/verify-evaluation-cache.nix {
         inherit pkgs system;

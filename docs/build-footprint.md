@@ -154,13 +154,17 @@ evaluations use locked-flake attributes rather than repeated impure `getFlake`
 evaluations.
 
 The CI-only-heavy audit consumes a source-bound Nix metadata inventory. Its
-context retains derivation metadata, not the outputs of every CI producer. The
-audit queries the union of the same `--requisites --include-outputs` closures
-once, then propagates heavy membership through store references and declared
-realized-output edges. Fixed-output metadata and both supported derivation JSON
-shapes are checked; unknown shapes fail closed. Graph conformance covers output
-edges, shared dependencies, cycles and negative cases. This does not waive any
-heavy-target classification or materialize unselected images.
+context retains derivation metadata, not the outputs of every CI producer. A
+bounded per-checkout GC root reuses that metadata only for the same complete
+locked source/input graph, Nix version, system and evaluation settings; mutable
+inputs or missing store data rebuild it. This cache contains no verification
+verdict, admission or readiness result. The audit still queries the union of the
+same `--requisites --include-outputs` closures once, then propagates heavy
+membership through store references and declared realized-output edges.
+Fixed-output metadata and both supported derivation JSON shapes are checked;
+unknown shapes fail closed. Graph conformance covers output edges, shared
+dependencies, cycles and negative cases. This does not waive any heavy-target
+classification or materialize unselected images.
 
 A successful dependency build is not necessarily a retained dependency cache:
 normal result roots do not automatically retain build-time-only Cargo artifacts.
