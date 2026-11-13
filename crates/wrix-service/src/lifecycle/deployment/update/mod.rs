@@ -13,6 +13,7 @@ use std::{
 use wrix_state::host::Host;
 
 mod cancel;
+mod candidate;
 mod progress;
 mod recovery;
 pub use cancel::run as cancel;
@@ -265,21 +266,8 @@ fn run_reported(target: Target, progress: &progress::Reporter) -> Result<String>
         return Err(owner::Error::Conflict.into());
     }
     let previous = owner::Selected::read(guard.root())?.ok_or(owner::Error::Invalid)?;
-    let selected =
-        if let Some(candidate) = owner::Selected::read(&guard.root().join("celler-candidate"))? {
-            if candidate.runtime != previous.runtime
-                || candidate.container != previous.container
-                || candidate.port != previous.port
-                || candidate.recipe.as_ref().is_none_or(|recipe| {
-                    recipe.binding != intent.candidate || recipe.config_digest != digest
-                })
-            {
-                return Err(owner::Error::Conflict.into());
-            }
-            candidate
-        } else {
-            previous.clone()
-        };
+    let pending = owner::Selected::read(&guard.root().join("celler-candidate"))?;
+    let selected = pending.as_ref().unwrap_or(&previous).clone();
     let mut runtime = Runtime::from_env()?;
     if runtime.kind != selected.runtime {
         runtime = runtime.alternate();
@@ -287,6 +275,16 @@ fn run_reported(target: Target, progress: &progress::Reporter) -> Result<String>
     runtime.binding = Some(intent.candidate.clone());
     super::validate_inventory(&runtime, &selected)?;
     let mut status = runtime.status(&selected.container)?;
+    if let Some(pending) = &pending {
+        candidate::check(
+            host.roots().state(),
+            &intent,
+            &previous,
+            pending,
+            status,
+            &digest,
+        )?;
+    }
     let same_image = selected
         .recipe
         .as_ref()
@@ -315,7 +313,14 @@ fn run_reported(target: Target, progress: &progress::Reporter) -> Result<String>
         progress.stage(Stage::PreparingGateway);
         super::super::generation::prepare_gateway(&intent.candidate)?;
     }
-    let replace = !same_image || !native_core;
+    let replace = !same_image
+        || !native_core
+        || pending
+            .as_ref()
+            .and_then(|owner| owner.recipe.as_ref())
+            .is_some_and(|recipe| {
+                recipe.binding != intent.candidate || recipe.config_digest != digest
+            });
     if replace {
         let layout = wrix_cache::backend::layout::Layout::current()?;
         let pins = super::ownership::Pin::capture(host.roots().state(), layout.metadata())?;
@@ -395,6 +400,13 @@ fn run_reported(target: Target, progress: &progress::Reporter) -> Result<String>
         publish(guard.root(), FILE, &intent)?;
     }
     progress.stage(Stage::StartingBackend);
+    if let Some(pending) = &pending
+        && pending.recipe.as_ref().is_some_and(|recipe| {
+            recipe.binding != intent.candidate || recipe.config_digest != digest
+        })
+    {
+        candidate::archive(&guard, &intent, pending)?;
+    }
     let active = owner::host::ensure(&runtime, &guard, Some(&previous), None, true)?;
     if active
         .recipe
@@ -504,7 +516,7 @@ mod test {
         })).unwrap()
     }
 
-    fn prepared() -> Intent {
+    pub(super) fn prepared() -> Intent {
         let mut pending = intent();
         pending.version = 2;
         pending.phase = Phase::Prepared;

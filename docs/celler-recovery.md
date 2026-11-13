@@ -300,6 +300,21 @@ checkpoints. Keep the evidence intact and use the fixed CLI rather than manually
 changing permissions or rebuilding receipts. Checkpoint refusals now identify
 the path and failed check.
 
+An interrupted recovery can also retain a candidate image different from both
+its original selection and the pending update target. When that candidate's
+container is missing, current `service update --resume` can continue the exact
+pending target after checking the original physical coordinates, exclusive
+native storage ownership and checkpoint. Before replacing candidate provenance,
+it durably archives the original bytes as
+`host-lifecycle/recovery-owner-before-update-<attempt>.json`. Retry after
+release requires the same target checkpoint and candidate origin. A retry
+interrupted before checkpoint publication must retain the same captured
+candidate origin; the original ownership inodes and exclusive release are
+checked again before checkpointing. A running or stopped container with a
+different candidate image is still refused; this recovery path does not remove
+it or authorize downtime. Keep all owner and update records; do not remove a
+container to make it eligible.
+
 Missing or conflicting evidence leaves the update fenced; do not bypass the
 refusal. Keep the same journals/checkpoint and coordinate the reported ownership
 or port conflict. Ordinary startup and passive information never perform this
