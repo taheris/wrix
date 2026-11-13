@@ -32,6 +32,10 @@
         if [[ '${name}' == test-container-pre-commit && -n "''${WRIX_TEST_CI_RESULT_ROOTS:-}" ]]; then
           find "$WRIX_TEST_CI_BATCH_PARENT" -maxdepth 2 -type l -name 'checked-test-linux-builder-sshd-hardening' > "$WRIX_TEST_CI_RESULT_ROOTS"
           test -s "$WRIX_TEST_CI_RESULT_ROOTS"
+          dispatcher=$(find "$WRIX_TEST_CI_BATCH_PARENT" -maxdepth 2 -type l -name dispatcher)
+          test -n "$dispatcher"
+          test -x "$dispatcher/bin/test-ci"
+          printf '%s\n' "$dispatcher" >> "$WRIX_TEST_CI_RESULT_ROOTS"
         fi
       '';
     in {

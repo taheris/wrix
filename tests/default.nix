@@ -803,6 +803,13 @@ let
         trap 'exit 130' INT
         trap 'exit 143' TERM
         trap 'exit 129' HUP
+        batch_dir=$(mktemp -d -t wrix-ci-runners.XXXXXX)
+        # A running Bash script is not a portable GC root. Keep its requirements,
+        # admission library and dispatcher data live during artifact realization.
+        dispatcher_script="$(${coreutils}/bin/readlink -f -- "''${BASH_SOURCE[0]}")"
+        dispatcher_store="$(${coreutils}/bin/dirname "$(${coreutils}/bin/dirname "$dispatcher_script")")"
+        ${pkgs.nix}/bin/nix-store --add-root "$batch_dir/dispatcher" --indirect \
+          --realise "$dispatcher_store" > /dev/null
 
         admit_ci_app() {
           local app="$1" requirements record status
@@ -833,7 +840,6 @@ let
           if [[ "''${#selected[@]}" -lt 2 ]]; then
             return 0
           fi
-          batch_dir=$(mktemp -d -t wrix-ci-runners.XXXXXX)
           names=$(printf '%s\n' "''${selected[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))')
           if ! { inventory=$(verification_inventory "$repo_root" "${system}" "$batch_dir") &&
             jq --argjson names "$names" '.ciApps as $apps | [$names[] | {drvPath: $apps[.]}]' "$inventory" > "$batch_dir/plan.json"; }; then

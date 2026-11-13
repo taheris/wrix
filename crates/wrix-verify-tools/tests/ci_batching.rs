@@ -504,6 +504,7 @@ fn checked_results_survive_window_rotation_and_are_removed_on_exit() {
     assert!(result.status.success(), "{}", combined(&result));
     let roots = f.sandbox.read("result-roots");
     assert!(roots.contains(&format!("checked-{PASS}")));
+    assert!(roots.lines().any(|path| path.ends_with("/dispatcher")));
     for root in roots.lines() {
         assert!(!std::path::Path::new(root).exists());
     }

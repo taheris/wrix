@@ -168,13 +168,18 @@ locked source/input graph, Nix version, system and evaluation settings; mutable
 inputs or missing store data rebuild it. This cache contains no verification
 verdict, admission or readiness result. The CI dispatcher consumes the same
 metadata after live admission, with its original planner and individual builds
-as fallbacks. The audit still queries the union of the same
-`--requisites --include-outputs` closures once, then propagates heavy membership
-through store references and declared realized-output edges. Fixed-output
-metadata and both supported derivation JSON shapes are checked; unknown shapes
-fail closed. Graph conformance covers output edges, shared dependencies, cycles
-and negative cases. This does not waive any heavy-target classification or
-materialize unselected images.
+as fallbacks. During execution it explicitly roots its own store package until
+batch cleanup: a running Bash script alone is not a portable GC root for its
+requirements and admission data. This lifetime root preserves live admission
+during automatic GC; it neither stores nor bypasses verdicts.
+
+The audit still queries the union of the same `--requisites --include-outputs`
+closures once, then propagates heavy membership through store references and
+declared realized-output edges. Fixed-output metadata and both supported
+derivation JSON shapes are checked; unknown shapes fail closed. Graph
+conformance covers output edges, shared dependencies, cycles and negative cases.
+This does not waive any heavy-target classification or materialize unselected
+images.
 
 A successful dependency build is not necessarily a retained dependency cache:
 normal result roots do not automatically retain build-time-only Cargo artifacts.
