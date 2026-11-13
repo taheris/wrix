@@ -22,7 +22,15 @@ let
     script = ''
       local root
       root="$(repo_root)"
-      nix eval --raw --no-warn-dirty "$root#legacyPackages.${system}.verifyEvaluations.\"${target}\"" >/dev/null
+      if ! nix eval --raw --no-warn-dirty "$root#legacyPackages.${system}.verifyEvaluations.\"${target}\"" >/dev/null; then
+        REPO_ROOT="$root" VERIFY_SYSTEM=${escapeShellArg system} VERIFY_TARGET=${escapeShellArg target} nix eval --raw --impure --no-warn-dirty --expr '
+          import (builtins.getEnv "REPO_ROOT" + "/tests/verify/profiles-eval.nix") {
+            root = builtins.getEnv "REPO_ROOT";
+            system = builtins.getEnv "VERIFY_SYSTEM";
+            target = builtins.getEnv "VERIFY_TARGET";
+          }
+        ' >/dev/null
+      fi
     '';
   };
 
