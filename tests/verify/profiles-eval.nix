@@ -3,6 +3,7 @@
   system,
   target,
   describe ? false,
+  flake ? builtins.getFlake "git+file://${toString root}",
 }:
 
 let
@@ -13,13 +14,11 @@ let
     concatStringsSep
     getAttr
     mapAttrs
-    getFlake
     hasAttr
     throw
     toString
     ;
   rootString = toString root;
-  flake = getFlake "git+file://${rootString}";
   pkgs = flake.inputs.nixpkgs.legacyPackages.${system};
   wlib = flake.legacyPackages.${system}.lib;
   inherit (pkgs) writeShellScriptBin writeText;

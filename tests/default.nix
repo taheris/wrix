@@ -352,6 +352,12 @@ let
         inherit pkgs;
         inherit (wrix) rustPackage;
       };
+      heavy-derivation-graph = import ./prek/heavy-derivation-graph.nix { inherit pkgs; };
+      verify-evaluation-cache = import ./prek/verify-evaluation-cache.nix {
+        inherit pkgs system;
+        self = src;
+      };
+      verify-script-batching = import ./prek/verify-script-batching.nix { inherit pkgs; };
       checked-artifact-app = import ./prek/checked-artifact-app.nix { inherit pkgs; };
       native-fixture-production-isolation = wrix.rustPackage.fixtureIsolation;
       rust-production-source = import ./services/production-source.nix {

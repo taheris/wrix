@@ -82,15 +82,6 @@ let
     map (target: escapeShellArg "verify:${target}") targetNames
   );
   knownPatterns = concatStringsSep "|" (map escapeShellArg targetNames);
-  caseArms = concatStringsSep "\n" (
-    map (target: ''
-      ${escapeShellArg target})
-        local script
-        script="$(nix build --no-link --print-out-paths --no-warn-dirty ${escapeShellArg "${src}#legacyPackages.${system}.verifyScripts.\"${target}\""})" || return 1
-        source "$script"
-        ;;
-    '') targetNames
-  );
 
   verify = writeShellScriptBin "verify" ''
     set -euo pipefail
@@ -100,6 +91,7 @@ let
     export PATH="${preflightPath}:$PATH"
     source ${../lib/verifier.sh}
     source ${../lib/print-inputs.sh}
+    source ${../lib/verify-scripts.sh}
 
     fail() {
       local message="$1"
@@ -226,18 +218,14 @@ let
     }
 
     run_target() {
-      local target="$1"
-      case "$target" in
-    ${caseArms}
-        *) fail "internal dispatcher received unknown target: $target" ;;
-      esac
+      verify_script_run ${escapeShellArg (toString src)} ${escapeShellArg system} "$1"
     }
 
     run_one() {
       local target="$1"
       local requirements
       requirements="$(jq -c --arg target "$target" '.[$target]' ${requirements})"
-      verifier_run "$target" "$requirements" bash "$SELF" --execute-target "$target"
+      verifier_run "$target" "$requirements" run_target "$target"
     }
 
     main() {
@@ -279,9 +267,21 @@ let
 
       validate_targets "$@"
 
-      local raw
-      local target
+      local raw target requirements
+      local selected=()
       local failed=0 skipped=0 status
+      for raw in "$@"; do
+        target="$(normalize_target "$raw")"
+        requirements="$(jq -c --arg target "$target" '.[$target]' ${requirements})"
+        if verifier_admit "$target" "$requirements" > /dev/null; then
+          selected+=("$target")
+        fi # Execution repeats live admission and reports any refusal through verifier_run.
+      done
+      trap verify_scripts_cleanup EXIT
+      trap 'exit 130' INT
+      trap 'exit 143' TERM
+      trap 'exit 129' HUP
+      verify_scripts_prepare ${escapeShellArg (toString src)} ${escapeShellArg system} "''${selected[@]}"
       for raw in "$@"; do
         target="$(normalize_target "$raw")"
         if run_one "$target"; then

@@ -41,35 +41,25 @@ HEAVY_GENERIC_VERIFY_TARGETS="$WORK_DIR/heavy-generic-verify-targets.txt"
 ANNOTATED_CI_APPS="$WORK_DIR/annotated-ci-apps.txt"
 UNKNOWN_ANNOTATED_CI_APPS="$WORK_DIR/unknown-annotated-ci-apps.txt"
 
-write_derivation_map() {
-  local flake_ref="$1"
-  local output="$2"
-
-  nix eval --json --no-warn-dirty \
-    --apply 'attrs: builtins.mapAttrs (name: drv: drv.drvPath) attrs' \
-    "$flake_ref" > "$output"
-}
-
-is_heavy_derivation() {
-  local drv="$1"
-
-  nix-store -q --requisites --include-outputs "$drv" \
-    | sed 's|.*/||' \
-    | awk -v re="$HEAVY_DERIVATION_RE" '$0 ~ re { found = 1 } END { exit found ? 0 : 1 }'
+prepare_heavy_graph() {
+  local roots=() drv
+  while IFS= read -r drv; do roots+=("$drv"); done < <(jq -r '.[]' "$CHECKS_MAP" "$CI_CHECKS_MAP" "$CI_APPS_MAP" | sort -u)
+  nix-store -q --requisites --include-outputs "${roots[@]}" > "$WORK_DIR/nodes"
+  nix path-info --json --json-format 1 --stdin < "$WORK_DIR/nodes" > "$WORK_DIR/references.json"
+  grep '\.drv$' "$WORK_DIR/nodes" > "$WORK_DIR/derivations"
+  nix derivation show --stdin < "$WORK_DIR/derivations" > "$WORK_DIR/derivations.json"
+  jq -nr --slurpfile paths "$WORK_DIR/references.json" --slurpfile derivations "$WORK_DIR/derivations.json" \
+    -f "$SCRIPT_DIR/heavy-derivation-graph.jq" \
+    | awk -v heavy="$HEAVY_DERIVATION_RE" -f "$SCRIPT_DIR/heavy-derivation-graph.awk" > "$WORK_DIR/heavy-paths"
 }
 
 write_heavy_derivations() {
   local map_file="$1"
   local output="$2"
-  local name drv
-
-  : > "$output"
-  while IFS=$'\t' read -r name drv; do
-    if is_heavy_derivation "$drv"; then
-      printf '%s\n' "$name" >> "$output"
-    fi
-  done < <(jq -r 'to_entries[] | [.key, .value] | @tsv' "$map_file")
-  sort -u -o "$output" "$output"
+  jq -r --rawfile heavy "$WORK_DIR/heavy-paths" '
+    (reduce ($heavy | split("\n")[]) as $path ({}; .[$path] = true)) as $paths |
+    to_entries[] | select($paths[.value] // false) | .key
+  ' "$map_file" | sort -u > "$output"
 }
 
 write_listed_targets() {
@@ -114,16 +104,17 @@ fail_if_file_nonempty() {
 
 failed=0
 
-if ! jq -e --arg app "test-ci" 'index($app)' \
-  < <(nix eval --json --no-warn-dirty --apply 'builtins.attrNames' "$REPO_ROOT#apps.$SYSTEM") \
-  >/dev/null; then
+INVENTORY=$(nix build --no-link --print-out-paths --no-warn-dirty "$REPO_ROOT#legacyPackages.$SYSTEM.verificationInventory")
+cp "$INVENTORY" "$WORK_DIR/inventory.json"
+if ! jq -e '.apps | index("test-ci")' "$WORK_DIR/inventory.json" > /dev/null; then
   echo "FAIL: apps.$SYSTEM.test-ci is missing" >&2
   failed=$((failed + 1))
 fi
 
-write_derivation_map "$REPO_ROOT#checks.$SYSTEM" "$CHECKS_MAP"
-write_derivation_map "$REPO_ROOT#legacyPackages.$SYSTEM.ciChecks" "$CI_CHECKS_MAP"
-write_derivation_map "$REPO_ROOT#legacyPackages.$SYSTEM.ciApps" "$CI_APPS_MAP"
+jq '.checks' "$WORK_DIR/inventory.json" > "$CHECKS_MAP"
+jq '.ciChecks' "$WORK_DIR/inventory.json" > "$CI_CHECKS_MAP"
+jq '.ciApps' "$WORK_DIR/inventory.json" > "$CI_APPS_MAP"
+prepare_heavy_graph
 write_heavy_derivations "$CHECKS_MAP" "$HEAVY_CHECKS"
 write_heavy_derivations "$CI_CHECKS_MAP" "$HEAVY_CI_CHECKS"
 write_heavy_derivations "$CI_APPS_MAP" "$HEAVY_APPS"

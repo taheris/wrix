@@ -52,9 +52,38 @@
           darwinPkgs = inputs.nixpkgs.legacyPackages.aarch64-darwin;
           darwinHostClient = self.packages.aarch64-darwin.wrix-notify-host;
         });
+      legacyPackages.verificationInventory =
+        let
+          metadata = builtins.mapAttrs (_: drv: builtins.unsafeDiscardOutputDependency drv.drvPath);
+        in
+        pkgs.writeText "verification-inventory.json" (
+          builtins.toJSON {
+            apps = builtins.attrNames config.apps;
+            checks = metadata config.checks;
+            ciChecks = metadata test.ciChecks;
+            ciApps = metadata test.ciAppDerivations;
+          }
+        );
       legacyPackages.ciChecks = test.ciChecks;
       legacyPackages.ciApps = test.ciAppDerivations;
       legacyPackages.verifyScripts = test.verify.scripts;
+      legacyPackages.verifyEvaluations =
+        let
+          descriptions = import ../../tests/verify/profiles-eval.nix {
+            root = self;
+            inherit system;
+            target = "";
+            describe = true;
+          };
+        in
+        builtins.mapAttrs (
+          target: _:
+          import ../../tests/verify/profiles-eval.nix {
+            root = self;
+            flake = self;
+            inherit system target;
+          }
+        ) descriptions;
       legacyPackages.systemTests = test.systemTests;
       legacyPackages.testApps = test.testAppDerivations;
       legacyPackages.testFixtures.execution = test.executionSandbox;
