@@ -179,13 +179,20 @@ let
       cargoExtraArgs = "--package wrix-cli --package wrix-service-server --bin wrix-service-supervisor --bin wrix-shared-service --bin wrix-egress-gateway --bin wrix-nix-pool-owner";
     }
   );
-  controllerPackages = builtins.filter (
-    name:
-    !(builtins.elem name [
-      "wrix-image-tools"
-      "wrix-verify-tools"
-    ])
-  ) (builtins.attrNames (builtins.readDir ../../crates));
+  # Production membership is explicit: adding a test-only workspace crate must
+  # never silently install its executables in the controller package.
+  controllerPackages = [
+    "wrix-beads"
+    "wrix-cache"
+    "wrix-cli"
+    "wrix-core"
+    "wrix-notify"
+    "wrix-runtime-env"
+    "wrix-sandbox"
+    "wrix-service"
+    "wrix-service-server"
+    "wrix-state"
+  ];
   controllerWorkspace = rustProfile.buildPackage (
     workspaceArgs
     // {
