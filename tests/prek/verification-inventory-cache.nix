@@ -51,7 +51,7 @@ pkgs.runCommand "verification-inventory-cache-conformance"
     export source_identity="$TMPDIR/source" builds="$TMPDIR/builds" purity="$TMPDIR/purity" invalid="$TMPDIR/invalid"
     export XDG_CACHE_HOME="$TMPDIR/cache"
     printf '%s\n' true > "$purity"
-    printf '%s\n' '{"locked":{"narHash":"first"},"locks":{"nodes":{"root":{}}},"path":"/nix/store/fixture-source"}' > "$source_identity"
+    printf '%s\n' '{"locked":{"rev":"fixture","narHash":"first"},"url":"fixture-reference","locks":{"nodes":{"root":{}}},"path":"/nix/store/fixture-source"}' > "$source_identity"
     mkdir "$TMPDIR/work"
     source ${./verification-inventory.sh}
     first=$(verification_inventory fixture unit "$TMPDIR/work")
@@ -62,14 +62,14 @@ pkgs.runCommand "verification-inventory-cache-conformance"
     printf '%s\n' false > "$purity"
     test "$(verification_inventory fixture unit "$TMPDIR/work")" = ${inventory}
     test "$(wc -l < "$builds")" = 2
-    printf '%s\n' '{"locked":{"narHash":"second"},"locks":{"nodes":{"root":{}}},"path":"/nix/store/fixture-source"}' > "$source_identity"
+    printf '%s\n' '{"locked":{"rev":"fixture","narHash":"second"},"url":"fixture-reference","locks":{"nodes":{"root":{}}},"path":"/nix/store/fixture-source"}' > "$source_identity"
     test "$(verification_inventory fixture unit "$TMPDIR/work")" = ${inventory}
     test "$(wc -l < "$builds")" = 3
     touch "$invalid"
     test "$(verification_inventory fixture unit "$TMPDIR/work")" = ${inventory}
     test "$(wc -l < "$builds")" = 4
     rm "$invalid"
-    printf '%s\n' '{"locked":{"narHash":"second"},"locks":{"nodes":{"root":{},"mutable":{"locked":{"type":"path"}}}},"path":"/nix/store/fixture-source"}' > "$source_identity"
+    printf '%s\n' '{"locked":{"rev":"fixture","narHash":"second"},"url":"fixture-reference","locks":{"nodes":{"root":{},"mutable":{"locked":{"type":"path"}}}},"path":"/nix/store/fixture-source"}' > "$source_identity"
     verification_inventory fixture unit "$TMPDIR/work" > /dev/null
     verification_inventory fixture unit "$TMPDIR/work" > /dev/null
     test "$(wc -l < "$builds")" = 6

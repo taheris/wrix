@@ -30,7 +30,26 @@ prepare() {
   if [[ -f "$CONFIG_LINK" && -x "$WRIX_LINK/bin/wrix" ]]; then
     return
   fi
-  nix build --impure --no-warn-dirty --out-link "$CONFIG_LINK" --expr "
+  if [[ -n "${prebuilt_profile_config:-}" ]]; then
+    jq -e '[.profile.mounts[].source] == ["/__wrix_verify_optional__", "/__wrix_verify_required__"]' "$prebuilt_profile_config" > /dev/null
+    nix build --impure --no-warn-dirty --out-link "$CONFIG_LINK" \
+      --argstr template "$prebuilt_profile_config" --argstr nixpkgs "$fixture_nixpkgs" --argstr system "$fixture_system" \
+      --argstr optional "$OPTIONAL_MOUNT_SOURCE" --argstr required "$REQUIRED_MOUNT_SOURCE" --expr '
+        { template, nixpkgs, system, optional, required }:
+        let
+          pkgs = import nixpkgs { inherit system; };
+          config = builtins.fromJSON (builtins.unsafeDiscardStringContext (builtins.readFile template));
+          mounts = map (mount: mount // {
+            source = if mount.source == "/__wrix_verify_optional__" then optional
+                     else if mount.source == "/__wrix_verify_required__" then required
+                     else throw "unexpected fixture mount source";
+          }) config.profile.mounts;
+        in pkgs.writeText "profile-config-fixture.json" (builtins.toJSON
+          (config // { profile = config.profile // { inherit mounts; }; }))
+      '
+    ln -s "$prebuilt_wrix" "$WRIX_LINK"
+  else
+    nix build --impure --no-warn-dirty --out-link "$CONFIG_LINK" --expr "
     let
       flake = builtins.getFlake \"git+file://$REPO_ROOT\";
       lib = flake.legacyPackages.\${builtins.currentSystem}.lib;
@@ -43,7 +62,8 @@ prepare() {
       };
     in (lib.mkSandbox { inherit profile; }).image.profileConfig
   "
-  nix build --no-warn-dirty --out-link "$WRIX_LINK" "$REPO_ROOT#wrix"
+    nix build --no-warn-dirty --out-link "$WRIX_LINK" "$REPO_ROOT#wrix"
+  fi
   printf '{}\n' >"$TEST_TMP/auth.json"
   export WRIX_PI_AUTH_FILE="$TEST_TMP/auth.json"
   mkdir -p "$TEST_TMP/home"
@@ -169,9 +189,15 @@ test_profile_config_wrapper_contract() {
   test_project_pointer_keeps_the_host_package_unconfigured
 }
 
+with_profile_config_inputs() {
+  local prebuilt_profile_config="$1" prebuilt_wrix="$2" fixture_nixpkgs="$3" fixture_system="$4"
+  shift 4
+  "$@"
+}
+
 if [[ $# -eq 0 ]]; then
   test_profile_config_wrapper_contract
   test_image_source_kind
 else
-  "$1"
+  "$@"
 fi

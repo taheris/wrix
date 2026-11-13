@@ -481,6 +481,7 @@ let
     [
       jq
       coreutils
+      pkgs.nix
     ]
     ++ optionals pkgs.stdenv.hostPlatform.isLinux [
       pkgs.podman
@@ -748,6 +749,7 @@ let
         export PATH="${ciPreflightPath}:$PATH"
         source ${./lib/verifier.sh}
         source ${./lib/print-inputs.sh}
+        source ${./prek/verification-inventory.sh}
 
         ci_checks=(
           builder-keys-structure
@@ -827,7 +829,7 @@ let
         }
 
         prepare_ci_apps() {
-          local app index
+          local app index inventory names
           local selected=() derivations=() installables=()
           local -A seen=()
           for app in "$@"; do
@@ -844,9 +846,13 @@ let
             return 0
           fi
           batch_dir=$(mktemp -d -t wrix-ci-runners.XXXXXX)
-          if ! ${pkgs.nix}/bin/nix build --dry-run --json --no-link --no-warn-dirty \
-            "''${installables[@]}" > "$batch_dir/plan.json"; then
-            return 0 # Metadata failure retains the original per-app build verdicts.
+          names=$(printf '%s\n' "''${selected[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))')
+          if ! { inventory=$(verification_inventory "$repo_root" "${system}" "$batch_dir") &&
+            jq --argjson names "$names" '.ciApps as $apps | [$names[] | {drvPath: $apps[.]}]' "$inventory" > "$batch_dir/plan.json"; }; then
+            if ! ${pkgs.nix}/bin/nix build --dry-run --json --no-link --no-warn-dirty \
+              "''${installables[@]}" > "$batch_dir/plan.json"; then
+              return 0 # Metadata failure retains the original per-app build verdicts.
+            fi
           fi
           if ! jq -e 'type == "array" and all(.[]; (.drvPath | type) == "string")' \
             "$batch_dir/plan.json" > /dev/null; then
@@ -1070,7 +1076,14 @@ let
   testProfileConfigImageSourceKind = mkRepoScriptCiApp {
     name = "test-profile-config-image-source-kind";
     script = "tests/sandbox/profile-config-wrapper.sh";
-    args = [ "test_image_source_kind" ];
+    args = [
+      "with_profile_config_inputs"
+      "${profileConfigFixture}"
+      "${wrix.rustPackage.wrix}"
+      "${pkgs.path}"
+      system
+      "test_image_source_kind"
+    ];
     environment = profileConfigHostEnvironment;
   };
   testProfileConfigParserAgreement = pkgs.writeShellApplication {
@@ -1079,10 +1092,38 @@ let
       test -e ${profileConfigParserAgreement}
     '';
   };
+  profileConfigFixture =
+    (wrix.mkSandbox {
+      profile = wrix.deriveProfile wrix.profiles.base {
+        runtimeSecrets.WRIX_RUNTIME_CONTRACT_TOKEN = "optional";
+        mounts = [
+          {
+            source = "/__wrix_verify_optional__";
+            dest = "/mnt/optional-cache";
+            mode = "rw";
+            optional = true;
+          }
+          {
+            source = "/__wrix_verify_required__";
+            dest = "/mnt/required-cache";
+            mode = "rw";
+            optional = false;
+          }
+        ];
+      };
+    }).image.profileConfig;
+
   testProfileConfigWrapper = mkRepoScriptCiApp {
     name = "test-profile-config-wrapper";
     script = "tests/sandbox/profile-config-wrapper.sh";
-    args = [ "test_profile_config_wrapper_contract" ];
+    args = [
+      "with_profile_config_inputs"
+      "${profileConfigFixture}"
+      "${wrix.rustPackage.wrix}"
+      "${pkgs.path}"
+      system
+      "test_profile_config_wrapper_contract"
+    ];
     environment = profileConfigHostEnvironment;
   };
 

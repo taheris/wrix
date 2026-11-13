@@ -1,18 +1,24 @@
 { pkgs }:
 let
   alpha = pkgs.writeText "verify-alpha.sh" ''
+    verify_evaluation_succeeded alpha
     printf '%s\n' alpha >> "$executions"
     isolation=changed
     cd "$TMPDIR"
     trap 'touch "$TMPDIR/alpha-exit"' EXIT
   '';
-  beta = pkgs.writeText "verify-beta.sh" ''printf '%s\n' beta >> "$executions"; return 23'';
+  beta = pkgs.writeText "verify-beta.sh" ''if verify_evaluation_succeeded beta; then exit 95; fi; printf '%s\n' beta >> "$executions"; return 23'';
   gamma = pkgs.writeText "verify-gamma.sh" ''false | true; printf '%s\n' false-pass >> "$executions"'';
   alphaDrv = builtins.unsafeDiscardStringContext alpha.drvPath;
   betaDrv = builtins.unsafeDiscardStringContext beta.drvPath;
   fakeNix = pkgs.writeShellScriptBin "nix" ''
     set -euo pipefail
     printf '%s\n' "$*" >> "$calls"
+    if [[ "$1" == eval ]]; then
+      if [[ -e "$failure/evaluation" ]]; then exit 19; fi
+      printf '%s\n' '{"alpha":true,"beta":false}'
+      exit 0
+    fi
     if [[ "$1" == build && "$2" == --dry-run ]]; then
       if [[ -e "$failure/plan" ]]; then exit 19; fi
       if [[ -e "$failure/malformed" ]]; then printf '{}\n'; exit 0; fi
@@ -96,7 +102,7 @@ pkgs.runCommand "verify-script-batching-conformance"
     saved="$verify_script_directory"
     verify_scripts_cleanup
     test ! -e "$saved"
-    for mode in plan malformed root; do
+    for mode in plan malformed root evaluation; do
       (
         source ${../lib/verify-scripts.sh}
         touch "$failure/$mode"

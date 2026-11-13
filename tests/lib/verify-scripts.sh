@@ -2,6 +2,7 @@
 set -euo pipefail
 
 verify_script_directory=""
+verify_script_evaluations=""
 declare -A verify_script_derivations=()
 
 verify_scripts_cleanup() {
@@ -11,7 +12,7 @@ verify_scripts_cleanup() {
 }
 
 verify_scripts_prepare() {
-  local source="$1" system="$2" target index
+  local source="$1" system="$2" target index names
   shift 2
   local selected=() installables=() derivations=()
   local -A seen=()
@@ -26,6 +27,11 @@ verify_scripts_prepare() {
     return 0
   fi
   verify_script_directory=$(mktemp -d -t wrix-verify-scripts.XXXXXX)
+  names=$(printf '%s\n' "${selected[@]}" | jq -Rn '[inputs | select(test("^[a-z0-9.-]+$"))] | map(tojson) | join(" ")')
+  if nix eval --json --no-warn-dirty "$source#legacyPackages.$system.verifyEvaluations" --apply "values: builtins.listToAttrs (map (name: { inherit name; value = builtins.hasAttr name values && (builtins.tryEval values.\${name}).success; }) [$names])" > "$verify_script_directory/evaluations.json" &&
+    jq -e 'type == "object" and all(.[]; type == "boolean")' "$verify_script_directory/evaluations.json" > /dev/null; then
+    verify_script_evaluations="$verify_script_directory/evaluations.json"
+  fi
   if ! nix build --dry-run --json --no-link --no-warn-dirty "${installables[@]}" > "$verify_script_directory/plan.json"; then
     return 0 # Planning failure preserves independent original script builds.
   fi
@@ -63,9 +69,14 @@ verify_script_path() {
   nix build --no-link --print-out-paths --no-warn-dirty "$source#legacyPackages.$system.verifyScripts.\"$target\""
 }
 
+verify_evaluation_succeeded() {
+  [[ -n "${verify_evaluation_results:-}" ]] &&
+    jq -e --arg target "$1" '.[$target] == true' "$verify_evaluation_results" > /dev/null
+}
+
 verify_script_run() {
   local script definitions self="${SELF:-$0}"
   script="$(verify_script_path "$1" "$2" "$3")" || return 1
   definitions="$(declare -f)"
-  SELF="$self" bash -euo pipefail -c "$definitions"$'\nverify_execute_source() { source "$1"; }\nverify_execute_source "$1"' "$self" "$script"
+  SELF="$self" bash -euo pipefail -c "$definitions"$'\nverify_execute_source() { local verify_evaluation_results="$2"; source "$1"; }\nverify_execute_source "$1" "$2"' "$self" "$script" "$verify_script_evaluations"
 }

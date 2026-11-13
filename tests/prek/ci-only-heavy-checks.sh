@@ -105,7 +105,9 @@ fail_if_file_nonempty() {
 failed=0
 
 source "$SCRIPT_DIR/verification-inventory.sh"
-INVENTORY=$(verification_inventory "$REPO_ROOT" "$SYSTEM" "$WORK_DIR")
+if ! INVENTORY=$(verification_inventory "$REPO_ROOT" "$SYSTEM" "$WORK_DIR"); then
+  INVENTORY=$(nix build --out-link "$WORK_DIR/inventory-root" --print-out-paths --no-warn-dirty "$REPO_ROOT#legacyPackages.$SYSTEM.verificationInventory")
+fi
 cp "$INVENTORY" "$WORK_DIR/inventory.json"
 if ! jq -e '.apps | index("test-ci")' "$WORK_DIR/inventory.json" > /dev/null; then
   echo "FAIL: apps.$SYSTEM.test-ci is missing" >&2

@@ -4,6 +4,7 @@ set -euo pipefail
 verification_inventory() {
   local repository="$1" system="$2" work="$3" identity scope directory output recipe fingerprint cacheable=0
   nix flake metadata --json "$repository" > "$work/source.json" || return 1
+  jq -e '(.locked.rev | type) == "string" and (.url | type) == "string"' "$work/source.json" > /dev/null || return 1
   if jq -e '(.locked.narHash | type) == "string" and all(.locks.nodes[]; .locked == null or (.locked.narHash | type) == "string")' "$work/source.json" > /dev/null; then
     cacheable=1
   fi
@@ -29,7 +30,12 @@ verification_inventory() {
       return 0
     fi
   fi
-  recipe=$(nix eval --raw --no-warn-dirty "$repository#legacyPackages.$system.verificationInventoryRecipe") || return 1
+  recipe=$(nix eval --raw --no-warn-dirty --expr '
+    { reference, system }:
+    let scope = (builtins.getFlake reference).legacyPackages.${system};
+    in if scope ? verificationInventoryRecipe then scope.verificationInventoryRecipe else ""
+  ' --argstr reference "$(jq -r .url "$work/source.json")" --argstr system "$system") || return 1
+  [[ -n "$recipe" ]] || return 1
   if ! nix-store --check-validity "$recipe"; then
     recipe=$(nix eval --raw --option eval-cache false --no-warn-dirty "$repository#legacyPackages.$system.verificationInventoryRecipe") || return 1
   fi
