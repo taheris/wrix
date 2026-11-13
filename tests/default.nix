@@ -255,7 +255,12 @@ let
       profile-config-parser-agreement = profileConfigParserAgreement;
       devshell-cli-selection = devshellCliSelection;
       host-service-package-binding = import ./services/package-binding.nix { inherit pkgs wrix; };
-      client-package-boundary = import ./services/client-package.nix { inherit pkgs wrix; };
+      client-package-boundary = pkgs.runCommand "client-package-and-fixture-boundary" { } ''
+        set -euo pipefail
+        test -e ${import ./services/client-package.nix { inherit pkgs wrix; }}
+        test -e ${wrix.rustPackage.fixtureIsolation}
+        touch "$out"
+      '';
       client-server-dependency-boundary = import ./services/client-graph.nix { inherit pkgs wrix; };
       profile-catalogue = import ./profiles/catalogue.nix { inherit pkgs wrix linuxPkgs; };
       shared-nix-host-binding = import ./store/pool-binding.nix { inherit pkgs wrix; };
@@ -359,7 +364,6 @@ let
       };
       verify-script-batching = import ./prek/verify-script-batching.nix { inherit pkgs; };
       checked-artifact-app = import ./prek/checked-artifact-app.nix { inherit pkgs; };
-      native-fixture-production-isolation = wrix.rustPackage.fixtureIsolation;
       rust-production-source = import ./services/production-source.nix {
         inherit pkgs wrix;
         rustProfile = wrix.profiles.rust;

@@ -68,11 +68,13 @@ implementation edits from rebuilding clients, service images and their dependent
 image tiers.
 
 Automatic native-fixture compilation uses the same implementation projection.
-The original production-package fixture-exclusion assertions run in the required
-`native-fixture-production-isolation` Nix check, covering the foundation,
-client, service and controller packages. They no longer force a separate
-full-workspace production build merely to start the native suite; packaged
-example unit tests remain enabled during fixture construction.
+The original production-package fixture-exclusion assertions remain in the
+`native-fixture-production-isolation` derivation, covering the foundation,
+client, service and controller packages. The required CI
+`test-client-package-boundary` consumes that derivation alongside its original
+boundary check. This keeps its four production builds out of lightweight
+`nix flake check` and native-suite setup without omitting any assertions;
+packaged example unit tests remain enabled during fixture construction.
 
 ## Archive work
 
