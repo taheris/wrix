@@ -104,7 +104,11 @@ fail_if_file_nonempty() {
 
 failed=0
 
-INVENTORY=$(nix build --no-link --print-out-paths --no-warn-dirty "$REPO_ROOT#legacyPackages.$SYSTEM.verificationInventory")
+RECIPE=$(nix eval --raw --no-warn-dirty "$REPO_ROOT#legacyPackages.$SYSTEM.verificationInventoryRecipe")
+if ! nix-store --check-validity "$RECIPE"; then
+  RECIPE=$(nix eval --raw --option eval-cache false --no-warn-dirty "$REPO_ROOT#legacyPackages.$SYSTEM.verificationInventoryRecipe")
+fi
+INVENTORY=$(nix build --no-link --print-out-paths --no-warn-dirty "$RECIPE^*")
 cp "$INVENTORY" "$WORK_DIR/inventory.json"
 if ! jq -e '.apps | index("test-ci")' "$WORK_DIR/inventory.json" > /dev/null; then
   echo "FAIL: apps.$SYSTEM.test-ci is missing" >&2

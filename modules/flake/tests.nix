@@ -64,6 +64,9 @@
             ciApps = metadata test.ciAppDerivations;
           }
         );
+      legacyPackages.verificationInventoryRecipe =
+        builtins.unsafeDiscardStringContext
+          self.legacyPackages.${system}.verificationInventory.drvPath;
       legacyPackages.ciChecks = test.ciChecks;
       legacyPackages.ciApps = test.ciAppDerivations;
       legacyPackages.verifyScripts = test.verify.scripts;
