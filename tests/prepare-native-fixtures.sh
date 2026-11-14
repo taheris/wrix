@@ -19,7 +19,7 @@ main() {
     WRIX_TEST_HOST_HOOK_STORE_INIT
   )
   local members=(hooks runner broken-runner builder-spec packaged-wrix devshell-hook cellerd controller-binding compiler sql-client beads fixture-runtime host-hook-store-init)
-  local name index root fixtures="" missing=0 value
+  local name index root fixtures="" missing=0 value fixture_link
   local values=()
 
   for name in "${names[@]}"; do
@@ -29,8 +29,16 @@ main() {
   done
   if [[ "$missing" -eq 1 ]]; then
     root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-    fixtures="$(WRIX_TEST_REPO="$root" nix build --impure --print-out-paths \
-      --out-link "$NEXTEST_ENV.fixtures" --expr '
+    fixture_link="$NEXTEST_ENV.fixtures"
+    if [[ -n "${WRIX_NATIVE_FIXTURE_ROOT_DIR:-}" ]]; then
+      [[ -d "$WRIX_NATIVE_FIXTURE_ROOT_DIR" && ! -L "$WRIX_NATIVE_FIXTURE_ROOT_DIR" ]] || {
+        printf 'Invalid suite-owned fixture root directory.\n' >&2
+        return 1
+      }
+      fixture_link="$WRIX_NATIVE_FIXTURE_ROOT_DIR/fixtures"
+    fi
+    fixtures="$(WRIX_TEST_REPO="$root" nix build --max-jobs 1 --cores 2 --impure --print-out-paths \
+      --out-link "$fixture_link" --expr '
         let
           flake = builtins.getFlake ("git+file://" + builtins.getEnv "WRIX_TEST_REPO");
         in (builtins.getAttr builtins.currentSystem flake.legacyPackages).testFixtures.native

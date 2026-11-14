@@ -13,16 +13,79 @@ fi
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$root"
 export NEXTEST_EXPERIMENTAL_SETUP_SCRIPTS=1
+suite_dir=$(mktemp -d "${TMPDIR:-/tmp}/wrix-native-suite.XXXXXXXX")
+exec {suite_fd}<"$suite_dir"
+case "$(uname -s)" in
+  Darwin) identity_command=(/usr/bin/stat -f '%d:%i');;
+  Linux) identity_command=(stat -c '%d:%i');;
+  *) printf 'test-native: unsupported directory identity platform.\n' >&2; exit 1;;
+esac
+suite_identity=$("${identity_command[@]}" "$suite_dir")
+export WRIX_NATIVE_FIXTURE_ROOT_DIR="$suite_dir"
+runner_pid=""
 
-if timeout --signal=TERM --kill-after=5s 595s cargo nextest run --workspace --all-targets; then
-  elapsed="$SECONDS"
-  printf 'Native suite: %ss including compilation and automatic setup (limit: 300s).\n' "$elapsed"
+cleanup_fixtures() {
+  if [[ -z "$suite_dir" ]]; then return 0; fi
+  if [[ -L "$suite_dir" || ! -d "$suite_dir" || $("${identity_command[@]}" "$suite_dir") != "$suite_identity" ]]; then
+    printf 'test-native: suite directory identity changed; preserving foreign data.\n' >&2
+    return 1
+  fi
+  if [[ -L "$suite_dir/fixtures" ]]; then
+    rm -- "$suite_dir/fixtures" || return "$?"
+  elif [[ -e "$suite_dir/fixtures" ]]; then
+    printf 'test-native: unexpected fixture root type; preserving foreign data.\n' >&2
+    return 1
+  fi
+  rmdir -- "$suite_dir" || return "$?"
+  exec {suite_fd}<&- || return "$?"
+  suite_dir=""
+}
+finish() {
+  local status="$?"
+  trap - EXIT
+  if ! cleanup_fixtures; then
+    printf 'test-native: owned fixture cleanup failed.\n' >&2
+    if [[ "$status" -eq 0 ]]; then status=1; fi
+  fi
+  exit "$status"
+}
+interrupt() {
+  local status="$1"
+  trap - TERM HUP INT
+  if [[ -n "$runner_pid" ]]; then
+    # GNU timeout forwards TERM to the owned test process group and retains its
+    # existing kill-after bound. Reap it before releasing the fixture GC root.
+    if ! kill -TERM "$runner_pid"; then
+      printf 'test-native: cancellation request failed; waiting for the owned runner.\n' >&2
+    fi
+    if wait "$runner_pid"; then :; else
+      printf 'test-native: owned runner cancellation completed with exit %s.\n' "$?" >&2
+    fi
+    runner_pid=""
+  fi
+  exit "$status"
+}
+trap finish EXIT
+trap 'interrupt 143' TERM HUP
+trap 'interrupt 130' INT
+
+timeout --signal=TERM --kill-after=5s 595s cargo nextest run --workspace --all-targets &
+runner_pid=$!
+status=0
+wait "$runner_pid" || status=$?
+runner_pid=""
+if ! cleanup_fixtures; then
+  printf 'test-native: owned fixture cleanup failed.\n' >&2
+  if [[ "$status" -eq 0 ]]; then status=1; fi
+fi
+elapsed="$SECONDS"
+if [[ "$status" -eq 0 ]]; then
+  printf 'Native suite: %ss including compilation and automatic setup and cleanup (limit: 300s).\n' "$elapsed"
   if [[ "$elapsed" -ge 300 ]]; then
     printf 'test-native: suite exceeded the five-minute acceptance budget.\n' >&2
     exit 1
   fi
 else
-  status="$?"
-  printf 'test-native: failed after %ss (exit %s; ten-minute hard stop includes cancellation).\n' "$SECONDS" "$status" >&2
+  printf 'test-native: failed after %ss (exit %s; ten-minute hard stop includes cancellation).\n' "$elapsed" "$status" >&2
   exit "$status"
 fi

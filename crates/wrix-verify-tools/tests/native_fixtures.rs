@@ -94,6 +94,7 @@ printf '%s\n' "$WRIX_FIXTURE_BUNDLE"
             .collect();
         environment.remove(&OsString::from("BASH_ENV"));
         environment.remove(&OsString::from("ENV"));
+        environment.remove(&OsString::from("WRIX_NATIVE_FIXTURE_ROOT_DIR"));
         let path = env::join_paths(
             std::iter::once(bin).chain(env::split_paths(&env::var_os("PATH").unwrap())),
         )
@@ -166,6 +167,46 @@ fn one_build_supplies_all_packaging_fixtures() {
         "--out-link {}.fixtures",
         fixture.exported.display()
     )));
+}
+#[test]
+fn managed_suite_keeps_its_fixture_root_inside_the_owned_lifetime_directory() {
+    let mut fixture = Fixture::new();
+    let directory = fixture.root.path().join("suite");
+    fs::create_dir(&directory).unwrap();
+    fixture.environment.insert(
+        "WRIX_NATIVE_FIXTURE_ROOT_DIR".into(),
+        directory.clone().into_os_string(),
+    );
+    let output = fixture.run();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let args = fs::read_to_string(fixture.calls.with_extension("args")).unwrap();
+    assert!(args.contains(&format!(
+        "--out-link {}",
+        directory.join("fixtures").display()
+    )));
+    assert!(!args.contains(&format!(
+        "--out-link {}.fixtures",
+        fixture.exported.display()
+    )));
+    assert_eq!(fixture.exported(), fixture.expected());
+}
+#[test]
+fn symlinked_suite_directory_is_refused_before_building_or_exporting() {
+    let mut fixture = Fixture::new();
+    let directory = fixture.root.path().join("suite");
+    symlink(fixture.root.path(), &directory).unwrap();
+    fixture.environment.insert(
+        "WRIX_NATIVE_FIXTURE_ROOT_DIR".into(),
+        directory.into_os_string(),
+    );
+    let output = fixture.run();
+    assert!(!output.status.success());
+    assert!(!fixture.calls.exists());
+    assert_eq!(fs::read(&fixture.exported).unwrap(), b"");
 }
 #[test]
 fn existing_nix_packaging_inputs_need_no_nix_frontend() {

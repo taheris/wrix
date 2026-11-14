@@ -14,8 +14,25 @@ and test failures retain their nonzero exit status.
 
 Packaging, image and platform acceptance remain required separately at the end
 of a batch. Their costs are not native-suite timing, and an unfinished
-publication gate is not a successful test result. Verification commands must be
+publication gate is not a successful test result. Native-suite commands are
 diagnosed at the ten-minute boundary rather than retried with longer timeouts.
+Publication hooks have no wall-clock limit.
+
+The suite creates a private, inode-pinned lifetime directory for automatic
+packaging-fixture GC roots. It releases those links after the runner is reaped,
+on success, failure or interruption. Cleanup refuses replaced directories or
+unexpected fixture-root types rather than deleting foreign data. Compilation,
+setup and cleanup remain inside the five-minute measured budget. Direct
+`cargo nextest` invocations retain the legacy setup-env sibling link; use the
+managed complete-suite entry point for automatic lifetime cleanup. Abrupt
+SIGKILL can still leave an orphan; it is not a successful cleanup receipt.
+
+CI-app/check and verifier-script realization requests explicitly select one
+local Nix job and two build cores instead of depending on ambient configuration.
+This bounds local overlapping build scratch without skipping checks, changing
+admission, changing builder endpoints or bypassing the hook environment. It does
+not lower a remote builder's independent job limit, and is not a measured claim
+about whole-push physical peak or cold execution time.
 
 ## Internal Git runtime
 

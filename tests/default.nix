@@ -876,7 +876,7 @@ let
           fi
           ci_runners=()
           rm -f "$batch_dir"/runner*
-          if ! ${pkgs.nix}/bin/nix build --no-warn-dirty --out-link "$batch_dir/runner" "''${ci_derivations[$app]}^*"; then
+          if ! ${pkgs.nix}/bin/nix build --max-jobs 1 --cores 2 --no-warn-dirty --out-link "$batch_dir/runner" "''${ci_derivations[$app]}^*"; then
             return 0 # Preserve independent failure verdicts through per-app fallback builds.
           fi
           links=("$batch_dir"/runner*)
@@ -907,7 +907,7 @@ let
           if [[ -v "ci_runners[$app]" ]]; then
             printf '%s\n' "''${ci_runners[$app]}"
           else
-            ${pkgs.nix}/bin/nix build --no-link --print-out-paths --no-warn-dirty ".#legacyPackages.${system}.ciApps.$app"
+            ${pkgs.nix}/bin/nix build --max-jobs 1 --cores 2 --no-link --print-out-paths --no-warn-dirty ".#legacyPackages.${system}.ciApps.$app"
           fi
         }
 
@@ -997,7 +997,7 @@ let
         run_step "nix flake check" ${pkgs.nix}/bin/nix flake check --no-warn-dirty
 
         for check in "''${ci_checks[@]}"; do
-          run_step "$check" ${pkgs.nix}/bin/nix build --no-link --no-warn-dirty ".#legacyPackages.${system}.ciChecks.$check"
+          run_step "$check" ${pkgs.nix}/bin/nix build --max-jobs 1 --cores 2 --no-link --no-warn-dirty ".#legacyPackages.${system}.ciChecks.$check"
         done
 
         for app in "''${ci_apps[@]}"; do

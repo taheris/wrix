@@ -58,7 +58,7 @@ verify_script_path() {
   local source="$1" system="$2" target="$3" script
   if [[ -v "verify_script_derivations[$target]" ]]; then
     rm -f "$verify_script_directory"/current*
-    if nix build --no-warn-dirty --out-link "$verify_script_directory/current" "${verify_script_derivations[$target]}^*"; then
+    if nix build --max-jobs 1 --cores 2 --no-warn-dirty --out-link "$verify_script_directory/current" "${verify_script_derivations[$target]}^*"; then
       script=$(readlink -f "$verify_script_directory/current")
       if [[ -f "$script" && "$script" == /nix/store/*-verify-"$target".sh ]]; then
         printf '%s\n' "$script"
@@ -66,7 +66,7 @@ verify_script_path() {
       fi
     fi
   fi
-  nix build --no-link --print-out-paths --no-warn-dirty "$source#legacyPackages.$system.verifyScripts.\"$target\""
+  nix build --max-jobs 1 --cores 2 --no-link --print-out-paths --no-warn-dirty "$source#legacyPackages.$system.verifyScripts.\"$target\""
 }
 
 verify_evaluation_succeeded() {
