@@ -35,7 +35,8 @@ repos:
         fail_fast: true
         entry: >-
           bin/pre-push-checks --hook-id nix-flake-check
-          --hook-entry 'nix flake check' -- nix flake check
+          --hook-entry 'nix flake check --max-jobs 1 --cores 2' --
+          nix flake check --max-jobs 1 --cores 2
         language: system
         pass_filenames: false
         always_run: true

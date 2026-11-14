@@ -27,12 +27,15 @@ setup and cleanup remain inside the five-minute measured budget. Direct
 managed complete-suite entry point for automatic lifetime cleanup. Abrupt
 SIGKILL can still leave an orphan; it is not a successful cleanup receipt.
 
-CI-app/check and verifier-script realization requests explicitly select one
-local Nix job and two build cores instead of depending on ambient configuration.
-This bounds local overlapping build scratch without skipping checks, changing
-admission, changing builder endpoints or bypassing the hook environment. It does
-not lower a remote builder's independent job limit, and is not a measured claim
-about whole-push physical peak or cold execution time.
+The pre-push flake check, CI-app/check and verifier-script realization requests
+explicitly select one local Nix job and two build cores instead of depending on
+ambient configuration. The flake-check hook records those exact arguments in its
+marker metadata; its conformance test executes the configured hook and rejects
+missing resource limits while preserving failure propagation and fail-fast
+order. This bounds local overlapping build scratch without skipping checks,
+changing admission, changing builder endpoints or bypassing the hook
+environment. It does not lower a remote builder's independent job limit, and is
+not a measured claim about whole-push physical peak or cold execution time.
 
 ## Internal Git runtime
 

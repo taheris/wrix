@@ -68,7 +68,7 @@ chmod +x "$TEST_TMP/bin/loom"
     "$PREK_BIN" run --stage pre-push --all-files --no-progress
 )
 
-expected=$'nix-flake-check|nix flake check|@{u}..HEAD\nloom-gate-verify|env WRIX_PRE_PUSH=1 RUSTC_WRAPPER= CARGO_BUILD_RUSTC_WRAPPER= loom gate verify --diff @{upstream}..HEAD|@{u}..HEAD'
+expected=$'nix-flake-check|nix flake check --max-jobs 1 --cores 2|@{u}..HEAD\nloom-gate-verify|env WRIX_PRE_PUSH=1 RUSTC_WRAPPER= CARGO_BUILD_RUSTC_WRAPPER= loom gate verify --diff @{upstream}..HEAD|@{u}..HEAD'
 actual="$(<"$CALL_LOG")"
 if [[ "$actual" != "$expected" ]]; then
   echo "FAIL: pre-push hooks did not pass canonical marker metadata" >&2
@@ -107,7 +107,8 @@ printf 'PASS: Loom pre-push bypasses compiler caches without suppressing failure
 cat >"$TEST_TMP/bin/nix" <<EOF
 #!$BASH_BIN
 set -euo pipefail
-if [[ "\$#" -ne 2 || "\$1" != flake || "\$2" != check ]]; then
+if [[ "\$#" -ne 6 || "\$1" != flake || "\$2" != check ||
+      "\$3" != --max-jobs || "\$4" != 1 || "\$5" != --cores || "\$6" != 2 ]]; then
   echo "nix shim: unexpected args: \$*" >&2
   exit 2
 fi
