@@ -86,6 +86,10 @@ docs/
 └── style-rules.md       # Code standards (SH-, NX-, DOC-, GIT-, TST-, RS-, COM-, CLI-)
 ```
 
+The standalone native test crate also contains explicitly scoped
+[operator probes](operator-probes.md). Its inert plans, read-only observations,
+and disposable primitives are not production admission or integration evidence.
+
 ## Component Overview
 
 | Component            | Purpose                                                                                                                                                                      | Entry Point                                                    |

@@ -2,12 +2,14 @@ use std::ffi::OsString;
 
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
 pub enum Error {
-    /// usage: wrix-native-test native-fixture-cleanup ARGS | native-interruption ARGS
+    /// usage: wrix-native-test native-fixture-cleanup ARGS | native-interruption ARGS | operator-probe ARGS
     Usage,
     /// {0}
     Cleanup(#[from] crate::native_fixture::cleanup::Error),
     /// {0}
     Egress(#[from] crate::egress::Error),
+    /// {0}
+    Probe(#[from] crate::probe::Error),
     /// {0}
     #[cfg(target_os = "linux")]
     Interruption(#[from] crate::native_fixture::interruption::Error),
@@ -17,6 +19,10 @@ pub fn run(args: impl IntoIterator<Item = OsString>) -> Result<(), Error> {
     match args.as_slice() {
         [name] if name == "pool-egress" => {
             crate::egress::run()?;
+            Ok(())
+        }
+        [name, rest @ ..] if name == "operator-probe" => {
+            crate::probe::run(rest)?;
             Ok(())
         }
         [name, rest @ ..] if name == "native-fixture-cleanup" => {
