@@ -2,6 +2,7 @@
 
 let
   inherit (pkgs.lib) escapeShellArg;
+  tools = import ../../lib/verify/tools.nix { inherit pkgs; };
 
   serviceScript = script: function: ''
     run_repo_script ${escapeShellArg "tests/services/${script}.sh"} ${escapeShellArg function}
@@ -28,7 +29,6 @@ in
   "services.cache-transport-http-only".script = ''
     local root
     root="$(repo_root)"
-    python3 "$root/tests/verify/test_services_cache_transport.py"
-    python3 "$root/tests/verify/services-cache-transport.py" "$root"
+    ${tools}/bin/wrix-verify-tools cache-transport "$root"
   '';
 }

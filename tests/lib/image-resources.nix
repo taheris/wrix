@@ -77,6 +77,7 @@ let
     ++ contracts [ "playwright-mcp" ]
     ++ [
       "/bin/test-ci-verifiers"
+      "/lib/sandbox/image.nix"
       "/tests/sandbox/pi-mcp-native.mjs"
     ]
   );

@@ -27,11 +27,17 @@ pub enum Error {
     BuilderAccount(#[from] crate::builder_account::Error),
     /// {0}
     Payload(#[from] crate::artifact::image::payload::Error),
+    /// {0}
+    CacheTransport(#[from] crate::cache_transport::Error),
 }
 
 pub fn run(args: impl IntoIterator<Item = OsString>) -> Result<(), Error> {
     let args: Vec<_> = args.into_iter().collect();
     match args.as_slice() {
+        [name, root] if name == "cache-transport" => {
+            crate::cache_transport::run(Path::new(root))?;
+            Ok(())
+        }
         [name, passwd, group, configured, trusted] if name == "builder-build-users" => {
             let configured = configured.to_str().ok_or(Error::Usage)?;
             let trusted = trusted.to_str().ok_or(Error::Usage)?;

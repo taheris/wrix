@@ -3,6 +3,7 @@
 let
   inherit (pkgs.lib) escapeShellArg;
   verifyTools = import ../../lib/verify/tools.nix { inherit pkgs; };
+  browserScopeTools = import ../prek/browser-scope-tools.nix { inherit pkgs; };
   # Retain the existing store source without coercing/copying its path again.
   nixpkgsSource =
     let
@@ -97,7 +98,10 @@ in
       export PATH="${pkgs.procps}/bin:$PATH"
       root="$(repo_root)"
       loom="$(build_flake_package loom)"
-      python3 "$root/tests/verify/browser-gate-scope.py" "$root" "$loom/bin/loom" ${escapeShellArg system}
+      export WRIX_TEST_BROWSER_SOURCE="$root"
+      export WRIX_TEST_BROWSER_LOOM="$loom/bin/loom"
+      export WRIX_TEST_BROWSER_SYSTEM=${escapeShellArg system}
+      ${browserScopeTools}/bin/browser-gate-scope-tests --include-ignored --test-threads=1
     '';
   };
 

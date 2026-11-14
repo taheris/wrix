@@ -132,6 +132,7 @@ assert elem "/lib/beads/" imageResources.imageInputs;
 assert elem "/crates/wrix-service/src/lifecycle/drain/native/" imageResources.imageInputs;
 assert !(elem "/**/*.nix" imageResources.browserInputs);
 assert elem "/tests/verify/" imageResources.browserInputs;
+assert elem "/lib/sandbox/image.nix" imageResources.browserInputs;
 assert !(elem "/specs/" imageResources.imageInputs);
 assert elem "/tests/sandbox/" imageResources.imageInputs;
 assert elem "/specs/image-builder.md" imageResources.imageInputs;

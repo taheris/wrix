@@ -7,12 +7,18 @@ pub enum Error {
     /// {0}
     Cleanup(#[from] crate::native_fixture::cleanup::Error),
     /// {0}
+    Egress(#[from] crate::egress::Error),
+    /// {0}
     #[cfg(target_os = "linux")]
     Interruption(#[from] crate::native_fixture::interruption::Error),
 }
 pub fn run(args: impl IntoIterator<Item = OsString>) -> Result<(), Error> {
     let args: Vec<_> = args.into_iter().collect();
     match args.as_slice() {
+        [name] if name == "pool-egress" => {
+            crate::egress::run()?;
+            Ok(())
+        }
         [name, rest @ ..] if name == "native-fixture-cleanup" => {
             crate::native_fixture::cleanup::entry::run(rest)?;
             Ok(())

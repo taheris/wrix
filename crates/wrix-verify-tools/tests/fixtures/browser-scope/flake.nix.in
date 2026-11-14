@@ -1,0 +1,44 @@
+{
+  inputs.wrix.url = @SOURCE@;
+  inputs.wrix.inputs.nixpkgs.follows = "nixpkgs";
+  inputs.nixpkgs.url = "path:./browser-nixpkgs";
+  outputs = { self, wrix, ... }: let
+    system = @SYSTEM@;
+    base = wrix.inputs.nixpkgs.legacyPackages.${system};
+    pkgs = base;
+    test = import (wrix.outPath + "/tests") {
+      inherit pkgs system;
+      loomTests = import (wrix.outPath + "/tests/loom.nix") {
+        inherit pkgs;
+        linuxPkgs = pkgs;
+        wrix = throw "discovery forced Loom image construction";
+        loomCli = throw "discovery forced Loom tooling";
+        linuxLoomCli = throw "discovery forced Linux Loom tooling";
+        packages = throw "discovery forced profile images";
+        devShell = throw "discovery forced a devshell";
+        lock = throw "discovery forced lock assertions";
+      };
+      linuxPkgs = pkgs;
+      treefmt = base.hello;
+      src = self;
+      inherit (wrix.inputs) crane fenix;
+      wrix = import (wrix.outPath + "/lib") {
+        inherit pkgs system;
+        linuxPkgs = pkgs;
+        inherit (wrix.inputs) crane fenix;
+        treefmt = base.hello;
+      };
+    };
+  in {
+    apps.${system} = {
+      verify = test.verify.app;
+      test-ci = test.apps.ci;
+    };
+    legacyPackages.${system} = {
+      browserBoundaries = [ pkgs.playwright-driver.browsers.drvPath pkgs.playwright-mcp.drvPath pkgs.pi-coding-agent.drvPath ];
+      verifyScripts = test.verify.scripts;
+      ciApps = test.ciAppDerivations;
+      testApps = test.testAppDerivations;
+    };
+  };
+}

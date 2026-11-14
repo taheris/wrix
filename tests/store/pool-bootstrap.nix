@@ -2,9 +2,10 @@
 
 let
   image = wrix.nixPoolImage;
+  nativeTools = import ../../lib/verify/native-test.nix { inherit pkgs; };
   dnsFixtureCheck = pkgs.runCommand "pool-dns-fixture-conformance" { } ''
     set -euo pipefail
-    ${pkgs.python3}/bin/python ${./egress-server.py} --test
+    test -x ${nativeTools}/bin/wrix-native-test
     touch "$out"
   '';
   archive =
@@ -103,7 +104,7 @@ pkgs.testers.runNixOSTest {
     ];
     systemd.services.pool-egress-control = {
       wantedBy = [ "multi-user.target" ];
-      serviceConfig.ExecStart = "${pkgs.python3}/bin/python ${./egress-server.py}";
+      serviceConfig.ExecStart = "${nativeTools}/bin/wrix-native-test pool-egress";
     };
     environment.systemPackages = [
       pkgs.bash

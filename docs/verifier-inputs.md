@@ -11,18 +11,20 @@ Imports and fixture paths use the same directory objects as their projections.
 Image-only and browser checks do not inherit the whole Rust workspace or every
 spec; checks using the real host CLI or service image retain those dependencies.
 Darwin browser guest launch checks retain Rust and image resources because they
-invoke the real host CLI; Linux host-browser checks do not. Loom/profile image
-wiring uses image resources rather than unrelated Rust sources. Legacy profile
-verifiers still use conservative `browser-resources.nix` scopes. Directory
-scopes include newly added resources. Image/browser families retain their owning
-resource directories plus root flake/module and verifier-dispatch definitions,
-`flake.lock`, `loom.toml`, patches and shared protocol scripts. They no longer
-claim every repository Nix file as an input: service-only Nix edits select the
-service-inclusive runtime matrices, not unrelated worker-image/browser checks.
-Image resources explicitly include Beads wrappers and the native compiler
-sources packaged by profiles. Other Nix-backed families retain their
-conservative repository-wide Nix scope. There is no target-name exclusion
-filter.
+invoke the real host CLI; Linux host-browser checks do not inherit those full
+resource families. Both retain the image-assembly routing source file as an
+explicit scoping edge, without realizing an image during discovery. Loom/profile
+image wiring uses image resources rather than unrelated Rust sources. Legacy
+profile verifiers still use conservative `browser-resources.nix` scopes.
+Directory scopes include newly added resources. Image/browser families retain
+their owning resource directories plus root flake/module and verifier-dispatch
+definitions, `flake.lock`, `loom.toml`, patches and shared protocol scripts.
+They no longer claim every repository Nix file as an input: service-only Nix
+edits select the service-inclusive runtime matrices, not unrelated
+worker-image/browser checks. Image resources explicitly include Beads wrappers
+and the native compiler sources packaged by profiles. Other Nix-backed families
+retain their conservative repository-wide Nix scope. There is no target-name
+exclusion filter.
 
 The existing target registries generate `--print-inputs` batch maps; there is no
 separate target/dependency registry. Opaque definitions are omitted, not encoded

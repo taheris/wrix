@@ -1,0 +1,22 @@
+{
+  inputs.upstream.url = @UPSTREAM@;
+  outputs = { upstream, ... }: {
+    inherit (upstream) lib;
+    legacyPackages.@SYSTEM@ = upstream.legacyPackages.@SYSTEM@.extend (final: prev: {
+      pi-coding-agent = final.runCommand "pi-image-boundary" { boundary = @SENTINEL@; } ''
+        echo IMAGE_RUNTIME_REALIZED >&2
+        exit 1
+      '';
+      playwright-mcp = final.runCommand "playwright-mcp" { boundary = @SENTINEL@; } ''
+        echo BROWSER_RUNTIME_REALIZED >&2
+        exit 1
+      '';
+      playwright-driver = prev.playwright-driver // {
+        browsers = final.runCommand @SENTINEL@ {} ''
+          echo BROWSER_RUNTIME_REALIZED >&2
+          exit 1
+        '';
+      };
+    });
+  };
+}
