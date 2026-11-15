@@ -181,6 +181,8 @@ pkgs.runCommandLocal "docker-image-stream"
     skopeo --tmpdir "$TMPDIR" --insecure-policy copy --quiet docker-archive:expected.tar oci:"$TMPDIR/converted":test
     config="$(skopeo --tmpdir "$TMPDIR" inspect --raw oci:"$TMPDIR/converted":test | jq -r '.config.digest')"
     test "$(sha256sum "$TMPDIR/converted/blobs/sha256/''${config#sha256:}" | cut -d ' ' -f 1)" = "''${config#sha256:}"
+    test "$config" = "$(cat ${compressed.configDigest})"
+    test "$config" = "$(cat ${uncompressed.configDigest})"
     jq -e '.config.Env == ["WRIX_STREAM_FIXTURE=1"]' <(
       skopeo --tmpdir "$TMPDIR" --insecure-policy inspect --config docker-archive:${overridden}
     )
@@ -201,7 +203,9 @@ pkgs.runCommandLocal "docker-image-stream"
     fi
     skopeo --tmpdir "$TMPDIR" --insecure-policy copy --quiet docker-archive:${child} oci:"$TMPDIR/child":test
     test "$(skopeo --tmpdir "$TMPDIR" --insecure-policy inspect --raw oci:"$TMPDIR/child":test | jq '.layers | length')" -gt 2
+    test "$(skopeo --tmpdir "$TMPDIR" inspect --raw oci:"$TMPDIR/child":test | jq -r '.config.digest')" = "$(cat ${child.configDigest})"
     skopeo --tmpdir "$TMPDIR" --insecure-policy copy --quiet docker-archive:default-child.tar oci:"$TMPDIR/default-child":test
     test "$(skopeo --tmpdir "$TMPDIR" --insecure-policy inspect --raw oci:"$TMPDIR/default-child":test | jq '.layers | length')" -le 6
+    test "$(skopeo --tmpdir "$TMPDIR" inspect --raw oci:"$TMPDIR/default-child":test | jq -r '.config.digest')" = "$(cat ${defaultChild.configDigest})"
     touch "$out"
   ''

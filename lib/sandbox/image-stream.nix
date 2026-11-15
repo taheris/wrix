@@ -119,24 +119,39 @@ in
       let
         image = baseDockerTools.buildLayeredImage (plannerArgs args);
         stream = nativeStream args image.stream;
+        configDigest = import ./stream-archive-digest.nix {
+          inherit pkgs;
+          image = stream;
+          inherit (args) name;
+          parent = args.fromImage or null;
+        };
       in
       image.overrideAttrs (previous: {
+        outputs = [
+          "out"
+          "configDigest"
+        ];
         buildCommand =
-          if args ? compressor then
-            ''
-              set -euo pipefail
-              ${replaceStream image.stream stream previous.buildCommand}
-            ''
-          else
-            ''
-              set -euo pipefail
-              while IFS= read -r digest; do
-                cat ${stream.gzipParts}/"$digest.gz"
-              done < ${stream.gzipParts}/order > "$out"
-              ${imageTools}/bin/wrix-image-tools docker-tail ${stream.ociLayout} ${stream.conf} \
-                ${optionalString ((args.fromImage or null) != null) "--from-layout ${args.fromImage.ociLayout}"} \
-                | ${pkgs.pigz}/bin/pigz -1 -n -p "$NIX_BUILD_CORES" >> "$out"
-            '';
+          (
+            if args ? compressor then
+              ''
+                set -euo pipefail
+                ${replaceStream image.stream stream previous.buildCommand}
+              ''
+            else
+              ''
+                set -euo pipefail
+                while IFS= read -r digest; do
+                  cat ${stream.gzipParts}/"$digest.gz"
+                done < ${stream.gzipParts}/order > "$out"
+                ${imageTools}/bin/wrix-image-tools docker-tail ${stream.ociLayout} ${stream.conf} \
+                  ${optionalString ((args.fromImage or null) != null) "--from-layout ${args.fromImage.ociLayout}"} \
+                  | ${pkgs.pigz}/bin/pigz -1 -n -p "$NIX_BUILD_CORES" >> "$out"
+              ''
+          )
+          + ''
+            cp ${configDigest} "$configDigest"
+          '';
         passthru = (previous.passthru or { }) // {
           inherit stream;
           inherit (stream)

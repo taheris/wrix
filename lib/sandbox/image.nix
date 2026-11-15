@@ -518,29 +518,8 @@ let
       '';
   imageSource = if asTarball then rawImage else nixDescriptorSource;
 
-  # Darwin's tar-loadable fallback keeps using the post-conversion OCI config
-  # digest that Apple's container store reports. Linux descriptor images use the
-  # descriptor layout's OCI config digest without installing from a whole-image
-  # archive.
-  digestFile =
-    if asTarball then
-      hostPkgs.runCommandLocal "${imageName}-digest"
-        {
-          nativeBuildInputs = [
-            hostPkgs.skopeo
-            hostPkgs.jq
-          ];
-        }
-        ''
-          set -euo pipefail
-          export HOME="$TMPDIR"
-          skopeo --insecure-policy copy --quiet \
-            "docker-archive:${rawImage}" "oci:$TMPDIR/image-oci:latest"
-          skopeo inspect --raw "oci:$TMPDIR/image-oci:latest" \
-            | jq -r '.config.digest' > "$out"
-        ''
-    else
-      descriptorDigestFile;
+  # Darwin retains the post-conversion identity without re-reading image layers.
+  digestFile = if asTarball then rawImage.configDigest else descriptorDigestFile;
 in
 rawImage
 // {
