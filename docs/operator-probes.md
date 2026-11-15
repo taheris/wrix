@@ -78,7 +78,35 @@ of the plan is metadata validation, not network or namespace execution.
 The `network-worker` primitives use an explicit certificate bundle, no ambient
 proxy, bounded certificate and response reads, credential-free transport URLs,
 non-root execution, exact expected content hashes, and private-service negative
-controls. These primitives and plans do not create private network namespaces,
+controls. These workers and plans do not create private network namespaces,
 start a private Nix daemon, pivot a root, provision signing authority, or prove
 untrusted source transport admission. Those are separate owning acceptance
 boundaries.
+
+## Owned network primitive
+
+Linux
+`network-fence --ip STORE-EXECUTABLE --nft STORE-EXECUTABLE --setpriv STORE-EXECUTABLE --ca STORE-CERTIFICATE --proc PRIVATE-PROC-MOUNT --run`
+requires an already qualified, idle, root-owned fixture and private mount
+namespace. Executables and certificate inputs resolve to root-owned,
+non-group/world-writable store files; commands use their canonical paths, not
+mutable caller aliases.
+
+The probe creates its own `wrix-native-build` namespace, veth pair, NAT table,
+resolver files, and bounded private HTTP fixture. Named network namespaces use
+iproute2's `/var/run/netns` location; reserved names are checked there and below
+`/run/netns`, without assuming the directories alias. Existing foreign entries
+are neither removed nor hidden.
+
+A genuinely namespace-UID-30001 worker must fetch the expected public TLS
+payload and fail to reach the private service. An exactly parsed, positive nft
+packet counter independently confirms the private-service drop. The parent
+checks the private service positively before the worker runs.
+
+Inode, interface-index, table-handle, and namespace receipts constrain reverse
+cleanup. Changed resources, changed forwarding values, and unconfirmed creation
+remain errors; foreign data is preserved. The result describes only the native
+unprivileged network primitive, not an actual Nix fixed-output derivation,
+private-daemon orchestration, signed input transport, or unified-service
+acceptance. The original private probes remain retained until those owning
+boundaries are accepted.

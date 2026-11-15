@@ -1,17 +1,20 @@
+pub mod counter;
+pub mod live;
 pub mod plan;
+pub mod server;
 use sha2::{Digest, Sha256};
 use std::{
     ffi::OsString,
     fs::{File, OpenOptions},
     io::{self, Read, Write},
     os::unix::fs::OpenOptionsExt,
-    path::Path,
+    path::{Path, PathBuf},
     time::Duration,
 };
 
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
 pub enum Error {
-    /// usage: network-worker pure|fixed CA PUBLIC-URL PRIVATE-URL SHA256
+    /// usage: network-worker pure|fixed|direct CA PUBLIC-URL PRIVATE-URL SHA256
     Usage,
     /// probe URL does not have the required transport or contains credentials
     Url,
@@ -19,6 +22,8 @@ pub enum Error {
     Hash,
     /// probe worker must run without root identity
     Account,
+    /// direct network worker must run as namespace UID 30001
+    DirectAccount,
     /// probe certificate input failed
     Certificate,
     /// probe network request failed
@@ -158,14 +163,32 @@ async fn observe(
         }
     }
 }
+#[derive(Clone, Copy)]
+enum Worker {
+    Pure,
+    Fixed,
+    Direct,
+}
+enum Destination {
+    Marker,
+    Output(PathBuf),
+}
 pub fn run(args: &[OsString]) -> Result<(), Error> {
     let [mode, ca, public, private, expected] = args else {
         return Err(Error::Usage);
     };
-    let mode = match mode.to_str() {
-        Some("pure") => Mode::Pure,
-        Some("fixed") => Mode::Fixed,
+    let operation = match mode.to_str() {
+        Some("pure") => Worker::Pure,
+        Some("fixed") => Worker::Fixed,
+        Some("direct") => Worker::Direct,
         _ => return Err(Error::Usage),
+    };
+    if matches!(operation, Worker::Direct) && rustix::process::getuid().as_raw() != 30_001 {
+        return Err(Error::DirectAccount);
+    }
+    let mode = match operation {
+        Worker::Pure => Mode::Pure,
+        Worker::Fixed | Worker::Direct => Mode::Fixed,
     };
     let public = Public::parse(public.to_str().ok_or(Error::Url)?)?;
     let private = Private::parse(private.to_str().ok_or(Error::Url)?)?;
@@ -173,16 +196,28 @@ pub fn run(args: &[OsString]) -> Result<(), Error> {
     if rustix::process::getuid().is_root() {
         return Err(Error::Account);
     }
-    let out = std::env::var_os("out").ok_or(Error::Output)?;
-    let out = Path::new(&out);
-    if !out.is_absolute() {
-        return Err(Error::Output);
-    }
+    let destination = match operation {
+        Worker::Direct => Destination::Marker,
+        Worker::Pure | Worker::Fixed => {
+            let out = PathBuf::from(std::env::var_os("out").ok_or(Error::Output)?);
+            if !out.is_absolute() {
+                return Err(Error::Output);
+            }
+            Destination::Output(out)
+        }
+    };
     let client = client(Path::new(ca))?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
     let bytes = runtime.block_on(observe(mode, &client, &public, &private, &expected))?;
+    let Destination::Output(out) = destination else {
+        writeln!(
+            io::stdout().lock(),
+            "NATIVE_BUILD_NETWORK_PUBLIC_TLS_ALLOWED_PRIVATE_SERVICE_BLOCKED"
+        )?;
+        return Ok(());
+    };
     let mut output = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -223,6 +258,25 @@ mod test {
             "not a URL",
         ] {
             assert!(Public::parse(value).is_err());
+        }
+    }
+    #[test]
+    fn direct_worker_preserves_exact_unprivileged_role_and_fails_before_requests() {
+        let root = tempfile::tempdir().unwrap();
+        let args = [
+            "direct".into(),
+            root.path().join("missing-ca").into_os_string(),
+            "https://cache.nixos.org/nix-cache-info".into(),
+            "http://10.231.47.1:24823".into(),
+            "a".repeat(64).into(),
+        ];
+        let result = run(&args);
+        if rustix::process::getuid().as_raw() == 30_001 {
+            assert!(
+                matches!(result,Err(Error::Io(error)) if error.kind()==io::ErrorKind::NotFound)
+            );
+        } else {
+            assert!(matches!(result, Err(Error::DirectAccount)));
         }
     }
     #[test]

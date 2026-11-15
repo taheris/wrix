@@ -14,7 +14,7 @@ use std::{
 };
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
 pub enum Error {
-    /// usage: operator-probe fixed-repair|strict-plan|strict-host|strict-guest|cgroup|cgroup-mapped|network-plan|network-worker|worker ARGS
+    /// usage: operator-probe fixed-repair|strict-plan|strict-host|strict-guest|cgroup|cgroup-mapped|network-plan|network-worker|network-fence|worker ARGS
     Usage,
     /// operator snapshot failed: {0}
     Snapshot(#[from] snapshot::Error),
@@ -36,6 +36,9 @@ pub enum Error {
     /// inert network derivation plan failed: {0}
     #[cfg(target_os = "linux")]
     NetworkPlan(#[from] network::plan::Error),
+    /// owned native network primitive failed: {0}
+    #[cfg(target_os = "linux")]
+    NetworkLive(#[from] network::live::Error),
     /// operator probe output failed: {0}
     Io(#[from] io::Error),
     /// operator probe encoding failed: {0}
@@ -43,6 +46,41 @@ pub enum Error {
 }
 
 pub fn run(args: &[OsString]) -> Result<(), Error> {
+    #[cfg(target_os = "linux")]
+    if let [
+        operation,
+        ip_flag,
+        ip,
+        nft_flag,
+        nft,
+        setpriv_flag,
+        setpriv,
+        ca_flag,
+        ca,
+        proc_flag,
+        proc,
+        execute,
+    ] = args
+        && operation == "network-fence"
+        && ip_flag == "--ip"
+        && nft_flag == "--nft"
+        && setpriv_flag == "--setpriv"
+        && ca_flag == "--ca"
+        && proc_flag == "--proc"
+        && execute == "--run"
+    {
+        let receipt = network::live::run(
+            Path::new(ip),
+            Path::new(nft),
+            Path::new(setpriv),
+            Path::new(ca),
+            Path::new(proc),
+        )?;
+        let mut stdout = io::stdout().lock();
+        serde_json::to_writer(&mut stdout, &receipt)?;
+        writeln!(stdout)?;
+        return Ok(());
+    }
     #[cfg(target_os = "linux")]
     if let [operation, rest @ ..] = args
         && operation == "network-plan"

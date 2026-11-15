@@ -1,0 +1,6 @@
+table ip wrix_npfo4_nat {
+  chain postrouting {
+    type nat hook postrouting priority srcnat; policy accept;
+    ip saddr 10.231.47.2 masquerade
+  }
+}
