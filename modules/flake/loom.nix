@@ -4,48 +4,43 @@
   perSystem =
     { pkgs, linuxPkgs, ... }:
     let
-      upstreamLib = import "${inputs.loom-src}/nix/lib.nix";
-      loomLib = upstreamLib // {
-        mkProfileManifest = import ../../lib/loom-manifest.nix { upstream = upstreamLib; };
-      };
-      loomPatches = [
-        ../../patches/loom-data-only-manifests.patch
-        ../../patches/loom-spawn-extensions.patch
-        ../../patches/loom-runner-input-batching.patch
-      ];
+      loomLib = import "${inputs.loom-src}/nix/lib.nix";
+      # Upstream source bindings belong to Loom, not this consumer checkout.
+      external = artifact: builtins.removeAttrs artifact [ "loom" ];
       loomWorkspace =
         pkgs:
         loomLib.mkLoom {
           inherit pkgs;
           inherit (inputs) crane fenix;
           src = inputs.loom-src;
-        };
-      mkLoom =
-        pkgs:
-        (loomWorkspace pkgs).bin.overrideAttrs (old: {
-          patches = (old.patches or [ ]) ++ loomPatches;
-          postInstall = (old.postInstall or "") + ''
-            find "$out/bin" -type f ! -name loom ! -name loom-walk -delete
-          '';
-        });
-      loomContract =
-        cargoNextestExtraArgs:
-        let
-          workspace = loomWorkspace pkgs;
-        in
-        workspace.craneLib.cargoNextest {
-          src = workspace.stagedSrc;
           cargoToml = inputs.loom-src + "/Cargo.toml";
           cargoLock = inputs.loom-src + "/Cargo.lock";
-          cargoVendorDir = workspace.bin.cargoVendorDir;
-          inherit (workspace) cargoArtifacts;
-          doInstallCargoArtifacts = false;
-          patches = loomPatches;
-          nativeBuildInputs = [ pkgs.git ];
-          inherit cargoNextestExtraArgs;
         };
-      loomCli = mkLoom pkgs;
-      linuxLoomCli = mkLoom linuxPkgs;
+      mkLoom =
+        {
+          pkgs,
+          directRuntime ? false,
+        }:
+        external (
+          (loomWorkspace pkgs).bin.overrideAttrs (old: {
+            postInstall = (old.postInstall or "") + ''
+              find "$out/bin" -type f ! -name loom ! -name loom-walk ${pkgs.lib.optionalString directRuntime "! -name loom-direct-runner"} -delete
+            '';
+          })
+        );
+      loomContract =
+        cargoNextestExtraArgs:
+        external (
+          (loomWorkspace pkgs).mkCheck {
+            doInstallCargoArtifacts = false;
+            inherit cargoNextestExtraArgs;
+          }
+        );
+      loomCli = mkLoom { inherit pkgs; };
+      linuxLoomCli = mkLoom {
+        pkgs = linuxPkgs;
+        directRuntime = true;
+      };
     in
     {
       _module.args = {

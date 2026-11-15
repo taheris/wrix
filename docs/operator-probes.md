@@ -110,3 +110,25 @@ unprivileged network primitive, not an actual Nix fixed-output derivation,
 private-daemon orchestration, signed input transport, or unified-service
 acceptance. The original private probes remain retained until those owning
 boundaries are accepted.
+
+## Worker UTS qualification
+
+The Linux-only `wrix-worker-uts` executable is a standalone test agent, not a
+production launcher or privilege helper. The existing worker-UTS image and
+normal Wrix spawn verifier select it directly with an immutable `unshare`
+executable. It retains all five capability-set checks, active seccomp filtering,
+rootless UID mappings, parent namespace and uname identity, denied hostname,
+domain and module operations, and successful independent user+UTS operations.
+The inner mode requires the exact single-root nested UID mapping before making
+identity changes. Supplemental groups are cleared only in the single-threaded
+probe process.
+
+Owning acceptance uses actual rootless Podman and normal packaged Wrix startup.
+An owned NixOS guest may run under the current builder's supported QEMU/TCG
+transport; it provisions mapping helpers and subordinate IDs only inside that
+disposable guest. This does not repair the builder account, change production
+seccomp or capabilities, imply KVM support, or establish other native runtimes.
+Selected immutable fixture roots can be registered from authentic host Nix
+registration records over a read-only fixture export, with exact recursive
+closure comparison and root hash verification. No host daemon, database or
+credential tree is mounted into the worker.

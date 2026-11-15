@@ -48,6 +48,8 @@ pkgs.rustPlatform.buildRustPackage {
       "nix-daemon-0.1.1" = "sha256-Jd4E7qN/9pCCYBLxWwHKjrRBt7gTBEZUYzoCAGH1nXg=";
     };
   };
+  # Match the workspace's bundled-library features rather than overriding them.
+  dontCargoUseSystemLibs = true;
   nativeBuildInputs = [ pkgs.bash ];
   inherit nativeCheckInputs;
   cargoBuildFlags = [

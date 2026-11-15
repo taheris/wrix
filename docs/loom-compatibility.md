@@ -76,7 +76,15 @@ The packaged Spawn/input contract checks use Loom's exact pinned Cargo manifests
 and the CLI's canonical vendor directory. Their staged source is execution
 input, not an evaluator directory to scan for Cargo metadata. This keeps cold
 metadata evaluation independent of a realized `loom-src-with-extras` output. The
-source patches and selected upstream tests are unchanged.
+selected upstream tests are unchanged. The updated Loom source already includes
+the data-only manifest, Spawn extensions and runner-input batching changes; Wrix
+no longer reapplies those obsolete patches or reconstructs its manifest.
+Contract checks use upstream's `mkCheck`, including its canonical metadata,
+configuration and execution dependencies. Imported artifacts remain external Nix
+dependencies rather than claiming Loom's relative source bindings as Wrix
+checkout resources. The Linux image package retains the direct-runtime provider
+alongside `loom` and `loom-walk`; the host CLI keeps its existing two-executable
+boundary and excludes test helpers.
 
 ```bash
 nix eval --json --option allow-import-from-derivation false \

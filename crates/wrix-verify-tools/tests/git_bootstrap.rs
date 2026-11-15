@@ -78,6 +78,9 @@ fn global_bootstrap_works_before_workspace_repository_discovery() {
         &home,
         &workspace,
     );
-    assert!(!dependent.status.success());
-    assert!(String::from_utf8_lossy(&dependent.stderr).contains("not a git repository"));
+    let discovery = invoke("git", &["rev-parse", "--git-dir"], &home, &workspace);
+    assert_eq!(discovery.status.code(), Some(128));
+    assert_eq!(dependent.status.code(), discovery.status.code());
+    assert_eq!(dependent.stdout, b"");
+    assert_eq!(dependent.stderr, discovery.stderr);
 }

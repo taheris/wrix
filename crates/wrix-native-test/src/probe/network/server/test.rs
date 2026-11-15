@@ -40,6 +40,6 @@ fn invalid_request_is_an_observed_server_error_not_a_success_receipt() {
             ) => {}
         Err(error) => panic!("unexpected fixture observation error: {error}"),
     }
-    assert!(bytes.is_empty());
+    assert_eq!(bytes, b"");
     assert!(server.finish().is_err());
 }

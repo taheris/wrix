@@ -2,10 +2,10 @@
   "nodes": {
     "crane": {
       "locked": {
-        "lastModified": 1792350552,
-        "narHash": "sha256-292lvpvxTGKryKxh3/3tcIVi85CwYGdl4oOi113Sob8=",
+        "lastModified": 1793836618,
+        "narHash": "sha256-TREenflwEjxOSq292FYwbc3kEm7TDRtXCZRNWEdjBmg=",
         "ref": "master",
-        "rev": "e675a36b7377bebe41d548388a2501cbb16d380d",
+        "rev": "79fd63528501446749c09f08cad486a58c7d173e",
         "shallow": true,
         "type": "git",
         "url": "https://github.com/ipetkov/crane.git"
@@ -25,10 +25,10 @@
         "rust-analyzer-src": "rust-analyzer-src"
       },
       "locked": {
-        "lastModified": 1792413714,
-        "narHash": "sha256-B8cRSZ1+MLLIkavhdhOY+aPWxqALfTZFsTJqWxBFh1Q=",
+        "lastModified": 1794662139,
+        "narHash": "sha256-9yPW7S9dzihQVL2dxAbbmdtGsTm2zPXu8JpMiwbXKNw=",
         "ref": "main",
-        "rev": "2e026d014f384f27929ff1e92a6c1c8d0af1ed2b",
+        "rev": "9e77b652ca4af1d2e5d9ad4f5a910e48d8c79085",
         "shallow": true,
         "type": "git",
         "url": "https://github.com/nix-community/fenix.git"
@@ -47,10 +47,10 @@
         ]
       },
       "locked": {
-        "lastModified": 1790898470,
-        "narHash": "sha256-zTwuwezD0w3hpga6a6P8emidzAZFyWqlNeRBlpWOOl8=",
+        "lastModified": 1793576659,
+        "narHash": "sha256-V1h85lUaJBQoHFrB2vpXZOE0Ju1MYSnIpsehoVZYlDo=",
         "ref": "main",
-        "rev": "024633cd702b10285db5cb19b40ad48d2399ba60",
+        "rev": "ea2630b7470978622c7689a1ff75d2b389175399",
         "shallow": true,
         "type": "git",
         "url": "https://github.com/hercules-ci/flake-parts.git"
@@ -65,10 +65,10 @@
     "loom-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1792421344,
-        "narHash": "sha256-qDhwhiUZIDZNJVJyO1DjQlcxXB6zVpZc7bqAKq/jAJE=",
+        "lastModified": 1794186573,
+        "narHash": "sha256-eBWQqlEEihkSLh5S5OQqfqf41e+Kjd2G+8v4zpUoCdk=",
         "ref": "main",
-        "rev": "a351c1bf8b2bfc0d903a63b0b1c47cb698838b0e",
+        "rev": "9a7e0610d0d29f468c83ef7c0f322f9d5e99a930",
         "shallow": true,
         "type": "git",
         "url": "https://github.com/taheris/loom.git"
@@ -82,10 +82,10 @@
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1792116957,
-        "narHash": "sha256-EjZqHKObBfIOeHZnMRVV87HB3pPq/WBkmRJWyFxmZu8=",
+        "lastModified": 1794495034,
+        "narHash": "sha256-E0hYoioqUtM2XmPPvYYpJgdADF5AW9oOoPSEiM9dTHQ=",
         "ref": "nixpkgs-unstable",
-        "rev": "f20cd90e28fe0403873f473b29e42662cd86e8c4",
+        "rev": "2074cc672349f14240fb7ea90d509e0b643e9dd4",
         "shallow": true,
         "type": "git",
         "url": "https://github.com/NixOS/nixpkgs.git"
@@ -110,11 +110,11 @@
     "rust-analyzer-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1792336958,
-        "narHash": "sha256-d1RSuaMORfpT6wVgzvdwuaCFeozUWZKN+1CjnDUBK5c=",
+        "lastModified": 1794551458,
+        "narHash": "sha256-oPhUsiv78Zuwn8UdKjZOE1F4pC9FdP8u4b41kGkxnBI=",
         "owner": "rust-lang",
         "repo": "rust-analyzer",
-        "rev": "5ec20d044dbf04895877a55921ddc0ae6e73e127",
+        "rev": "114dcb8d6f50aca1ef14d67b831a7560362f8f69",
         "type": "github"
       },
       "original": {

@@ -50,6 +50,8 @@ rustPlatform.buildRustPackage (finalAttrs: {
     "dist-server"
   ];
 
+  # Retain this pinned recipe's vendoring with newer Cargo setup hooks.
+  dontCargoUseSystemLibs = true;
   nativeBuildInputs = [ pkg-config ];
   buildInputs = [ openssl ];
 

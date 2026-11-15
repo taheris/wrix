@@ -224,11 +224,12 @@ mod test {
                 .unwrap()
                 .contains("expected intentional SIGTERM")
         );
-        assert!(
-            !f.json("cleanup-failure", "namespace-after.json")["containers"]
+        assert_ne!(
+            f.json("cleanup-failure", "namespace-after.json")["containers"]
                 .as_array()
                 .unwrap()
-                .is_empty()
+                .as_slice(),
+            [] as [Value; 0]
         );
         assert_eq!(result["resource_inventory"]["verified"], false);
         assert!(
@@ -270,7 +271,10 @@ mod test {
         );
         assert!(helper["exe"].is_string());
         assert!(helper.get("wchan").is_some());
-        assert!(!helper["threads"].as_array().unwrap().is_empty());
+        assert_ne!(
+            helper["threads"].as_array().unwrap().as_slice(),
+            [] as [Value; 0]
+        );
         let ignored = helper["status"]
             .as_str()
             .unwrap()
@@ -386,11 +390,12 @@ mod test {
             .unwrap();
         let f = Fixture::new();
         let (result, output) = f.run("escaped-helper", true);
-        assert!(
-            !result["assertion_helpers_terminated"]
+        assert_ne!(
+            result["assertion_helpers_terminated"]
                 .as_array()
                 .unwrap()
-                .is_empty()
+                .as_slice(),
+            [] as [Value; 0]
         );
         assert!(output.contains("assertion helpers"));
         assert!(unrelated.try_wait().unwrap().is_none());
