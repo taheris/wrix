@@ -17,6 +17,12 @@ let
   '';
 in
 {
+  "prek.verification-root-retention".script = ''
+    local root
+    root="$(repo_root)"
+    cargo nextest run --offline --locked --manifest-path "$root/Cargo.toml" \
+      --package wrix-verify-tools --test retention_nix --run-ignored only
+  '';
   "prek.bundle-contents".script = ''
     ${repoScript "tests/profiles/prek-hooks-bundle.sh" "test_bundle_contents"}
     ${repoScript "tests/profiles/prek-hooks-bundle.sh" "test_bundle_path_is_context_stable"}

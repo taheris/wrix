@@ -51,6 +51,16 @@ wrix beads push
 Do not push `loom/<id>` branches. Work is complete only after main and beads are
 pushed.
 
+## Verification Caches
+
+- Keep logs/evidence separate from Nix GC roots.
+- Use the bounded `wrix-verification-roots` cache for retained verification
+  outputs; replace its complete current manifest instead of appending per-commit
+  root directories. See `docs/verification-root-retention.md`.
+- Lease the cache during use. Do not retire live roots, profile/service roots,
+  another project's roots, or legacy roots without a reviewed migration.
+- Cache retention is not verification acceptance; never mint approval stamps.
+
 ## Verify
 
 ```bash

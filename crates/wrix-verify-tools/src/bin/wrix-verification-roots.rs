@@ -1,0 +1,58 @@
+use std::{
+    env,
+    ffi::OsString,
+    io::{self, Write},
+    path::Path,
+    process::{Command, ExitCode},
+};
+use wrix_verify_tools::retention::{self, Cache};
+
+#[derive(Debug, thiserror::Error, displaydoc::Display)]
+enum Error {
+    /// usage: wrix-verification-roots init DIRECTORY | plan DIRECTORY MANIFEST | replace DIRECTORY MANIFEST | run DIRECTORY MANIFEST -- COMMAND [ARGS...]
+    Usage,
+    /// {0}
+    Retention(#[from] retention::Error),
+}
+
+fn run(args: &[OsString]) -> Result<(), Error> {
+    match args {
+        [mode, directory] if mode == "init" => retention::initialize(Path::new(directory))?,
+        [mode, directory, manifest] if mode == "plan" || mode == "replace" => {
+            let desired = retention::manifest(Path::new(manifest))?;
+            let cache = Cache::open(Path::new(directory))?;
+            if mode == "plan" {
+                cache.plan(&desired, &mut io::stdout().lock())?;
+            } else {
+                cache.replace(&desired, Path::new("nix-store"), &mut io::stdout().lock())?;
+            }
+        }
+        [
+            mode,
+            directory,
+            manifest,
+            separator,
+            program,
+            arguments @ ..,
+        ] if mode == "run" && separator == "--" => {
+            let desired = retention::manifest(Path::new(manifest))?;
+            let cache = Cache::open(Path::new(directory))?;
+            cache.replace(&desired, Path::new("nix-store"), &mut io::stderr().lock())?;
+            cache.execute(Command::new(program).args(arguments))?;
+        }
+        _ => return Err(Error::Usage),
+    }
+    Ok(())
+}
+
+fn main() -> ExitCode {
+    match run(&env::args_os().skip(1).collect::<Vec<_>>()) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            if writeln!(io::stderr().lock(), "{error}").is_err() {
+                return ExitCode::from(74);
+            }
+            ExitCode::FAILURE
+        }
+    }
+}
