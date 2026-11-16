@@ -106,15 +106,39 @@ let
     "--bin wrix --bin wrix-git-sign --bin wrix-focus-notification"
     "--bin wrix-cache-hook --bin wrix-cache-publish --bin wrix-host-cache-policy"
   ];
-  clientCargoArtifacts = workspace.cargoArtifacts.overrideAttrs {
-    pname = "wrix-client-deps";
-    doCheck = false;
-    buildPhase = ''
-      runHook preBuild
-      cargo --version
-      cargoWithProfile build --locked ${clientCargoArgs}
-      runHook postBuild
-    '';
+  productionDependencyArtifacts =
+    { packages, artifacts }:
+    let
+      dependencies = import ./rust-production-dependencies.nix {
+        inherit pkgs packages;
+        inherit (rustProfile) craneLib;
+        root = ../..;
+        filter = workspaceArgs.srcFilter;
+      };
+    in
+    artifacts.overrideAttrs (old: {
+      inherit (dependencies) src;
+      preBuild = (old.preBuild or "") + dependencies.preBuild;
+      postInstall = (old.postInstall or "") + ''
+        mkdir -p "$out/nix-support"
+        printf '%s\n' '${old.cargoVendorDir}' > "$out/nix-support/production-dependency-vendor"
+      '';
+      passthru = (old.passthru or { }) // {
+        productionDependencyMembers = dependencies.selected;
+      };
+    });
+  clientCargoArtifacts = productionDependencyArtifacts {
+    packages = clientPackages;
+    artifacts = workspace.cargoArtifacts.overrideAttrs {
+      pname = "wrix-client-deps";
+      doCheck = false;
+      buildPhase = ''
+        runHook preBuild
+        cargo --version
+        cargoWithProfile build --locked ${clientCargoArgs}
+        runHook postBuild
+      '';
+    };
   };
   clientWorkspace = rustProfile.buildPackage (
     workspaceArgs
@@ -174,7 +198,7 @@ let
   runtimeWorkspace = rustProfile.buildPackage (
     workspaceArgs
     // {
-      inherit (workspace) cargoArtifacts;
+      cargoArtifacts = productionCargoArtifacts;
       productionSrc = productionSource [ "wrix-cli" "wrix-service-server" ] workspaceArgs.srcFilter;
       cargoExtraArgs = "--package wrix-cli --package wrix-service-server --bin wrix-service-supervisor --bin wrix-shared-service --bin wrix-egress-gateway --bin wrix-nix-pool-owner";
     }
@@ -193,10 +217,25 @@ let
     "wrix-service-server"
     "wrix-state"
   ];
+  productionCargoArtifacts = productionDependencyArtifacts {
+    packages = controllerPackages;
+    artifacts = workspace.cargoArtifacts.overrideAttrs {
+      pname = "wrix-production-deps";
+      doCheck = false;
+      buildPhase = ''
+        runHook preBuild
+        cargo --version
+        cargoWithProfile build --locked ${
+          concatStringsSep " " (map (name: "--package ${name}") controllerPackages)
+        }
+        runHook postBuild
+      '';
+    };
+  };
   controllerWorkspace = rustProfile.buildPackage (
     workspaceArgs
     // {
-      inherit (workspace) cargoArtifacts;
+      cargoArtifacts = productionCargoArtifacts;
       productionSrc = productionSource controllerPackages workspaceArgs.srcFilter;
       cargoExtraArgs = concatStringsSep " " (map (name: "--package ${name}") controllerPackages);
     }

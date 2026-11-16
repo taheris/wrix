@@ -1,0 +1,14 @@
+[workspace]
+members = ["crates/fixture-app", "crates/fixture-dependency", "crates/fixture-dev-only", "crates/fixture-unrelated"]
+resolver = "3"
+
+[workspace.metadata.crane]
+name = "fixture-production-cache"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+fixture-dependency = { path = "crates/fixture-dependency" }
+fixture-dev-only = { path = "crates/fixture-dev-only" }

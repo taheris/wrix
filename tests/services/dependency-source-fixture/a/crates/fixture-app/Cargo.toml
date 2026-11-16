@@ -1,0 +1,10 @@
+[package]
+name = "fixture-app"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+fixture-dependency.workspace = true
+
+[dev-dependencies]
+fixture-dev-only.workspace = true

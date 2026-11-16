@@ -8,10 +8,10 @@ build selecting only these six binaries:
 - `wrix`, `wrix-git-sign`, `wrix-focus-notification`
 - `wrix-cache-hook`, `wrix-cache-publish`, `wrix-host-cache-policy`
 
-The complete workspace package still supplies controller preparation, native
-fixtures and verification. The initial packaging change shared its dependency
-artifact with the client, Clippy and Nextest. The later
-[client/server split](client-server-boundary.md) gives the client a
+Controller preparation uses its own production package; the complete workspace
+package still supplies native fixtures and verification. The initial packaging
+change shared its dependency artifact with the client, Clippy and Nextest. The
+later [client/server split](client-server-boundary.md) gives the client a
 normal-target cache and server-excluding source projection. Full all-target
 checks, dependency test compilation and actual Nextest execution remain intact.
 No Cargo features, runtime/network checks or security tests were disabled.
@@ -54,6 +54,37 @@ checking, 29 s of dependency builds, 1 s of test compilation and 25 s compiling
 workspace sources, with the rest in Nix/Crane staging and artifact handling. The
 check-format artifacts are useful to the independent verification builds;
 removing their construction from one path did not establish a net improvement.
+
+## Production dependency metadata
+
+Production dependency caches now project the actual normal/build local-package
+closure, independently for the client and controller/runtime families. Only
+build-only cache manifests omit development dependencies. Real production
+sources retain canonical workspace manifests and targets; full workspace Clippy,
+dependency test compilation and Nextest retain their original inputs.
+
+The cache uses the canonical vendor input. Cargo derives its scoped lock
+**offline** from the original lock, every resolved package name/version/source
+must belong to that lock, and subsequent commands use `--locked`. Projection
+runs through Crane's manifest-cleaning scope, before Crane adds its dummy
+build-script invalidation sentinel. Replacing generated manifests afterward
+would lose that sentinel and can incorrectly reuse dummy executables.
+
+`tests/services/production-dependencies.nix` executes real products through the
+consumed Crane pipeline. An unrelated manifest edit preserves the cache; a
+selected feature edit invalidates it; a source edit preserves the dependency
+cache but changes the real program. Outputs are respectively `1/1/2/3`, and
+unexpected package versions are refused. Source-directory strings are tested,
+not only literal checkout paths.
+
+A controlled real-workspace edit to the excluded native-test PTY feature now
+preserves all three production dependency-cache identities. Actual production
+source and binary recipes still change because canonical metadata is retained.
+The current default `nix build` took **168.45 s** with existing store inputs.
+Separate first controller-family and runtime realizations took **317.51 s** and
+**118.14 s**; current full flake checks took **1048 s**. These are component
+observations, not an empty-store comparison or proof of an ordinary push under
+ten minutes.
 
 ## Independent boundaries
 

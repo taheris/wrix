@@ -181,6 +181,18 @@ assert rustPackage.clippy.cargoArtifacts == rustPackage.cargoArtifacts;
 assert rustPackage.nextest.cargoArtifacts == rustPackage.cargoArtifacts;
 assert rustPackage.clientPackage.cargoArtifacts == rustPackage.clientCargoArtifacts;
 assert rustPackage.clientCargoArtifacts != rustPackage.cargoArtifacts;
+assert
+  rustPackage.controllerImplementation.cargoArtifacts == rustPackage.runtimePackage.cargoArtifacts;
+assert rustPackage.controllerImplementation.cargoArtifacts != rustPackage.cargoArtifacts;
+assert rustPackage.controllerImplementation.cargoArtifacts != rustPackage.clientCargoArtifacts;
+assert
+  !(builtins.elem "wrix-native-test" rustPackage.clientCargoArtifacts.productionDependencyMembers);
+assert
+  !(builtins.elem "wrix-service-server" rustPackage.clientCargoArtifacts.productionDependencyMembers);
+assert builtins.elem "wrix-service-server"
+  rustPackage.controllerImplementation.cargoArtifacts.productionDependencyMembers;
+assert
+  !(builtins.elem "wrix-native-test" rustPackage.controllerImplementation.cargoArtifacts.productionDependencyMembers);
 assert toString clientA == toString clientB;
 assert toString clientA != toString clientC;
 assert !(builtins.pathExists (clientA + "/crates/wrix-service/src/gateway/server.rs"));

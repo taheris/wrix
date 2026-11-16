@@ -373,6 +373,10 @@ let
         inherit pkgs wrix;
         rustProfile = wrix.profiles.rust;
       };
+      rust-production-dependencies = import ./services/production-dependencies.nix {
+        inherit pkgs;
+        rustProfile = wrix.profiles.rust;
+      };
       rust-source-fixtures = import ./services/rust-source.nix {
         inherit pkgs;
         inherit (wrix) rustPackage;

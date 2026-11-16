@@ -1,0 +1,4 @@
+[package]
+name = "fixture-dev-only"
+version.workspace = true
+edition.workspace = true

@@ -1,0 +1,11 @@
+[package]
+name = "fixture-dependency"
+version.workspace = true
+edition.workspace = true
+
+[features]
+default = ["alternate"]
+alternate = []
+
+[dev-dependencies]
+fixture-dev-only.workspace = true
