@@ -97,11 +97,11 @@ let
       ) manifest.target;
     };
   scopedCrane = craneLib.overrideScope (
-    _: previous: {
+    _: { cleanCargoToml, ... }: {
       cleanCargoToml =
         arguments:
         let
-          manifest = normalManifest (previous.cleanCargoToml arguments);
+          manifest = normalManifest (cleanCargoToml arguments);
         in
         manifest
         // optionalAttrs (manifest ? workspace) {

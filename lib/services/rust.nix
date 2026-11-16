@@ -116,17 +116,26 @@ let
         filter = workspaceArgs.srcFilter;
       };
     in
-    artifacts.overrideAttrs (old: {
-      inherit (dependencies) src;
-      preBuild = (old.preBuild or "") + dependencies.preBuild;
-      postInstall = (old.postInstall or "") + ''
-        mkdir -p "$out/nix-support"
-        printf '%s\n' '${old.cargoVendorDir}' > "$out/nix-support/production-dependency-vendor"
-      '';
-      passthru = (old.passthru or { }) // {
-        productionDependencyMembers = dependencies.selected;
-      };
-    });
+    artifacts.overrideAttrs (
+      {
+        preBuild ? "",
+        postInstall ? "",
+        cargoVendorDir,
+        passthru ? { },
+        ...
+      }:
+      {
+        inherit (dependencies) src;
+        preBuild = preBuild + dependencies.preBuild;
+        postInstall = postInstall + ''
+          mkdir -p "$out/nix-support"
+          printf '%s\n' '${cargoVendorDir}' > "$out/nix-support/production-dependency-vendor"
+        '';
+        passthru = passthru // {
+          productionDependencyMembers = dependencies.selected;
+        };
+      }
+    );
   clientCargoArtifacts = productionDependencyArtifacts {
     packages = clientPackages;
     artifacts = workspace.cargoArtifacts.overrideAttrs {
