@@ -27,7 +27,7 @@
         lock = builtins.fromJSON (builtins.readFile ../../flake.lock);
       };
       test = import ../../tests {
-        inherit loomTests;
+        inherit loomTests loomCli;
         inherit
           pkgs
           system

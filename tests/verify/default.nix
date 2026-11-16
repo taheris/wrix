@@ -2,6 +2,7 @@
   pkgs,
   system,
   linuxPkgs,
+  loomCli,
   focusBinary,
   hostCachePolicy,
   runtimeEnvironmentTests,
@@ -41,12 +42,12 @@ let
 
   domainRegistries = [
     (import ./beads.nix { inherit pkgs system; })
-    (import ./cli.nix { inherit pkgs system; })
+    (import ./cli.nix { inherit pkgs system loomCli; })
     (import ./images.nix { inherit pkgs system; })
     (import ./linux-builder.nix { inherit pkgs system linuxPkgs; })
     (import ./notifications.nix { inherit pkgs system focusBinary; })
     (import ./playwright-mcp.nix { inherit pkgs system; })
-    (import ./prek.nix { inherit pkgs system; })
+    (import ./prek.nix { inherit pkgs system loomCli; })
     (import ./profiles.nix { inherit pkgs system; })
     (import ./sandbox.nix { inherit pkgs system; })
     (import ./security.nix {

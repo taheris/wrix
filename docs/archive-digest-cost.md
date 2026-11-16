@@ -25,6 +25,14 @@ uncompressed, fixed-tier inherited and default-budget inherited archives. Parent
 archive poisoning, compressor/mtime changes, payload equality and
 producer-failure controls remain in the same owner.
 
+Verifier scripts that consume Loom retain the pinned host CLI in their immutable
+closures; listing targets and discovering inputs remain independent of that
+runtime. A successful tiny Nix check output need not reference the program it
+ran; preserving that marker alone allowed GC to remove Loom before a later
+`build_flake_package loom` call. The consuming scripts now retain the actual
+program, while that call still resolves and checks the current repository's
+package. A Nix closure regression exercises this dependency.
+
 This removes redundant metadata work; it is not evidence that an entire cold
 push is below ten minutes. Whole-hook timing includes dependency acquisition,
 archive emission, checks and verifier execution and is measured separately.

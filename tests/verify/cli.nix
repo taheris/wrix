@@ -1,4 +1,9 @@
-{ pkgs, system, ... }:
+{
+  pkgs,
+  system,
+  loomCli,
+  ...
+}:
 
 let
   inherit (pkgs.lib) escapeShellArg;
@@ -48,6 +53,7 @@ in
     fi
 
     local root loom test_ci
+    export PATH="${loomCli}/bin:$PATH"
     root="$(repo_root)"
     nix build --no-link --no-warn-dirty "$root#checks.${system}.verifier-inputs"
     loom="$(build_flake_package loom)"
@@ -95,7 +101,7 @@ in
     platforms = (import ../lib/verifier.nix).linux;
     script = ''
       local root loom
-      export PATH="${pkgs.procps}/bin:$PATH"
+      export PATH="${loomCli}/bin:${pkgs.procps}/bin:$PATH"
       root="$(repo_root)"
       loom="$(build_flake_package loom)"
       export WRIX_TEST_BROWSER_SOURCE="$root"

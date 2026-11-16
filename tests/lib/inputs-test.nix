@@ -47,6 +47,7 @@ let
     inherit pkgs;
     system = pkgs.stdenv.hostPlatform.system;
     linuxPkgs = throw "inventory evaluated image packages";
+    loomCli = throw "inventory evaluated the pinned Loom runtime";
     focusBinary = throw "inventory evaluated an opaque runtime";
     hostCachePolicy = throw "inventory evaluated the host cache policy runtime";
     runtimeEnvironmentTests = throw "inventory evaluated native protocol tests";
@@ -72,6 +73,7 @@ let
   );
   lazyCi = import ../default.nix {
     inherit pkgs;
+    loomCli = throw "CI inventory evaluated the pinned Loom runtime";
     loomTests = loom;
     system = pkgs.stdenv.hostPlatform.system;
     linuxPkgs = throw "CI inventory evaluated image packages";

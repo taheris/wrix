@@ -3,6 +3,7 @@
   pkgs,
   system,
   linuxPkgs,
+  loomCli,
   treefmt,
   src,
   wrix,
@@ -205,6 +206,7 @@ let
       pkgs
       system
       linuxPkgs
+      loomCli
       src
       ;
     focusBinary = wrix.rustPackage.focusNotification;
@@ -326,6 +328,20 @@ let
       inherit (ciChecks) client-server-dependency-boundary;
       ci-annotation-registration = import ./verify/ci-registry.nix { inherit pkgs ciApps; };
       devshell-cli-selection = devshellCliSelection;
+      verifier-loom-runtime =
+        let
+          closure = pkgs.closureInfo {
+            rootPaths = [
+              verify.scripts."cli.shared-verifier-app"
+              verify.scripts."prek.ci-batching"
+            ];
+          };
+        in
+        pkgs.runCommand "verifier-loom-runtime-retention" { nativeBuildInputs = [ pkgs.gnugrep ]; } ''
+          set -euo pipefail
+          grep -Fx ${loomCli} ${closure}/store-paths
+          touch "$out"
+        '';
       builder-vmnet-route = builderRouteTest;
       cargo-canonical-metadata = import ./services/cargo-metadata.nix {
         inherit pkgs;

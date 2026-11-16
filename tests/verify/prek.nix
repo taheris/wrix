@@ -1,4 +1,9 @@
-{ pkgs, system, ... }:
+{
+  pkgs,
+  system,
+  loomCli,
+  ...
+}:
 
 let
   inherit (pkgs.lib) escapeShellArg;
@@ -61,6 +66,7 @@ in
   "prek.ci-platform-policy".script = wholeRepoScript "tests/prek/test-ci-platform-policy.sh";
   "prek.ci-batching".script = ''
     local root test_ci_runner loom
+    export PATH="${loomCli}/bin:$PATH"
     root="$(repo_root)"
     loom="$(build_flake_package loom)"
     nix run --no-warn-dirty "$root#test-ci" -- --list >/dev/null
