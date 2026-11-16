@@ -1,0 +1,33 @@
+{
+  inputs.loom = { url = @loomSource@; flake = false; };
+  outputs = { self, loom }: let
+    checked = import (loom + "/nix/verification.nix");
+    source = checked.resource { root = ./.; origin = "subjects"; };
+    reports = checked.resource { root = ./.; origin = "reports"; };
+    bash = builtins.appendContext @bash@ { ${@bash@} = { path = true; }; };
+    coreutils = builtins.appendContext @coreutils@ { ${@coreutils@} = { path = true; }; };
+    jq = builtins.appendContext @jq@ { ${@jq@} = { path = true; }; };
+  in {
+    checks.@system@.report = checked.reported {
+      system = @system@;
+      inherit bash coreutils;
+      name = "fixture-wrix-report";
+      resources = [ source reports ];
+      evaluation = [ (checked.resource {
+        root = ./.;
+        filter = path: type: type == "directory" || builtins.elem (builtins.baseNameOf path) [ "flake.nix" "flake.lock" ];
+      }) ];
+      program = "${bash}/bin/bash";
+      arguments = [ "-c" ''
+        set -euo pipefail
+        export PATH="${coreutils}/bin:${jq}/bin:${bash}/bin"
+        source "${reports.path}/verifier.sh"
+        requirements=$(cat "${reports.path}/requirements.json")
+        verifier_run heading "$requirements" "$BASH" "${source.path}/command.sh" "${source.path}/README.md"
+      '' ];
+      tier = @tier@;
+      parser = "json-lines";
+      targets = [ "heading" ];
+    };
+  };
+}

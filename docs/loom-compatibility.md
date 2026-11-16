@@ -98,6 +98,27 @@ exact `writeText` payload rather than reading a built output during evaluation;
 the emitted-configuration consumers remain separate and unchanged. Derivation
 evaluation is not artifact, host service or production runtime acceptance.
 
+## Checked verifier fixtures
+
+The consumed Loom CLI requires actual checked definitions. A runner command and
+`--print-inputs` JSON do not register an executable or grant source coverage.
+Native fixtures use the pinned SDK's `checked.check` and `checked.reported`
+constructors, explicit runtime/evaluator resources, immutable tools and real
+sandboxed executions. Report fixtures execute Wrix's actual verifier library;
+they do not substitute a hand-authored passing result for that library.
+
+The native Rust conformance cases cover changed-source failures, fresh reports,
+source-derived selection, owner contracts, shared invocations, undeclared Nix
+obligations and unpermitted skips. Native System reports follow their admitted
+source scope; they are not legacy opaque always-run commands. A producer's
+foreign-platform JSON does not authorize worker coverage. Tests retain the
+observed distinction between an unavailable declared prerequisite and an
+unreported exit 77 rather than converting either into passing evidence.
+
+These cases establish the supported construction path, not compatibility of
+unregistered legacy fixtures or migration of all production annotations. The
+legacy fixtures remain until their owning acceptance has an actual replacement.
+
 ## Independent host blockers
 
 `wrix run --dry-run --json` deliberately omits sensitive input values. For an

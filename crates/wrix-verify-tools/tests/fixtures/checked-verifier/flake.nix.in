@@ -1,0 +1,28 @@
+{
+  inputs.loom = {
+    url = @loomSource@;
+    flake = false;
+  };
+  outputs = { self, loom }: let
+    checked = import (loom + "/nix/verification.nix");
+    source = checked.resource { root = ./.; origin = "subjects"; };
+    bash = builtins.appendContext (@bash@ + "/bin/bash") {
+      ${@bash@} = { path = true; };
+    };
+  in {
+    checks.@system@.heading = checked.check {
+      resources = [ source ];
+      evaluation = [ (checked.resource {
+        root = ./.;
+        filter = path: type: type == "directory" || builtins.elem (builtins.baseNameOf path) [ "flake.nix" "flake.lock" ];
+      }) ];
+      build = sources: builtins.derivation {
+        name = "fixture-heading";
+        system = @system@;
+        builder = bash;
+        src = builtins.head sources;
+        args = [ "-c" ''read -r heading < "$src/README.md"; [[ "$heading" == '# '* ]] && printf 'heading verified\n' > "$out"'' ];
+      };
+    };
+  };
+}

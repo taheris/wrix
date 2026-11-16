@@ -1,5 +1,7 @@
 //! Definition-derived input discovery through the actual dispatcher and Loom.
 #![cfg(test)]
+#[path = "verifier_inputs/checked/mod.rs"]
+mod checked;
 #[path = "common/verifier/mod.rs"]
 mod fixture;
 
