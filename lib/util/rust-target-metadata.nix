@@ -4,6 +4,8 @@
   root,
   members,
   includeProduction ? true,
+  includeDevelopment ? true,
+  minimalProduction ? false,
 }:
 let
   inherit (pkgs.lib) concatMapStringsSep escapeShellArg;
@@ -36,13 +38,28 @@ let
         "src/main.rs"
       ];
     in
-    (if includeProduction then production ++ conventional (directory + "/src/bin") "src/bin" else [ ])
-    ++ builtins.concatLists (
-      map (kind: conventional (directory + "/${kind}") kind) [
-        "tests"
-        "examples"
-        "benches"
-      ]
+    (
+      if !includeProduction then
+        [ ]
+      else if minimalProduction then
+        if production != [ ] then
+          production
+        else
+          pkgs.lib.take 1 (conventional (directory + "/src/bin") "src/bin")
+      else
+        production ++ conventional (directory + "/src/bin") "src/bin"
+    )
+    ++ (
+      if includeDevelopment then
+        builtins.concatLists (
+          map (kind: conventional (directory + "/${kind}") kind) [
+            "tests"
+            "examples"
+            "benches"
+          ]
+        )
+      else
+        [ ]
     );
 in
 pkgs.runCommand "cargo-target-metadata" { } ''

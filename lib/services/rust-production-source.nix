@@ -1,5 +1,5 @@
-# Production implementations follow normal/build local dependencies, while every
-# canonical manifest and Cargo target remains discoverable in the workspace.
+# Production follows normal/build local dependencies and canonical manifests.
+# Development target inventories belong to the full verification source.
 {
   pkgs,
   root,
@@ -86,11 +86,8 @@ let
   unusedTargets = import ../util/rust-target-metadata.nix {
     inherit pkgs root;
     members = unusedDirectories;
-  };
-  selectedTargets = import ../util/rust-target-metadata.nix {
-    inherit pkgs root;
-    members = selectedDirectories;
-    includeProduction = false;
+    includeDevelopment = false;
+    minimalProduction = true;
   };
 in
 pkgs.runCommand "wrix-production-source"
@@ -103,5 +100,4 @@ pkgs.runCommand "wrix-production-source"
     cp -r ${selectedSource}/. "$out"
     chmod -R u+w "$out"
     cp -r ${unusedTargets}/. "$out"
-    cp -r ${selectedTargets}/. "$out"
   ''

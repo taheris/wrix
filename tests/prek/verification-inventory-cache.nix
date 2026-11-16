@@ -2,13 +2,28 @@
 let
   inventory = pkgs.writeText "verification-inventory.json" "{}";
   recipe = builtins.unsafeDiscardStringContext inventory.drvPath;
+  expression = pkgs.writeText "inventory-fixture.nix" ''
+    { legacyPackages.unit.verificationInventoryRecipe = "${recipe}"; }
+  '';
   fakeNix = pkgs.writeShellScriptBin "nix" ''
     set -euo pipefail
     case "$1" in
       flake) cat "$source_identity" ;;
       --version) echo fixture-nix ;;
       config) printf '{"pure-eval":%s}\n' "$(cat "$purity")" ;;
-      eval) [[ ! -f "$TMPDIR/fail-evaluation" ]]; printf '%s\n' '${recipe}' ;;
+      eval)
+        [[ ! -f "$TMPDIR/fail-evaluation" ]]
+        shift
+        arguments=()
+        for argument in "$@"; do
+          if [[ "$argument" == fixture-reference#legacyPackages.unit.verificationInventoryRecipe || "$argument" == fixture#legacyPackages.unit.verificationInventoryRecipe ]]; then
+            arguments+=(--expr 'import ${expression}' --apply 'values: values.legacyPackages.unit.verificationInventoryRecipe')
+          else
+            arguments+=("$argument")
+          fi
+        done
+        exec ${pkgs.nix}/bin/nix eval --impure --store dummy:// --extra-experimental-features nix-command "''${arguments[@]}"
+        ;;
       build)
         printf 'build\n' >> "$builds"
         previous=""

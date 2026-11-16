@@ -30,11 +30,7 @@ verification_inventory() {
       return 0
     fi
   fi
-  recipe=$(nix eval --raw --no-warn-dirty --expr '
-    { reference, system }:
-    let scope = (builtins.getFlake reference).legacyPackages.${system};
-    in if scope ? verificationInventoryRecipe then scope.verificationInventoryRecipe else ""
-  ' --argstr reference "$(jq -r .url "$work/source.json")" --argstr system "$system") || return 1
+  recipe=$(nix eval --raw --no-warn-dirty "$(jq -r .url "$work/source.json")#legacyPackages.$system.verificationInventoryRecipe") || return 1
   [[ -n "$recipe" ]] || return 1
   if ! nix-store --check-validity "$recipe"; then
     recipe=$(nix eval --raw --option eval-cache false --no-warn-dirty "$repository#legacyPackages.$system.verificationInventoryRecipe") || return 1

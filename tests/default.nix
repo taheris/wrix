@@ -756,6 +756,7 @@ let
         set -euo pipefail
         export PATH="${ciPreflightPath}:$PATH"
         source ${./lib/verifier.sh}
+        source ${./lib/verifier-timing.sh}
         source ${./lib/print-inputs.sh}
         source ${./prek/verification-inventory.sh}
 
@@ -947,7 +948,7 @@ let
           build_log=$(mktemp -t wrix-ci-build.XXXXXX)
           if runner=$(resolve_ci_app "$app" 2>"$build_log"); then
             rm -f "$build_log"
-            verifier_run "$app" "$requirements" "$runner/bin/$app"
+            verifier_run "$app" "$requirements" verifier_timed execute "$app" "$runner/bin/$app"
           else
             evidence=$(head -c 4000 "$build_log")
             cat "$build_log" >&2
@@ -964,7 +965,7 @@ let
             exit 64
           fi
 
-          prepare_ci_apps "$@"
+          verifier_timed prepare ci-batch prepare_ci_apps "$@"
           json_failed=0
           json_skipped=0
           for app in "$@"; do
@@ -974,7 +975,7 @@ let
               continue
             fi
 
-            prepare_ci_window "$app"
+            verifier_timed realize "$app" prepare_ci_window "$app"
             if run_ci_json_app "$app"; then
               continue
             else

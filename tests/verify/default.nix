@@ -101,6 +101,7 @@ let
       export PATH="${preflightPath}:$PATH"
       source ${../lib/verifier.sh}
       source ${../lib/print-inputs.sh}
+      source ${../lib/verifier-timing.sh}
       source ${../lib/verify-scripts.sh}
 
       fail() {

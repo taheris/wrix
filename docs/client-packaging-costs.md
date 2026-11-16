@@ -60,8 +60,9 @@ removing their construction from one path did not establish a net improvement.
 Production dependency caches now project the actual normal/build local-package
 closure, independently for the client and controller/runtime families. Only
 build-only cache manifests omit development dependencies. Real production
-sources retain canonical workspace manifests and targets; full workspace Clippy,
-dependency test compilation and Nextest retain their original inputs.
+sources retain canonical workspace manifests and selected production targets;
+full workspace Clippy, dependency test compilation and Nextest retain the
+complete target inventory and original development inputs.
 
 The cache uses the canonical vendor input. Cargo derives its scoped lock
 **offline** from the original lock, every resolved package name/version/source
@@ -85,6 +86,50 @@ Separate first controller-family and runtime realizations took **317.51 s** and
 **118.14 s**; current full flake checks took **1048 s**. These are component
 observations, not an empty-store comparison or proof of an ordinary push under
 ten minutes.
+
+## Development target discovery
+
+Preserving every inferred target in production source was still too broad:
+adding an integration-test file or an unselected verifier binary changed its
+empty target stubs, then the client, profiles and image matrix recipes. A timed
+instrumentation-only experiment planned 429 rebuilds and exhausted 595 seconds
+after just the first CI owner. This was not a warm gate, despite unchanged
+production implementations.
+
+Production source now keeps only the minimum conventional entrypoints needed to
+parse unselected workspace members, without their inferred extra binaries or
+development targets. Selected production implementations, canonical manifests,
+lock and normal/build dependencies remain unchanged. Full verification source
+still discovers every target. The owning fixture executes an added test against
+the real client and deliberately adds a failing test to prove it is not lost;
+selected-source and dependency edits still change the resulting program.
+
+A controlled actual-workspace test-file and unselected-binary removal preserves
+all client/controller/runtime source, binary and dependency-cache identities.
+This prevents that class of future test-only edits from triggering another cold
+image matrix. It does not remove image verification, waive genuine production
+changes, or establish a sub-ten-minute ordinary push.
+
+## Verifier inventory evaluation
+
+The inventory reader passed a function expression to `nix eval --raw` and
+expected `--argstr` to call it. Current Nix returns a function-coercion error;
+the dispatcher silently took its conservative, expensive planning fallback. The
+reader now requests the locked flake attribute directly. The cache fixture uses
+the real Nix evaluator rather than returning a recipe for any `eval` arguments;
+the original invocation fails that conformance test.
+
+A real clean-checkout inventory took 213.82 seconds on the first lookup and 0.41
+seconds on the repeated lookup with an identical source/config identity. Mutable
+inputs, changed identities and invalid outputs retain refusal/rebuild behavior.
+This caches metadata, not outcomes. Optional `WRIX_VERIFIER_TIMING_FILE`
+diagnostics separate preparation, realization and execution while preserving
+output and failure/skip statuses.
+
+The observed 72-minute ordinary push remains the whole-push baseline. One
+current shared-verifier owner still takes 139.85 seconds, and the baseline
+requested it four times. Preventing accidental production invalidation and
+repairing metadata reuse do not, alone, establish the requested ten-minute gate.
 
 ## Independent boundaries
 

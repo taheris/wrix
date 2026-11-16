@@ -1,0 +1,4 @@
+[package]
+name = "target-helper"
+version.workspace = true
+edition.workspace = true

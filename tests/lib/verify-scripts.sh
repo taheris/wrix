@@ -82,6 +82,6 @@ verify_script_execute() {
 
 verify_script_run() {
   local script
-  script="$(verify_script_path "$1" "$2" "$3")" || return 1
-  verify_script_execute "$script" "$verify_script_evaluations"
+  script="$(verifier_timed realize "$3" verify_script_path "$1" "$2" "$3")" || return 1
+  verifier_timed execute "$3" verify_script_execute "$script" "$verify_script_evaluations"
 }

@@ -81,6 +81,7 @@ pkgs.runCommand "verify-script-batching-conformance"
     set -euo pipefail
     export calls="$TMPDIR/calls" executions="$TMPDIR/executions" failure="$TMPDIR/failure"
     mkdir "$failure"
+    source ${../lib/verifier-timing.sh}
     source ${../lib/verify-scripts.sh}
     trap verify_scripts_cleanup EXIT
     verify_scripts_prepare frozen-source unit alpha beta alpha
