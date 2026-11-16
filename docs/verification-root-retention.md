@@ -35,7 +35,12 @@ keeps the previous current generation. A subsequent replacement removes
 abandoned pending generations under the same lock, bounding repeated failures to
 current plus one pending generation. A dry run reports root changes without
 creating generations. Unknown files, foreign directories, symlinked generations
-and modified root links cause refusal rather than recursive deletion.
+and modified root links cause refusal rather than recursive deletion. Each
+generation records its requested manifest; indexed root names bind to that
+manifest. Nix registration uses batches of 128 paths rather than one subprocess
+per root. On the same 4,915-path retained set, initial per-path registration
+took 586.99 seconds and batched replacement took 11.65 seconds. These are
+cache-management timings, not whole-push or verification timings.
 
 The lock is kernel-owned and inherited by `run`'s actual command and
 descendants. A killed parent does not authorize retirement while a descendant

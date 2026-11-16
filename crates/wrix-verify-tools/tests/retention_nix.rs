@@ -37,9 +37,7 @@ fn real_nix_roots_rotate_and_failed_registration_preserves_the_current_set() {
     fs::write(&manifest, format!("{first}\n")).unwrap();
     success(Command::new(TOOL).arg("replace").arg(&cache).arg(&manifest));
     let original = fs::read_link(cache.join("current")).unwrap();
-    let root = cache
-        .join(&original)
-        .join(Path::new(&first).file_name().unwrap());
+    let root = cache.join(&original).join("batch-0");
     let roots = success(Command::new("nix-store").args(["--query", "--roots", &first]));
     assert!(
         String::from_utf8(roots.stdout)
@@ -67,9 +65,7 @@ fn real_nix_roots_rotate_and_failed_registration_preserves_the_current_set() {
     success(Command::new(TOOL).arg("replace").arg(&cache).arg(&manifest));
     assert!(!root.exists());
     let current = fs::read_link(cache.join("current")).unwrap();
-    let new_root = cache
-        .join(current)
-        .join(Path::new(&second).file_name().unwrap());
+    let new_root = cache.join(current).join("batch-0");
     assert_eq!(fs::read_link(&new_root).unwrap(), Path::new(&second));
     let roots = success(Command::new("nix-store").args(["--query", "--roots", &second]));
     assert!(
@@ -77,6 +73,20 @@ fn real_nix_roots_rotate_and_failed_registration_preserves_the_current_set() {
             .unwrap()
             .contains(new_root.to_str().unwrap())
     );
+    fs::write(&manifest, format!("{first}\n{second}\n")).unwrap();
+    success(Command::new(TOOL).arg("replace").arg(&cache).arg(&manifest));
+    let paired = cache.join(fs::read_link(cache.join("current")).unwrap());
+    let mut actual = vec![
+        fs::read_link(paired.join("batch-0")).unwrap(),
+        fs::read_link(paired.join("batch-0-2")).unwrap(),
+    ];
+    actual.sort();
+    let mut expected = vec![
+        std::path::PathBuf::from(&first),
+        std::path::PathBuf::from(&second),
+    ];
+    expected.sort();
+    assert_eq!(actual, expected);
     fs::write(&manifest, "").unwrap();
     success(Command::new(TOOL).arg("replace").arg(&cache).arg(&manifest));
     assert!(!new_root.exists());

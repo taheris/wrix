@@ -1,6 +1,6 @@
 //! Bounded, explicitly owned verification caches, independent of verification verdicts.
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File},
     io::{self, Write},
     os::unix::{
@@ -12,6 +12,24 @@ use std::{
 };
 
 const OWNER: &str = "wrix-verification-roots-v1\n";
+const BATCH_SIZE: usize = 128;
+
+fn indexed(desired: &BTreeSet<StorePath>) -> BTreeMap<String, StorePath> {
+    desired
+        .iter()
+        .enumerate()
+        .map(|(index, path)| {
+            let batch = index / BATCH_SIZE;
+            let offset = index % BATCH_SIZE;
+            let name = if offset == 0 {
+                format!("batch-{batch}")
+            } else {
+                format!("batch-{batch}-{}", offset + 1)
+            };
+            (name, path.clone())
+        })
+        .collect()
+}
 
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
 pub enum Error {
@@ -173,13 +191,30 @@ impl Cache {
 
     fn entries(directory: &Path) -> Result<Vec<(PathBuf, StorePath)>, Error> {
         let mut entries = Vec::new();
+        let inventory = directory.join("manifest");
+        let expected = if exists(&inventory)? {
+            regular(&inventory)?;
+            Some(indexed(&manifest(&inventory)?))
+        } else {
+            None
+        };
         for entry in fs::read_dir(directory)? {
             let entry = entry?;
             let name = entry.file_name();
             let Some(name) = name.to_str() else {
                 return Err(Error::Foreign(entry.path()));
             };
-            let target = StorePath::parse(&format!("/nix/store/{name}"))?;
+            if name == "manifest" {
+                continue;
+            }
+            let target = if let Some(expected) = &expected {
+                expected
+                    .get(name)
+                    .cloned()
+                    .ok_or_else(|| Error::Foreign(entry.path()))?
+            } else {
+                StorePath::parse(&format!("/nix/store/{name}"))?
+            };
             if fs::read_link(entry.path())? != target.0 {
                 return Err(Error::Foreign(entry.path()));
             }
@@ -242,14 +277,16 @@ impl Cache {
             .tempdir_in(&self.path)?;
         fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700))?;
         let generation = temporary.keep();
+        let mut inventory = File::create(generation.join("manifest"))?;
         for target in desired {
-            let name = target
-                .0
-                .file_name()
-                .ok_or_else(|| Error::Foreign(target.0.clone()))?;
+            writeln!(inventory, "{}", target.0.display())?;
+        }
+        inventory.sync_all()?;
+        let targets: Vec<_> = desired.iter().map(|path| &path.0).collect();
+        for (batch, paths) in targets.chunks(BATCH_SIZE).enumerate() {
             if !Command::new(nix)
                 .arg("--check-validity")
-                .arg(&target.0)
+                .args(paths)
                 .status()?
                 .success()
             {
@@ -258,9 +295,9 @@ impl Cache {
             if !Command::new(nix)
                 .arg("--realise")
                 .arg("--add-root")
-                .arg(generation.join(name))
+                .arg(generation.join(format!("batch-{batch}")))
                 .arg("--indirect")
-                .arg(&target.0)
+                .args(paths)
                 .stdout(std::process::Stdio::null())
                 .status()?
                 .success()
@@ -298,6 +335,11 @@ impl Cache {
             writeln!(output, "retire\t{}\t{}", root.display(), target.0.display())?;
             fs::remove_file(root)?;
         }
+        let inventory = directory.join("manifest");
+        if exists(&inventory)? {
+            regular(&inventory)?;
+            fs::remove_file(inventory)?;
+        }
         fs::remove_dir(directory)?;
         Ok(())
     }
@@ -309,5 +351,7 @@ impl Cache {
     }
 }
 
+#[cfg(test)]
+mod batch_test;
 #[cfg(test)]
 mod test;
