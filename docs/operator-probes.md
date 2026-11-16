@@ -132,3 +132,19 @@ Selected immutable fixture roots can be registered from authentic host Nix
 registration records over a read-only fixture export, with exact recursive
 closure comparison and root hash verification. No host daemon, database or
 credential tree is mounted into the worker.
+
+## Public Run terminal candidate
+
+`wrix-public-run --cli ABSOLUTE-EXECUTABLE PROFILE` supplies a real controlling
+PTY for the fixed public shared-store Run qualification command. It
+canonicalizes the profile, streams terminal bytes and retains the original
+signal-status conversion. Its owned child is reaped on normal completion and
+cleaned up on stream failure; a failed diagnostic write has a distinct nonzero
+I/O status.
+
+The candidate is independently checked against the retained original PTY
+implementation on Darwin and Linux, including terminal ownership, exact argv,
+normal/nonzero/signal exits and bulk output. It does not replace the owning
+public installed-store acceptance or establish shared controller/store access.
+The original launcher and its consumer remain selected until that owning
+acceptance is equivalent.
