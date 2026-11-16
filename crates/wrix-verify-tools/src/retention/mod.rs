@@ -39,6 +39,8 @@ pub enum Error {
     Foreign(PathBuf),
     /// invalid top-level Nix store path: {0}
     Store(String),
+    /// derivation recipes cannot be used as output roots: {0}
+    Recipe(String),
     /// verification cache is leased by another process
     Busy,
     /// Nix failed while registering verification roots
@@ -65,6 +67,12 @@ impl StorePath {
         });
         if !valid {
             return Err(Error::Store(value.to_owned()));
+        }
+        if Path::new(value)
+            .extension()
+            .is_some_and(|extension| extension == "drv")
+        {
+            return Err(Error::Recipe(value.to_owned()));
         }
         Ok(Self(PathBuf::from(value)))
     }

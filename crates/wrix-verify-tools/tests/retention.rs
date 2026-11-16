@@ -83,6 +83,31 @@ fn killed_parent_cannot_release_a_still_running_descendants_lease() {
 }
 
 #[test]
+fn recipe_manifests_are_refused_before_registration_or_execution() {
+    let (_temporary, cache, manifest) = setup();
+    fs::write(
+        &manifest,
+        "/nix/store/00000000000000000000000000000000-unwanted-build.drv\n",
+    )
+    .unwrap();
+    for mode in ["plan", "replace", "run"] {
+        let mut command = Command::new(TOOL);
+        command.args([mode]).arg(&cache).arg(&manifest);
+        if mode == "run" {
+            command.args(["--", "must-not-execute"]);
+        }
+        let output = command.env("PATH", "").output().unwrap();
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8(output.stderr)
+                .unwrap()
+                .contains("derivation recipes cannot be used as output roots")
+        );
+        assert_eq!(fs::read_dir(&cache).unwrap().count(), 2);
+    }
+}
+
+#[test]
 fn dry_run_does_not_create_generations() {
     let (_temporary, cache, manifest) = setup();
     for _ in 0..3 {

@@ -27,7 +27,24 @@ The manifest is an explicit complete replacement set, not an append operation.
 Use outputs and prerequisites of the selected current build, not an ever-growing
 history or all outputs in the store. Include any intentionally retained rollback
 or qualification outputs explicitly. An empty manifest intentionally releases
-all managed roots. Paths outside the top level of `/nix/store` are refused.
+all managed roots. Paths outside the top level of `/nix/store` and `.drv`
+recipes are refused before cache mutation or Nix invocation. A valid recipe is
+not an existing output: passing it to `nix-store --realise` starts a build.
+
+Derive the manifest from the same source reference as the actual consumer. For a
+Git-flake consumer, use `git+file://` explicitly and compare representative
+recipe identities with the ordinary flake CLI.
+`builtins.getFlake (toString ./.)` instead captures a whole-directory path
+flake, including ignored files; it can retain different recipes and unintended
+local data.
+
+Do not automatically retain every transitive build output. Completed outputs
+retain their runtime references through Nix. For pending builds, retain the
+available prerequisite frontier and source inputs; keep hot dependency caches
+explicitly where needed. Retaining completed producers' raw OCI layers as well
+as their final archives needlessly multiplies storage. The command does not
+compute this frontier: source identity and the complete manifest remain the
+caller's responsibility.
 
 Replacement registers every requested root with real `nix-store` before
 switching `current` and retiring the previous generation. A failed registration
