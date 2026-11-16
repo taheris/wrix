@@ -103,6 +103,18 @@ let
       source ${../lib/print-inputs.sh}
       source ${../lib/verifier-timing.sh}
       source ${../lib/verify-scripts.sh}
+      source ${../lib/parallel-verifiers.sh}
+
+      parallel_verifier_target() {
+        case "$1" in
+          ${
+            concatStringsSep "|" (
+              map escapeShellArg (builtins.filter (name: registry.${name}.parallelSafe or false) targetNames)
+            )
+          }) return 0 ;;
+          *) return 1 ;;
+        esac
+      }
 
       fail() {
         local message="$1"
@@ -306,7 +318,8 @@ let
             selected+=("$target")
           fi # Execution repeats live admission and reports any refusal through verifier_run.
         done
-        trap verify_scripts_cleanup EXIT
+        parallel_verifiers_prepare "$@"
+        trap 'parallel_verifiers_cleanup; verify_scripts_cleanup' EXIT
         trap 'exit 130' INT
         trap 'exit 143' TERM
         trap 'exit 129' HUP
@@ -320,7 +333,11 @@ let
         }
         for raw in "$@"; do
           target="$(normalize_target "$raw")"
-          if run_one "$target"; then
+          local runner=(run_one "$target")
+          if [[ "''${parallel_verifier_counts[$target]:-0}" -gt 1 ]]; then
+            runner=(parallel_verifier_run ${escapeShellArg (toString src)} ${escapeShellArg system} "$target")
+          fi
+          if "''${runner[@]}"; then
             continue
           else
             status="$?"
@@ -345,6 +362,7 @@ in
   };
   package = verify;
   inherit scripts;
+  parallelTools = import ../../lib/verify/tools.nix { inherit pkgs; };
   mkProgram =
     { targets }:
     makeVerifier {

@@ -2,6 +2,7 @@
 import ../util/rust-tool.nix {
   inherit pkgs;
   package = "wrix-image-tools";
+  scopedSource = true;
   description = "Native OCI configuration and image input tooling";
   extraSources = [ ./oci-layout-build.sh ];
   nativeCheckInputs = [ pkgs.gnutar ];

@@ -36,6 +36,8 @@ capability discovery, Loom integration and fresh-image verification boundaries.
 checked resource projections, conservative scope, and measured worker costs.
 [Client packaging costs](client-packaging-costs.md) separates Rust build,
 artifact size and shell activation measurements, including rejected experiments.
+[Independent verifier jobs](verifier-parallelism.md) describes bounded parallel
+execution, read-only source-cache snapshots and image-producer source isolation.
 [Locked Loom consumer measurement](locked-consumer-measurement.md) records
 separate evaluation, realization, environment-generation and CI-shell activation
 phases. [Client/server compilation](client-server-boundary.md) documents the

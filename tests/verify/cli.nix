@@ -36,6 +36,8 @@ in
     fi
   '';
 
+  # Each invocation uses private fixture roots and a consistent read-only source-cache snapshot.
+  "cli.shared-verifier-app".parallelSafe = true;
   "cli.shared-verifier-app".script = ''
     local list_output
     local batch_output
@@ -79,7 +81,7 @@ in
       fi
       for database in "$caller_cache"/fetcher-cache-v[0-9]*.sqlite; do
         [[ -f "$database" ]] || continue
-        ${pkgs.sqlite}/bin/sqlite3 -readonly "$database" ".backup '$snapshot/''${database##*/}'"
+        ${verifyTools}/bin/wrix-verify-tools snapshot-nix-fetcher "$database" "$snapshot/''${database##*/}"
       done
       export WRIX_TEST_FETCHER_CACHE_SNAPSHOT="$snapshot"
       export WRIX_TEST_VERIFY="$SELF"

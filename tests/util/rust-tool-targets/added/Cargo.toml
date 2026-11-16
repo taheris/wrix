@@ -1,0 +1,8 @@
+[workspace]
+members = ["crates/native-tool", "crates/unused"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+license = "MIT"

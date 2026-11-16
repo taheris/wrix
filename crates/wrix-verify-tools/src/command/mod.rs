@@ -29,11 +29,17 @@ pub enum Error {
     Payload(#[from] crate::artifact::image::payload::Error),
     /// {0}
     CacheTransport(#[from] crate::cache_transport::Error),
+    /// {0}
+    CacheSnapshot(#[from] crate::cache_snapshot::Error),
 }
 
 pub fn run(args: impl IntoIterator<Item = OsString>) -> Result<(), Error> {
     let args: Vec<_> = args.into_iter().collect();
     match args.as_slice() {
+        [name, source, destination] if name == "snapshot-nix-fetcher" => {
+            crate::cache_snapshot::snapshot(Path::new(source), Path::new(destination))?;
+            Ok(())
+        }
         [name, root] if name == "cache-transport" => {
             crate::cache_transport::run(Path::new(root))?;
             Ok(())

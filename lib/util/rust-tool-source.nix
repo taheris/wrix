@@ -4,6 +4,7 @@
   root,
   package,
   extraSources ? [ ],
+  minimalUnusedTargets ? false,
 }:
 let
   workspace = builtins.fromTOML (builtins.readFile (root + "/Cargo.toml"));
@@ -26,7 +27,11 @@ let
   members = builtins.filter (name: name != package) (
     builtins.attrNames (builtins.readDir (root + "/crates"))
   );
-  metadata = import ./rust-target-metadata.nix { inherit pkgs root members; };
+  metadata = import ./rust-target-metadata.nix {
+    inherit pkgs root members;
+    includeDevelopment = !minimalUnusedTargets;
+    minimalProduction = minimalUnusedTargets;
+  };
   source = pkgs.lib.fileset.toSource {
     inherit root;
     fileset = pkgs.lib.fileset.unions (

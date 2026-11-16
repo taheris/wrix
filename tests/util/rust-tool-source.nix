@@ -6,6 +6,23 @@ let
       inherit pkgs package;
       root = ../..;
     };
+  fixture =
+    name: minimalUnusedTargets:
+    import ../../lib/util/rust-tool-source.nix {
+      inherit pkgs minimalUnusedTargets;
+      package = "native-tool";
+      root = ./rust-tool-targets + "/${name}";
+    };
+  imageSource = (import ../../lib/sandbox/image-tools.nix { inherit pkgs; }).src;
+  environmentSource =
+    (import ../../lib/sandbox/runtime-environment.nix { inherit pkgs; }).package.src;
+  expectedSource =
+    package: extraSources:
+    import ../../lib/util/rust-tool-source.nix {
+      inherit pkgs package extraSources;
+      root = ../..;
+      minimalUnusedTargets = true;
+    };
   rejected =
     builtins.tryEval
       (import ../../lib/util/rust-tool-source.nix {
@@ -15,10 +32,18 @@ let
       }).drvPath;
 in
 assert !rejected.success;
+assert
+  toString imageSource
+  == toString (expectedSource "wrix-image-tools" [ ../../lib/sandbox/oci-layout-build.sh ]);
+assert toString environmentSource == toString (expectedSource "wrix-runtime-env" [ ]);
+assert (fixture "base" true).drvPath == (fixture "added" true).drvPath;
+assert (fixture "base" false).drvPath != (fixture "added" false).drvPath;
 pkgs.runCommand "rust-tool-source"
   {
     nativeBuildInputs = [
       pkgs.cargo
+      pkgs.rustc
+      pkgs.stdenv.cc
       pkgs.jq
     ];
   }
@@ -60,5 +85,16 @@ pkgs.runCommand "rust-tool-source"
         fi
       done
     done
+    cp -r ${fixture "added" true}/. "$TMPDIR/tool"
+    chmod -R u+w "$TMPDIR/tool"
+    cargo test --offline --locked --manifest-path "$TMPDIR/tool/Cargo.toml" -p native-tool
+    test "$("$TMPDIR/tool/target/debug/native-tool")" = 7
+    cp -r ${./rust-tool-targets/added}/. "$TMPDIR/complete"
+    chmod -R u+w "$TMPDIR/complete"
+    if cargo test --offline --locked --manifest-path "$TMPDIR/complete/Cargo.toml" --workspace > "$TMPDIR/full.log" 2>&1; then
+      echo 'full workspace must still execute the added failing integration test' >&2
+      exit 1
+    fi
+    grep -F 'full workspace sees added test' "$TMPDIR/full.log"
     touch "$out"
   ''

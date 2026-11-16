@@ -19,6 +19,9 @@ pkgs.rustPlatform.buildRustPackage {
       import ./rust-tool-source.nix {
         inherit pkgs package extraSources;
         root = ../..;
+        # This package builds/tests only the selected tool. Full workspace
+        # verification uses its own complete source and target inventory.
+        minimalUnusedTargets = true;
       }
     else
       lib.fileset.toSource {

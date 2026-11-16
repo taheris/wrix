@@ -128,8 +128,10 @@ output and failure/skip statuses.
 
 The observed 72-minute ordinary push remains the whole-push baseline. One
 current shared-verifier owner still takes 139.85 seconds, and the baseline
-requested it four times. Preventing accidental production invalidation and
-repairing metadata reuse do not, alone, establish the requested ten-minute gate.
+requested it four times. Those requests now qualify for
+[bounded independent parallel execution](verifier-parallelism.md). Preventing
+accidental production invalidation and repairing metadata reuse do not, alone,
+establish the requested ten-minute gate.
 
 ## Independent boundaries
 

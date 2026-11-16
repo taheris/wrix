@@ -70,6 +70,7 @@
       legacyPackages.ciChecks = test.ciChecks;
       legacyPackages.ciApps = test.ciAppDerivations;
       legacyPackages.verifyScripts = test.verify.scripts;
+      legacyPackages.verifierParallelTools = test.verify.parallelTools;
       legacyPackages.mkVerifierProgram = test.verify.mkProgram;
       legacyPackages.verifyEvaluations =
         let
