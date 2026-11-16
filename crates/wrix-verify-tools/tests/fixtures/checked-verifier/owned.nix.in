@@ -1,0 +1,32 @@
+{
+  inputs.loom = { url = @loomSource@; flake = false; };
+  inputs.nixpkgs.url = @nixpkgsSource@;
+  outputs = { self, loom, ... }: let
+    checked = import (loom + "/nix/verification.nix");
+    source = checked.resource { root = ./.; origin = "subjects"; };
+    bash = builtins.appendContext (@bash@ + "/bin/bash") { ${@bash@} = { path = true; }; };
+  in {
+    checks.@system@.devshell = checked.check {
+      resources = [ source ];
+      evaluation = [ (checked.resource {
+        root = ./.;
+        filter = path: type: type == "directory" || builtins.baseNameOf path == "flake.lock" || builtins.match ".*\\.nix" (toString path) != null;
+      }) ];
+      build = sources: let
+        root = builtins.head sources;
+        result = import (root + "/tests/verify/profiles-eval.nix") {
+          inherit root;
+          flake = self;
+          system = @system@;
+          target = "devshell.no-prek-install";
+        };
+      in assert result == "passed"; builtins.derivation {
+        name = "fixture-owned-wrix-source";
+        system = @system@;
+        builder = bash;
+        src = root;
+        args = [ "-c" ''set -euo pipefail; read -r source < "$src/lib/devshell/default.nix"; printf '%s\n' "$source" > "$out"'' ];
+      };
+    };
+  };
+}

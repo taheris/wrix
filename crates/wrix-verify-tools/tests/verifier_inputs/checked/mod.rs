@@ -4,6 +4,7 @@ use serde_json::Value;
 #[derive(Clone, Copy)]
 enum Definition {
     Check,
+    OwnedCheck,
     Report,
     SystemReport,
 }
@@ -27,6 +28,7 @@ fn fixture(definition: Definition) -> Fixture {
     let inputs: Value = serde_json::from_slice(&inputs.stdout).unwrap();
     let template = match definition {
         Definition::Check => include_str!("../../fixtures/checked-verifier/flake.nix.in"),
+        Definition::OwnedCheck => include_str!("../../fixtures/checked-verifier/owned.nix.in"),
         Definition::Report | Definition::SystemReport => {
             include_str!("../../fixtures/checked-verifier/report.nix.in")
         }
@@ -44,6 +46,11 @@ fn fixture(definition: Definition) -> Fixture {
         )
         .replace("@jq@", &serde_json::to_string(&inputs["jq"]).unwrap())
         .replace("@system@", &system)
+        .replace(
+            "@nixpkgsSource@",
+            &serde_json::to_string(&format!("path:{}", binary("WRIX_TEST_NIXPKGS").display()))
+                .unwrap(),
+        )
         .replace(
             "@tier@",
             if matches!(definition, Definition::SystemReport) {
@@ -65,6 +72,7 @@ fn fixture(definition: Definition) -> Fixture {
     );
     let target = match definition {
         Definition::Check => format!("nix build .#checks.{}.heading", fixture.system),
+        Definition::OwnedCheck => format!("nix build .#checks.{}.devshell", fixture.system),
         Definition::Report | Definition::SystemReport => {
             format!("nix report .#checks.{}.report::heading", fixture.system)
         }
@@ -74,9 +82,14 @@ fn fixture(definition: Definition) -> Fixture {
     } else {
         "check"
     };
+    let criterion = if matches!(definition, Definition::OwnedCheck) {
+        "The actual Wrix devshell.no-prek-install assertion passes."
+    } else {
+        "The captured subject has a heading."
+    };
     fixture.sandbox.write(
         "specs/fixture.md",
-        &format!("# Native fixture\n\n## Success Criteria\n\n- The captured subject has a heading. [{tier}]({target})\n"),
+        &format!("# Native fixture\n\n## Success Criteria\n\n- {criterion} [{tier}]({target})\n"),
     );
     if matches!(definition, Definition::Report | Definition::SystemReport) {
         fixture.sandbox.write(
@@ -93,6 +106,24 @@ fn fixture(definition: Definition) -> Fixture {
     fixture
         .sandbox
         .write("subjects/README.md", "# Captured subject\n");
+    if matches!(definition, Definition::OwnedCheck) {
+        for relative in [
+            "tests/verify/profiles-eval.nix",
+            "tests/verify/agent-defaults.nix",
+            "tests/verify/network-rules.nix",
+            "tests/lib/inputs.nix",
+            "tests/lib/browser-resources.nix",
+        ] {
+            fixture.sandbox.write(
+                &format!("subjects/{relative}"),
+                &std::fs::read_to_string(binary("WRIX_TEST_SOURCE").join(relative)).unwrap(),
+            );
+        }
+        fixture.sandbox.write(
+            "subjects/lib/devshell/default.nix",
+            "# Consumer construction does not mutate hooks.\n",
+        );
+    }
     for args in [
         vec!["init", "-q"],
         vec!["-c", "core.hooksPath=/dev/null", "add", "."],
@@ -151,6 +182,30 @@ fn scoped_gate(fixture: &Fixture, selection: Selection) -> std::process::Output 
         combined(&output)
     );
     output
+}
+
+#[test]
+#[ignore = "requires the actual consumed Loom CLI and native Nix backend"]
+fn checked_owned_wrix_assertion_preserves_real_failure_and_restoration() {
+    let fixture = fixture(Definition::OwnedCheck);
+    let first = gate(&fixture);
+    assert!(first.status.success(), "{}", combined(&first));
+    fixture
+        .sandbox
+        .write("subjects/lib/devshell/default.nix", "\"prek install\"\n");
+    let changed = gate(&fixture);
+    assert!(!changed.status.success(), "{}", combined(&changed));
+    assert!(
+        combined(&changed).contains("mkDevShell invokes prek install"),
+        "{}",
+        combined(&changed)
+    );
+    fixture.sandbox.write(
+        "subjects/lib/devshell/default.nix",
+        "# Consumer construction does not mutate hooks.\n",
+    );
+    let restored = gate(&fixture);
+    assert!(restored.status.success(), "{}", combined(&restored));
 }
 
 #[test]

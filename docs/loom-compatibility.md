@@ -115,6 +115,12 @@ foreign-platform JSON does not authorize worker coverage. Tests retain the
 observed distinction between an unavailable declared prerequisite and an
 unreported exit 77 rather than converting either into passing evidence.
 
+An owned-source fixture also imports the actual Wrix `profiles-eval.nix`
+assertion for `devshell.no-prek-install`. Its captured source is staged and read
+by the native derivation. Success, a source edit containing the forbidden hook
+command and restoration exercise that same assertion through the consumed Loom
+CLI, not a replacement predicate or runner-derived input authority.
+
 These cases establish the supported construction path, not compatibility of
 unregistered legacy fixtures or migration of all production annotations. The
 legacy fixtures remain until their owning acceptance has an actual replacement.
