@@ -74,9 +74,14 @@ verify_evaluation_succeeded() {
     jq -e --arg target "$1" '.[$target] == true' "$verify_evaluation_results" > /dev/null
 }
 
-verify_script_run() {
-  local script definitions self="${SELF:-$0}"
-  script="$(verify_script_path "$1" "$2" "$3")" || return 1
+verify_script_execute() {
+  local script="$1" evaluations="$2" definitions self="${SELF:-$0}"
   definitions="$(declare -f)"
-  SELF="$self" bash -euo pipefail -c "$definitions"$'\nverify_execute_source() { local verify_evaluation_results="$2"; source "$1"; }\nverify_execute_source "$1" "$2"' "$self" "$script" "$verify_script_evaluations"
+  SELF="$self" bash -euo pipefail -c "$definitions"$'\nverify_execute_source() { local verify_evaluation_results="$2"; source "$1"; }\nverify_execute_source "$1" "$2"' "$self" "$script" "$evaluations"
+}
+
+verify_script_run() {
+  local script
+  script="$(verify_script_path "$1" "$2" "$3")" || return 1
+  verify_script_execute "$script" "$verify_script_evaluations"
 }

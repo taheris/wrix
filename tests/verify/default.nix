@@ -79,227 +79,262 @@ let
     ]
   );
   targetNames = sort builtins.lessThan (attrNames registry);
-  listArguments = concatStringsSep " \\\n        " (
-    map (target: escapeShellArg "verify:${target}") targetNames
-  );
-  knownPatterns = concatStringsSep "|" (map escapeShellArg targetNames);
+  scripts = mapAttrs (name: entry: pkgs.writeText "verify-${name}.sh" entry.script) registry;
+  makeVerifier =
+    {
+      targets ? targetNames,
+      prepared ? false,
+    }:
+    assert targets != [ ];
+    assert builtins.all (target: builtins.hasAttr target registry) targets;
+    let
+      listArguments = concatStringsSep " \\\n        " (
+        map (target: escapeShellArg "verify:${target}") targets
+      );
+      knownPatterns = concatStringsSep "|" (map escapeShellArg targets);
+    in
+    writeShellScriptBin "verify" ''
+      set -euo pipefail
 
-  verify = writeShellScriptBin "verify" ''
-    set -euo pipefail
+      export PATH="${bash}/bin:${coreutils}/bin:${findutils}/bin:${gawk}/bin:${git}/bin:${gnugrep}/bin:${gnused}/bin:${jq}/bin:${nix}/bin:${openssh}/bin:${prek}/bin:${python3}/bin:${wrixPrek}/bin:$PATH"
+      SELF="$0"
+      export PATH="${preflightPath}:$PATH"
+      source ${../lib/verifier.sh}
+      source ${../lib/print-inputs.sh}
+      source ${../lib/verify-scripts.sh}
 
-    export PATH="${bash}/bin:${coreutils}/bin:${findutils}/bin:${gawk}/bin:${git}/bin:${gnugrep}/bin:${gnused}/bin:${jq}/bin:${nix}/bin:${openssh}/bin:${prek}/bin:${python3}/bin:${wrixPrek}/bin:$PATH"
-    SELF="$0"
-    export PATH="${preflightPath}:$PATH"
-    source ${../lib/verifier.sh}
-    source ${../lib/print-inputs.sh}
-    source ${../lib/verify-scripts.sh}
+      fail() {
+        local message="$1"
+        printf 'FAIL: %s\n' "$message" >&2
+        return 1
+      }
 
-    fail() {
-      local message="$1"
-      printf 'FAIL: %s\n' "$message" >&2
-      return 1
-    }
+      list_targets() {
+        printf '%s\n' \
+          ${listArguments}
+      }
 
-    list_targets() {
-      printf '%s\n' \
-        ${listArguments}
-    }
+      usage() {
+        printf 'Usage: nix run .#verify -- [--list | --print-inputs] <id>...\n'
+        printf 'IDs may be passed as verify:<domain>.<check-id> or <domain>.<check-id>.\n'
+      }
 
-    usage() {
-      printf 'Usage: nix run .#verify -- [--list | --print-inputs] <id>...\n'
-      printf 'IDs may be passed as verify:<domain>.<check-id> or <domain>.<check-id>.\n'
-    }
-
-    normalize_target() {
-      local target="$1"
-      case "$target" in
-        verify:*) printf '%s\n' "''${target#verify:}" ;;
-        *) printf '%s\n' "$target" ;;
-      esac
-    }
-
-    is_known_target() {
-      local target="$1"
-      case "$target" in
-        ${knownPatterns}) return 0 ;;
-        *) return 1 ;;
-      esac
-    }
-
-    validate_targets() {
-      local raw
-      local target
-      local unknown=0
-      for raw in "$@"; do
-        target="$(normalize_target "$raw")"
-        if ! is_known_target "$target"; then
-          printf 'Unknown verify target: %s\n' "$raw" >&2
-          unknown=1
-        fi
-      done
-      if [[ "$unknown" -ne 0 ]]; then
-        printf 'Run `nix run .#verify -- --list` to see supported targets.\n' >&2
-        printf 'Supported verify targets:\n' >&2
-        list_targets >&2
-        return 64
-      fi
-    }
-
-    repo_root() {
-      if [[ -n "''${REPO_ROOT:-}" ]]; then
-        printf '%s\n' "$REPO_ROOT"
-      else
-        git rev-parse --show-toplevel
-      fi
-    }
-
-    run_repo_script() {
-      local relative_path="$1"
-      shift
-      local root
-      root="$(repo_root)"
-      REPO_ROOT="$root" bash "$root/$relative_path" "$@"
-    }
-
-    run_repo_script_with_wrix() {
-      local relative_path="$1"
-      shift
-      local root
-      local package
-      root="$(repo_root)"
-      package="$(build_flake_package wrix)"
-      WRIX_TEST_WRIX_BIN="$package/bin/wrix" REPO_ROOT="$root" bash "$root/$relative_path" "$@"
-    }
-
-    build_flake_package() {
-      local attr="$1"
-      local root
-      root="$(repo_root)"
-      nix build --no-link --print-out-paths --no-warn-dirty "$root#$attr"
-    }
-
-    assert_contains() {
-      local label="$1"
-      local haystack="$2"
-      local needle="$3"
-      if [[ "$haystack" != *"$needle"* ]]; then
-        fail "$label: missing '$needle'"
-      fi
-    }
-
-    assert_executable() {
-      local path="$1"
-      if [[ ! -x "$path" ]]; then
-        fail "expected executable at $path"
-      fi
-    }
-
-    assert_package_attr_absent() {
-      local attr="$1"
-      local root
-      local out_file
-      local err_file
-      root="$(repo_root)"
-      out_file="$(mktemp -t wrix-verify-attr.XXXXXX)"
-      err_file="$(mktemp -t wrix-verify-attr.XXXXXX)"
-      if nix build --no-link --no-warn-dirty "$root#$attr" >"$out_file" 2>"$err_file"; then
-        rm -f "$out_file" "$err_file"
-        fail "legacy package attr is still exposed: $attr"
-      fi
-      rm -f "$out_file" "$err_file"
-    }
-
-    assert_json_verdict() {
-      local label="$1"
-      local json_lines="$2"
-      local target="$3"
-      if ! printf '%s\n' "$json_lines" | jq -e --arg target "$target" 'select(.target == $target and .outcome == "passed")' >/dev/null; then
-        fail "$label: missing passing JSON verdict for $target"
-      fi
-    }
-
-    run_target() {
-      verify_script_run ${escapeShellArg (toString src)} ${escapeShellArg system} "$1"
-    }
-
-    run_one() {
-      local target="$1"
-      local requirements
-      requirements="$(jq -c --arg target "$target" '.[$target]' ${requirements})"
-      verifier_run "$target" "$requirements" run_target "$target"
-    }
-
-    main() {
-      if [[ "$#" -eq 0 ]]; then
-        usage >&2
-        return 64
-      fi
-
-      case "''${1:-}" in
-        --execute-target)
-          [[ "$#" -eq 2 ]] || fail "internal target execution requires one ID"
-          is_known_target "$2" || fail "unknown internal target: $2"
-          run_target "$2"
-          return
-          ;;
-        --help|-h)
-          usage
-          return 0
-          ;;
-        --print-inputs)
-          shift
-          validate_targets "$@"
-          local raw
-          local targets=()
-          for raw in "$@"; do
-            targets+=("$(normalize_target "$raw")")
-          done
-          verifier_print_inputs ${inputDescriptions} "''${targets[@]}"
-          return
-          ;;
-        --list)
-          if [[ "$#" -ne 1 ]]; then
-            fail "--list cannot be combined with target IDs"
-          fi
-          list_targets
-          return 0
-          ;;
-      esac
-
-      validate_targets "$@"
-
-      local raw target requirements
-      local selected=()
-      local failed=0 skipped=0 status
-      for raw in "$@"; do
-        target="$(normalize_target "$raw")"
-        requirements="$(jq -c --arg target "$target" '.[$target]' ${requirements})"
-        if verifier_admit "$target" "$requirements" > /dev/null; then
-          selected+=("$target")
-        fi # Execution repeats live admission and reports any refusal through verifier_run.
-      done
-      trap verify_scripts_cleanup EXIT
-      trap 'exit 130' INT
-      trap 'exit 143' TERM
-      trap 'exit 129' HUP
-      verify_scripts_prepare ${escapeShellArg (toString src)} ${escapeShellArg system} "''${selected[@]}"
-      for raw in "$@"; do
-        target="$(normalize_target "$raw")"
-        if run_one "$target"; then
-          continue
-        else
-          status="$?"
-        fi
-        case "$status" in
-          77) skipped=$((skipped + 1)) ;;
-          *) failed=$((failed + 1)) ;;
+      normalize_target() {
+        local target="$1"
+        case "$target" in
+          verify:*) printf '%s\n' "''${target#verify:}" ;;
+          *) printf '%s\n' "$target" ;;
         esac
-      done
-      verifier_batch_exit "$failed" "$skipped"
-    }
+      }
 
-    main "$@"
-  '';
+      is_known_target() {
+        local target="$1"
+        case "$target" in
+          ${knownPatterns}) return 0 ;;
+          *) return 1 ;;
+        esac
+      }
+
+      validate_targets() {
+        local raw
+        local target
+        local unknown=0
+        for raw in "$@"; do
+          target="$(normalize_target "$raw")"
+          if ! is_known_target "$target"; then
+            printf 'Unknown verify target: %s\n' "$raw" >&2
+            unknown=1
+          fi
+        done
+        if [[ "$unknown" -ne 0 ]]; then
+          printf 'Run `nix run .#verify -- --list` to see supported targets.\n' >&2
+          printf 'Supported verify targets:\n' >&2
+          list_targets >&2
+          return 64
+        fi
+      }
+
+      repo_root() {
+        if [[ -n "''${REPO_ROOT:-}" ]]; then
+          printf '%s\n' "$REPO_ROOT"
+        else
+          git rev-parse --show-toplevel
+        fi
+      }
+
+      run_repo_script() {
+        local relative_path="$1"
+        shift
+        local root
+        root="$(repo_root)"
+        REPO_ROOT="$root" bash "$root/$relative_path" "$@"
+      }
+
+      run_repo_script_with_wrix() {
+        local relative_path="$1"
+        shift
+        local root
+        local package
+        root="$(repo_root)"
+        package="$(build_flake_package wrix)"
+        WRIX_TEST_WRIX_BIN="$package/bin/wrix" REPO_ROOT="$root" bash "$root/$relative_path" "$@"
+      }
+
+      build_flake_package() {
+        local attr="$1"
+        local root
+        root="$(repo_root)"
+        nix build --no-link --print-out-paths --no-warn-dirty "$root#$attr"
+      }
+
+      assert_contains() {
+        local label="$1"
+        local haystack="$2"
+        local needle="$3"
+        if [[ "$haystack" != *"$needle"* ]]; then
+          fail "$label: missing '$needle'"
+        fi
+      }
+
+      assert_executable() {
+        local path="$1"
+        if [[ ! -x "$path" ]]; then
+          fail "expected executable at $path"
+        fi
+      }
+
+      assert_package_attr_absent() {
+        local attr="$1"
+        local root
+        local out_file
+        local err_file
+        root="$(repo_root)"
+        out_file="$(mktemp -t wrix-verify-attr.XXXXXX)"
+        err_file="$(mktemp -t wrix-verify-attr.XXXXXX)"
+        if nix build --no-link --no-warn-dirty "$root#$attr" >"$out_file" 2>"$err_file"; then
+          rm -f "$out_file" "$err_file"
+          fail "legacy package attr is still exposed: $attr"
+        fi
+        rm -f "$out_file" "$err_file"
+      }
+
+      assert_json_verdict() {
+        local label="$1"
+        local json_lines="$2"
+        local target="$3"
+        if ! printf '%s\n' "$json_lines" | jq -e --arg target "$target" 'select(.target == $target and .outcome == "passed")' >/dev/null; then
+          fail "$label: missing passing JSON verdict for $target"
+        fi
+      }
+
+      run_target() {
+        ${
+          if prepared then
+            ''
+              local target="$1" script
+              case "$target" in
+                ${concatStringsSep "\n" (
+                  map (
+                    target: "${escapeShellArg target}) script=${escapeShellArg (toString scripts.${target})} ;;"
+                  ) targets
+                )}
+                *) fail "target is outside the prepared verifier program: $target"; return 1 ;;
+              esac
+              verify_script_execute "$script" ""
+            ''
+          else
+            ''
+              verify_script_run ${escapeShellArg (toString src)} ${escapeShellArg system} "$1"
+            ''
+        }
+      }
+
+      run_one() {
+        local target="$1"
+        local requirements
+        requirements="$(jq -c --arg target "$target" '.[$target]' ${requirements})"
+        verifier_run "$target" "$requirements" run_target "$target"
+      }
+
+      main() {
+        if [[ "$#" -eq 0 ]]; then
+          usage >&2
+          return 64
+        fi
+
+        case "''${1:-}" in
+          --execute-target)
+            [[ "$#" -eq 2 ]] || fail "internal target execution requires one ID"
+            is_known_target "$2" || fail "unknown internal target: $2"
+            run_target "$2"
+            return
+            ;;
+          --help|-h)
+            usage
+            return 0
+            ;;
+          --print-inputs)
+            shift
+            validate_targets "$@"
+            local raw
+            local targets=()
+            for raw in "$@"; do
+              targets+=("$(normalize_target "$raw")")
+            done
+            verifier_print_inputs ${inputDescriptions} "''${targets[@]}"
+            return
+            ;;
+          --list)
+            if [[ "$#" -ne 1 ]]; then
+              fail "--list cannot be combined with target IDs"
+            fi
+            list_targets
+            return 0
+            ;;
+        esac
+
+        validate_targets "$@"
+
+        local raw target requirements
+        local selected=()
+        local failed=0 skipped=0 status
+        for raw in "$@"; do
+          target="$(normalize_target "$raw")"
+          requirements="$(jq -c --arg target "$target" '.[$target]' ${requirements})"
+          if verifier_admit "$target" "$requirements" > /dev/null; then
+            selected+=("$target")
+          fi # Execution repeats live admission and reports any refusal through verifier_run.
+        done
+        trap verify_scripts_cleanup EXIT
+        trap 'exit 130' INT
+        trap 'exit 143' TERM
+        trap 'exit 129' HUP
+        ${
+          if prepared then
+            ""
+          else
+            ''
+              verify_scripts_prepare ${escapeShellArg (toString src)} ${escapeShellArg system} "''${selected[@]}"
+            ''
+        }
+        for raw in "$@"; do
+          target="$(normalize_target "$raw")"
+          if run_one "$target"; then
+            continue
+          else
+            status="$?"
+          fi
+          case "$status" in
+            77) skipped=$((skipped + 1)) ;;
+            *) failed=$((failed + 1)) ;;
+          esac
+        done
+        verifier_batch_exit "$failed" "$skipped"
+      }
+
+      main "$@"
+    '';
+  verify = makeVerifier { };
 in
 {
   app = {
@@ -308,6 +343,12 @@ in
     program = "${verify}/bin/verify";
   };
   package = verify;
-  scripts = mapAttrs (name: entry: pkgs.writeText "verify-${name}.sh" entry.script) registry;
+  inherit scripts;
+  mkProgram =
+    { targets }:
+    makeVerifier {
+      inherit targets;
+      prepared = true;
+    };
   targets = map (target: "verify:${target}") targetNames;
 }

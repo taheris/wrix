@@ -7,44 +7,50 @@ enum Definition {
     OwnedCheck,
     Report,
     SystemReport,
+    WorkspaceReport { system: bool },
+}
+
+impl Definition {
+    fn is_system(self) -> bool {
+        matches!(
+            self,
+            Self::SystemReport | Self::WorkspaceReport { system: true }
+        )
+    }
+
+    fn is_report(self) -> bool {
+        matches!(
+            self,
+            Self::Report | Self::SystemReport | Self::WorkspaceReport { .. }
+        )
+    }
 }
 
 fn fixture(definition: Definition) -> Fixture {
     let fixture = Fixture::new();
-    let reference = serde_json::to_string(&format!(
-        "git+file://{}",
-        binary("WRIX_TEST_SOURCE").display()
-    ))
-    .unwrap();
     let system = serde_json::to_string(&fixture.system).unwrap();
-    let expression = format!(
-        "let f = builtins.getFlake {reference}; p = f.inputs.nixpkgs.legacyPackages.{system}; in {{ source = f.inputs.loom-src.outPath; bash = p.bash.outPath; coreutils = p.coreutils.outPath; jq = p.jq.outPath; }}"
-    );
-    let inputs = fixture.command(
-        "nix",
-        &["eval", "--impure", "--json", "--expr", &expression],
-    );
-    assert!(inputs.status.success(), "{}", combined(&inputs));
-    let inputs: Value = serde_json::from_slice(&inputs.stdout).unwrap();
+    let inputs = super::checked_tool::Set::load(&fixture.sandbox);
     let template = match definition {
         Definition::Check => include_str!("../../fixtures/checked-verifier/flake.nix.in"),
         Definition::OwnedCheck => include_str!("../../fixtures/checked-verifier/owned.nix.in"),
         Definition::Report | Definition::SystemReport => {
             include_str!("../../fixtures/checked-verifier/report.nix.in")
         }
+        Definition::WorkspaceReport { .. } => {
+            include_str!("../../fixtures/checked-verifier/workspace-report.nix.in")
+        }
     };
     let flake = template
         .replace(
             "@loomSource@",
-            &serde_json::to_string(&format!("path:{}", inputs["source"].as_str().unwrap()))
-                .unwrap(),
+            &serde_json::to_string(&format!("path:{}", inputs.source.display())).unwrap(),
         )
-        .replace("@bash@", &serde_json::to_string(&inputs["bash"]).unwrap())
+        .replace("@bash@", &serde_json::to_string(&inputs.bash).unwrap())
         .replace(
             "@coreutils@",
-            &serde_json::to_string(&inputs["coreutils"]).unwrap(),
+            &serde_json::to_string(&inputs.coreutils).unwrap(),
         )
-        .replace("@jq@", &serde_json::to_string(&inputs["jq"]).unwrap())
+        .replace("@jq@", &serde_json::to_string(&inputs.jq).unwrap())
         .replace("@system@", &system)
         .replace(
             "@nixpkgsSource@",
@@ -53,7 +59,7 @@ fn fixture(definition: Definition) -> Fixture {
         )
         .replace(
             "@tier@",
-            if matches!(definition, Definition::SystemReport) {
+            if definition.is_system() {
                 "\"system\""
             } else {
                 "\"check\""
@@ -73,11 +79,11 @@ fn fixture(definition: Definition) -> Fixture {
     let target = match definition {
         Definition::Check => format!("nix build .#checks.{}.heading", fixture.system),
         Definition::OwnedCheck => format!("nix build .#checks.{}.devshell", fixture.system),
-        Definition::Report | Definition::SystemReport => {
+        Definition::Report | Definition::SystemReport | Definition::WorkspaceReport { .. } => {
             format!("nix report .#checks.{}.report::heading", fixture.system)
         }
     };
-    let tier = if matches!(definition, Definition::SystemReport) {
+    let tier = if definition.is_system() {
         "system"
     } else {
         "check"
@@ -91,7 +97,11 @@ fn fixture(definition: Definition) -> Fixture {
         "specs/fixture.md",
         &format!("# Native fixture\n\n## Success Criteria\n\n- {criterion} [{tier}]({target})\n"),
     );
-    if matches!(definition, Definition::Report | Definition::SystemReport) {
+    if matches!(definition, Definition::WorkspaceReport { .. }) {
+        let contract = fixture.sandbox.read("specs/fixture.md");
+        fixture.sandbox.write("specs/fixture.md", &format!("{contract}- A scoped sibling retains independent coverage. [check](nix build .#checks.{}.specific)\n", fixture.system));
+    }
+    if definition.is_report() {
         fixture.sandbox.write(
             "reports/verifier.sh",
             &std::fs::read_to_string(binary("WRIX_TEST_SOURCE").join("tests/lib/verifier.sh"))
@@ -158,8 +168,16 @@ fn fixture(definition: Definition) -> Fixture {
     fixture
 }
 
+pub fn owned_source() -> Fixture {
+    fixture(Definition::OwnedCheck)
+}
+
+pub fn workspace_report(system: bool) -> Fixture {
+    fixture(Definition::WorkspaceReport { system })
+}
+
 #[derive(Clone, Copy)]
-enum Selection {
+pub enum Selection {
     Tree,
     File(&'static str),
 }
@@ -168,7 +186,7 @@ fn gate(fixture: &Fixture) -> std::process::Output {
     scoped_gate(fixture, Selection::Tree)
 }
 
-fn scoped_gate(fixture: &Fixture, selection: Selection) -> std::process::Output {
+pub fn scoped_gate(fixture: &Fixture, selection: Selection) -> std::process::Output {
     let root = fixture.sandbox.root.to_str().unwrap();
     let mut arguments = vec!["gate", "verify", "--workspace", root];
     match selection {
@@ -369,7 +387,7 @@ fn a_native_wrix_report_cannot_hide_an_intermediate_assertion_failure() {
     );
 }
 
-fn plan(output: &std::process::Output) -> Value {
+pub fn plan(output: &std::process::Output) -> Value {
     combined(output)
         .lines()
         .find_map(|line| {
@@ -422,7 +440,7 @@ fn a_native_owner_contract_change_selects_its_actual_checked_assertion() {
     );
 }
 
-fn fresh_invocations(output: &std::process::Output) -> std::collections::BTreeSet<String> {
+pub fn fresh_invocations(output: &std::process::Output) -> std::collections::BTreeSet<String> {
     let mut invocations = std::collections::BTreeSet::new();
     for line in combined(output).lines() {
         if !line.starts_with("loom gate [") {
@@ -434,8 +452,9 @@ fn fresh_invocations(output: &std::process::Output) -> std::collections::BTreeSe
         if !json.starts_with('{') {
             continue;
         }
-        let record: Value = serde_json::from_str(json).unwrap();
-        for observation in record["observations"].as_array().unwrap() {
+        let records = super::records(json.as_bytes());
+        assert_eq!(records.len(), 1);
+        for observation in records[0]["observations"].as_array().unwrap() {
             if observation["kind"] == "fresh-execution" {
                 invocations.insert(observation["derivation"].as_str().unwrap().to_owned());
             }

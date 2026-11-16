@@ -79,12 +79,6 @@ pub fn records(bytes: &[u8]) -> Vec<Value> {
         .map(|line| serde_json::from_str(line).unwrap())
         .collect()
 }
-pub fn quote(value: impl AsRef<std::ffi::OsStr>) -> String {
-    format!(
-        "'{}'",
-        value.as_ref().to_str().unwrap().replace('\'', "'\"'\"'")
-    )
-}
 fn seed_fetcher_cache(snapshot: &Path, cache: &Path) {
     let destination = cache.join("nix");
     fs::create_dir_all(&destination).unwrap();
@@ -108,6 +102,13 @@ fn seed_fetcher_cache(snapshot: &Path, cache: &Path) {
             fs::copy(entry.path(), destination.join(name)).unwrap();
         }
     }
+}
+
+pub fn quote(value: impl AsRef<std::ffi::OsStr>) -> String {
+    format!(
+        "'{}'",
+        value.as_ref().to_str().unwrap().replace('\'', "'\"'\"'")
+    )
 }
 
 pub fn executable(path: &Path, content: &str) {

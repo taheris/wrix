@@ -70,6 +70,7 @@
       legacyPackages.ciChecks = test.ciChecks;
       legacyPackages.ciApps = test.ciAppDerivations;
       legacyPackages.verifyScripts = test.verify.scripts;
+      legacyPackages.mkVerifierProgram = test.verify.mkProgram;
       legacyPackages.verifyEvaluations =
         let
           descriptions = import ../../tests/verify/profiles-eval.nix {

@@ -2,6 +2,8 @@
 #![cfg(test)]
 #[path = "verifier_inputs/checked/mod.rs"]
 mod checked;
+#[path = "common/verifier/tool/mod.rs"]
+mod checked_tool;
 #[path = "common/verifier/mod.rs"]
 mod fixture;
 
@@ -399,133 +401,156 @@ fn unknown_id_rejects_whole_description_before_output() {
 }
 #[test]
 #[ignore = "requires actual verifier/CI/Loom and native Nix input providers"]
-fn independent_change_runs_opaque_and_queries_group_once_per_session() {
-    let fixture = Fixture::new();
-    fixture.fixture(false, false);
+fn independent_change_runs_a_declared_workspace_report_once_per_session() {
+    let fixture = checked::workspace_report(false);
+    let mut previous = BTreeSet::new();
     for index in 0..2 {
-        let (result, calls) = fixture.gate("README.md", "verify", index == 0);
-        assert!(result.status.success(), "{result:?}");
-        assert_eq!(
-            calls.iter().filter(|call| *call == "query").count(),
-            1,
-            "{calls:?}"
+        fixture.sandbox.write(
+            "README.md",
+            &format!("# Independent documentation {index}\n"),
         );
-        assert!(calls.contains(&format!("execute {OPAQUE}")));
-        assert!(!calls.contains(&format!("execute {KNOWN}")));
-        assert_eq!(calls.iter().filter(|call| *call == "opaque").count(), 1);
+        let result = checked::scoped_gate(&fixture, checked::Selection::File("README.md"));
+        assert!(result.status.success(), "{}", combined(&result));
+        let selected = checked::plan(&result);
+        let targets = selected["executions"].as_array().unwrap();
+        assert_eq!(
+            targets
+                .iter()
+                .filter(|entry| entry["target"]
+                    == format!("nix build .#checks.{}.report", fixture.system))
+                .count(),
+            1,
+            "{selected}"
+        );
+        assert!(
+            !targets.iter().any(|entry| entry["target"]
+                == format!("nix build .#checks.{}.specific", fixture.system)),
+            "{selected}"
+        );
+        let invocations = checked::fresh_invocations(&result);
+        assert_eq!(invocations.len(), 1, "{}", combined(&result));
+        assert!(
+            invocations.is_disjoint(&previous),
+            "{previous:?} {invocations:?}"
+        );
+        previous = invocations;
+        assert_eq!(fixture.sandbox.read("calls"), "");
     }
 }
 #[test]
 #[ignore = "requires actual verifier/CI/Loom and native Nix input providers"]
 fn changed_source_selects_real_assertion_and_retains_failure() {
-    let fixture = Fixture::new();
-    fixture.fixture(false, false);
+    let fixture = checked::owned_source();
     fixture
         .sandbox
-        .write("lib/devshell/default.nix", "\"prek install\"\n");
-    let (result, calls) = fixture.gate("lib/devshell/default.nix", "verify", true);
-    assert_eq!(result.status.code(), Some(1), "{result:?}");
-    assert_eq!(
-        calls.iter().filter(|call| *call == "query").count(),
-        1,
-        "{calls:?}"
+        .write("subjects/lib/devshell/default.nix", "\"prek install\"\n");
+    let result = checked::scoped_gate(
+        &fixture,
+        checked::Selection::File("subjects/lib/devshell/default.nix"),
     );
+    assert_eq!(result.status.code(), Some(1), "{}", combined(&result));
     assert!(
-        calls
-            .iter()
-            .any(|call| call.starts_with("execute ") && call.contains(KNOWN))
+        combined(&result).contains("mkDevShell invokes prek install"),
+        "{}",
+        combined(&result)
     );
-    assert!(
-        fixture
-            .sandbox
-            .read(".loom/logs/gate/verifier-results.jsonl")
-            .contains("mkDevShell invokes prek install")
-    );
-    assert!(calls.contains(&"opaque".into()));
+    assert_eq!(fixture.sandbox.read("calls"), "");
 }
 #[test]
 #[ignore = "requires actual verifier/CI/Loom and native Nix input providers"]
 fn changed_owner_spec_selects_known_assertion() {
-    let fixture = Fixture::new();
-    fixture.fixture(false, false);
-    let (result, calls) = fixture.gate("specs/fixture.md", "verify", true);
-    assert!(result.status.success(), "{result:?}");
-    assert!(
-        calls
-            .iter()
-            .any(|call| call.starts_with("execute ") && call.contains(KNOWN))
-    );
+    let fixture = checked::owned_source();
+    let contract = fixture.sandbox.read("specs/fixture.md");
+    fixture
+        .sandbox
+        .write("specs/fixture.md", &format!("{contract}\n"));
+    let result = checked::scoped_gate(&fixture, checked::Selection::File("specs/fixture.md"));
+    assert!(result.status.success(), "{}", combined(&result));
+    let selected = checked::plan(&result);
     assert_eq!(
-        calls.iter().filter(|call| *call == "query").count(),
+        selected["executions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|entry| {
+                entry["target"] == format!("nix build .#checks.{}.devshell", fixture.system)
+            })
+            .count(),
         1,
-        "{calls:?}"
+        "{selected}"
     );
+    assert_eq!(fixture.sandbox.read("calls"), "");
 }
 #[test]
 #[ignore = "requires actual verifier/CI/Loom and native Nix input providers"]
 fn new_nix_definition_invalidates_known_assertion() {
-    let fixture = Fixture::new();
-    fixture.fixture(false, false);
+    let fixture = checked::owned_source();
     fixture.sandbox.write("new/definition.nix", "{}\n");
-    let (result, calls) = fixture.gate("new/definition.nix", "verify", true);
-    assert!(result.status.success(), "{result:?}");
+    let staged = fixture.command(
+        "git",
+        &[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "add",
+            "new/definition.nix",
+        ],
+    );
+    assert!(staged.status.success(), "{}", combined(&staged));
+    let result = checked::scoped_gate(&fixture, checked::Selection::File("new/definition.nix"));
+    assert!(result.status.success(), "{}", combined(&result));
+    let selected = checked::plan(&result);
     assert!(
-        calls
+        selected["executions"]
+            .as_array()
+            .unwrap()
             .iter()
-            .any(|call| call.starts_with("execute ") && call.contains(KNOWN))
+            .any(|entry| {
+                entry["target"] == format!("nix build .#checks.{}.devshell", fixture.system)
+            }),
+        "{selected}"
     );
+    assert_eq!(fixture.sandbox.read("calls"), "");
 }
 #[test]
 #[ignore = "requires actual verifier/CI/Loom and native Nix input providers"]
-fn malformed_provider_document_is_a_blocking_protocol_finding() {
-    let fixture = Fixture::new();
-    fixture.fixture(true, false);
-    let (result, calls) = fixture.gate("README.md", "verify", true);
-    assert_eq!(result.status.code(), Some(1), "{result:?}");
-    for message in ["input-query errored", "emitted a malformed inputs document"] {
-        assert!(combined(&result).contains(message), "{result:?}");
-    }
-    assert_eq!(
-        calls.iter().filter(|call| *call == "query").count(),
-        1,
-        "{calls:?}"
+fn malformed_legacy_provider_cannot_override_a_checked_source_failure() {
+    let fixture = checked::owned_source();
+    let command = "printf 'legacy callback\\n' >>\"$REPO_ROOT/calls\"; printf 'not-json\\n'";
+    fixture.sandbox.write("loom.toml", &format!("[runner.check.verify]\nmatch = '^verify:(.+)$'\ncommand = {}\ninputs = {}\ntarget = '{{capture_1}}'\njoin = ' '\nparse = 'json-lines'\ncwd = '.'\n", serde_json::to_string(&format!("{command} {{targets}}")).unwrap(), serde_json::to_string(&format!("{command} {{print_inputs}} {{targets}}")).unwrap()));
+    fixture
+        .sandbox
+        .write("subjects/lib/devshell/default.nix", "\"prek install\"\n");
+    let result = checked::scoped_gate(&fixture, checked::Selection::File("README.md"));
+    assert_eq!(result.status.code(), Some(1), "{}", combined(&result));
+    assert!(
+        combined(&result).contains("mkDevShell invokes prek install"),
+        "{}",
+        combined(&result)
     );
+    assert_eq!(fixture.sandbox.read("calls"), "");
 }
 #[test]
 #[ignore = "requires actual verifier/CI/Loom and native Nix input providers"]
-fn system_checks_remain_always_run_and_share_only_within_invocation() {
-    let fixture = Fixture::new();
-    fixture.fixture(false, true);
+fn workspace_system_reports_share_only_within_the_current_invocation() {
+    let fixture = checked::workspace_report(true);
+    let contract = fixture.sandbox.read("specs/fixture.md");
+    fixture.sandbox.write("specs/fixture.md", &format!("{contract}- A second system owner retains its own report. [system](nix report .#checks.{}.report::heading)\n", fixture.system));
+    let mut previous = BTreeSet::new();
     for index in 0..2 {
-        let (result, calls) = fixture.gate("README.md", "system", index == 0);
-        assert!(result.status.success(), "{result:?}");
-        assert_eq!(
-            calls
-                .iter()
-                .filter(|call| *call == &format!("execute {KNOWN}"))
-                .count(),
-            1,
-            "{calls:?}"
+        fixture.sandbox.write(
+            "README.md",
+            &format!("# Independent documentation {index}\n"),
         );
-        assert_eq!(
-            calls.iter().filter(|call| *call == "query").count(),
-            0,
-            "{calls:?}"
+        let result = checked::scoped_gate(&fixture, checked::Selection::File("README.md"));
+        assert!(result.status.success(), "{}", combined(&result));
+        let invocations = checked::fresh_invocations(&result);
+        assert_eq!(invocations.len(), 1, "{}", combined(&result));
+        assert!(
+            invocations.is_disjoint(&previous),
+            "{previous:?} {invocations:?}"
         );
-        let records = records(
-            fixture
-                .sandbox
-                .read(".loom/logs/gate/verifier-results.jsonl")
-                .as_bytes(),
-        );
-        assert!(records.len() >= 2);
-        assert_eq!(
-            records[records.len() - 2..]
-                .iter()
-                .map(|record| record["target"].as_str().unwrap())
-                .collect::<Vec<_>>(),
-            [format!("verify:{KNOWN}"), format!("verify:{KNOWN}")]
-        );
+        previous = invocations;
         assert!(!fixture.sandbox.root.join(".loom/marker.json").exists());
+        assert_eq!(fixture.sandbox.read("calls"), "");
     }
 }

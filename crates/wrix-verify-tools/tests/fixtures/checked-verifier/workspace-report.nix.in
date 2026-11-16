@@ -1,0 +1,46 @@
+{
+  inputs.loom = { url = @loomSource@; flake = false; };
+  outputs = { self, loom }: let
+    checked = import (loom + "/nix/verification.nix");
+    workspace = checked.resource { root = ./.; };
+    subject = checked.resource { root = ./.; origin = "subjects"; };
+    reports = checked.resource { root = ./.; origin = "reports"; };
+    evaluation = checked.resource {
+      root = ./.;
+      filter = path: type: type == "directory" || builtins.elem (builtins.baseNameOf path) [ "flake.nix" "flake.lock" ];
+    };
+    bash = builtins.appendContext @bash@ { ${@bash@} = { path = true; }; };
+    coreutils = builtins.appendContext @coreutils@ { ${@coreutils@} = { path = true; }; };
+    jq = builtins.appendContext @jq@ { ${@jq@} = { path = true; }; };
+  in {
+    checks.@system@.specific = checked.check {
+      resources = [ subject ];
+      evaluation = [ evaluation ];
+      build = sources: builtins.derivation {
+        name = "fixture-specific-heading";
+        system = @system@;
+        builder = "${bash}/bin/bash";
+        src = builtins.head sources;
+        args = [ "-c" ''set -euo pipefail; read -r heading < "$src/README.md"; [[ "$heading" == '# '* ]]; printf 'heading verified\n' > "$out"'' ];
+      };
+    };
+    checks.@system@.report = checked.reported {
+      system = @system@;
+      inherit bash coreutils;
+      name = "fixture-workspace-wrix-report";
+      resources = [ workspace reports ];
+      evaluation = [ evaluation ];
+      program = "${bash}/bin/bash";
+      arguments = [ "-c" ''
+        set -euo pipefail
+        export PATH="${coreutils}/bin:${jq}/bin:${bash}/bin"
+        source "${reports.path}/verifier.sh"
+        requirements=$(cat "${reports.path}/requirements.json")
+        verifier_run heading "$requirements" "$BASH" "${workspace.path}/subjects/command.sh" "${workspace.path}/subjects/README.md"
+      '' ];
+      tier = @tier@;
+      parser = "json-lines";
+      targets = [ "heading" ];
+    };
+  };
+}

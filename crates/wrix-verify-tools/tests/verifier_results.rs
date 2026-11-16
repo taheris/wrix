@@ -1,5 +1,7 @@
 //! Real dispatcher and consumed Loom result/skip protocol conformance.
 #![cfg(test)]
+#[path = "common/verifier/tool/mod.rs"]
+mod checked_tool;
 #[path = "common/verifier/mod.rs"]
 mod fixture;
 
@@ -17,6 +19,22 @@ const PASS: &str = "notifications.focus-target-envelope";
 const FAIL: &str = "notifications.client-non-blocking";
 const UNEXPECTED: &str = "notifications.client-tcp-endpoint-override";
 const BUILDER: &str = "linux-builder.integration";
+
+#[derive(Clone, Copy)]
+enum Tier {
+    Check,
+    System,
+}
+
+impl Tier {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Check => "check",
+            Self::System => "system",
+        }
+    }
+}
+
 fn empty() -> Value {
     json!({"platforms":[],"capabilities":[]})
 }
@@ -30,10 +48,14 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
-        let sandbox = Sandbox::new("wrix-verifier-results-");
+        let mut sandbox = Sandbox::new("wrix-verifier-results-");
+        sandbox.environment.insert(
+            "WRIX_FIXTURE_CALLS".into(),
+            sandbox.root.join("calls").into_os_string(),
+        );
         sandbox.write("tests/standalone/notify-test.sh", r#"#!/usr/bin/env bash
 set -euo pipefail
-printf '%s\n' "$1" >>"$REPO_ROOT/calls"
+printf '%s\n' "$1" >>"$WRIX_FIXTURE_CALLS"
 case "$1" in
   test_focus_target_envelope) printf 'fixture passed\n' ;;
   test_client_non_blocking) printf 'fixture assertion failed\n' >&2; false; printf 'concealed failure\n' ;;
@@ -75,9 +97,9 @@ esac
         (result, records)
     }
     fn builder(&mut self, platform: &str, version: &str, status: i32) {
-        self.sandbox.write("bin/uname", "");
+        self.sandbox.write("bin/uname.sh", "");
         executable(
-            &self.sandbox.root.join("bin/uname"),
+            &self.sandbox.root.join("bin/uname.sh"),
             r#"#!/usr/bin/env bash
 set -euo pipefail
 case "${1-}" in
@@ -88,11 +110,11 @@ esac
 "#,
         );
         executable(
-            &self.sandbox.root.join("bin/sw_vers"),
+            &self.sandbox.root.join("bin/sw-vers.sh"),
             "#!/usr/bin/env bash\nset -euo pipefail\n[[ \"$*\" == -productVersion ]] || exit 64\nprintf '%s\\n' \"$BUILDER_VERSION\"\n",
         );
-        self.sandbox.write("platform.sh", "set -euo pipefail\nuname() { \"$REPO_ROOT/bin/uname\" \"$@\"; }\nsw_vers() { \"$REPO_ROOT/bin/sw_vers\" \"$@\"; }\n");
-        self.sandbox.write("tests/standalone/builder-test.sh", "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'builder integration invoked\\n' >>\"$REPO_ROOT/calls\"\nprintf '%s\\n' \"$BUILDER_EVIDENCE\" >&2\nexit \"$BUILDER_STATUS\"\n");
+        self.sandbox.write("platform.sh", "set -euo pipefail\nuname() { \"$BASH\" \"$REPO_ROOT/bin/uname.sh\" \"$@\"; }\nsw_vers() { \"$BASH\" \"$REPO_ROOT/bin/sw-vers.sh\" \"$@\"; }\n");
+        self.sandbox.write("tests/standalone/builder-test.sh", "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'builder integration invoked\\n' >>\"$WRIX_FIXTURE_CALLS\"\nprintf '%s\\n' \"$BUILDER_EVIDENCE\" >&2\nexit \"$BUILDER_STATUS\"\n");
         for (key, value) in [
             (
                 "BASH_ENV",
@@ -115,8 +137,14 @@ esac
     }
     fn library(&self, requirements: &Value, prefix: Option<&Path>) -> (Output, Value) {
         let mut command = self.sandbox.command("bash");
-        command.args(["-c", "source \"$1\"; verifier_run fixture \"$2\" bash -c 'echo ran >\"$REPO_ROOT/executed\"'", "fixture"])
-            .arg(binary("WRIX_TEST_VERIFIER_LIBRARY")).arg(requirements.to_string());
+        let body = format!(
+            "source \"$1\"; verifier_run fixture \"$2\" bash -c {}",
+            quote("echo ran >\"$REPO_ROOT/executed\"")
+        );
+        command
+            .args(["-c", &body, "fixture"])
+            .arg(binary("WRIX_TEST_VERIFIER_LIBRARY"))
+            .arg(requirements.to_string());
         if let Some(prefix) = prefix {
             command.env(
                 "PATH",
@@ -135,21 +163,114 @@ esac
         let record = serde_json::from_slice(&result.stdout).unwrap();
         (result, record)
     }
-    fn gate(&self, targets: &[&str], worker: bool, tier: &str) -> Output {
+    fn prepared_program(&self, targets: &[&str]) -> PathBuf {
+        let reference = serde_json::to_string(&format!(
+            "git+file://{}",
+            binary("WRIX_TEST_SOURCE").display()
+        ))
+        .unwrap();
+        let system = serde_json::to_string(&env::var("WRIX_TEST_SYSTEM").unwrap()).unwrap();
+        let selected = serde_json::to_string(&serde_json::to_string(targets).unwrap()).unwrap();
+        let expression = format!(
+            "let f = builtins.getFlake {reference}; in f.legacyPackages.{system}.mkVerifierProgram {{ targets = builtins.fromJSON {selected}; }}"
+        );
+        let result = capture(self.sandbox.command("nix").args([
+            "build",
+            "--impure",
+            "--no-link",
+            "--print-out-paths",
+            "--max-jobs",
+            "1",
+            "--cores",
+            "2",
+            "--expr",
+            &expression,
+        ]));
+        assert!(result.status.success(), "{}", combined(&result));
+        PathBuf::from(text(&result.stdout).trim()).join("bin/verify")
+    }
+
+    fn native_definition(&self, targets: &[&str], worker: bool, tier: Tier) {
+        let tools = checked_tool::Set::load(&self.sandbox);
+        let verify = self.prepared_program(targets);
+        let verify_root = verify.parent().unwrap().parent().unwrap();
+        let system = env::var("WRIX_TEST_SYSTEM").unwrap();
+        let flake = include_str!("fixtures/checked-verifier/verdict-report.nix.in")
+            .replace(
+                "@loomSource@",
+                &serde_json::to_string(&format!("path:{}", tools.source.display())).unwrap(),
+            )
+            .replace("@bash@", &serde_json::to_string(&tools.bash).unwrap())
+            .replace(
+                "@coreutils@",
+                &serde_json::to_string(&tools.coreutils).unwrap(),
+            )
+            .replace("@jq@", &serde_json::to_string(&tools.jq).unwrap())
+            .replace("@verify@", &serde_json::to_string(&verify).unwrap())
+            .replace(
+                "@verifyRoot@",
+                &serde_json::to_string(&verify_root).unwrap(),
+            )
+            .replace("@system@", &serde_json::to_string(&system).unwrap())
+            .replace("@tier@", &serde_json::to_string(tier.name()).unwrap())
+            .replace(
+                "@targets@",
+                &serde_json::to_string(&serde_json::to_string(targets).unwrap()).unwrap(),
+            );
+        self.sandbox.write("flake.nix", &flake);
+        self.sandbox.write("loom.toml", "");
+        self.sandbox.write(
+            "docs/README.md",
+            "# Fixture\n\n- [fixture](../specs/fixture.md)\n",
+        );
+        self.sandbox.write(
+            ".gitignore",
+            ".loom/\nhome/\nconfig/\nstate/\ncache/\ncalls\n",
+        );
+        let mut execution = serde_json::Map::new();
+        execution.insert("worker".into(), worker.into());
+        for key in [
+            "BUILDER_PLATFORM",
+            "BUILDER_VERSION",
+            "BUILDER_STATUS",
+            "BUILDER_EVIDENCE",
+        ] {
+            let value = self
+                .sandbox
+                .environment
+                .get(std::ffi::OsStr::new(key))
+                .map_or("", |value| value.to_str().unwrap());
+            execution.insert(key.into(), value.into());
+        }
+        self.sandbox.write(
+            "execution/environment.json",
+            &Value::Object(execution).to_string(),
+        );
+    }
+
+    fn gate(&self, targets: &[&str], worker: bool, tier: Tier) -> Output {
+        self.native_definition(targets, worker, tier);
+        let system = env::var("WRIX_TEST_SYSTEM").unwrap();
+        let tier = tier.name();
         let mut annotations = String::new();
         for (index, target) in targets.iter().enumerate() {
-            writeln!(annotations, "- Target {index} [{tier}](verify:{target})").unwrap();
+            writeln!(
+                annotations,
+                "- Target {index} [{tier}](nix report .#checks.{system}.results::{target})"
+            )
+            .unwrap();
         }
         self.sandbox.write(
             "specs/fixture.md",
             &format!("# Fixture\n\n## Success Criteria\n\n{annotations}"),
         );
-        let command = serde_json::to_string(&format!(
-            "{} {{targets}}",
-            quote(binary("WRIX_TEST_VERIFY"))
-        ))
-        .unwrap();
-        self.sandbox.write("loom.toml", &format!("[runner.{tier}.verify]\nmatch = '^verify:(.+)$'\ncommand = {command}\ntarget = '{{capture_1}}'\njoin = ' '\nparse = 'json-lines'\ncwd = '.'\nskip_policy = 'sandbox-capability'\nskip_capabilities = ['container-runtime', 'kvm', 'user-network-namespace']\n"));
+        let lock = capture(
+            self.sandbox
+                .command("nix")
+                .current_dir(&self.sandbox.root)
+                .args(["flake", "lock"]),
+        );
+        assert!(lock.status.success(), "{}", combined(&lock));
         let mut environment = self.sandbox.environment.clone();
         environment.remove(std::ffi::OsStr::new("LOOM_INSIDE"));
         if worker {
@@ -185,7 +306,7 @@ esac
             );
             assert!(result.status.success(), "{result:?}");
         }
-        capture(
+        let result = capture(
             self.sandbox
                 .command(binary("WRIX_TEST_LOOM"))
                 .current_dir(&self.sandbox.root)
@@ -194,33 +315,54 @@ esac
                 .args(["gate", "verify", "--workspace"])
                 .arg(&self.sandbox.root)
                 .arg("--tree"),
-        )
+        );
+        let diagnostic = combined(&result);
+        assert!(
+            !diagnostic.contains("no actual checked definition"),
+            "{diagnostic}"
+        );
+        assert!(
+            !diagnostic.contains("unsupported/unclassified subject"),
+            "{diagnostic}"
+        );
+        result
     }
+    fn native_result(&self, result: &Output, target: &str) -> Value {
+        let expected = format!("nix report .#checks.{}.results::{target}", self.platform);
+        let matching: Vec<Value> = combined(result)
+            .lines()
+            .filter_map(|line| {
+                if !line.starts_with("loom gate [") {
+                    return None;
+                }
+                let (_, json) = line.split_once("]: ")?;
+                if !json.starts_with('{') {
+                    return None;
+                }
+                let record: Value = serde_json::from_str(json).unwrap();
+                (record["target"] == expected).then_some(record)
+            })
+            .collect();
+        assert_eq!(matching.len(), 1, "{}", combined(result));
+        matching.into_iter().next().unwrap()
+    }
+
     fn assert_worker_builder_skip(&self, result: &Output) {
-        assert_eq!(result.status.code(), Some(1), "{result:?}");
+        assert_eq!(result.status.code(), Some(1), "{}", combined(result));
         assert!(
             combined(result).contains("coverage unverified, permitted=false"),
-            "{result:?}"
+            "{}",
+            combined(result)
         );
-        let records = records(
-            self.sandbox
-                .read(".loom/logs/gate/verifier-results.jsonl")
-                .as_bytes(),
-        );
-        let builders: Vec<_> = records
-            .iter()
-            .filter(|record| record["target"] == format!("verify:{BUILDER}"))
-            .collect();
-        assert_eq!(builders.len(), 1);
-        let record = builders[0];
-        assert_eq!(record["outcome"], "skipped");
-        assert_eq!(record["coverage_verified"], false);
-        assert_eq!(record["result"]["pass"], false);
-        assert!(record["result"].get("skip_reason").is_none());
+        let record = self.native_result(result, BUILDER);
+        assert_eq!(record["verdict"]["pass"], false);
+        assert_eq!(record["verdict"]["skipped"], true);
+        assert!(record["verdict"].get("skip_reason").is_none());
+        let evidence = record["verdict"]["evidence"].as_str().unwrap();
+        assert!(evidence.contains("unexpected skip:"), "{record}");
         assert!(
-            self.sandbox
-                .read("calls")
-                .contains("builder integration invoked")
+            evidence.contains("fixture builder prerequisite"),
+            "{record}"
         );
         assert!(!self.sandbox.root.join(".loom/marker.json").exists());
     }
@@ -240,6 +382,47 @@ fn assert_builder_skip(record: &Value, platform: &str) {
             .unwrap()
             .contains("unexpected skip:")
     );
+}
+
+#[test]
+#[ignore = "requires actual packaged verifier, Nix and consumed Loom"]
+fn prepared_programs_conform_to_the_actual_registry_and_dispatcher() {
+    let foreign = if env::var("WRIX_TEST_SYSTEM").unwrap().ends_with("-linux") {
+        "notifications.container-transport-darwin"
+    } else {
+        "notifications.container-transport-linux"
+    };
+    for target in [PASS, FAIL, UNEXPECTED, foreign, BUILDER] {
+        let mut fixture = Fixture::new();
+        if target == BUILDER {
+            fixture.builder("Linux", "26.0", 77);
+        }
+        let program = fixture.prepared_program(&[target]);
+        let (original, expected) = fixture.run(&[target]);
+        let prepared = capture(fixture.sandbox.command(&program).arg(target));
+        assert_eq!(
+            prepared.status.code(),
+            original.status.code(),
+            "{}",
+            combined(&prepared)
+        );
+        assert_eq!(
+            records(&prepared.stdout),
+            expected,
+            "{}",
+            combined(&prepared)
+        );
+        fixture.sandbox.write("calls", "");
+        let rejected = capture(fixture.sandbox.command(&program).arg("not-registered"));
+        assert_eq!(rejected.status.code(), Some(64), "{}", combined(&rejected));
+        assert_eq!(rejected.stdout, b"");
+        assert_eq!(fixture.sandbox.read("calls"), "");
+        let outside = if target == PASS { FAIL } else { PASS };
+        let rejected = capture(fixture.sandbox.command(&program).arg(outside));
+        assert_eq!(rejected.status.code(), Some(64), "{}", combined(&rejected));
+        assert_eq!(rejected.stdout, b"");
+        assert_eq!(fixture.sandbox.read("calls"), "");
+    }
 }
 
 #[test]
@@ -690,48 +873,82 @@ fn unknown_capability_is_a_preflight_failure_not_a_skip() {
 }
 #[test]
 #[ignore = "requires actual packaged verifier and consumed Loom"]
-fn worker_accepts_exported_foreign_skip_without_claiming_coverage() {
+fn native_worker_foreign_skip_remains_unverified_without_acceptance() {
     let fixture = Fixture::new();
-    let result = fixture.gate(&[PASS, fixture.foreign()], true, "check");
-    assert!(result.status.success(), "{result:?}");
-    assert!(combined(&result).contains("unverified"));
-    assert!(!fixture.sandbox.root.join(".loom/marker.json").exists());
-    let records = records(
-        fixture
-            .sandbox
-            .read(".loom/logs/gate/verifier-results.jsonl")
-            .as_bytes(),
+    let result = fixture.gate(&[PASS, fixture.foreign()], true, Tier::Check);
+    assert_eq!(result.status.code(), Some(78), "{}", combined(&result));
+    assert!(combined(&result).contains("coverage unverified, permitted=false"));
+    assert_eq!(
+        fixture.native_result(&result, PASS)["verdict"]["pass"],
+        true
     );
-    assert_ne!(records, Vec::<Value>::new());
-    assert!(serde_json::to_string(&records).unwrap().contains("skipped"));
+    let skipped = fixture.native_result(&result, fixture.foreign());
+    assert_eq!(skipped["verdict"]["pass"], false);
+    assert_eq!(skipped["verdict"]["skipped"], true);
+    assert_eq!(
+        skipped["verdict"]["skip_reason"]["kind"],
+        "foreign-platform"
+    );
+    assert!(!fixture.sandbox.root.join(".loom/marker.json").exists());
 }
 #[test]
 #[ignore = "requires actual packaged verifier and consumed Loom"]
-fn host_acceptance_retains_skip_exit_77() {
+fn host_native_skip_uses_78_while_the_dispatcher_retains_77() {
     let fixture = Fixture::new();
-    let result = fixture.gate(&[PASS, fixture.foreign()], false, "check");
-    assert_eq!(result.status.code(), Some(77), "{result:?}");
+    let (raw, _) = fixture.run(&[PASS, fixture.foreign()]);
+    assert_eq!(raw.status.code(), Some(77), "{}", combined(&raw));
+    let result = fixture.gate(&[PASS, fixture.foreign()], false, Tier::Check);
+    assert_eq!(result.status.code(), Some(78), "{}", combined(&result));
+    assert_eq!(
+        fixture.native_result(&result, PASS)["verdict"]["pass"],
+        true
+    );
+    assert_eq!(
+        fixture.native_result(&result, fixture.foreign())["verdict"]["skipped"],
+        true
+    );
 }
 #[test]
 #[ignore = "requires actual packaged verifier and consumed Loom"]
-fn worker_failure_remains_blocking_alongside_authorized_skip() {
+fn native_failure_remains_blocking_alongside_foreign_unavailability() {
     let fixture = Fixture::new();
-    let result = fixture.gate(&[fixture.foreign(), FAIL], true, "check");
-    assert_eq!(result.status.code(), Some(1), "{result:?}");
+    let result = fixture.gate(&[fixture.foreign(), FAIL], true, Tier::Check);
+    assert_eq!(result.status.code(), Some(1), "{}", combined(&result));
+    let failure = fixture.native_result(&result, FAIL);
+    assert_eq!(failure["verdict"]["pass"], false);
+    assert!(
+        failure["verdict"]["evidence"]
+            .as_str()
+            .unwrap()
+            .contains("fixture assertion failed")
+    );
+    assert_eq!(
+        fixture.native_result(&result, fixture.foreign())["verdict"]["skipped"],
+        true
+    );
 }
 #[test]
 #[ignore = "requires actual packaged verifier and consumed Loom"]
 fn worker_unreported_skip_remains_blocking() {
     let fixture = Fixture::new();
-    let result = fixture.gate(&[UNEXPECTED], true, "check");
-    assert_eq!(result.status.code(), Some(1), "{result:?}");
+    let result = fixture.gate(&[UNEXPECTED], true, Tier::Check);
+    assert_eq!(result.status.code(), Some(1), "{}", combined(&result));
+    let unreported = fixture.native_result(&result, UNEXPECTED);
+    assert_eq!(unreported["verdict"]["pass"], false);
+    assert!(unreported["verdict"].get("skip_reason").is_none());
+    assert!(
+        unreported["verdict"]["evidence"]
+            .as_str()
+            .unwrap()
+            .contains("unexpected skip:")
+    );
 }
 #[test]
 #[ignore = "requires actual packaged verifier and consumed Loom"]
 fn builder_non_darwin_skip_cannot_be_worker_acceptance() {
     let mut fixture = Fixture::new();
     fixture.builder("Linux", "26.0", 77);
-    let result = fixture.gate(&[BUILDER], true, "system");
+    let result = fixture.gate(&[BUILDER], true, Tier::System);
     fixture.assert_worker_builder_skip(&result);
 }
 #[test]
@@ -739,7 +956,7 @@ fn builder_non_darwin_skip_cannot_be_worker_acceptance() {
 fn builder_older_darwin_skip_cannot_be_worker_acceptance() {
     let mut fixture = Fixture::new();
     fixture.builder("Darwin", "25.6", 77);
-    let result = fixture.gate(&[BUILDER], true, "system");
+    let result = fixture.gate(&[BUILDER], true, Tier::System);
     fixture.assert_worker_builder_skip(&result);
 }
 #[test]
@@ -747,7 +964,7 @@ fn builder_older_darwin_skip_cannot_be_worker_acceptance() {
 fn builder_supported_darwin_unexpected_skip_blocks_worker() {
     let mut fixture = Fixture::new();
     fixture.builder("Darwin", "26.0", 77);
-    let result = fixture.gate(&[BUILDER], true, "system");
+    let result = fixture.gate(&[BUILDER], true, Tier::System);
     fixture.assert_worker_builder_skip(&result);
 }
 #[test]
@@ -755,6 +972,6 @@ fn builder_supported_darwin_unexpected_skip_blocks_worker() {
 fn builder_skip_and_real_failure_remain_worker_blocking() {
     let mut fixture = Fixture::new();
     fixture.builder("Linux", "26.0", 77);
-    let result = fixture.gate(&[BUILDER, FAIL], true, "system");
+    let result = fixture.gate(&[BUILDER, FAIL], true, Tier::System);
     fixture.assert_worker_builder_skip(&result);
 }

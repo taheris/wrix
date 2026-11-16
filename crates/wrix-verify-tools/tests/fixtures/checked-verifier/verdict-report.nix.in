@@ -1,0 +1,51 @@
+{
+  inputs.loom = { url = @loomSource@; flake = false; };
+  outputs = { self, loom }: let
+    checked = import (loom + "/nix/verification.nix");
+    source = checked.resource { root = ./.; };
+    execution = checked.resource { root = ./.; origin = "execution"; };
+    bash = builtins.appendContext @bash@ { ${@bash@} = { path = true; }; };
+    coreutils = builtins.appendContext @coreutils@ { ${@coreutils@} = { path = true; }; };
+    jq = builtins.appendContext @jq@ { ${@jq@} = { path = true; }; };
+    verify = builtins.appendContext @verify@ { ${@verifyRoot@} = { path = true; }; };
+    targets = builtins.fromJSON @targets@;
+  in {
+    checks.@system@.results = checked.reported {
+      system = @system@;
+      inherit bash coreutils targets;
+      name = "fixture-consumed-wrix-results";
+      resources = [ source execution ];
+      evaluation = [ (checked.resource {
+        root = ./.;
+        filter = path: type: type == "directory" || builtins.elem (builtins.baseNameOf path) [ "flake.nix" "flake.lock" ];
+      }) ];
+      program = "${bash}/bin/bash";
+      arguments = [ "-c" ''
+        set -euo pipefail
+        export PATH="${coreutils}/bin:${jq}/bin:${bash}/bin"
+        export REPO_ROOT="${source.path}"
+        export WRIX_FIXTURE_CALLS="$TMPDIR/wrix-fixture-calls"
+        for key in BUILDER_PLATFORM BUILDER_VERSION BUILDER_STATUS BUILDER_EVIDENCE; do
+          value=$("${jq}/bin/jq" -er --arg key "$key" '.[$key]' "${execution.path}/environment.json")
+          export "$key=$value"
+        done
+        worker=$("${jq}/bin/jq" -er '.worker | tostring' "${execution.path}/environment.json")
+        if [[ "$worker" == true ]]; then
+          export LOOM_INSIDE=1
+        elif [[ "$worker" == false ]]; then
+          unset LOOM_INSIDE
+        else
+          exit 64
+        fi
+        if [[ -f "$REPO_ROOT/platform.sh" ]]; then
+          export BASH_ENV="$REPO_ROOT/platform.sh"
+        else
+          unset BASH_ENV
+        fi
+        exec "${verify}" "$@"
+      '' "fixture" ] ++ targets;
+      tier = @tier@;
+      parser = "json-lines";
+    };
+  };
+}

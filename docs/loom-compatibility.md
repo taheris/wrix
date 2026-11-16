@@ -121,9 +121,26 @@ by the native derivation. Success, a source edit containing the forbidden hook
 command and restoration exercise that same assertion through the consumed Loom
 CLI, not a replacement predicate or runner-derived input authority.
 
-These cases establish the supported construction path, not compatibility of
-unregistered legacy fixtures or migration of all production annotations. The
-legacy fixtures remain until their owning acceptance has an actual replacement.
+Positive dispatcher/Loom fixtures now register checked definitions rather than
+legacy runner annotations. Workspace-wide reports declare that actual resource
+scope; a scoped sibling stays unselected for an independent document change. A
+malformed legacy provider cannot override an admitted source assertion.
+Unregistered legacy fixtures remain as refusal tests.
+
+Native report jobs use
+`legacyPackages.<system>.mkVerifierProgram { targets = [ ... ]; }` to
+materialize only the selected registry scripts before execution. Prepared
+programs share the ordinary dispatcher's requirements, validation, batching and
+script-execution library. Conformance compares actual success, failure,
+unexpected-skip, foreign-platform and builder results, including refusal of
+targets outside the prepared set. Ordinary dispatcher inventory stays lazy.
+Report jobs do not open the host Nix daemon or rely on recursive Nix.
+
+The ordinary dispatcher retains exit `77` for unavailable checks. The current
+native Loom frontend returns `78` for declared unavailability and does not grant
+worker coverage; unexpected exits remain failures. These cases establish the
+consumed fixture boundary, not migration of every production annotation or
+acceptance on an unavailable executor.
 
 ## Independent host blockers
 
