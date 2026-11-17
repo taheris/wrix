@@ -68,8 +68,6 @@ let
     agent = "direct";
     agentPkg = import ./sandbox/fixtures/command-runner.nix { pkgs = linuxPkgs; };
   };
-  executionFixtureRunner = import ./sandbox/fixtures/command-runner.nix { inherit pkgs; };
-
   mkTestImage =
     args:
     import ./sandbox/test-image.nix (
@@ -389,20 +387,7 @@ let
       image-assembly-native = sandboxImageChecks.imageAssemblyNativeCheck;
       image-verifier-realization = sandboxImageChecks.metadataRealizationCheck;
       oci-layout-builder = import ./sandbox/oci-layout.nix { inherit pkgs; };
-      execution-fixtures =
-        pkgs.runCommandLocal "execution-fixture-conformance"
-          {
-            nativeBuildInputs = [
-              bash
-              coreutils
-              pkgs.python3
-            ];
-          }
-          ''
-            set -euo pipefail
-            ${pkgs.python3}/bin/python3 ${./security}/test_execution_lifecycle.py fixtures ${executionFixtureRunner}/bin/test-command-runner
-            touch "$out"
-          '';
+      execution-fixtures = import ./security/execution-fixtures.nix { inherit pkgs; };
       entrypoint-hook-failures = pkgs.runCommandLocal "entrypoint-hook-failures" { } ''
         set -euo pipefail
         test -x ${pkgs.lib.getExe (import ../lib/verify/tools.nix { inherit pkgs; })}

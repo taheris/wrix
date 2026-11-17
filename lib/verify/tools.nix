@@ -7,7 +7,8 @@ import ../util/rust-tool.nix {
   nativeCheckInputs = [
     pkgs.git
     pkgs.jq
-  ];
+  ]
+  ++ pkgs.lib.optional pkgs.stdenv.hostPlatform.isDarwin pkgs.darwin.ps;
   extraSources = [
     ../../bin/test-native
     ../../loom.toml
@@ -19,6 +20,8 @@ import ../util/rust-tool.nix {
     ../../lib/util/git-ssh-setup.sh
     ../../lib/services/nix-pool/bootstrap-process.sh
     ../../tests/fixtures/build-package-fixture/build.rs
+    ../../tests/security/execution-runtime.sh
+    ../../tests/security/execution-probe.sh
     ../../tests/sandbox/entrypoint-contract.sh
     ../../lib/sandbox/linux/entrypoint.sh
     ../../lib/sandbox/darwin/entrypoint.sh
