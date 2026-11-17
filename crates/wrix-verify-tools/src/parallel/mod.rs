@@ -1,5 +1,5 @@
 //! Bounded independent verifier processes. Results are never reused across jobs.
-use rustix::process::{Pid, Signal};
+use rustix::process::{Pid, Signal, WaitId, WaitIdOptions};
 use std::{
     fs::{File, OpenOptions},
     io,
@@ -27,24 +27,86 @@ struct Worker {
     stopped: bool,
 }
 
-impl Drop for Worker {
-    fn drop(&mut self) {
-        // ESRCH means the owned group has already exited. Other failures remain visible.
-        if !self.stopped
-            && let Err(error) = signal(self.group, Signal::KILL)
-        {
-            use std::io::Write;
-            let _ = writeln!(io::stderr().lock(), "cannot stop verifier group: {error}");
+impl Worker {
+    fn exited(&self) -> io::Result<bool> {
+        loop {
+            match rustix::process::waitid(
+                WaitId::Pid(self.group),
+                WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT,
+            ) {
+                Ok(status) => return Ok(status.is_some()),
+                Err(rustix::io::Errno::INTR) => {}
+                Err(error) => return Err(error.into()),
+            }
         }
-        let _ = self.child.wait(); // Reap after terminating our owned group, including on early errors.
+    }
+
+    fn signal(&self, signal: Signal) -> io::Result<()> {
+        match rustix::process::kill_process_group(self.group, signal) {
+            Ok(()) | Err(rustix::io::Errno::SRCH) => Ok(()),
+            #[cfg(target_os = "macos")]
+            Err(rustix::io::Errno::PERM) if self.exited()? && zombie_group(self.group)? => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn finish(&mut self) -> io::Result<std::process::ExitStatus> {
+        self.signal(Signal::KILL)?;
+        self.stopped = true;
+        self.child.wait()
     }
 }
 
-fn signal(group: Pid, signal: Signal) -> io::Result<()> {
-    match rustix::process::kill_process_group(group, signal) {
-        Ok(()) | Err(rustix::io::Errno::SRCH) => Ok(()),
-        Err(error) => Err(error.into()),
+impl Drop for Worker {
+    fn drop(&mut self) {
+        if !self.stopped
+            && let Err(error) = self.signal(Signal::KILL)
+        {
+            report_cleanup(&error);
+        }
+        if let Err(error) = self.child.wait() {
+            report_cleanup(&error);
+        }
     }
+}
+
+fn report_cleanup(error: &io::Error) {
+    use std::io::Write;
+    if writeln!(
+        io::stderr().lock(),
+        "cannot clean up verifier group: {error}"
+    )
+    .is_err()
+    {
+        std::process::exit(74);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn zombie_group(group: Pid) -> io::Result<bool> {
+    let output = Command::new(option_env!("WRIX_PARALLEL_PS").unwrap_or("ps"))
+        .args([
+            "-g",
+            &group.as_raw_nonzero().get().to_string(),
+            "-o",
+            "stat=",
+        ])
+        .output()?;
+    if !output.status.success() {
+        return Err(io::Error::other(format!(
+            "verifier group observation failed: {output:?}"
+        )));
+    }
+    Ok(only_zombies(&output.stdout))
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn only_zombies(states: &[u8]) -> bool {
+    let mut members = states
+        .split(u8::is_ascii_whitespace)
+        .filter(|member| !member.is_empty())
+        .peekable();
+    members.peek().is_some() && members.all(|member| member.first() == Some(&b'Z'))
 }
 
 fn output(directory: &Path, index: usize, suffix: &str) -> PathBuf {
@@ -95,7 +157,7 @@ pub fn run(
             || u32::try_from(Pid::as_raw(rustix::process::getppid())).ok() != Some(parent)
         {
             for worker in &active {
-                signal(worker.group, Signal::TERM)?;
+                worker.signal(Signal::TERM)?;
             }
             thread::sleep(Duration::from_millis(100));
             return Err(Error::Cancelled);
@@ -106,16 +168,15 @@ pub fn run(
         }
         let mut index = 0;
         while index < active.len() {
-            if let Some(status) = active[index].child.try_wait()? {
+            if active[index].exited()? {
                 use std::{io::Write, os::unix::process::ExitStatusExt};
                 let mut worker = active.remove(index);
+                let status = worker.finish()?;
                 let code = status
                     .code()
                     .unwrap_or_else(|| 128 + status.signal().unwrap_or(1));
                 let number = worker.index;
-                signal(worker.group, Signal::KILL)?;
-                worker.stopped = true;
-                drop(worker); // No surviving ordinary descendants when a result is published.
+                drop(worker); // Descendant cleanup precedes reaping and result publication.
                 write!(create(&output(directory, number, "status"))?, "{code}")?;
             } else {
                 index += 1;
@@ -127,3 +188,6 @@ pub fn run(
         thread::sleep(Duration::from_millis(10));
     }
 }
+
+#[cfg(test)]
+mod test;

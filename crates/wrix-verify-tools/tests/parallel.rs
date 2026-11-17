@@ -81,6 +81,22 @@ fn completed_job_cannot_leave_an_ordinary_descendant_running() {
 }
 
 #[test]
+fn signaled_workers_publish_the_actual_signal_exit_class() {
+    let root = tempfile::tempdir().unwrap();
+    let work = root.path().join("work");
+    fs::create_dir(&work).unwrap();
+    let script = root.path().join("signal.sh");
+    fs::write(&script, "kill -TERM $$\n").unwrap();
+    assert!(command(&work, &script).status().unwrap().success());
+    for index in 0..4 {
+        assert_eq!(
+            fs::read_to_string(work.join(format!("{index}.status"))).unwrap(),
+            "143"
+        );
+    }
+}
+
+#[test]
 fn cancellation_does_not_publish_success_for_incomplete_jobs() {
     let root = tempfile::tempdir().unwrap();
     let work = root.path().join("work");

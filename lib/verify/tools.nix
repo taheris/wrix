@@ -1,34 +1,42 @@
 { pkgs }:
-import ../util/rust-tool.nix {
-  inherit pkgs;
-  package = "wrix-verify-tools";
-  scopedSource = true;
-  description = "Native Wrix verifier policy and registry audits";
-  nativeCheckInputs = [
-    pkgs.git
-    pkgs.jq
-  ]
-  ++ pkgs.lib.optional pkgs.stdenv.hostPlatform.isDarwin pkgs.darwin.ps;
-  extraSources = [
-    ../../bin/test-native
-    ../../loom.toml
-    ../../tests/loom-nextest-file-targets.sh
-    ../../tests/lib/verifier-timing.sh
-    ../../tests/prepare-native-fixtures.sh
-    ../../lib/sandbox/install-known-hosts.sh
-    ../../lib/sandbox/initialize-private-nix.sh
-    ../../lib/util/git-ssh-setup.sh
-    ../../lib/services/nix-pool/bootstrap-process.sh
-    ../../tests/fixtures/build-package-fixture/build.rs
-    ../../tests/security/execution-runtime.sh
-    ../../tests/security/execution-probe.sh
-    ../../tests/sandbox/entrypoint-contract.sh
-    ../../lib/sandbox/linux/entrypoint.sh
-    ../../lib/sandbox/darwin/entrypoint.sh
-    ../../lib/sandbox/network-ready.sh
-    ../../lib/sandbox/mcp-manifest.sh
-    ../../lib/sandbox/shared-nix-client.sh
-    ../../lib/sandbox/tool-cache.sh
-    ../../lib/beads/sandbox.sh
-  ];
-}
+let
+  tool = import ../util/rust-tool.nix {
+    inherit pkgs;
+    package = "wrix-verify-tools";
+    scopedSource = true;
+    description = "Native Wrix verifier policy and registry audits";
+    nativeCheckInputs = [
+      pkgs.git
+      pkgs.jq
+    ]
+    ++ pkgs.lib.optional pkgs.stdenv.hostPlatform.isDarwin pkgs.darwin.ps;
+    extraSources = [
+      ../../bin/test-native
+      ../../loom.toml
+      ../../tests/loom-nextest-file-targets.sh
+      ../../tests/lib/verifier-timing.sh
+      ../../tests/prepare-native-fixtures.sh
+      ../../lib/sandbox/install-known-hosts.sh
+      ../../lib/sandbox/initialize-private-nix.sh
+      ../../lib/util/git-ssh-setup.sh
+      ../../lib/services/nix-pool/bootstrap-process.sh
+      ../../tests/fixtures/build-package-fixture/build.rs
+      ../../tests/security/execution-runtime.sh
+      ../../tests/security/execution-probe.sh
+      ../../tests/sandbox/entrypoint-contract.sh
+      ../../lib/sandbox/linux/entrypoint.sh
+      ../../lib/sandbox/darwin/entrypoint.sh
+      ../../lib/sandbox/network-ready.sh
+      ../../lib/sandbox/mcp-manifest.sh
+      ../../lib/sandbox/shared-nix-client.sh
+      ../../lib/sandbox/tool-cache.sh
+      ../../lib/beads/sandbox.sh
+    ];
+  };
+in
+tool.overrideAttrs (
+  _:
+  pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isDarwin {
+    WRIX_PARALLEL_PS = "${pkgs.darwin.ps}/bin/ps";
+  }
+)

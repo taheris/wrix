@@ -19,6 +19,15 @@ native-suite's separate 300-second acceptance budget is unchanged. Independently
 detaching descendants are outside the process-group contract; the qualified
 fixture harness separately owns and bounds its isolated subprocesses.
 
+The supervisor observes completion with `waitid(WNOWAIT)`, retaining the group
+leader until descendant cleanup finishes, and only then reaps it. This prevents
+PID/group-ID reuse between observation and signaling. On Darwin, an EPERM signal
+result is accepted only after observing that every member of the exact
+still-held group is a zombie; empty, active, mixed or unobservable groups remain
+errors. The packaged binary embeds the immutable `ps` executable used for that
+observation rather than relying on an ambient runtime tool. Cleanup errors
+remain visible and cannot publish a successful job result.
+
 The caller leases the bounded root-manager namespace
 `$XDG_CACHE_HOME/wrix/parallel-verifiers` (under `~/.cache` by default). Its
 complete manifest contains the dispatcher, selected script and tools. The lease
