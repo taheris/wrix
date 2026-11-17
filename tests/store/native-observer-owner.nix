@@ -1,5 +1,6 @@
 { pkgs, owner }:
 let
+  native = import ../../lib/verify/native-test.nix { inherit pkgs; };
   boundary = pkgs.replaceVars ./native-boundary.py {
     bpftool = "${pkgs.bpftools}/bin/bpftool";
   };
@@ -14,7 +15,7 @@ pkgs.writeShellScriptBin "wrix-nix-pool-owner" ''
       wrix-native-observe-boot-id)
         exec ${pkgs.python3}/bin/python3 ${boundary} boot-id ;;
       wrix-native-observe-serve)
-        exec ${pkgs.python3}/bin/python3 ${boundary} serve ;;
+        exec ${native}/bin/wrix-native-test boundary serve ;;
       wrix-native-observe-snapshot)
         exec ${pkgs.python3}/bin/python3 ${boundary} snapshot ;;
       wrix-native-observe-stop)

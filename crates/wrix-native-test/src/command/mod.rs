@@ -2,10 +2,12 @@ use std::ffi::OsString;
 
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
 pub enum Error {
-    /// usage: wrix-native-test native-fixture-cleanup ARGS | native-interruption ARGS | operator-probe ARGS
+    /// usage: wrix-native-test native-fixture-cleanup ARGS | native-interruption ARGS | operator-probe ARGS | boundary ARGS
     Usage,
     /// {0}
     Cleanup(#[from] crate::native_fixture::cleanup::Error),
+    /// {0}
+    Boundary(#[from] crate::boundary::Error),
     /// {0}
     Egress(#[from] crate::egress::Error),
     /// {0}
@@ -17,6 +19,10 @@ pub enum Error {
 pub fn run(args: impl IntoIterator<Item = OsString>) -> Result<(), Error> {
     let args: Vec<_> = args.into_iter().collect();
     match args.as_slice() {
+        [name, rest @ ..] if name == "boundary" => {
+            crate::boundary::run(rest)?;
+            Ok(())
+        }
         [name] if name == "pool-egress" => {
             crate::egress::run()?;
             Ok(())

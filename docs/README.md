@@ -36,6 +36,8 @@ capability discovery, Loom integration and fresh-image verification boundaries.
 checked resource projections, conservative scope, and measured worker costs.
 [Client packaging costs](client-packaging-costs.md) separates Rust build,
 artifact size and shell activation measurements, including rejected experiments.
+[Native boundary controls](native-boundary-controls.md) documents real loopback
+conformance separately from installed-store and containment acceptance.
 [Execution lifecycle acceptance](execution-lifecycle-acceptance.md) separates
 packaged fixture checks from live Darwin and Linux launch ownership.
 [Independent verifier jobs](verifier-parallelism.md) describes bounded parallel

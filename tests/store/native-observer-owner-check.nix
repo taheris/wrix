@@ -29,7 +29,6 @@ pkgs.runCommand "native-observer-owner-delegation" { } ''
   export SSH_ORIGINAL_COMMAND='wrix-native-observe-snapshot; id'
   check_delegation control
   check_delegation control extra
-  WRIX_TEST_NATIVE_BOUNDARY_SCRIPT=${./native-boundary.py} \
-    ${pkgs.python3}/bin/python3 ${./test_native_boundary.py}
+  test -x ${pkgs.lib.getExe (import ../../lib/verify/native-test.nix { inherit pkgs; })}
   touch "$out"
 ''
