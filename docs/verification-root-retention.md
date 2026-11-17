@@ -44,7 +44,10 @@ available prerequisite frontier and source inputs; keep hot dependency caches
 explicitly where needed. Retaining completed producers' raw OCI layers as well
 as their final archives needlessly multiplies storage. The command does not
 compute this frontier: source identity and the complete manifest remain the
-caller's responsibility.
+caller's responsibility. Include packages realized dynamically by verifier
+bodies, not just their launcher closures. For example,
+`test-wrix-cli-in-profile` builds `packages.<system>.image-base` at runtime;
+retain that output explicitly even when its CI launcher is already realized.
 
 Replacement registers every requested root with real `nix-store` before
 switching `current` and retiring the previous generation. A failed registration

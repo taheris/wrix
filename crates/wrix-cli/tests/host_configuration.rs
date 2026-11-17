@@ -1,4 +1,5 @@
 mod common;
+mod profile_snapshot;
 
 use std::{fs, path::PathBuf, process::Command};
 

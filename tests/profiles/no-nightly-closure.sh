@@ -22,13 +22,15 @@ trap cleanup EXIT
 
 copy_tracked_flake() {
   local destination
-  local relative_path
   destination=$(mktemp -d -t wrix-fresh-flake.XXXXXX)
   destination=$(cd "$destination" && pwd -P)
-  while IFS= read -r -d '' relative_path; do
-    mkdir -p "$destination/$(dirname "$relative_path")"
-    cp -a "$REPO_ROOT/$relative_path" "$destination/$relative_path"
-  done < <(git -C "$REPO_ROOT" ls-files -z)
+  if ! git -C "$REPO_ROOT" ls-files -z | (
+    cd "$REPO_ROOT"
+    xargs -0 -r cp -a --no-preserve=links --parents --target-directory="$destination" --
+  ); then
+    rm -rf "$destination"
+    return 1
+  fi
   printf '%s\n' "$destination"
 }
 
