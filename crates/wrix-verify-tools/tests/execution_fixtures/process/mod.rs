@@ -2,7 +2,7 @@ use rustix::process::{Pid, Signal, WaitId, WaitIdOptions};
 use std::{
     fs::File,
     io::{Read, Seek, SeekFrom, Write},
-    os::unix::process::CommandExt,
+    os::unix::{fs::FileExt, process::CommandExt},
     path::Path,
     process::{Child, Command, Output, Stdio},
     thread,
@@ -49,14 +49,34 @@ impl Owned {
         self.child.as_ref().unwrap().id()
     }
 
+    pub fn close_stdin(&mut self) {
+        drop(self.child.as_mut().unwrap().stdin.take());
+    }
+
+    fn diagnostics(&self) -> String {
+        let mut captured = Vec::new();
+        for file in [&self.stdout, &self.stderr] {
+            let mut buffer = vec![0; 1_048_576];
+            let size = file.read_at(&mut buffer, 0).unwrap();
+            captured.extend_from_slice(&buffer[..size]);
+        }
+        String::from_utf8_lossy(&captured).into_owned()
+    }
+
     pub fn ready(&self, marker: &Path) {
         let deadline = Instant::now() + Duration::from_secs(120);
         while !marker.exists() {
-            assert!(!self.exited(), "process exited before {}", marker.display());
+            assert!(
+                !self.exited(),
+                "process exited before {}: {}",
+                marker.display(),
+                self.diagnostics()
+            );
             assert!(
                 Instant::now() < deadline,
-                "timed out waiting for {}",
-                marker.display()
+                "timed out waiting for {}: {}",
+                marker.display(),
+                self.diagnostics()
             );
             thread::sleep(Duration::from_millis(50));
         }
@@ -91,7 +111,7 @@ impl Owned {
                 }))
     }
 
-    fn stop(&mut self) -> std::io::Result<std::process::ExitStatus> {
+    pub fn stop(&mut self) -> std::io::Result<std::process::ExitStatus> {
         // Keep the leader waitable until signaling, so its group ID cannot be recycled.
         match rustix::process::kill_process_group(self.pid, Signal::KILL) {
             Ok(()) | Err(rustix::io::Errno::SRCH) => {}
@@ -112,18 +132,19 @@ impl Owned {
         self.child.take().unwrap().wait()
     }
 
-    pub fn finish(mut self, input: &[u8]) -> Output {
-        self.child
-            .as_mut()
-            .unwrap()
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(input)
-            .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(120);
+    pub fn finish(self, input: &[u8]) -> Output {
+        self.finish_with_limit(input, Duration::from_secs(120))
+    }
+
+    pub fn finish_with_limit(mut self, input: &[u8], limit: Duration) -> Output {
+        if let Some(mut stdin) = self.child.as_mut().unwrap().stdin.take() {
+            stdin.write_all(input).unwrap();
+        } else {
+            assert_eq!(input, b"", "cannot send input to a closed execution stream");
+        }
+        let deadline = Instant::now() + limit;
         while !self.exited() {
-            assert!(Instant::now() < deadline, "execution exceeded 120 seconds");
+            assert!(Instant::now() < deadline, "execution exceeded {limit:?}");
             thread::sleep(Duration::from_millis(10));
         }
         let status = self.stop().unwrap();
@@ -155,11 +176,12 @@ impl Drop for Owned {
 fn dropping_an_unreleased_fixture_terminates_and_reaps_its_leader() {
     let root = tempfile::tempdir().unwrap();
     let marker = root.path().join("ready");
-    let child = Owned::spawn(
+    let mut child = Owned::spawn(
         Command::new("bash")
             .args(["-c", "touch \"$1\"; exec sleep 30", "fixture"])
             .arg(&marker),
     );
+    child.close_stdin();
     child.ready(&marker);
     let pid = child.pid;
     drop(child);

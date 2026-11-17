@@ -110,8 +110,8 @@ mod test {
             for path in ["crates/wrix-cache/src/recovery.rs", "specs/cache.md"] {
                 let (result, records, queries) = f.scoped_gate(lane, path);
                 passed(&result);
-                assert!(!queries.is_empty());
-                assert!(!records.is_empty());
+                assert_ne!(queries, [] as [String; 0]);
+                assert_ne!(records, [] as [serde_json::Value; 0]);
                 assert!(!records.iter().any(browser_target));
                 assert!(
                     !records

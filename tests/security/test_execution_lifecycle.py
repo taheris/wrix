@@ -124,7 +124,7 @@ class LiveExecution(unittest.TestCase):
 
         cls.launcher = build(".#wrix") / "bin/wrix"
         cls.packaged_profiles = {
-            "direct": build(f"{fixtures}.profileConfig"),
+            "direct": build(f"{fixtures}.image.profileConfig"),
             "claude": build(".#image-base-claude.image.profileConfig"),
             "pi": build(".#image-base-pi.image.profileConfig"),
         }
