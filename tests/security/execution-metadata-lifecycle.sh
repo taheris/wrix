@@ -12,14 +12,9 @@ case "$(uname -s)" in
   Darwin) timeout 30 container system status || wrix_live_skip "Apple container service unavailable or timed out" ;;
 esac
 cd "$REPO_ROOT"
-case "$(uname -s)" in
-  Darwin)
-    command -v cargo >/dev/null 2>&1 || wrix_live_skip "cargo not on PATH"
-    exec cargo test --offline --locked --manifest-path "$REPO_ROOT/Cargo.toml" \
-      --package wrix-verify-tools --test execution_lifecycle -- --include-ignored --test-threads=1
-    ;;
-  Linux)
-    command -v python3 >/dev/null 2>&1 || wrix_live_skip "python3 not on PATH"
-    exec python3 "$SCRIPT_DIR/test_execution_lifecycle.py" live
-    ;;
-esac
+: "${WRIX_EXECUTION_HARNESS:?the owning CI app must supply its native test executable}"
+[[ "$WRIX_EXECUTION_HARNESS" = /* && -x "$WRIX_EXECUTION_HARNESS" ]] || {
+  printf 'Invalid native execution lifecycle harness.\n' >&2
+  exit 1
+}
+exec "$WRIX_EXECUTION_HARNESS" --include-ignored --test-threads=1

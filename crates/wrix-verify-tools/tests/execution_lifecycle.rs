@@ -23,6 +23,30 @@ fn count_records(workspace: &Path) -> usize {
 
 #[test]
 #[ignore = "requires actual packaged Wrix and a live host container runtime"]
+fn selected_runtime_gate_precedes_container_creation_in_both_launch_modes() {
+    with_live(|harness| {
+        for mode in [Mode::Run, Mode::Spawn] {
+            let workspace = harness.workspace(&format!("gated-{}", mode.name()));
+            let index = harness.start(mode, &workspace, Agent::Direct, 0, None, false);
+            let launch = &harness.launches[index];
+            assert!(!harness.present(index));
+            assert_eq!(fs::read(&launch.record).unwrap(), launch.initial);
+            fs::write(launch.control.join("release"), "").unwrap();
+            harness.probe_ready(index);
+            assert!(harness.present(index));
+            fs::write(
+                workspace.join(format!("exit-{}", harness.launches[index].member)),
+                "",
+            )
+            .unwrap();
+            let (value, _) = harness.finish(index, 0);
+            assert_eq!(value["exit_code"], 0);
+        }
+    });
+}
+
+#[test]
+#[ignore = "requires actual packaged Wrix and a live host container runtime"]
 fn normal_runtime_exits_complete_the_original_record() {
     with_live(|harness| {
         for mode in [Mode::Run, Mode::Spawn] {

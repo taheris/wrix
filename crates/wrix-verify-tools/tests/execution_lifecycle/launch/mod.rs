@@ -183,6 +183,12 @@ impl Harness {
             .env("WRIX_TEST_CONTROL", &control)
             .env("WRIX_TEST_CONTAINER_NAME", &name)
             .env("PATH", std::env::join_paths(path).unwrap());
+        if self.context.runtime_name == "podman" {
+            command.env(
+                "WRIX_CONTAINER_RUNTIME",
+                self.root.path().join("bin/podman"),
+            );
+        }
         let mut child = Owned::spawn(&mut command);
         child.close_stdin();
         assert_ne!(child.id(), std::process::id());
@@ -248,6 +254,26 @@ impl Harness {
             expected,
         );
         (value, log)
+    }
+
+    pub fn present(&self, index: usize) -> bool {
+        let name = self.launches[index].name.as_str();
+        if self.context.runtime_name == "podman" {
+            let output = self.runtime(&["container".as_ref(), "exists".as_ref(), name.as_ref()]);
+            assert!(matches!(output.status.code(), Some(0 | 1)), "{output:?}");
+            output.status.success()
+        } else {
+            let entries: Vec<Value> = serde_json::from_slice(&context::checked(self.runtime(&[
+                "list".as_ref(),
+                "--all".as_ref(),
+                "--format".as_ref(),
+                "json".as_ref(),
+            ])))
+            .unwrap();
+            entries
+                .iter()
+                .any(|entry| entry["configuration"]["id"] == name)
+        }
     }
 
     pub fn remove(&self, index: usize) -> Result<(), String> {

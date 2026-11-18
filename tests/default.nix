@@ -1250,18 +1250,14 @@ let
     name = "test-security-execution-metadata-lifecycle";
     script = "tests/security/execution-metadata-lifecycle.sh";
     args = [ ];
-    environment =
-      securityCiEnvironment
-      + (
-        if pkgs.stdenv.hostPlatform.isDarwin then
-          ''
-            export PATH="${wrix.profiles.rust.toolchain}/bin:${pkgs.darwin.ps}/bin:$PATH"
-          ''
-        else
-          ''
-            export PATH="${pkgs.python3}/bin:$PATH"
-          ''
-      );
+    environment = securityCiEnvironment + ''
+      export WRIX_EXECUTION_HARNESS="${
+        import ./security/execution-lifecycle.nix { inherit pkgs src; }
+      }/libexec/execution-lifecycle"
+      ${pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
+        export PATH="${pkgs.darwin.ps}/bin:$PATH"
+      ''}
+    '';
   };
   testSecurityGitSshBootstrap = mkRepoScriptCiApp {
     name = "test-security-explicit-git-ssh-bootstrap";

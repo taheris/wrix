@@ -56,10 +56,15 @@ pub fn command(command: &mut Command, limit: Duration) -> Output {
     Owned::spawn(command).finish_with_limit(b"", limit)
 }
 
+pub fn source() -> PathBuf {
+    option_env!("WRIX_EXECUTION_SOURCE").map_or_else(
+        || Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."),
+        PathBuf::from,
+    )
+}
+
 pub fn fixture(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/security")
-        .join(name)
+    source().join("tests/security").join(name)
 }
 
 pub fn environment() -> BTreeMap<OsString, OsString> {
