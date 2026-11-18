@@ -13,13 +13,13 @@ pkgs.writeShellScriptBin "wrix-nix-pool-owner" ''
   if [[ "$#" == 1 && "$1" == control && "$EUID" == 0 ]]; then
     case "''${SSH_ORIGINAL_COMMAND:-}" in
       wrix-native-observe-boot-id)
-        exec ${pkgs.python3}/bin/python3 ${boundary} boot-id ;;
+        exec ${native}/bin/wrix-native-test boundary boot-id ;;
       wrix-native-observe-serve)
         exec ${native}/bin/wrix-native-test boundary serve ;;
       wrix-native-observe-snapshot)
         exec ${pkgs.python3}/bin/python3 ${boundary} snapshot ;;
       wrix-native-observe-stop)
-        exec ${pkgs.python3}/bin/python3 ${boundary} stop ;;
+        exec ${native}/bin/wrix-native-test boundary stop ;;
       wrix-native-observe-kill-daemon)
         exec ${pkgs.python3}/bin/python3 ${boundary} kill-daemon ;;
     esac

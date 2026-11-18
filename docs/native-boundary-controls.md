@@ -1,10 +1,9 @@
 # Native boundary controls
 
-The qualification-only observer selects `wrix-native-test boundary serve` for
-its known-live IPv4/IPv6 loopback controls. The root-only service operation
-requires the native service marker and refuses agent images. Other observer
-operations still select the original Python helper; its snapshot, boot ID, stop
-and pinned-daemon signal paths are not retired by this slice.
+The qualification-only observer selects `wrix-native-test boundary serve`,
+`boot-id` and `stop`. All three root-only service operations require the native
+service marker and refuse agent images. Snapshot and pinned-daemon signaling
+still select the original Python helper; that file remains required.
 
 The native server preserves the original single-port, dual-loopback protocol:
 `probe` returns `ok\n`; a private 32-byte random token, encoded as 64 lowercase
@@ -23,6 +22,19 @@ socket cleanup, foreign-file refusal and failed-readiness evidence retention.
 Both-platform native packages and the selected Linux observer-owner delegation
 check execute these tests. No Python test adapter replaces them.
 
-These are protocol, fixture ownership and observer-delegation checks. They are
-not installed-store, daemon-resource, firewall, native VM or containment
-acceptance. Those broader owners remain independently required.
+The boot observer preserves the kernel file's exact UTF-8 text and trailing
+newline. Shutdown sends only the private token and newline to IPv4 loopback,
+requires the exact original `ok\n` acknowledgment, and preserves all
+three-second socket bounds. Malformed tokens fail before connecting;
+unsuccessful shutdown does not remove evidence.
+
+Boot and shutdown also have original/native acceptance in actual ARM Linux
+service-image VMs under the native Apple runtime. The actual Nix-produced
+observer image supplies its service marker, packaged owner, Python predecessor
+and Rust helper. Boot output is compared with that VM's real kernel, and both
+original/native servers acknowledge shutdown and remove their owned files. Each
+server gets a separate fresh VM because immediate fixed-port reuse can encounter
+TCP TIME_WAIT. The test harness replaces the image entrypoint only to isolate
+these operations; it does not claim normal pool initialization, installed-store,
+daemon-resource, firewall or containment acceptance. Those broader owners remain
+independently required.

@@ -1,4 +1,6 @@
 //! Known-live loopback observations; not service containment or host-store access.
+mod control;
+
 use serde_json::json;
 use std::{
     ffi::OsString,
@@ -13,8 +15,12 @@ use std::{
 
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
 pub enum Error {
-    /// usage: boundary serve | boundary fixture-serve ROOT OUTSIDE PORT
+    /// usage: boundary serve|stop|boot-id | boundary fixture-serve ROOT OUTSIDE PORT | boundary fixture-stop ROOT PORT
     Arguments,
+    /// boundary shutdown token is not a private server token
+    Token,
+    /// boundary shutdown acknowledgment is not exactly ok followed by a newline
+    Response,
     /// boundary controls require the native service owner, not an agent image
     Service,
     /// boundary I/O failed: {0}
@@ -145,15 +151,38 @@ impl Server {
     }
 }
 
+fn require_service() -> Result<(), Error> {
+    if !rustix::process::geteuid().is_root()
+        || fs::read("/etc/wrix/nix-pool-service")? != b"1\n"
+        || Path::new("/etc/wrix/image-agent").try_exists()?
+    {
+        return Err(Error::Service);
+    }
+    Ok(())
+}
+
 pub fn run(args: &[OsString]) -> Result<(), Error> {
     let (root, outside, port) = match args {
+        [operation] if operation == "boot-id" => {
+            require_service()?;
+            return control::boot_id(
+                Path::new("/proc/sys/kernel/random/boot_id"),
+                &mut io::stdout().lock(),
+            );
+        }
+        [operation] if operation == "stop" => {
+            require_service()?;
+            return control::stop(Path::new("/run/wrix-native-platform-control"), 18443);
+        }
+        [operation, root, port] if operation == "fixture-stop" => {
+            let port = port
+                .to_str()
+                .and_then(|value| value.parse().ok())
+                .ok_or(Error::Arguments)?;
+            return control::stop(Path::new(root), port);
+        }
         [operation] if operation == "serve" => {
-            if !rustix::process::geteuid().is_root()
-                || fs::read("/etc/wrix/nix-pool-service")? != b"1\n"
-                || Path::new("/etc/wrix/image-agent").try_exists()?
-            {
-                return Err(Error::Service);
-            }
+            require_service()?;
             (
                 Path::new("/run/wrix-native-platform-control"),
                 Path::new("/var/empty/native-platform-outside-build"),

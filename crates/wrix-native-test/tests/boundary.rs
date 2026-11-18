@@ -110,11 +110,17 @@ fn unexpected_connections_preserve_dual_stack_controls_until_token_shutdown() {
     assert_eq!(entries[1]["peer"][0], "::1");
     assert_eq!(entries[1]["peer"].as_array().unwrap().len(), 4);
     assert!(child.0.try_wait().unwrap().is_none());
-    let mut token = fs::read(root.join("token")).unwrap();
+    let token = fs::read(root.join("token")).unwrap();
     assert_eq!(token.len(), 64);
     assert!(token.iter().all(u8::is_ascii_hexdigit));
-    token.push(b'\n');
-    request(v4, &token);
+    let stopped = Command::new(env!("CARGO_BIN_EXE_wrix-native-test"))
+        .args(["boundary", "fixture-stop"])
+        .arg(&root)
+        .arg(port.to_string())
+        .output()
+        .unwrap();
+    assert!(stopped.status.success(), "{stopped:?}");
+    assert_eq!(stopped.stdout, b"");
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         if let Some(status) = child.0.try_wait().unwrap() {
@@ -139,6 +145,9 @@ fn service_operation_refuses_an_unqualified_host_or_unknown_arguments() {
         vec!["boundary"],
         vec!["boundary", "unknown"],
         vec!["boundary", "serve", "extra"],
+        vec!["boundary", "stop", "extra"],
+        vec!["boundary", "boot-id", "extra"],
+        vec!["boundary", "fixture-stop"],
     ] {
         let result = Command::new(env!("CARGO_BIN_EXE_wrix-native-test"))
             .args(args)
@@ -147,15 +156,17 @@ fn service_operation_refuses_an_unqualified_host_or_unknown_arguments() {
         assert!(!result.status.success());
     }
     if !rustix::process::geteuid().is_root() {
-        let result = Command::new(env!("CARGO_BIN_EXE_wrix-native-test"))
-            .args(["boundary", "serve"])
-            .output()
-            .unwrap();
-        assert!(!result.status.success());
-        assert!(
-            String::from_utf8(result.stderr)
-                .unwrap()
-                .contains("require the native service owner")
-        );
+        for operation in ["serve", "stop", "boot-id"] {
+            let result = Command::new(env!("CARGO_BIN_EXE_wrix-native-test"))
+                .args(["boundary", operation])
+                .output()
+                .unwrap();
+            assert!(!result.status.success());
+            assert!(
+                String::from_utf8(result.stderr)
+                    .unwrap()
+                    .contains("require the native service owner")
+            );
+        }
     }
 }
