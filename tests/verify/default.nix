@@ -334,7 +334,7 @@ let
         for raw in "$@"; do
           target="$(normalize_target "$raw")"
           local runner=(run_one "$target")
-          if [[ "''${parallel_verifier_counts[$target]:-0}" -gt 1 ]]; then
+          if [[ "''${parallel_verifier_counts[$target]:-0}" -gt 0 && "$parallel_verifier_total" -gt 1 ]]; then
             runner=(parallel_verifier_run ${escapeShellArg (toString src)} ${escapeShellArg system} "$target")
           fi
           if "''${runner[@]}"; then

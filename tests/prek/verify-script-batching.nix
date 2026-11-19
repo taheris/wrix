@@ -32,9 +32,11 @@ let
     fi
     [[ "$1" == build ]] || exit 64
     link=""
+    print=false
     previous=""
     for argument in "$@"; do
       if [[ "$previous" == --out-link ]]; then link="$argument"; fi
+      if [[ "$argument" == --print-out-paths ]]; then print=true; fi
       previous="$argument"
     done
     selector="''${!#}"
@@ -45,10 +47,13 @@ let
       *) exit 64 ;;
     esac
     if [[ -n "$link" ]]; then
-      if [[ -e "$failure/build" ]]; then exit 19; fi
-      if [[ -e "$failure/identity" ]]; then output=${beta}; fi
+      if [[ "$selector" == *'^*' ]]; then
+        if [[ -e "$failure/build" ]]; then exit 19; fi
+        if [[ -e "$failure/identity" ]]; then output=${beta}; fi
+      fi
       ln -sf "$output" "$link"
-    else
+    fi
+    if [[ -z "$link" || "$print" == true ]]; then
       printf '%s\n' "$output"
     fi
   '';
@@ -97,6 +102,8 @@ pkgs.runCommand "verify-script-batching-conformance"
     test -f "$TMPDIR/alpha-exit"
     test -d "$verify_script_directory"
     script=$(verify_script_path frozen-source unit beta)
+    test "$(readlink -f "$verify_script_directory/current-alpha")" = ${alpha}
+    test "$(readlink -f "$verify_script_directory/current-beta")" = ${beta}
     if verify_script_run frozen-source unit beta; then exit 1; else test "$?" = 23; fi
     if verify_script_run frozen-source unit gamma; then exit 1; else test "$?" = 1; fi
     test "$(cat "$executions")" = $'alpha\nbeta'

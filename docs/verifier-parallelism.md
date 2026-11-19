@@ -1,9 +1,12 @@
 # Independent verifier jobs
 
-The ordinary dispatcher may run repeated requests for an explicitly
-`parallelSafe` owner concurrently. Currently only `cli.shared-verifier-app` is
-qualified: its fixture repositories, HOME/state directories and source-cache
-snapshots are private. Other owners retain sequential execution.
+The ordinary dispatcher groups requests for explicitly `parallelSafe` owners
+into one bounded queue, including distinct owners and repeated occurrences.
+`cli.shared-verifier-app` uses private fixture repositories, HOME/state
+directories and source-cache snapshots. Profile evaluation owners are read-only;
+profile package-invalidation owners use independent temporary fixtures and
+Nix-managed builds. Other owners retain sequential execution. Host-service,
+window-management and interactive owners are not implicitly opted in.
 
 Each occurrence executes the original dispatcher in a fresh process, including
 live admission and the entire owner body. There is no verdict cache or duplicate
@@ -30,8 +33,10 @@ remain visible and cannot publish a successful job result.
 
 The caller leases the bounded root-manager namespace
 `$XDG_CACHE_HOME/wrix/parallel-verifiers` (under `~/.cache` by default). Its
-complete manifest contains the dispatcher, selected script and tools. The lease
-is inherited by jobs, so killing the supervisor cannot permit a subsequent
+complete manifest contains the dispatcher, every selected script and tools. Each
+distinct script has a separate temporary root until lease adoption; a later
+script realization cannot retire an earlier queued script. The lease is
+inherited by jobs, so killing the supervisor cannot permit a subsequent
 replacement to retire roots still held by descendants. Only a current generation
 and bounded interrupted replacement are retained, never per-commit roots. Result
 files are temporary data, not GC roots.
@@ -56,7 +61,12 @@ owners with an interspersed passing batching owner in the requested order. The
 four bodies took 339 seconds concurrently; the complete component run including
 tool realization took 497.40 seconds. An earlier 300-second experimental batch
 limit interrupted unfinished owners and was correctly rejected. These are
-component measurements, not proof of a sub-ten-minute ordinary push.
+component measurements, not proof of a sub-ten-minute ordinary push or of the
+expanded distinct-owner queue. The queue retains the same four-process bound and
+595-second deadline, rather than starting a new deadline per owner. Its bounded
+JSON manifest preserves argument order and multiplicity; malformed, oversized,
+count-mismatched or invalid target names fail before starting jobs.
+Per-occurrence receipts remain distinct, including when another owner fails.
 
 ## Image-producer source isolation
 

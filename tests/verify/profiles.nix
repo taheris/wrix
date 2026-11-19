@@ -18,6 +18,7 @@ let
     describe = true;
   };
   nixEval = target: {
+    parallelSafe = true;
     inputs = descriptions.${target};
     script = ''
       local root
@@ -66,6 +67,7 @@ let
     in
     target
     // {
+      parallelSafe = true;
       script = ''
         export WRIX_BUILD_PACKAGE_TOOLS=${escapeShellArg (pkgs.lib.getExe tools)}
         ${target.script}

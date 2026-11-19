@@ -15,6 +15,7 @@ let
       ../../loom.toml
       ../../tests/loom-nextest-file-targets.sh
       ../../tests/lib/verifier-timing.sh
+      ../../tests/lib/parallel-verifiers.sh
       ../../tests/prepare-native-fixtures.sh
       ../../lib/sandbox/install-known-hosts.sh
       ../../lib/sandbox/initialize-private-nix.sh

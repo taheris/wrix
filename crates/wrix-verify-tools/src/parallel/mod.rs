@@ -148,6 +148,32 @@ pub fn run(
     if !(2..=256).contains(&count) || parent == 0 || target.is_empty() {
         return Err(Error::Arguments);
     }
+    let targets = if target == "@targets" {
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        File::open(directory.join("targets.json"))?
+            .take(65_537)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() > 65_536 {
+            return Err(Error::Arguments);
+        }
+        let targets: Vec<String> = serde_json::from_slice(&bytes).map_err(|_| Error::Arguments)?;
+        if targets.len() != count
+            || targets.iter().any(|target| {
+                target.is_empty()
+                    || !target.bytes().all(|byte| {
+                        byte.is_ascii_lowercase()
+                            || byte.is_ascii_digit()
+                            || matches!(byte, b'.' | b'-')
+                    })
+            })
+        {
+            return Err(Error::Arguments);
+        }
+        targets
+    } else {
+        vec![target.to_owned(); count]
+    };
     let deadline = Instant::now() + Duration::from_secs(595);
     let mut active: Vec<Worker> = Vec::new();
     let mut next = 0;
@@ -163,7 +189,7 @@ pub fn run(
             return Err(Error::Cancelled);
         }
         while next < count && active.len() < 4 {
-            active.push(start(directory, program, target, next)?);
+            active.push(start(directory, program, &targets[next], next)?);
             next += 1;
         }
         let mut index = 0;
