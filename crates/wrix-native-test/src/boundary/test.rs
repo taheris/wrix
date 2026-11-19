@@ -38,6 +38,49 @@ fn symlinked_control_roots_and_relative_fixture_paths_are_refused() {
 }
 
 #[test]
+fn accepted_nonblocking_sockets_restore_blocking_io_with_original_bounds() {
+    let temporary = tempfile::tempdir().unwrap();
+    let server = Server::bind(
+        &temporary.path().join("control"),
+        &temporary.path().join("outside"),
+        0,
+    )
+    .unwrap();
+    for listener in &server.listeners {
+        // Acceptance readiness is not the behavior under test; force the
+        // inherited accepted-stream flag below without racing a listener poll.
+        listener.set_nonblocking(false).unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let (connection, peer) = listener.accept().unwrap();
+        // Force Darwin's inherited descriptor state on both platforms.
+        connection.set_nonblocking(true).unwrap();
+        let observed = connection.try_clone().unwrap();
+        client.write_all(b"probe").unwrap();
+        assert!(!server.connection(connection, peer).unwrap());
+        assert!(
+            !rustix::fs::fcntl_getfl(&observed)
+                .unwrap()
+                .contains(rustix::fs::OFlags::NONBLOCK)
+        );
+        assert_eq!(
+            observed.read_timeout().unwrap(),
+            Some(Duration::from_secs(3))
+        );
+        assert_eq!(
+            observed.write_timeout().unwrap(),
+            Some(Duration::from_secs(3))
+        );
+        let mut response = [0; 3];
+        client.read_exact(&mut response).unwrap();
+        assert_eq!(&response, b"ok\n");
+    }
+    assert_eq!(fs::read(server.root.join("unexpected")).unwrap(), b"");
+}
+
+#[test]
 fn protocol_whitespace_matches_bytes_strip_including_vertical_tab() {
     assert_eq!(trim(b" \t\n\r\x0b\x0cprobe\x0b\x0c"), b"probe");
     assert_eq!(trim(b"\xffprobe\0"), b"\xffprobe\0");

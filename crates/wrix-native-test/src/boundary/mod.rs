@@ -93,6 +93,9 @@ impl Server {
     }
 
     fn connection(&self, mut connection: TcpStream, peer: SocketAddr) -> Result<bool, Error> {
+        // Darwin inherits the listener's nonblocking flag; socket timeouts alone
+        // do not restore the original bounded blocking protocol.
+        connection.set_nonblocking(false)?;
         connection.set_read_timeout(Some(Duration::from_secs(3)))?;
         connection.set_write_timeout(Some(Duration::from_secs(3)))?;
         let mut bytes = [0; 128];
