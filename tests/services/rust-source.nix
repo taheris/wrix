@@ -71,6 +71,21 @@ let
   compiledC = compileOnlyPackage (storedRoot "c") (storedRoot "c" + "/Cargo.lock");
   compiledE = compileOnlyPackage configChanged (configChanged + "/Cargo.lock");
   compiledLockChanged = compileOnlyPackage (storedRoot "a") changedLock;
+  resourcePackage =
+    value:
+    let
+      args = storedArguments (storedRoot "a") (storedRoot "a" + "/Cargo.lock");
+    in
+    rustProfile.buildPackage (
+      args
+      // {
+        extraSrcs = args.extraSrcs // {
+          "crates/probe/src/policy.nft" = builtins.toFile "policy.nft" value;
+        };
+      }
+    );
+  resourceA = resourcePackage "policy A\n";
+  resourceB = resourcePackage "policy B\n";
 
   filtered =
     root:
@@ -114,6 +129,8 @@ let
   );
 
   resources = [
+    "crates/wrix-native-test/src/probe/network/nat.nft"
+    "crates/wrix-native-test/src/probe/network/egress.nft"
     "crates/wrix-cli/tests/fixtures/service-runtime.sh"
     "crates/wrix-cli/tests/fixtures/launch-runtime.sh"
     "crates/wrix-cli/tests/snapshots/init_help.txt"
@@ -164,6 +181,12 @@ assert compiledA.nextest.drvPath != compiledC.nextest.drvPath;
 assert compiledA.cargoArtifacts.drvPath == compiledB.cargoArtifacts.drvPath;
 assert compiledA.cargoArtifacts.drvPath == compiledC.cargoArtifacts.drvPath;
 assert compiledA.cargoArtifacts.drvPath != compiledLockChanged.cargoArtifacts.drvPath;
+assert resourceA.bin.drvPath == resourceB.bin.drvPath;
+assert resourceA.cargoArtifacts.drvPath == resourceB.cargoArtifacts.drvPath;
+assert resourceA.clippy.src.drvPath != resourceB.clippy.src.drvPath;
+assert resourceA.nextest.src.drvPath != resourceB.nextest.src.drvPath;
+assert resourceA.clippy.drvPath != resourceB.clippy.drvPath;
+assert resourceA.nextest.drvPath != resourceB.nextest.drvPath;
 assert storedA.bin.drvPath != storedC.bin.drvPath;
 assert storedA.cargoArtifacts.drvPath == storedC.cargoArtifacts.drvPath;
 assert storedA.cargoArtifacts.drvPath != lockChanged.cargoArtifacts.drvPath;
@@ -207,6 +230,14 @@ assert hasInfix
   rustPackage.controllerPackage.buildCommand;
 assert rustPackage.cacheBackendTests.cargoArtifacts == rustPackage.cargoArtifacts;
 assert rustPackage.clippy.src == rustPackage.nextest.src;
+assert
+  !(builtins.pathExists (
+    rustPackage.package.src + "/crates/wrix-native-test/src/probe/network/nat.nft"
+  ));
+assert
+  !(builtins.pathExists (
+    rustPackage.package.src + "/crates/wrix-native-test/src/probe/network/egress.nft"
+  ));
 assert toString rustPackage.runtimePackage.src != toString rustPackage.package.src;
 assert toString rustPackage.controllerImplementation.src != toString rustPackage.package.src;
 assert hasInfix "--bin wrix-service-supervisor" rustPackage.runtimePackage.buildPhase;

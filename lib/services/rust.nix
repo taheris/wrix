@@ -39,6 +39,10 @@ let
       "crates/wrix-service/tests" = ../../crates/wrix-service/tests;
       "crates/wrix-verify-tools/tests" = ../../crates/wrix-verify-tools/tests;
       "crates/wrix-native-test/tests" = ../../crates/wrix-native-test/tests;
+      "crates/wrix-native-test/src/probe/network/nat.nft" =
+        ../../crates/wrix-native-test/src/probe/network/nat.nft;
+      "crates/wrix-native-test/src/probe/network/egress.nft" =
+        ../../crates/wrix-native-test/src/probe/network/egress.nft;
       ".config/nextest.toml" = ../../.config/nextest.toml;
       "bin/test-native" = ../../bin/test-native;
       "loom.toml" = ../../loom.toml;
