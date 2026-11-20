@@ -34,6 +34,8 @@ capability discovery, Loom integration and fresh-image verification boundaries.
 
 [Verifier input discovery and measurements](verifier-inputs.md) describes
 checked resource projections, conservative scope, and measured worker costs.
+[Git transport liveness](git-transport-liveness.md) describes authenticated SSH
+keepalives during ordinary hooks without changing trust or verification policy.
 [Client packaging costs](client-packaging-costs.md) separates Rust build,
 artifact size and shell activation measurements, including rejected experiments.
 [Native boundary controls](native-boundary-controls.md) documents real loopback

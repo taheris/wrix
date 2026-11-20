@@ -72,6 +72,8 @@ Host github.com
   StrictHostKeyChecking yes
   UserKnownHostsFile /etc/ssh/ssh_known_hosts
   GlobalKnownHostsFile /dev/null
+  ServerAliveInterval 30
+  ServerAliveCountMax 20
 SSHEOF
   chmod 600 "$ssh_home/.ssh/config"
 }
@@ -129,7 +131,7 @@ wrix_configure_git_signing() {
 wrix_configure_git_deploy() {
   local key_arg effective_home
   printf -v key_arg '%q' "$WRIX_DEPLOY_KEY"
-  export GIT_SSH_COMMAND="ssh -F /dev/null -i $key_arg -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none -o IdentityFile=none -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/etc/ssh/ssh_known_hosts -o GlobalKnownHostsFile=/dev/null"
+  export GIT_SSH_COMMAND="ssh -F /dev/null -i $key_arg -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none -o IdentityFile=none -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/etc/ssh/ssh_known_hosts -o GlobalKnownHostsFile=/dev/null -o ServerAliveInterval=30 -o ServerAliveCountMax=20"
   git -C / config --global --replace-all core.sshCommand "$GIT_SSH_COMMAND"
 
   effective_home=$(wrix_effective_user_home)

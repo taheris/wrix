@@ -1855,6 +1855,8 @@ fn verify_transport_helper(
     let effective_config = probe_helper_config(root, helper_path)?;
     require_ssh_config_value(&effective_config, "batchmode", "yes")?;
     require_ssh_config_value(&effective_config, "identitiesonly", "yes")?;
+    require_ssh_config_value(&effective_config, "serveraliveinterval", "30")?;
+    require_ssh_config_value(&effective_config, "serveralivecountmax", "20")?;
     require_ssh_config_value_any(&effective_config, "stricthostkeychecking", &["yes", "true"])?;
     require_ssh_config_value(&effective_config, "identityagent", "none")?;
     require_ssh_config_value(&effective_config, "globalknownhostsfile", "/dev/null")?;
@@ -2182,7 +2184,7 @@ if [[ ! -f "$known_hosts" ]]; then
   fail "pinned GitHub known-hosts file is missing: $known_hosts"
 fi
 key_path="$(resolve_key)"
-exec ssh -F /dev/null -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$known_hosts" -o GlobalKnownHostsFile=/dev/null -o IdentityAgent=none -o IdentityFile=none -i "$key_path" "$@"
+exec ssh -F /dev/null -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$known_hosts" -o GlobalKnownHostsFile=/dev/null -o IdentityAgent=none -o IdentityFile=none -o ServerAliveInterval=30 -o ServerAliveCountMax=20 -i "$key_path" "$@"
 "#,
         key_name = shell_single_quote(&key_name.to_string())
     )

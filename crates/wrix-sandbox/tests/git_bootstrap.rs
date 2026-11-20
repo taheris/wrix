@@ -101,6 +101,56 @@ unset GIT_CONFIG_COUNT
 }
 
 #[test]
+fn deploy_bootstrap_keeps_live_strict_transport_without_repository_changes() -> TestResult {
+    let root = tempfile::tempdir()?;
+    bootstrap(
+        root.path(),
+        r#"
+set -euo pipefail
+getent() {
+  [[ "$1" == passwd && "$2" == "$(id -u)" ]] || return 2
+  printf 'fixture:x:%s:%s:Fixture:%s:/bin/sh\n' "$(id -u)" "$(id -g)" "$HOME"
+}
+unset GIT_CONFIG_COUNT
+git init -q .
+cp .git/config common.before
+: > "$HOME/deploy"
+export WRIX_DEPLOY_KEY="$HOME/deploy"
+export GIT_CONFIG_COUNT=2
+source "$1" 0
+first="$GIT_SSH_COMMAND"
+source "$1" 0
+[[ "$first" == "$GIT_SSH_COMMAND" ]]
+eval "$GIT_SSH_COMMAND -G github.com" > effective-ssh
+cmp common.before .git/config
+"#,
+    )?;
+    let configuration = fs::read_to_string(root.path().join("effective-ssh"))?;
+    for expected in [
+        "serveraliveinterval 30",
+        "serveralivecountmax 20",
+        "batchmode yes",
+        "identitiesonly yes",
+        "identityagent none",
+        "globalknownhostsfile /dev/null",
+        "userknownhostsfile /etc/ssh/ssh_known_hosts",
+        "identityfile none",
+    ] {
+        assert!(
+            configuration.lines().any(|line| line == expected),
+            "{expected}: {configuration}"
+        );
+    }
+    assert!(configuration.lines().any(|line| line == "stricthostkeychecking true" || line == "stricthostkeychecking yes"), "{configuration}");
+    let key = format!("identityfile {}", root.path().join("home/deploy").display());
+    assert!(
+        configuration.lines().any(|line| line == key),
+        "{configuration}"
+    );
+    Ok(())
+}
+
+#[test]
 fn sign_enabled_requires_a_mounted_key() -> TestResult {
     let root = tempfile::tempdir()?;
     bootstrap(

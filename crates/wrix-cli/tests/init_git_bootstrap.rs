@@ -189,6 +189,44 @@ fn strict_context_aware_ssh_helper() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn reinitialization_restores_liveness_without_changing_common_configuration() -> TestResult {
+    let repo = setup_committed_repo("liveness-repair", false)?;
+    let fixture = tempfile::tempdir()?;
+    let home = fixture.path().join("home");
+    let key = home.join(".ssh/deploy_keys/liveness-key");
+    write_empty_key(&key)?;
+    let mut command = wrix_command(repo.path())?;
+    command
+        .args([
+            "init",
+            "repo",
+            "--offline",
+            "--no-sign",
+            "--key",
+            "liveness-key",
+        ])
+        .env("HOME", &home);
+    assert_success_with_clean_stderr(&run_command(&mut command)?);
+    let common = common_git_dir(repo.path())?;
+    let helper = common.join("wrix/git-ssh");
+    let configured = fs::read(common.join("config"))?;
+    let expected = fs::read_to_string(&helper)?;
+    let old = expected.replace(" -o ServerAliveInterval=30 -o ServerAliveCountMax=20", "");
+    assert_ne!(old, expected);
+    fs::write(&helper, old)?;
+    let mut verify = wrix_command(repo.path())?;
+    verify
+        .args(["init", "--offline", "--no-sign", "--key", "liveness-key"])
+        .env("HOME", &home);
+    let result = run_command(&mut verify)?;
+    assert_failure_with_clean_stdout(&result);
+    assert_success_with_clean_stderr(&run_command(&mut command)?);
+    assert_eq!(fs::read_to_string(&helper)?, expected);
+    assert_eq!(fs::read(common.join("config"))?, configured);
+    Ok(())
+}
+
 fn assert_stable_config_value(label: &str, value: &str, repo: &Path, home: &Path) {
     assert_not_contains(label, value, &repo.display().to_string());
     assert_not_contains(label, value, &home.display().to_string());
@@ -224,6 +262,15 @@ fn path_with_fake_bin(fake_bin: &Path) -> TestResult<std::ffi::OsString> {
 }
 
 fn assert_strict_helper_args(label: &str, args: &str, key_path: &Path, known_hosts: &Path) {
+    assert_eq!(
+        args,
+        format!(
+            "-F\n/dev/null\n-o\nBatchMode=yes\n-o\nIdentitiesOnly=yes\n-o\nStrictHostKeyChecking=yes\n-o\nUserKnownHostsFile={}\n-o\nGlobalKnownHostsFile=/dev/null\n-o\nIdentityAgent=none\n-o\nIdentityFile=none\n-o\nServerAliveInterval=30\n-o\nServerAliveCountMax=20\n-i\n{}\ngit@github.com\ngit-upload-pack 'example/strict-helper.git'\n",
+            known_hosts.display(),
+            key_path.display()
+        ),
+        "{label}"
+    );
     assert_contains(label, args, "-F\n/dev/null");
     assert_contains(label, args, "BatchMode=yes");
     assert_contains(label, args, "IdentitiesOnly=yes");
