@@ -160,13 +160,13 @@ fn dispatch(
 async fn serve(root: &Path, executable: &Path) -> Result<(), Error> {
     let mut termination =
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    let listener = UnixListener::bind(root.join("manager.sock"))?;
+    listener.set_nonblocking(true)?;
     let mut child = Owner(Some(launch(
         &std::env::current_exe()?,
         &[Path::new("maintenance"), Path::new("legacy"), root],
         root.join("legacy.stderr"),
     )?));
-    let listener = UnixListener::bind(root.join("manager.sock"))?;
-    listener.set_nonblocking(true)?;
     loop {
         tokio::select! {
             _ = termination.recv() => break,

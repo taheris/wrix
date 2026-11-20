@@ -78,7 +78,9 @@ impl Maintenance {
             binding,
         };
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        while !fixture.control.join("legacy-ready").exists() {
+        while !fixture.control.join("legacy-ready").exists()
+            || !fixture.control.join("manager.sock").exists()
+        {
             if let Some(status) = fixture.child.try_wait()? {
                 return Err(format!("maintenance adapter exited: {status}").into());
             }
