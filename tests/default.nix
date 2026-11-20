@@ -737,6 +737,7 @@ let
     test-notify = testNotify;
   };
 
+  ciRootTools = import ../lib/verify/tools.nix { inherit pkgs; };
   testCi = writeShellScriptBin "test-ci" ''
         set -euo pipefail
         export PATH="${ciPreflightPath}:$PATH"
@@ -803,13 +804,31 @@ let
           exit 0
         fi
 
-        batch_dir=""
-        declare -A ci_runners=() ci_derivations=() ci_admission_status=() ci_admission_records=()
-        trap 'if [[ -n "$batch_dir" ]]; then rm -rf "$batch_dir"; fi' EXIT
+        ci_root_tool=${ciRootTools}/bin/wrix-verification-roots
+        ci_cache_parent="''${XDG_CACHE_HOME:-$HOME/.cache}/wrix"
+        (umask 077; mkdir -p "$ci_cache_parent")
+        ci_namespace="$ci_cache_parent/ci-runners"
+        if [[ "''${WRIX_CI_SESSION_PID:-}" != "$$" ]]; then
+          exec "$ci_root_tool" session "$ci_namespace" -- "$0" "$@"
+        fi
+        "$ci_root_tool" session-check "$WRIX_CI_BATCH_DIR" "$WRIX_CI_BATCH_LEASE_FD" "$0"
+        batch_dir="$WRIX_CI_BATCH_DIR"
+        declare -A ci_runners=() ci_derivations=() ci_recipe_roots=() ci_remaining=() ci_admission_status=() ci_admission_records=()
+        ci_frontier_ready=0
+        ci_retention_failed=0
+        finish_ci_roots() {
+          local status="$?"
+          trap - EXIT
+          exec {WRIX_CI_BATCH_LEASE_FD}<&-
+          if ! "$ci_root_tool" session-clean "$ci_namespace"; then
+            if [[ "$status" -eq 0 ]]; then status=1; fi
+          fi
+          exit "$status"
+        }
+        trap finish_ci_roots EXIT
         trap 'exit 130' INT
         trap 'exit 143' TERM
         trap 'exit 129' HUP
-        batch_dir=$(mktemp -d -t wrix-ci-runners.XXXXXX)
         # A running Bash script is not a portable GC root. Keep its requirements,
         # admission library and dispatcher data live during artifact realization.
         dispatcher_script="$(${coreutils}/bin/readlink -f -- "''${BASH_SOURCE[0]}")"
@@ -834,6 +853,9 @@ let
           local selected=() derivations=() installables=()
           local -A seen=()
           for app in "$@"; do
+            if is_ci_app "$app"; then
+              ci_remaining["$app"]=$(( ''${ci_remaining[$app]:-0} + 1 ))
+            fi
             if is_ci_app "$app" && [[ ! -v "seen[$app]" ]]; then
               seen["$app"]=1
               admit_ci_app "$app"
@@ -871,7 +893,47 @@ let
           fi
           for index in "''${!selected[@]}"; do
             ci_derivations["''${selected[$index]}"]="$(${coreutils}/bin/readlink -f "''${derivations[$index]}")"
+            ci_recipe_roots["''${selected[$index]}"]="''${derivations[$index]}"
           done
+          if refresh_ci_frontier; then
+            ci_frontier_ready=1
+          else
+            ci_retention_failed=1
+          fi
+        }
+
+        refresh_ci_frontier() {
+          local app
+          local -a pending=()
+          for app in "''${!ci_derivations[@]}"; do
+            if [[ "''${ci_remaining[$app]}" -gt 0 ]]; then
+              pending+=("''${ci_derivations[$app]}")
+            fi
+          done
+          "$ci_root_tool" session-frontier "$batch_dir" "$WRIX_CI_BATCH_LEASE_FD" "$0" ${nix}/bin/nix ${nix}/bin/nix-store -- "''${pending[@]}"
+        }
+
+        finish_ci_app() {
+          local app="$1" link
+          ci_remaining["$app"]=$((ci_remaining[$app] - 1))
+          if [[ "$ci_frontier_ready" -eq 0 || ! -v "ci_recipe_roots[$app]" ]]; then return 0; fi
+          if ! refresh_ci_frontier; then
+            ci_retention_failed=1
+            ci_frontier_ready=0
+            return 0
+          fi
+          if [[ "''${ci_remaining[$app]}" -ne 0 ]]; then return 0; fi
+          link="''${ci_recipe_roots[$app]}"
+          if [[ "$link" != "$batch_dir/"* || ! -L "$link" || "$(${coreutils}/bin/readlink -f "$link")" != "''${ci_derivations[$app]}" ]]; then
+            printf 'Cannot retire modified CI recipe root: %s\n' "$link" >&2
+            ci_retention_failed=1
+            ci_frontier_ready=0
+            return 0
+          fi
+          if ! rm -- "$link"; then
+            ci_retention_failed=1
+            ci_frontier_ready=0
+          fi
         }
 
         prepare_ci_window() {
@@ -961,16 +1023,16 @@ let
             fi
 
             verifier_timed realize "$app" prepare_ci_window "$app"
-            if run_ci_json_app "$app"; then
-              continue
-            else
-              status="$?"
-            fi
+            status=0
+            run_ci_json_app "$app" || status="$?"
+            finish_ci_app "$app"
             case "$status" in
+              0) ;;
               77) json_skipped=$((json_skipped + 1)) ;;
               *) json_failed=$((json_failed + 1)) ;;
             esac
           done
+          json_failed=$((json_failed + ci_retention_failed))
           verifier_batch_exit "$json_failed" "$json_skipped"
           exit 0
         fi

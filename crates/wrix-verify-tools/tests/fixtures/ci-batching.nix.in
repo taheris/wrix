@@ -2,7 +2,7 @@
   inputs.bash = { url = @BASH@; flake = false; };
   inputs.coreutils = { url = @COREUTILS@; flake = false; };
   outputs = { bash, coreutils, ... }: builtins.trace "WRIX-CI-BATCH-QUERY" {
-    legacyPackages.@SYSTEM@.ciApps = let
+    legacyPackages.@SYSTEM@ = let
       result = derivation {
         name = "@BOUNDARY@-checked-result";
         system = "@SYSTEM@";
@@ -38,7 +38,7 @@
           printf '%s\n' "$dispatcher" >> "$WRIX_TEST_CI_RESULT_ROOTS"
         fi
       '';
-    in {
+      ciApps = {
       test-linux-builder-sshd-hardening = pass "test-linux-builder-sshd-hardening";
       test-container-pre-commit = pass "test-container-pre-commit";
       test-services-devshell-start-independent = pass "test-services-devshell-start-independent";
@@ -69,6 +69,19 @@
         builder = "${bash}/bin/bash";
         args = [ "-c" "exit 19" ];
       };
+      };
+      inventory = derivation {
+        name = "verification-inventory.json";
+        system = "@SYSTEM@";
+        builder = "${bash}/bin/bash";
+        content = builtins.toJSON {
+          ciApps = builtins.mapAttrs (_: package: builtins.unsafeDiscardStringContext package.drvPath) ciApps;
+        };
+        args = [ "-c" ''printf '%s' "$content" > "$out"'' ];
+      };
+    in {
+      inherit ciApps;
+      @INVENTORY@
     };
   };
 }

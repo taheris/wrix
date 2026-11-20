@@ -42,8 +42,8 @@ Do not automatically retain every transitive build output. Completed outputs
 retain their runtime references through Nix. For pending builds, retain the
 available prerequisite frontier and source inputs; keep hot dependency caches
 explicitly where needed. Retaining completed producers' raw OCI layers as well
-as their final archives needlessly multiplies storage. The command does not
-compute this frontier: source identity and the complete manifest remain the
+as their final archives needlessly multiplies storage. The manifest commands do
+not compute this frontier: source identity and the complete manifest remain the
 caller's responsibility. Include packages realized dynamically by verifier
 bodies, not just their launcher closures. For example,
 `test-wrix-cli-in-profile` builds `packages.<system>.image-base` at runtime;
@@ -77,6 +77,47 @@ equate cache availability with test acceptance. GC remains an explicit operator
 action after reviewing the retained set. Summing closure sizes double-counts
 shared paths; use a union/deduplicated store audit and filesystem free-space
 measurements for capacity decisions.
+
+## CI batch lifetime
+
+`test-ci` uses the private `$XDG_CACHE_HOME/wrix/ci-runners` namespace (default
+`$HOME/.cache/wrix/ci-runners`). A missing namespace is initialized atomically;
+an existing unmarked directory is refused, not adopted. Each invocation has a
+separate batch and inherited kernel lease. Only short filesystem publication and
+retirement hold the namespace lock; independent verifier bodies do not share an
+execution lock.
+
+The native helper replaces its own process with the dispatcher, preserving
+stdio, arguments, process groups and real exit/signal behavior. Re-entry checks
+the exact open lease descriptor and generated program. The PID label only
+prevents recursive wrapping; it never authorizes retirement. Nested invocations
+get independent batches while retaining inherited ancestor leases.
+
+An ordinary EXIT closes the dispatcher's descriptor before requesting cleanup.
+After forced cancellation or caller death, the next invocation retires only
+fully recognized, unleased batches. Live descendants retain their batch even
+when their parent is absent. Unknown entries, modified pending roots, foreign
+paths and symlinked directories fail closed. Incomplete metadata-only pending
+generations can retire without interpreting their truncated manifest; registered
+root generations still require exact manifest/link agreement. No recursive
+foreign-directory deletion or PID-based stale test is used.
+
+Before releasing completed recipe links, the dispatcher registers the valid
+pending-build frontier using its own already-instantiated recipes. It captures
+Nix derivation graph schema 3/4 and output mappings once, without re-evaluating
+a different flake identity. Output discovery disables import-from-derivation;
+dynamic outputs and unsupported metadata are refused. Each update refreshes
+validity by breadth-first layers, stopping at complete existing outputs rather
+than rooting every historical transitive build input. Only validated output
+paths reach registration; recipes never become `--realise` requests. Duplicate
+requests retain their recipe until the final requested execution.
+
+Frontier replacement registers before retirement. If planning/registration
+fails, previous roots and recipe links stay in place, remaining requested
+verifiers still execute independently, and the batch exits nonzero. Original
+receipt order, multiplicity, stdout/stderr and failure/skip handling remain
+separate from retention. Capacity thresholds, verifier deadlines, hooks and
+approval policy are unchanged; the manager does not run GC.
 
 Legacy temporary roots and older ad-hoc namespaces require separately reviewed
 migration. They are not automatically claimed by this tool. The native tests

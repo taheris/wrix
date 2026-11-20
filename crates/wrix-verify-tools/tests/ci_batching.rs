@@ -121,12 +121,22 @@ fn input(name: &str) -> String {
 fn vm_requirements() -> Value {
     json!({"platforms":["aarch64-linux","x86_64-linux"],"capabilities":[]})
 }
+#[derive(Clone, Copy)]
+enum Inventory {
+    Shared,
+    Legacy,
+}
+
 struct Fixture {
     sandbox: Sandbox,
     system: String,
 }
 impl Fixture {
     fn new() -> Self {
+        Self::with_inventory(Inventory::Shared)
+    }
+
+    fn with_inventory(inventory: Inventory) -> Self {
         let mut sandbox = Sandbox::new("wrix-ci-batching-");
         for name in git_locals() {
             sandbox.environment.remove(std::ffi::OsStr::new(&name));
@@ -150,7 +160,11 @@ impl Fixture {
                 &serde_json::to_string(&format!("path:{}", input("WRIX_TEST_CI_COREUTILS")))
                     .unwrap(),
             )
-            .replace("@BOUNDARY@", boundary);
+            .replace("@BOUNDARY@", boundary)
+            .replace("@INVENTORY@", match inventory {
+                Inventory::Shared => "verificationInventoryRecipe = builtins.unsafeDiscardStringContext inventory.drvPath;",
+                Inventory::Legacy => "",
+            });
         sandbox.write("flake.nix", &source);
         for args in [
             vec!["init", "-q"],
@@ -416,7 +430,7 @@ fn selected_runners_batch_before_independent_execution() {
 #[test]
 #[ignore = "owning test-ci boundary"]
 fn admitted_metadata_reuses_the_locked_flake_evaluation_cache() {
-    let f = Fixture::new();
+    let f = Fixture::with_inventory(Inventory::Legacy);
     f.lock_inputs();
     let targets = [PASS, STATUS].map(|app| format!(".#legacyPackages.{}.ciApps.{app}", f.system));
     let seeded = capture(
@@ -442,6 +456,35 @@ fn admitted_metadata_reuses_the_locked_flake_evaluation_cache() {
         !text(&result.stderr).contains("WRIX-CI-BATCH-QUERY"),
         "{}",
         combined(&result)
+    );
+}
+
+#[test]
+#[ignore = "owning test-ci boundary"]
+fn shared_inventory_reuses_metadata_but_executes_each_requested_body_again() {
+    let f = Fixture::new();
+    f.lock_inputs();
+    for cold in [true, false] {
+        let result = capture(
+            f.cached_command(&input("WRIX_TEST_CI_RUNNER"))
+                .args(["--json", PASS, STATUS])
+                .env("WRIX_TEST_CI_STATUS", "pass")
+                .env("WRIX_TEST_CI_CALLS", f.sandbox.root.join("calls")),
+        );
+        assert!(result.status.success(), "{}", combined(&result));
+        let verdicts = records(&result.stdout);
+        assert_eq!(verdicts.len(), 2);
+        assert!(verdicts.iter().all(|record| record["outcome"] == "passed"));
+        assert_eq!(
+            text(&result.stderr).contains("WRIX-CI-BATCH-QUERY"),
+            cold,
+            "{}",
+            combined(&result)
+        );
+    }
+    assert_eq!(
+        f.sandbox.read("calls"),
+        format!("{PASS}\n{STATUS}\n{PASS}\n{STATUS}\n")
     );
 }
 
@@ -480,7 +523,11 @@ fn completed_window_executes_before_later_image_producers_are_materialized() {
         })
         .unwrap();
     assert!(execution < next_producer, "{diagnostic}");
-    assert_eq!(diagnostic.matches("trace: WRIX-CI-BATCH-QUERY").count(), 1);
+    assert_eq!(
+        diagnostic.matches("trace: WRIX-CI-BATCH-QUERY").count(),
+        1,
+        "{diagnostic}"
+    );
 }
 
 #[test]
@@ -493,7 +540,8 @@ fn checked_results_survive_window_rotation_and_are_removed_on_exit() {
         f.command(&input("WRIX_TEST_CI_RUNNER"))
             .args(["--json", PASS, STATUS, OFFLINE])
             .env("TMPDIR", &parent)
-            .env("WRIX_TEST_CI_BATCH_PARENT", &parent)
+            .env("XDG_CACHE_HOME", &parent)
+            .env("WRIX_TEST_CI_BATCH_PARENT", parent.join("wrix/ci-runners"))
             .env(
                 "WRIX_TEST_CI_RESULT_ROOTS",
                 f.sandbox.root.join("result-roots"),
@@ -781,14 +829,14 @@ fn terminated_batch_removes_its_temporary_gc_roots() {
         assert!(Instant::now() < deadline, "fixture never became ready");
         std::thread::sleep(Duration::from_millis(50));
     }
-    let roots = fs::read_dir(tmp.path())
+    let roots = fs::read_dir(f.sandbox.root.join("cache/wrix/ci-runners"))
         .unwrap()
         .map(|entry| entry.unwrap().path())
         .filter(|path| {
             path.file_name()
                 .unwrap()
                 .to_string_lossy()
-                .starts_with("wrix-ci-runners.")
+                .starts_with("batch-")
         })
         .collect::<Vec<PathBuf>>();
     assert_eq!(roots.len(), 1);

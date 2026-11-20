@@ -9,7 +9,7 @@ use wrix_verify_tools::retention::{self, Cache};
 
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
 enum Error {
-    /// usage: wrix-verification-roots init DIRECTORY | plan DIRECTORY MANIFEST | replace DIRECTORY MANIFEST | run DIRECTORY MANIFEST -- COMMAND [ARGS...]
+    /// usage: wrix-verification-roots init DIRECTORY | plan DIRECTORY MANIFEST | replace DIRECTORY MANIFEST | run DIRECTORY MANIFEST -- COMMAND [ARGS...] | session DIRECTORY -- COMMAND [ARGS...] | session-check DIRECTORY FD PROGRAM | session-clean DIRECTORY | session-frontier DIRECTORY FD PROGRAM NIX NIX-STORE -- [RECIPE...]
     Usage,
     /// {0}
     Retention(#[from] retention::Error),
@@ -17,6 +17,43 @@ enum Error {
 
 fn run(args: &[OsString]) -> Result<(), Error> {
     match args {
+        [mode, directory, separator, program, arguments @ ..]
+            if mode == "session" && separator == "--" =>
+        {
+            retention::session::execute(
+                Path::new(directory),
+                Command::new(program).args(arguments),
+            )?;
+        }
+        [
+            mode,
+            directory,
+            descriptor,
+            program,
+            nix,
+            nix_store,
+            separator,
+            recipes @ ..,
+        ] if mode == "session-frontier" && separator == "--" => {
+            retention::session::frontier::protect(
+                Path::new(directory),
+                descriptor.to_str().ok_or(Error::Usage)?,
+                program,
+                Path::new(nix),
+                Path::new(nix_store),
+                recipes,
+            )?;
+        }
+        [mode, directory, descriptor, program] if mode == "session-check" => {
+            retention::session::check(
+                Path::new(directory),
+                descriptor.to_str().ok_or(Error::Usage)?,
+                program,
+            )?;
+        }
+        [mode, directory] if mode == "session-clean" => {
+            retention::session::clean(Path::new(directory))?;
+        }
         [mode, directory] if mode == "init" => retention::initialize(Path::new(directory))?,
         [mode, directory, manifest] if mode == "plan" || mode == "replace" => {
             let desired = retention::manifest(Path::new(manifest))?;

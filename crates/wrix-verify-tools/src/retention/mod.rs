@@ -1,4 +1,5 @@
 //! Bounded, explicitly owned verification caches, independent of verification verdicts.
+pub mod session;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File},
