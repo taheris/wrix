@@ -7,7 +7,10 @@ use rustix::process::{Pid, Signal, kill_process_group};
 use serde_json::{Value, json};
 use std::{
     env, fs,
-    os::unix::process::CommandExt,
+    os::unix::{
+        fs::{MetadataExt, PermissionsExt},
+        process::CommandExt,
+    },
     path::PathBuf,
     process::{Child, Output, Stdio},
     time::{Duration, Instant},
@@ -138,6 +141,12 @@ impl Fixture {
 
     fn with_inventory(inventory: Inventory) -> Self {
         let mut sandbox = Sandbox::new("wrix-ci-batching-");
+        fs::create_dir_all(sandbox.root.join("cache/wrix")).unwrap();
+        fs::set_permissions(
+            sandbox.root.join("cache/wrix"),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
         for name in git_locals() {
             sandbox.environment.remove(std::ffi::OsStr::new(&name));
         }
@@ -419,6 +428,28 @@ fn unknown_options_do_not_trigger_the_full_suite() {
 }
 #[test]
 #[ignore = "owning test-ci boundary"]
+fn searchable_existing_cache_parent_keeps_identity_and_gets_private_ci_state() {
+    let f = Fixture::new();
+    let parent = f.sandbox.root.join("cache/wrix");
+    let before = fs::metadata(&parent).unwrap();
+    assert_eq!(before.mode() & 0o777, 0o755);
+    let (result, verdicts, calls) = f.run(&[PASS, STATUS], "pass");
+    assert!(result.status.success(), "{}", combined(&result));
+    assert_eq!(verdicts.len(), 2);
+    assert!(verdicts.iter().all(|record| record["outcome"] == "passed"));
+    assert_eq!(calls, [PASS, STATUS]);
+    let after = fs::metadata(&parent).unwrap();
+    assert_eq!(
+        (before.ino(), before.uid(), before.gid(), before.mode()),
+        (after.ino(), after.uid(), after.gid(), after.mode())
+    );
+    let state = parent.join("ci-runner-state");
+    assert_eq!(fs::metadata(&state).unwrap().mode() & 0o777, 0o700);
+    assert_eq!(fs::read_dir(state.join("ci-runners")).unwrap().count(), 2);
+}
+
+#[test]
+#[ignore = "owning test-ci boundary"]
 fn selected_runners_batch_before_independent_execution() {
     let f = Fixture::new();
     let (r, v, c) = f.run(&[PASS, STATUS, PASS], "pass");
@@ -541,7 +572,10 @@ fn checked_results_survive_window_rotation_and_are_removed_on_exit() {
             .args(["--json", PASS, STATUS, OFFLINE])
             .env("TMPDIR", &parent)
             .env("XDG_CACHE_HOME", &parent)
-            .env("WRIX_TEST_CI_BATCH_PARENT", parent.join("wrix/ci-runners"))
+            .env(
+                "WRIX_TEST_CI_BATCH_PARENT",
+                parent.join("wrix/ci-runner-state/ci-runners"),
+            )
             .env(
                 "WRIX_TEST_CI_RESULT_ROOTS",
                 f.sandbox.root.join("result-roots"),
@@ -829,7 +863,7 @@ fn terminated_batch_removes_its_temporary_gc_roots() {
         assert!(Instant::now() < deadline, "fixture never became ready");
         std::thread::sleep(Duration::from_millis(50));
     }
-    let roots = fs::read_dir(f.sandbox.root.join("cache/wrix/ci-runners"))
+    let roots = fs::read_dir(f.sandbox.root.join("cache/wrix/ci-runner-state/ci-runners"))
         .unwrap()
         .map(|entry| entry.unwrap().path())
         .filter(|path| {

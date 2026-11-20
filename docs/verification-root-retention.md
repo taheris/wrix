@@ -80,12 +80,14 @@ measurements for capacity decisions.
 
 ## CI batch lifetime
 
-`test-ci` uses the private `$XDG_CACHE_HOME/wrix/ci-runners` namespace (default
-`$HOME/.cache/wrix/ci-runners`). A missing namespace is initialized atomically;
-an existing unmarked directory is refused, not adopted. Each invocation has a
-separate batch and inherited kernel lease. Only short filesystem publication and
-retirement hold the namespace lock; independent verifier bodies do not share an
-execution lock.
+`test-ci` uses the private `$XDG_CACHE_HOME/wrix/ci-runner-state/ci-runners`
+namespace (default `$HOME/.cache/wrix/ci-runner-state/ci-runners`). Its
+dedicated state parent is created privately without changing the permissions or
+ownership of an existing searchable Wrix cache directory. A missing namespace is
+initialized atomically; an existing unmarked directory is refused, not adopted.
+Each invocation has a separate batch and inherited kernel lease. Only short
+filesystem publication and retirement hold the namespace lock; independent
+verifier bodies do not share an execution lock.
 
 The native helper replaces its own process with the dispatcher, preserving
 stdio, arguments, process groups and real exit/signal behavior. Re-entry checks

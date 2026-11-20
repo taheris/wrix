@@ -805,7 +805,7 @@ let
         fi
 
         ci_root_tool=${ciRootTools}/bin/wrix-verification-roots
-        ci_cache_parent="''${XDG_CACHE_HOME:-$HOME/.cache}/wrix"
+        ci_cache_parent="''${XDG_CACHE_HOME:-$HOME/.cache}/wrix/ci-runner-state"
         (umask 077; mkdir -p "$ci_cache_parent")
         ci_namespace="$ci_cache_parent/ci-runners"
         if [[ "''${WRIX_CI_SESSION_PID:-}" != "$$" ]]; then
