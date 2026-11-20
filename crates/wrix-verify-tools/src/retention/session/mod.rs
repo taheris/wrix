@@ -1,5 +1,6 @@
 //! Private CI batches remain rooted only while their inherited lease is held.
 pub mod frontier;
+mod retirement;
 use super::{Error, StorePath, exists, private_directory, regular};
 use std::{
     fs::{self, File, OpenOptions},
@@ -97,42 +98,7 @@ impl Namespace {
     }
 
     fn reap(&self) -> Result<(), Error> {
-        let mut retired = Vec::new();
-        for entry in fs::read_dir(&self.path)? {
-            let entry = entry?;
-            let name = entry.file_name();
-            match name.to_str() {
-                Some("owner" | "lock") => regular(&entry.path())?,
-                Some(name)
-                    if name.strip_prefix("batch-").is_some_and(|suffix| {
-                        !suffix.is_empty()
-                            && suffix.bytes().all(|byte| byte.is_ascii_alphanumeric())
-                    }) =>
-                {
-                    owner(&entry.path())?;
-                    let lease = open_lock(&entry.path().join("lease"))?;
-                    match rustix::fs::flock(
-                        &lease,
-                        rustix::fs::FlockOperation::NonBlockingLockExclusive,
-                    ) {
-                        Ok(()) => retired.push((entry.path(), lease, contents(&entry.path())?)),
-                        Err(rustix::io::Errno::WOULDBLOCK) => {}
-                        Err(error) => return Err(io::Error::from(error).into()),
-                    }
-                }
-                _ => return Err(Error::Foreign(entry.path())),
-            }
-        }
-        for (directory, _lease, entries) in retired {
-            for entry in entries.files {
-                fs::remove_file(entry)?;
-            }
-            for entry in entries.directories {
-                fs::remove_dir(entry)?;
-            }
-            fs::remove_dir(directory)?;
-        }
-        Ok(())
+        retirement::reap(self)
     }
 
     fn create(&self, program: &std::ffi::OsStr) -> Result<Batch, Error> {

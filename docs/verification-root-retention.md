@@ -104,6 +104,19 @@ generations can retire without interpreting their truncated manifest; registered
 root generations still require exact manifest/link agreement. No recursive
 foreign-directory deletion or PID-based stale test is used.
 
+Retirement first publishes a private, bounded, inode-bound record outside the
+batch, then atomically detaches the fully validated and exclusively leased batch
+with a no-replace rename. The record binds every relative entry, directory/file
+identity, regular-file digest and symlink target. It remains until the detached
+directory is gone. A killed cleaner can therefore resume after owner, lease or
+nested manifest files have already been unlinked, without recreating any of
+them. Only the exact recorded remaining subset is eligible: unknown content,
+modified bytes/links, replaced directories, escaping paths and unrecorded
+detached trees are refused before deletion. Interrupted pre-detach publication
+leaves the original batch untouched. Older partially deleted batches without
+such a record are not repaired or adopted; they require separate ownership
+review.
+
 Before releasing completed recipe links, the dispatcher registers the valid
 pending-build frontier using its own already-instantiated recipes. It captures
 Nix derivation graph schema 3/4 and output mappings once, without re-evaluating
